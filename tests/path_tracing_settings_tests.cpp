@@ -36,11 +36,13 @@ namespace
         static_assert(!Defaults.reuseDirectReservoirs);
         static_assert(!Defaults.reusePathReservoirs);
         static_assert(!Defaults.reuseIndirectGiReservoirs);
-        static_assert(Defaults.stablePlaneCount == 0u);
-        static_assert(!Defaults.usePsr);
+        static_assert(!Defaults.reuseRevalidatedProposalsDuringMotion);
+        static_assert(Defaults.stablePlaneCount == 3u);
+        static_assert(Defaults.spatialResolveStrength == 1.f);
         static_assert(!Defaults.enableFireflyFilter);
         static_assert(Defaults.fireflyThreshold == 5.f);
-        static_assert(Defaults.denoiser == PathTracingDenoiser::Raw);
+        static_assert(Defaults.denoiser ==
+            PathTracingDenoiser::SpatialPathResolve);
         static_assert(Defaults.debugView ==
             PathTracingDebugView::FinalImage);
     }
@@ -60,9 +62,9 @@ namespace
         assert(GetPathTracingSolverLabel(PathTracingSolver::RtxPt) ==
             std::string_view("RTX PT"));
         assert(GetPathTracingSolverLabel(PathTracingSolver::RestirPt) ==
-            std::string_view("ReSTIR PT"));
+            std::string_view("RESTIR PT"));
         assert(GetPathTracingSolverLabel(PathTracingSolver::RestirGi) ==
-            std::string_view("ReSTIR GI"));
+            std::string_view("RESTIR GI"));
 
         assert(IsValidPathTracingNeeMode(PathTracingNeeMode::Uniform));
         assert(IsValidPathTracingNeeMode(PathTracingNeeMode::Power));
@@ -78,18 +80,12 @@ namespace
 
         assert(IsValidPathTracingDenoiser(PathTracingDenoiser::Raw));
         assert(IsValidPathTracingDenoiser(
-            PathTracingDenoiser::StablePlaneResolve));
-        assert(IsValidPathTracingDenoiser(PathTracingDenoiser::NrdReblur));
-        assert(IsValidPathTracingDenoiser(PathTracingDenoiser::NrdRelax));
+            PathTracingDenoiser::SpatialPathResolve));
         assert(GetPathTracingDenoiserLabel(PathTracingDenoiser::Raw) ==
             std::string_view("Raw (No Denoising)"));
         assert(GetPathTracingDenoiserLabel(
-            PathTracingDenoiser::StablePlaneResolve) ==
-            std::string_view("Stable Plane Resolve"));
-        assert(GetPathTracingDenoiserLabel(PathTracingDenoiser::NrdReblur) ==
-            std::string_view("NRD ReBLUR"));
-        assert(GetPathTracingDenoiserLabel(PathTracingDenoiser::NrdRelax) ==
-            std::string_view("NRD ReLAX"));
+            PathTracingDenoiser::SpatialPathResolve) ==
+            std::string_view("Spatial Path Resolve"));
 
         assert(IsValidPathTracingDebugView(
             PathTracingDebugView::FinalImage));
@@ -101,13 +97,17 @@ namespace
         assert(IsValidPathTracingDebugView(
             PathTracingDebugView::SampleCount));
         assert(IsValidPathTracingDebugView(
-            PathTracingDebugView::RetryProbability));
+            PathTracingDebugView::UpdateRate));
         assert(IsValidPathTracingDebugView(
-            PathTracingDebugView::StablePlane));
+            PathTracingDebugView::SignalGroup));
         assert(IsValidPathTracingDebugView(
             PathTracingDebugView::DirectReservoir));
         assert(IsValidPathTracingDebugView(
             PathTracingDebugView::IndirectReservoir));
+        assert(IsValidPathTracingDebugView(
+            PathTracingDebugView::PrimaryTransport));
+        assert(IsValidPathTracingDebugView(
+            PathTracingDebugView::IndirectTransport));
         assert(GetPathTracingDebugViewLabel(
             PathTracingDebugView::FinalImage) ==
             std::string_view("Final Image"));
@@ -123,17 +123,23 @@ namespace
             PathTracingDebugView::SampleCount) ==
             std::string_view("Sample Count"));
         assert(GetPathTracingDebugViewLabel(
-            PathTracingDebugView::RetryProbability) ==
-            std::string_view("Retry Probability"));
+            PathTracingDebugView::UpdateRate) ==
+            std::string_view("Update Rate"));
         assert(GetPathTracingDebugViewLabel(
-            PathTracingDebugView::StablePlane) ==
-            std::string_view("Stable Plane"));
+            PathTracingDebugView::SignalGroup) ==
+            std::string_view("Signal Group"));
         assert(GetPathTracingDebugViewLabel(
             PathTracingDebugView::DirectReservoir) ==
             std::string_view("Direct Reservoir"));
         assert(GetPathTracingDebugViewLabel(
             PathTracingDebugView::IndirectReservoir) ==
             std::string_view("Indirect Reservoir"));
+        assert(GetPathTracingDebugViewLabel(
+            PathTracingDebugView::PrimaryTransport) ==
+            std::string_view("Primary Transport"));
+        assert(GetPathTracingDebugViewLabel(
+            PathTracingDebugView::IndirectTransport) ==
+            std::string_view("Indirect Transport"));
 
         constexpr auto InvalidLighting =
             static_cast<LightingSolution>(255u);
@@ -178,6 +184,7 @@ namespace
         static_assert(!RestirPt.useRtxdi);
         static_assert(RestirPt.reuseDirectReservoirs);
         static_assert(RestirPt.reusePathReservoirs);
+        static_assert(RestirPt.stablePlaneCount == 2u);
         static_assert(!RestirPt.reuseIndirectGiReservoirs);
         static_assert(IsValidPathTracingSettings(RestirPt));
 
@@ -190,6 +197,7 @@ namespace
         static_assert(RestirGi.reuseDirectReservoirs);
         static_assert(!RestirGi.reusePathReservoirs);
         static_assert(RestirGi.reuseIndirectGiReservoirs);
+        static_assert(RestirGi.stablePlaneCount == 2u);
         static_assert(IsValidPathTracingSettings(RestirGi));
 
         constexpr PathTracingSettings Invalid =
@@ -217,6 +225,8 @@ namespace
         Invalid.reusePathReservoirs = true;
         Invalid.reuseIndirectGiReservoirs = true;
         Invalid.stablePlaneCount = 4u;
+        Invalid.spatialResolveStrength =
+            std::numeric_limits<float>::quiet_NaN();
         Invalid.fireflyThreshold =
             std::numeric_limits<float>::quiet_NaN();
         Invalid.denoiser = static_cast<PathTracingDenoiser>(255u);
@@ -240,6 +250,8 @@ namespace
         assert(Sanitized.reuseIndirectGiReservoirs);
         assert(Sanitized.stablePlaneCount ==
             PathTracingMaxStablePlaneCount);
+        assert(Sanitized.spatialResolveStrength ==
+            PathTracingDefaultSpatialResolveStrength);
         assert(Sanitized.fireflyThreshold ==
             PathTracingDefaultFireflyThreshold);
         assert(Sanitized.denoiser == PathTracingDenoiser::Raw);
@@ -291,6 +303,9 @@ namespace
         assert(Different != Left);
         Different = Left;
         Different.fireflyThreshold = 6.f;
+        assert(Different != Left);
+        Different = Left;
+        Different.spatialResolveStrength = 0.5f;
         assert(Different != Left);
         Different = Left;
         Different.reuseDirectReservoirs = true;
@@ -417,44 +432,8 @@ namespace
 
     void TestAccumulationMath()
     {
-        static_assert(GetAccumulationRetryProbability(0u) == 1.f);
-        static_assert(GetAccumulationRetryProbability(1u) == 0.5f);
-        static_assert(GetAccumulationRetryProbability(3u) == 0.25f);
-
-        float previousProbability =
-            GetAccumulationRetryProbability(0u);
-        for (uint32_t count = 1u; count < 100u; ++count)
-        {
-            const float probability =
-                GetAccumulationRetryProbability(count);
-            assert(probability > 0.f);
-            assert(probability < previousProbability);
-            previousProbability = probability;
-        }
-
-        assert(ShouldAttemptAccumulationSample(0u, 0.f));
-        assert(ShouldAttemptAccumulationSample(0u, 0.999999f));
-        assert(ShouldAttemptAccumulationSample(
-            0u,
-            std::numeric_limits<float>::quiet_NaN()));
-        assert(ShouldAttemptAccumulationSample(1u, 0.f));
-        assert(ShouldAttemptAccumulationSample(1u, 0.499999f));
-        assert(!ShouldAttemptAccumulationSample(1u, 0.5f));
-        assert(!ShouldAttemptAccumulationSample(1u, 0.999999f));
-        assert(!ShouldAttemptAccumulationSample(1u, -0.1f));
-        assert(!ShouldAttemptAccumulationSample(1u, 1.f));
-        assert(!ShouldAttemptAccumulationSample(
-            1u,
-            std::numeric_limits<float>::quiet_NaN()));
-
         constexpr uint32_t Maximum =
             std::numeric_limits<uint32_t>::max();
-        assert(GetAccumulationRetryProbability(Maximum) > 0.f);
-        assert(ShouldAttemptAccumulationSample(Maximum, 0.f));
-        assert(!ShouldAttemptAccumulationSample(
-            Maximum,
-            GetAccumulationRetryProbability(Maximum)));
-
         static_assert(SaturatingIncrementSuccessfulSampleCount(0u) == 1u);
         static_assert(SaturatingIncrementSuccessfulSampleCount(41u) == 42u);
         static_assert(SaturatingIncrementSuccessfulSampleCount(Maximum) ==
@@ -473,27 +452,40 @@ namespace
         assert(Near(GetAccumulationOnlineMeanWeight(newCount), 0.125f));
     }
 
-    void TestStablePlaneResolveCapability()
+    void TestSpatialPathResolveCapability()
     {
         PathTracingSettings settings;
-        assert(!IsStablePlaneResolveRequested(settings));
-        assert(!CanUseStablePlaneResolve(settings, true));
+        assert(IsSpatialPathResolveRequested(settings));
+        assert(CanUseSpatialPathResolve(settings, true));
+        assert(!CanUseSpatialPathResolve(settings, false));
 
-        settings.denoiser = PathTracingDenoiser::StablePlaneResolve;
-        settings.stablePlaneCount = 0u;
-        const PathTracingSettings sanitized =
-            SanitizePathTracingSettings(settings);
-        assert(sanitized.stablePlaneCount == 1u);
-        assert(IsStablePlaneResolveRequested(sanitized));
-        assert(CanUseStablePlaneResolve(sanitized, true));
-        assert(!CanUseStablePlaneResolve(sanitized, false));
+        settings.stablePlaneCount = 3u;
+        assert(CanUseSpatialPathResolve(settings, true));
+
+        settings.solver = PathTracingSolver::RestirPt;
+        assert(IsSpatialPathResolveRequested(settings));
+        assert(!CanUseSpatialPathResolve(settings, true));
+        const PathTracingSettings sanitized = SanitizePathTracingSettings(
+            settings);
+        assert(sanitized.stablePlaneCount == 2u);
+        assert(CanUseSpatialPathResolve(sanitized, true));
 
         settings = sanitized;
-        settings.solver = PathTracingSolver::RestirPt;
-        assert(IsStablePlaneResolveRequested(settings));
-        assert(!CanUseStablePlaneResolve(settings, true));
         settings.solver = PathTracingSolver::RestirGi;
-        assert(!CanUseStablePlaneResolve(settings, true));
+        assert(CanUseSpatialPathResolve(settings, true));
+
+        settings.denoiser = PathTracingDenoiser::Raw;
+        settings.stablePlaneCount = 0u;
+        const PathTracingSettings raw = SanitizePathTracingSettings(settings);
+        assert(raw.stablePlaneCount == 0u);
+        assert(!IsSpatialPathResolveRequested(raw));
+        assert(!CanUseSpatialPathResolve(raw, true));
+
+        settings = {};
+        settings.stablePlaneCount = 0u;
+        const PathTracingSettings restored =
+            SanitizePathTracingSettings(settings);
+        assert(restored.stablePlaneCount == 1u);
     }
 
 }
@@ -507,6 +499,6 @@ int main()
     TestEquality();
     TestPipelineResolution();
     TestAccumulationMath();
-    TestStablePlaneResolveCapability();
+    TestSpatialPathResolveCapability();
     return 0;
 }

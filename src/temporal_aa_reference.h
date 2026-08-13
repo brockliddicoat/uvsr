@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 namespace uvsr
 {
@@ -226,6 +227,161 @@ namespace uvsr
     {
         return footprint.validMask == 0xfu &&
             footprint.backgroundMask == 0u;
+    }
+
+    [[nodiscard]] inline bool TemporalAaViewDepthAccepted(
+        float expectedViewDepth,
+        float previousViewDepth,
+        float nearerViewAllowance,
+        float fartherViewAllowance,
+        float baseViewDepthAllowance = 1e-3f)
+    {
+        if (!std::isfinite(expectedViewDepth) ||
+            !std::isfinite(previousViewDepth) ||
+            expectedViewDepth <= 0.f ||
+            previousViewDepth <= 0.f)
+        {
+            return false;
+        }
+        const float baseAllowance = std::max(
+            baseViewDepthAllowance,
+            0.f);
+        return expectedViewDepth <=
+                previousViewDepth + baseAllowance + nearerViewAllowance &&
+            previousViewDepth <=
+                expectedViewDepth + baseAllowance + fartherViewAllowance;
+    }
+
+    [[nodiscard]] inline float TemporalAaViewDepthFootprintCoherence(
+        float nearestFootprintViewDepth,
+        float farthestFootprintViewDepth)
+    {
+        if (!std::isfinite(nearestFootprintViewDepth) ||
+            !std::isfinite(farthestFootprintViewDepth) ||
+            nearestFootprintViewDepth <= 0.f ||
+            farthestFootprintViewDepth < nearestFootprintViewDepth)
+        {
+            return 0.f;
+        }
+
+        const float relativeRange =
+            (farthestFootprintViewDepth - nearestFootprintViewDepth) /
+            std::max(nearestFootprintViewDepth, 1e-3f);
+        const float t = std::clamp(
+            (relativeRange - 0.005f) / (0.05f - 0.005f),
+            0.f,
+            1.f);
+        const float smooth = t * t * (3.f - 2.f * t);
+        return 1.f - smooth;
+    }
+
+    [[nodiscard]] inline bool TemporalAaViewDepthFootprintAccepted(
+        float expectedViewDepth,
+        float filteredPreviousViewDepth,
+        float nearestFootprintViewDepth,
+        float farthestFootprintViewDepth,
+        float nearerViewAllowance = 0.f,
+        float fartherViewAllowance = 0.f,
+        float baseViewDepthAllowance = 1e-3f)
+    {
+        return TemporalAaViewDepthFootprintCoherence(
+                nearestFootprintViewDepth,
+                farthestFootprintViewDepth) > 0.f &&
+            TemporalAaViewDepthAccepted(
+                expectedViewDepth,
+                filteredPreviousViewDepth,
+                nearerViewAllowance,
+                fartherViewAllowance,
+                baseViewDepthAllowance);
+    }
+
+    [[nodiscard]] inline float RoundTripTemporalAaPositiveBinary16(
+        float value)
+    {
+        if (!std::isfinite(value) || value <= 0.f)
+            return value == 0.f ? 0.f : 65504.f;
+
+        constexpr float maximumHalf = 65504.f;
+        constexpr float subnormalSpacing =
+            0.000000059604644775390625f;
+        if (value >= maximumHalf)
+            return maximumHalf;
+
+        const int exponent = std::ilogb(value);
+        const float spacing = exponent < -14
+            ? subnormalSpacing
+            : std::ldexp(1.f, exponent - 10);
+        const double scaled = double(value) / double(spacing);
+        const double lower = std::floor(scaled);
+        const double fraction = scaled - lower;
+        const bool roundUp = fraction > 0.5 ||
+            (fraction == 0.5 &&
+                std::fmod(lower, 2.0) != 0.0);
+        return float(
+            (lower + (roundUp ? 1.0 : 0.0)) * double(spacing));
+    }
+
+    [[nodiscard]] inline float GetTemporalAaStoredDeviceDepthError(
+        float deviceDepth,
+        bool storedAsBinary16)
+    {
+        if (!storedAsBinary16)
+            return 0.f;
+        if (!std::isfinite(deviceDepth) || deviceDepth <= 0.f)
+        {
+            return std::numeric_limits<float>::infinity();
+        }
+        return std::max(
+            deviceDepth * 0.00048828125f,
+            0.0000000298023223876953125f);
+    }
+
+    struct TemporalAaViewDepthAllowances
+    {
+        float nearer = 0.f;
+        float farther = 0.f;
+    };
+
+    [[nodiscard]] inline TemporalAaViewDepthAllowances
+        GetTemporalAaInfiniteReverseZViewAllowances(
+            float expectedDeviceDepth,
+            float deviceDepthError,
+            float nearPlane = 0.1f)
+    {
+        TemporalAaViewDepthAllowances result;
+        if (!std::isfinite(expectedDeviceDepth) ||
+            expectedDeviceDepth <= 0.f ||
+            expectedDeviceDepth > 1.f ||
+            !std::isfinite(deviceDepthError) ||
+            deviceDepthError < 0.f ||
+            !std::isfinite(nearPlane) ||
+            nearPlane <= 0.f)
+        {
+            return result;
+        }
+
+        const float expectedViewDepth =
+            nearPlane / expectedDeviceDepth;
+        const float nearestPlausibleDeviceDepth = std::min(
+            expectedDeviceDepth + deviceDepthError,
+            1.f);
+        result.nearer = std::max(
+            expectedViewDepth -
+                nearPlane / nearestPlausibleDeviceDepth,
+            0.f);
+        if (deviceDepthError < expectedDeviceDepth)
+        {
+            result.farther = std::max(
+                nearPlane /
+                    (expectedDeviceDepth - deviceDepthError) -
+                    expectedViewDepth,
+                0.f);
+        }
+        else
+        {
+            result.farther = 65504.f;
+        }
+        return result;
     }
 
     [[nodiscard]] inline constexpr uint64_t

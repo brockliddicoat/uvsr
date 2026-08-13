@@ -21,7 +21,7 @@ struct RayTracedFlashlightShadowConstants
     uint sampleSequencePhase;
     uint sampleCount;
     uint noisePattern;
-    uint attemptMaskEnabled;
+    uint sampleSequenceMode;
 };
 
 #endif // UVSR_RAY_TRACED_FLASHLIGHT_SHADOWS_CB_H

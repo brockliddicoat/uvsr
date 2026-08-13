@@ -26,12 +26,12 @@ namespace uvsr
 
     struct RayTracedSkyVisibilitySettings
     {
-        bool enabled = false;
+        bool enabled = true;
         bool applyToDiffuseIbl = true;
         bool applyToSpecularIbl = true;
         bool useRatioEstimator = true;
         bool outputHitDistance = false;
-        int32_t sampleRateLog2 = 0;
+        int32_t sampleRateLog2 = 1;
         float rayBias = 0.002f;
         RayVisibilityMaxDistance maxDistance =
             RayVisibilityMaxDistance::Maximum;

@@ -6,6 +6,7 @@
 #include <donut/engine/SceneGraph.h>
 #include <donut/engine/ShaderFactory.h>
 #include <donut/engine/View.h>
+#include <nvrhi/utils.h>
 
 #include <algorithm>
 #include <cmath>
@@ -26,8 +27,10 @@ static_assert(sizeof(PathTracingConstants) % 16u == 0u,
 static_assert(sizeof(GeometryData) == 64u);
 static_assert(sizeof(MaterialConstants) == 208u);
 static_assert(std::is_trivially_copyable_v<LightConstants>);
-static_assert(offsetof(PathTracingConstants, flashlight) ==
+static_assert(offsetof(PathTracingConstants, previousView) ==
     sizeof(PlanarViewConstants));
+static_assert(offsetof(PathTracingConstants, flashlight) ==
+    2u * sizeof(PlanarViewConstants));
 static_assert(static_cast<uint32_t>(uvsr::PathTracingSolver::RtxPt) == 0u);
 static_assert(static_cast<uint32_t>(uvsr::PathTracingSolver::RestirPt) == 1u);
 static_assert(static_cast<uint32_t>(uvsr::PathTracingSolver::RestirGi) == 2u);
@@ -41,20 +44,37 @@ static_assert(static_cast<uint32_t>(uvsr::NoisePattern::SpatialWhite) == 0u);
 static_assert(static_cast<uint32_t>(uvsr::NoisePattern::SpatialBlue) == 1u);
 static_assert(static_cast<uint32_t>(
     uvsr::NoisePattern::SpatiotemporalBlue) == 2u);
+static_assert(static_cast<uint32_t>(
+    uvsr::SampleAccumulationAveraging::Cumulative) == 0u);
+static_assert(static_cast<uint32_t>(
+    uvsr::SampleAccumulationAveraging::Exponential) == 1u);
+static_assert(static_cast<uint32_t>(
+    uvsr::SampleAccumulationScheduling::EveryPixel) == 0u);
+static_assert(static_cast<uint32_t>(
+    uvsr::SampleAccumulationScheduling::VarianceGuided) == 1u);
+static_assert(static_cast<uint32_t>(
+    uvsr::PathTracingDebugView::PrimaryTransport) == 9u);
+static_assert(static_cast<uint32_t>(
+    uvsr::PathTracingDebugView::IndirectTransport) == 10u);
 
 namespace uvsr
 {
     namespace
     {
+        // This is a coarse safety estimate, not a ray or instruction count.
+        // This synthetic budget is a safety bound, not an ordinary-preset
+        // quality throttle. One Gi work units keeps the default 1080p Sponza
+        // RESTIR presets and default 4K low-light presets at one full-frame
+        // phase while retaining a bounded lattice for pathological settings.
         constexpr uint64_t MaxPathTracingWorkUnitsPerDispatch =
-            2ull * 1024ull * 1024ull;
-        constexpr uint32_t MaxPathTracingPreviewTilePixels = 64u;
+            1024ull * 1024ull * 1024ull;
 
         struct PathTracingDispatchSchedule
         {
             uint2 workExtent = uint2(1u, 1u);
             uint2 grid = uint2(1u, 1u);
             uint2 phase = uint2(0u, 0u);
+            uint64_t estimatedWorkUnitsPerPixel = 0u;
             uint32_t phaseCount = 1u;
             bool valid = false;
         };
@@ -64,20 +84,82 @@ namespace uvsr
             return (value + divisor - 1u) / divisor;
         }
 
-        uint64_t SaturatingAdd(uint64_t left, uint64_t right)
+        constexpr uint64_t SaturatingAdd(uint64_t left, uint64_t right)
         {
             return left > std::numeric_limits<uint64_t>::max() - right
                 ? std::numeric_limits<uint64_t>::max()
                 : left + right;
         }
 
-        uint64_t SaturatingMultiply(uint64_t left, uint64_t right)
+        constexpr uint64_t SaturatingMultiply(
+            uint64_t left,
+            uint64_t right)
         {
             return left != 0u &&
                     right > std::numeric_limits<uint64_t>::max() / left
                 ? std::numeric_limits<uint64_t>::max()
                 : left * right;
         }
+
+        constexpr uint64_t EstimatePathTracingWorkUnitsPerPixel(
+            const PathTracingSettings& settings,
+            uint32_t lightCount)
+        {
+            const uint64_t candidateCount = lightCount > 0u
+                ? std::max(settings.neeCandidateCount, 1u)
+                : 0u;
+            const uint64_t selectionWork =
+                settings.neeMode == PathTracingNeeMode::Uniform
+                    ? 0u
+                    : SaturatingMultiply(uint64_t(lightCount), 2u);
+            const uint64_t baseWorkPerPixel = std::max<uint64_t>(
+                1u,
+                SaturatingMultiply(
+                    uint64_t(settings.maxBounces),
+                    SaturatingAdd(
+                        1u,
+                        SaturatingMultiply(
+                            candidateCount,
+                            SaturatingAdd(1u, selectionWork)))));
+            // Seed replay evaluates the current continuation plus at most one
+            // temporal and one independently selected neighbor continuation.
+            const uint64_t solverWorkMultiplier =
+                settings.solver == PathTracingSolver::RestirPt &&
+                    settings.reusePathReservoirs
+                ? 3u
+                : 1u;
+            return SaturatingMultiply(
+                baseWorkPerPixel,
+                solverWorkMultiplier);
+        }
+
+        static_assert(EstimatePathTracingWorkUnitsPerPixel(
+            PathTracingSettings{}, 0u) == 8u);
+        static_assert(EstimatePathTracingWorkUnitsPerPixel(
+            PathTracingSettings{}, 1u) == 16u);
+        static_assert(EstimatePathTracingWorkUnitsPerPixel(
+            ApplyPathTracingSolverPreset(PathTracingSolver::RestirPt),
+            0u) == 9u);
+        static_assert(EstimatePathTracingWorkUnitsPerPixel(
+            ApplyPathTracingSolverPreset(PathTracingSolver::RestirPt),
+            1u) == 36u);
+        static_assert(EstimatePathTracingWorkUnitsPerPixel(
+            ApplyPathTracingSolverPreset(PathTracingSolver::RestirGi),
+            1u) == 32u);
+        static_assert(EstimatePathTracingWorkUnitsPerPixel(
+            ApplyPathTracingSolverPreset(PathTracingSolver::RestirPt),
+            24u) == 450u);
+        static_assert(EstimatePathTracingWorkUnitsPerPixel(
+            ApplyPathTracingSolverPreset(PathTracingSolver::RestirGi),
+            24u) == 400u);
+        static_assert(3840ull * 2160ull * 16ull <=
+            MaxPathTracingWorkUnitsPerDispatch);
+        static_assert(3840ull * 2160ull * 32ull <=
+            MaxPathTracingWorkUnitsPerDispatch);
+        static_assert(3840ull * 2160ull * 36ull <=
+            MaxPathTracingWorkUnitsPerDispatch);
+        static_assert(1920ull * 1080ull * 450ull <=
+            MaxPathTracingWorkUnitsPerDispatch);
 
         bool TryGetStructuredBufferCount(
             nvrhi::IBuffer* buffer,
@@ -112,32 +194,10 @@ namespace uvsr
             uint32_t lightCount,
             uint32_t progressivePhase)
         {
-            const uint64_t candidateCount = lightCount > 0u
-                ? std::max(settings.neeCandidateCount, 1u)
-                : 0u;
-            const uint64_t selectionWork =
-                settings.neeMode == PathTracingNeeMode::Uniform
-                    ? 0u
-                    : SaturatingMultiply(uint64_t(lightCount), 2u);
-            const uint64_t baseWorkPerPixel = std::max<uint64_t>(
-                1u,
-                SaturatingMultiply(
-                    uint64_t(settings.maxBounces),
-                    SaturatingAdd(
-                        1u,
-                        SaturatingMultiply(
-                            candidateCount,
-                            SaturatingAdd(1u, selectionWork)))));
-            // Seed replay evaluates the current continuation plus at most one
-            // temporal and one independently selected neighbor continuation.
-            const uint64_t solverWorkMultiplier =
-                settings.solver == PathTracingSolver::RestirPt &&
-                    settings.reusePathReservoirs
-                ? 3u
-                : 1u;
-            const uint64_t workPerPixel = SaturatingMultiply(
-                baseWorkPerPixel,
-                solverWorkMultiplier);
+            const uint64_t workPerPixel =
+                EstimatePathTracingWorkUnitsPerPixel(
+                    settings,
+                    lightCount);
             if (workPerPixel > MaxPathTracingWorkUnitsPerDispatch)
                 return {};
             const uint64_t maximumPixels =
@@ -166,6 +226,9 @@ namespace uvsr
                 uint32_t(CeilDivide(height, gridY)));
             schedule.grid = uint2(gridX, gridY);
             const uint64_t phaseCount64 = uint64_t(gridX) * gridY;
+            if (phaseCount64 > std::numeric_limits<uint32_t>::max())
+                return {};
+            schedule.estimatedWorkUnitsPerPixel = workPerPixel;
             schedule.phaseCount = uint32_t(phaseCount64);
             const uint32_t phase = uint32_t(
                 uint64_t(progressivePhase) % phaseCount64);
@@ -227,8 +290,7 @@ namespace uvsr
             const PathTracingInputs& inputs,
             const PathTracingConstants& constants,
             const std::vector<LightConstants>& lights,
-            bool stableSignalsRequired,
-            uint32_t stablePlaneCount)
+            bool stableSignalsRequired)
         {
             uint64_t hash = 1469598103934665603ull;
             hash = HashValue(
@@ -280,17 +342,19 @@ namespace uvsr
             hash = HashValue(hash, settings.reuseDirectReservoirs);
             hash = HashValue(hash, settings.reusePathReservoirs);
             hash = HashValue(hash, settings.reuseIndirectGiReservoirs);
+            hash = HashValue(
+                hash,
+                settings.reuseRevalidatedProposalsDuringMotion);
             // Only executable signal topology participates. Authored-but-
             // unavailable reconstruction choices cannot contaminate raw
             // transport history.
             hash = HashValue(hash, stableSignalsRequired);
-            if (stableSignalsRequired)
-                hash = HashValue(hash, stablePlaneCount);
             hash = HashValue(hash, settings.enableFireflyFilter);
             hash = HashValue(hash, settings.fireflyThreshold);
             hash = HashValue(hash, inputs.noiseSettings.pattern);
             hash = HashValue(hash, inputs.noiseSettings.resolution);
             hash = HashValue(hash, inputs.accumulateSamples);
+            hash = HashValue(hash, inputs.accumulationSettings);
             return hash;
         }
 
@@ -316,6 +380,7 @@ namespace uvsr
         const nvrhi::FormatSupport displaySupport =
             nvrhi::FormatSupport::Texture |
             nvrhi::FormatSupport::ShaderLoad |
+            nvrhi::FormatSupport::ShaderUavLoad |
             nvrhi::FormatSupport::ShaderUavStore;
         const nvrhi::FormatSupport countSupport =
             nvrhi::FormatSupport::Texture |
@@ -383,8 +448,6 @@ namespace uvsr
             capabilities.rayQuerySupported &&
             stableSignalMeanFormatSupported && stableGuideFormatSupported;
         capabilities.stablePlaneResolveSupported = false;
-        capabilities.psrSupported = false;
-        capabilities.nrdSupported = false;
         return capabilities;
     }
 
@@ -439,7 +502,7 @@ namespace uvsr
             nvrhi::BindingLayoutItem::StructuredBuffer_SRV(13),
             nvrhi::BindingLayoutItem::Sampler(0)
         };
-        for (uint32_t slot = 0u; slot <= 13u; ++slot)
+        for (uint32_t slot = 0u; slot <= 14u; ++slot)
         {
             layoutDescription.bindings.push_back(
                 nvrhi::BindingLayoutItem::Texture_UAV(slot));
@@ -565,7 +628,9 @@ namespace uvsr
     {
         if (width == 0u || height == 0u)
             return false;
-        if (m_RawMean && m_Width == width && m_Height == height &&
+        if (m_RawMean && m_SuccessfulSampleCount &&
+            m_ColorVariance && m_Display &&
+            m_Width == width && m_Height == height &&
             m_DirectReuseResourcesFullResolution == directReuseRequired &&
             m_GiReuseResourcesFullResolution == giReuseRequired &&
             m_PathReuseResourcesFullResolution == pathReuseRequired &&
@@ -594,6 +659,7 @@ namespace uvsr
         nvrhi::TextureHandle rawMean = m_RawMean;
         nvrhi::TextureHandle successfulSampleCount =
             m_SuccessfulSampleCount;
+        nvrhi::TextureHandle colorVariance = m_ColorVariance;
         nvrhi::TextureHandle display = m_Display;
         nvrhi::TextureHandle residualMean = m_ResidualMean;
         nvrhi::TextureHandle diffuseSuffixMean = m_DiffuseSuffixMean;
@@ -608,6 +674,9 @@ namespace uvsr
             successfulSampleCount = CreatePathTexture(
                 m_Device, width, height, nvrhi::Format::R32_UINT,
                 "Path Tracing/Successful Sample Count");
+            colorVariance = CreatePathTexture(
+                m_Device, width, height, nvrhi::Format::RGBA32_FLOAT,
+                "Path Tracing/Color Variance");
             display = CreatePathTexture(
                 m_Device, width, height, nvrhi::Format::RGBA16_FLOAT,
                 "Path Tracing/Display");
@@ -740,6 +809,7 @@ namespace uvsr
         }
 
         const bool allCreated = rawMean && successfulSampleCount &&
+            colorVariance &&
             display && residualMean && diffuseSuffixMean &&
             primaryNormalRoughness && primaryViewZ &&
             directReservoirs[0] && directReservoirs[1] &&
@@ -755,6 +825,7 @@ namespace uvsr
         ClearBindingSets();
         m_RawMean = rawMean;
         m_SuccessfulSampleCount = successfulSampleCount;
+        m_ColorVariance = colorVariance;
         m_Display = display;
         m_ResidualMean = residualMean;
         m_DiffuseSuffixMean = diffuseSuffixMean;
@@ -774,6 +845,9 @@ namespace uvsr
         m_PathReuseResourcesFullResolution = pathReuseRequired;
         m_StableSignalResourcesFullResolution = stableSignalsRequired;
         m_HistoryIndex = 0u;
+        m_DirectReservoirHistoryValid = false;
+        m_GiCheckpointHistoryValid = false;
+        m_PathSeedHistoryValid = false;
         m_ResetRequested = true;
         return true;
     }
@@ -890,7 +964,9 @@ namespace uvsr
                 11, m_PrimaryNormalRoughness),
             nvrhi::BindingSetItem::Texture_UAV(12, m_PrimaryViewZ),
             nvrhi::BindingSetItem::Texture_UAV(
-                13, m_DirectSampleSeeds[historyIndex])
+                13, m_DirectSampleSeeds[historyIndex]),
+            nvrhi::BindingSetItem::Texture_UAV(
+                14, m_ColorVariance)
         };
         m_BindingSets[historyIndex] = m_Device->createBindingSet(
             description,
@@ -899,12 +975,15 @@ namespace uvsr
     }
 
     void PathTracingPass::ClearHistory(
-        nvrhi::ICommandList* commandList)
+        nvrhi::ICommandList* commandList,
+        bool preserveRevalidatedProposals)
     {
         commandList->clearTextureFloat(
             m_RawMean, nvrhi::AllSubresources, nvrhi::Color(0.f));
         commandList->clearTextureUInt(
             m_SuccessfulSampleCount, nvrhi::AllSubresources, 0u);
+        commandList->clearTextureFloat(
+            m_ColorVariance, nvrhi::AllSubresources, nvrhi::Color(0.f));
         commandList->clearTextureFloat(
             m_Display, nvrhi::AllSubresources, nvrhi::Color(0.f));
         commandList->clearTextureFloat(
@@ -921,18 +1000,21 @@ namespace uvsr
             m_PrimaryViewZ, nvrhi::AllSubresources, nvrhi::Color(0.f));
         for (uint32_t index = 0u; index < 2u; ++index)
         {
-            commandList->clearTextureFloat(
-                m_DirectReservoirs[index],
-                nvrhi::AllSubresources,
-                nvrhi::Color(0.f));
-            commandList->clearTextureFloat(
-                m_SurfaceHistory[index],
-                nvrhi::AllSubresources,
-                nvrhi::Color(0.f));
-            commandList->clearTextureUInt(
-                m_DirectSampleSeeds[index],
-                nvrhi::AllSubresources,
-                0u);
+            if (!preserveRevalidatedProposals)
+            {
+                commandList->clearTextureFloat(
+                    m_DirectReservoirs[index],
+                    nvrhi::AllSubresources,
+                    nvrhi::Color(0.f));
+                commandList->clearTextureFloat(
+                    m_SurfaceHistory[index],
+                    nvrhi::AllSubresources,
+                    nvrhi::Color(0.f));
+                commandList->clearTextureUInt(
+                    m_DirectSampleSeeds[index],
+                    nvrhi::AllSubresources,
+                    0u);
+            }
             commandList->clearTextureFloat(
                 m_GiCheckpointReservoirs[index],
                 nvrhi::AllSubresources,
@@ -941,19 +1023,28 @@ namespace uvsr
                 m_GiCheckpointCounts[index],
                 nvrhi::AllSubresources,
                 0u);
-            commandList->clearTextureUInt(
-                m_PathSeedReservoirs[index],
-                nvrhi::AllSubresources,
-                0u);
-            commandList->clearTextureFloat(
-                m_PathSeedStatistics[index],
-                nvrhi::AllSubresources,
-                nvrhi::Color(0.f));
+            if (!preserveRevalidatedProposals)
+            {
+                commandList->clearTextureUInt(
+                    m_PathSeedReservoirs[index],
+                    nvrhi::AllSubresources,
+                    0u);
+                commandList->clearTextureFloat(
+                    m_PathSeedStatistics[index],
+                    nvrhi::AllSubresources,
+                    nvrhi::Color(0.f));
+            }
         }
-        m_HistoryIndex = 0u;
+        if (!preserveRevalidatedProposals)
+        {
+            m_HistoryIndex = 0u;
+            m_DirectReservoirHistoryValid = false;
+            m_PathSeedHistoryValid = false;
+        }
+        m_GiCheckpointHistoryValid = false;
         m_ProgressivePhase = 0u;
+        m_AccumulationSchedulingCycle = 0u;
         m_HistoryValid = false;
-        m_ReservoirHistoryValid = false;
         m_CompletedSignalCycle = false;
         m_SignalEpoch = 0u;
         m_ResetRequested = false;
@@ -1028,9 +1119,11 @@ namespace uvsr
             m_Capabilities.continuationSeedReservoirSupported &&
             m_Capabilities.replayablePathSeedSupported;
         const bool stableSignalsRequested =
-            requestedSettings.solver == PathTracingSolver::RtxPt &&
-            inputs.settings.solver == PathTracingSolver::RtxPt &&
-            m_Capabilities.CanUseStablePlaneResolve(requestedSettings);
+            m_Capabilities.CanUseSpatialPathResolve(requestedSettings) &&
+            CanUseSpatialPathResolve(
+                inputs.settings,
+                m_Capabilities.stablePlaneSignalSupported &&
+                    m_Capabilities.stablePlaneResolveSupported);
         bool stableSignalsRequired = stableSignalsRequested;
         const bool validInputs = inputs.view && inputs.worldTlas &&
             bool(inputs.materialVisibility) && validEnvironment && validNoise &&
@@ -1101,6 +1194,17 @@ namespace uvsr
             materialCount,
             descriptorCapacity);
         inputs.view->FillPlanarViewConstants(constants.view);
+        // The fallback makes every matrix lane deterministic even when no
+        // prior view exists. Only the explicit validity word enables shader
+        // reprojection; the current view is never mistaken for history.
+        constants.previousView = constants.view;
+        constants.previousViewValid = 0u;
+        if (inputs.previousView && inputs.historyResetByViewOnly)
+        {
+            inputs.previousView->FillPlanarViewConstants(
+                constants.previousView);
+            constants.previousViewValid = 1u;
+        }
         constants.flashlight.lightIndex = -1;
         if (inputs.lights.size() >
             size_t(std::numeric_limits<uint32_t>::max()))
@@ -1152,6 +1256,21 @@ namespace uvsr
         constants.sampleSequencePhase = inputs.samplingPhase;
         constants.noisePattern =
             static_cast<uint32_t>(inputs.noiseSettings.pattern);
+        const SampleAccumulationSettings accumulationSettings =
+            SanitizeSampleAccumulationSettings(
+                inputs.accumulationSettings);
+        constants.accumulationAveraging =
+            static_cast<uint32_t>(accumulationSettings.averaging);
+        constants.accumulationScheduling =
+            static_cast<uint32_t>(accumulationSettings.scheduling);
+        constants.accumulationEffectiveHistory =
+            accumulationSettings.effectiveHistory;
+        constants.accumulationMinimumSamples =
+            accumulationSettings.minimumSamples;
+        constants.accumulationTargetRelativeError =
+            accumulationSettings.targetRelativeError;
+        constants.accumulationMinimumUpdateRate =
+            accumulationSettings.minimumUpdateRate;
         const bool requestedPathPresetIsExecutable =
             pipelineResolution.executable &&
             inputs.settings.solver == requestedSettings.solver;
@@ -1162,7 +1281,7 @@ namespace uvsr
         constants.debugView =
             static_cast<uint32_t>(inputs.settings.debugView);
         constants.stablePlaneCount = constants.debugView ==
-                static_cast<uint32_t>(PathTracingDebugView::StablePlane)
+                static_cast<uint32_t>(PathTracingDebugView::SignalGroup)
             ? std::max(inputs.settings.stablePlaneCount, 2u)
             : inputs.settings.stablePlaneCount;
         if (inputs.accumulateSamples)
@@ -1212,29 +1331,17 @@ namespace uvsr
                 inputs,
                 constants,
                 submittedLights,
-                stableSignalsRequired,
-                constants.stablePlaneCount);
+                stableSignalsRequired);
         const bool historyReset = m_ResetRequested || !m_HistoryValid ||
             m_LastHistoryEpoch != inputs.historyEpoch ||
             m_LastTransportSignature != transportSignature;
-        const bool previousHistoryAvailable =
-            m_ReservoirHistoryValid && !historyReset;
-        if (historyReset)
-        {
-            ClearHistory(commandList);
-            if (stableSignalsRequired)
-                m_SignalEpoch = inputs.historyEpoch;
-        }
-        m_LastHistoryEpoch = inputs.historyEpoch;
-        m_LastTransportSignature = transportSignature;
-
         const PathTracingDispatchSchedule dispatchSchedule =
             BuildPathTracingDispatchSchedule(
                 inputs.width,
                 inputs.height,
                 inputs.settings,
                 constants.lightCount,
-                m_ProgressivePhase);
+                historyReset ? 0u : m_ProgressivePhase);
         if (!dispatchSchedule.valid)
         {
             if (!m_ReportedUnsafeSchedule)
@@ -1246,15 +1353,50 @@ namespace uvsr
             return failure;
         }
         m_ReportedUnsafeSchedule = false;
-        constants.schedulingGrid = dispatchSchedule.grid;
-        constants.schedulingPhase = dispatchSchedule.phase;
-        if (historyReset && dispatchSchedule.phaseCount > 1u &&
-            dispatchSchedule.phaseCount <= MaxPathTracingPreviewTilePixels)
+        if (historyReset && inputs.noiseSettings.animate)
         {
             constants.flags |=
-                UVSR_PATH_TRACING_FLAG_REPLICATE_PREVIEW;
+                UVSR_PATH_TRACING_FLAG_ANIMATE_HISTORY_RESET;
         }
+        const bool preserveRevalidatedProposals =
+            historyReset &&
+            inputs.historyResetByViewOnly &&
+            inputs.previousView != nullptr &&
+            inputs.settings.reuseRevalidatedProposalsDuringMotion &&
+            !m_ResetRequested &&
+            m_HistoryValid &&
+            dispatchSchedule.phaseCount == 1u &&
+            (m_DirectReservoirHistoryValid ||
+                m_PathSeedHistoryValid);
+        const bool previousDirectHistoryAvailable =
+            m_DirectReservoirHistoryValid &&
+            (!historyReset || preserveRevalidatedProposals);
+        const bool previousPathHistoryAvailable =
+            m_PathSeedHistoryValid &&
+            (!historyReset || preserveRevalidatedProposals);
+        const bool previousGiHistoryAvailable =
+            m_GiCheckpointHistoryValid && !historyReset;
+        if (historyReset)
+        {
+            ClearHistory(commandList, preserveRevalidatedProposals);
+            if (stableSignalsRequired)
+                m_SignalEpoch = inputs.historyEpoch;
+        }
+        if (inputs.accumulateSamples)
+        {
+            // Adaptive revisits advance only after a complete successfully
+            // submitted lattice cycle. Render gaps cannot skip a pixel's
+            // deterministic revisit phase.
+            constants.schedulingSerialLow =
+                LowWord(m_AccumulationSchedulingCycle);
+            constants.schedulingSerialHigh =
+                HighWord(m_AccumulationSchedulingCycle);
+        }
+        m_LastHistoryEpoch = inputs.historyEpoch;
+        m_LastTransportSignature = transportSignature;
 
+        constants.schedulingGrid = dispatchSchedule.grid;
+        constants.schedulingPhase = dispatchSchedule.phase;
         const uint32_t outputHistoryIndex = m_HistoryIndex;
         if (!EnsureBindingSet(inputs, outputHistoryIndex))
         {
@@ -1289,6 +1431,26 @@ namespace uvsr
         commandList->dispatch(
             div_ceil(dispatchSchedule.workExtent.x, 8u),
             div_ceil(dispatchSchedule.workExtent.y, 8u));
+
+        if (historyReset && dispatchSchedule.phaseCount > 1u)
+        {
+            // Publish the newly traced phase before a cheap full-resolution
+            // pass copies each phase-zero representative through its tile.
+            // This initializes presentation only; raw means/counts and every
+            // proposal history remain reset until their pixels are traced.
+            nvrhi::utils::TextureUavBarrier(commandList, m_Display);
+            commandList->commitBarriers();
+            constants.flags |=
+                UVSR_PATH_TRACING_FLAG_REPLICATE_PREVIEW;
+            commandList->writeBuffer(
+                m_ConstantBuffer,
+                &constants,
+                sizeof(constants));
+            commandList->setComputeState(state);
+            commandList->dispatch(
+                div_ceil(inputs.width, 8u),
+                div_ceil(inputs.height, 8u));
+        }
         commandList->endMarker();
 
         m_HistoryValid = true;
@@ -1302,11 +1464,15 @@ namespace uvsr
         if (completedProgressiveCycle && anyReservoirHistoryRequired)
         {
             m_HistoryIndex ^= 1u;
-            m_ReservoirHistoryValid = true;
+            m_DirectReservoirHistoryValid = directReuseRequired;
+            m_GiCheckpointHistoryValid = giReuseRequired;
+            m_PathSeedHistoryValid = pathReuseRequired;
         }
         if (completedProgressiveCycle)
         {
             m_DebugRefreshActive = false;
+            if (inputs.accumulateSamples)
+                ++m_AccumulationSchedulingCycle;
             if (stableSignalsRequired)
                 m_CompletedSignalCycle = true;
         }
@@ -1319,6 +1485,7 @@ namespace uvsr
         result.sceneLinearDisplay = m_Display;
         result.rawMean = m_RawMean;
         result.successfulSampleCount = m_SuccessfulSampleCount;
+        result.colorVariance = m_ColorVariance;
         result.directReservoir = directReuseRequired
             ? m_DirectReservoirs[outputHistoryIndex].Get()
             : nullptr;
@@ -1345,6 +1512,9 @@ namespace uvsr
             : nullptr;
         result.capabilities = m_Capabilities;
         result.submittedSamplePassCount = m_SubmittedSamplePassCount;
+        result.estimatedWorkUnitsPerPixel =
+            dispatchSchedule.estimatedWorkUnitsPerPixel;
+        result.dispatchPhaseCount = dispatchSchedule.phaseCount;
         result.signalEpoch = coherentSignalsAvailable
             ? m_SignalEpoch
             : 0u;
@@ -1353,25 +1523,19 @@ namespace uvsr
         result.completedSignalCycle = coherentSignalsAvailable;
         result.directReservoirActive = directReservoirActive;
         result.temporalReuseActive =
-            reuseRequested && previousHistoryAvailable;
+            reuseRequested && previousDirectHistoryAvailable;
         result.spatialReuseActive =
-            reuseRequested && previousHistoryAvailable &&
+            reuseRequested && previousDirectHistoryAvailable &&
             m_Capabilities.previousFrameSpatialReuseSupported;
         result.giCheckpointReuseActive =
-            giReuseRequired && previousHistoryAvailable;
+            giReuseRequired && previousGiHistoryAvailable;
         result.pathSeedReplayActive =
-            pathReuseRequired && previousHistoryAvailable;
+            pathReuseRequired && previousPathHistoryAvailable;
         result.serRequestedButUnavailable =
             requestedSettings.useSer && !m_Capabilities.serSupported;
         result.stablePlaneResolveRequestedButUnavailable =
-            IsStablePlaneResolveRequested(requestedSettings) &&
+            IsSpatialPathResolveRequested(requestedSettings) &&
             !stableSignalsRequired;
-        result.psrRequestedButUnavailable =
-            requestedSettings.usePsr && !m_Capabilities.psrSupported;
-        result.nrdRequestedButUnavailable =
-            (requestedSettings.denoiser == PathTracingDenoiser::NrdReblur ||
-                requestedSettings.denoiser == PathTracingDenoiser::NrdRelax) &&
-            !m_Capabilities.nrdSupported;
         result.pathReuseRequestedButUnavailable =
             requestedSettings.reusePathReservoirs && !pathReuseRequired;
         result.giReuseRequestedButUnavailable =

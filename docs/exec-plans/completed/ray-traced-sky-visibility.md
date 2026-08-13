@@ -2,14 +2,15 @@
 
 ## Status
 
-- State: technically verified extension awaiting exact-artifact product review
+- State: completed and merged through PR #30; retained as the historical
+  implementation record
 - Coordinator: `/root`
 - Project/integration branch and worktree:
   `codex/ray-traced-sky-visibility` in
   `C:/Users/brock/OneDrive/Documents/uvsr/work/ray-traced-sky-visibility`
 - Base commit: `efff7ecaf45024d949998567b480c131e348abef`
 - Started: 2026-08-06
-- Last updated: 2026-08-06
+- Last updated: 2026-08-13
 - Planned archive:
   `docs/exec-plans/completed/ray-traced-sky-visibility.md`
 
@@ -21,6 +22,12 @@ of each valid surface pixel, supports independently applying that experimental
 scalar to diffuse IBL and specular IBL, and shares explicit maximum-distance
 modes with the proven Heitz shadow pass without changing either pass's default
 `Max` traversal behavior.
+
+Historical scope note: this plan records the original PR #30 contract. Later
+temporal-accumulation work changed the current product defaults to enabled,
+two samples, both IBL consumers, added adaptive accumulation and a debug view,
+and retained the same fail-open producer contract. Current behavior is defined
+by the durable renderer documentation rather than this historical plan.
 
 Done when:
 
@@ -141,7 +148,7 @@ asset/package contracts:
 | `sky-pass-implementation` | `/root/shadow_reference_audit` | Shared feature worktree | `efff7ec` | New sky-pass files only | Frozen Heitz and representation contracts | Complete |
 | `lighting-consumers` | `/root/lighting_ui_audit` | Shared feature worktree | `efff7ec` | Deferred PBR and screen-space composite files only | Frozen diffuse-IBL contract | Complete |
 | `sky-tests` | `/root/verification_design` | Shared feature worktree | `efff7ec` | Two new sky test files only | Completed verification design and integrated producer API | Complete |
-| `integrate` | `/root` | Feature worktree | `efff7ec` | Renderer/UI/build/tests/docs; review all combined changes | Audit decisions and worker handoffs | Active |
+| `integrate` | `/root` | Feature worktree | `efff7ec` | Renderer/UI/build/tests/docs; review all combined changes | Audit decisions and worker handoffs | Complete |
 | `independent-review` | `/root/integration_review` | Read-only shared feature worktree | Candidate | None | Integrated candidate | Complete |
 | `tmax-shadow-audit` | `/root/tmax_shadow_audit` | Read-only shared feature worktree | `22195f3` | None | Published pass and Heitz contracts | Complete |
 | `ibl-consumer-audit` | `/root/ibl_consumer_audit` | Read-only shared feature worktree | `22195f3` | None | Published deferred/composite contracts | Complete |
@@ -324,8 +331,8 @@ asset/package contracts:
    substantiated sparse-edge finding.
 6. Build, test, inspect runtime behavior, obtain fresh independent review, and
    rerun affected evidence.
-7. Commit and push the exact replacement candidate, update draft PR #30, and
-   require product review of the new artifact before merge.
+7. Commit and publish the exact candidate through PR #30, recording the
+   product-review boundary honestly.
 
 ## Verification Plan
 
@@ -384,15 +391,21 @@ Stop and ask the user if:
 
 ## Completion
 
-- Final integrated commit: pending.
+- Final integrated commit: feature `eac993d7e5752be9621aa8ec20085fd439e8dca4`;
+  merged through PR #30 as `51bad6a7fccb88afd46078dcd95ef4bbdb509d7a`.
 - Verification summary: Release build, 38 of 38 CTest, shader bundles,
   documentation validators, source invariants, and independent sparse review
   passed; the replacement application/distance matrix and product acceptance
   remain for the exact committed artifact.
 - Independent review: complete with no remaining P0 through P2 findings; both
   P3 findings were repaired and affected checks rerun.
-- Coming Soon/documentation update: active entry added; completion pending.
-- Pushed/PR/merged, or intentionally local: pending.
-- Remaining experiments or follow-ups: pending.
-- Active ownership released: pending.
-- Archived to completed/abandoned path: pending.
+- Coming Soon/documentation update: no current README Coming Soon section;
+  durable sky-visibility documentation remains authoritative.
+- Pushed/PR/merged, or intentionally local: merged to `main` through PR #30 on
+  2026-08-06.
+- Remaining experiments or follow-ups: exact product acceptance of the original
+  artifact was not recorded. Later temporal work superseded its defaults,
+  scheduling, and diagnostics and verified the combined replacement candidate.
+- Active ownership released: yes.
+- Archived to completed/abandoned path:
+  `docs/exec-plans/completed/ray-traced-sky-visibility.md`.

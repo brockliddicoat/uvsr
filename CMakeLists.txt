@@ -598,6 +598,16 @@ add_test(
     COMMAND uvsr_path_tracing_settings_tests)
 
 add_executable(
+    uvsr_sample_accumulation_settings_tests
+    tests/sample_accumulation_settings_tests.cpp)
+target_include_directories(
+    uvsr_sample_accumulation_settings_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(
+    NAME uvsr_sample_accumulation_settings_reference
+    COMMAND uvsr_sample_accumulation_settings_tests)
+
+add_executable(
     uvsr_path_tracing_source_contract_tests
     tests/path_tracing_source_contract_tests.cpp)
 add_test(

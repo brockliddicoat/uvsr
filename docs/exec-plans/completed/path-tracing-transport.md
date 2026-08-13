@@ -20,7 +20,7 @@
 
 Goal: build the smallest complete DX12 path-tracing implementation on the exact
 requested main commit, expose it as a first-class Lighting Solution, and keep
-NVIDIA-derived RTX PT, ReSTIR PT, and ReSTIR GI behavior behind one extensible
+NVIDIA-derived RTX PT, RESTIR PT, and RESTIR GI behavior behind one extensible
 transport core instead of three independent renderers.
 
 Done when:
@@ -35,8 +35,8 @@ Done when:
       Path Tracing controls.
 - [x] A **Pathing** drawer immediately follows General and exposes executable
       **RTX PT**, NEE/NEE-AT, an optional first-party direct reservoir, a
-      clean-room **ReSTIR PT** seed-replay subset, and a clean-room
-      **ReSTIR GI** indirect-checkpoint subset. Neither subset claims NVIDIA
+      clean-room **RESTIR PT** seed-replay subset, and a clean-room
+      **RESTIR GI** indirect-checkpoint subset. Neither subset claims NVIDIA
       parity or geometric/hybrid reconnection; SER remains unavailable.
 - [x] Noise exposes **Accumulate Samples** in both lighting solutions. Static
       successful samples persist and receive lower retry priority; camera,
@@ -47,7 +47,7 @@ Done when:
       production C++ compilation, and independent transaction review passed.
 - [x] Firefly handling is executable and biased. RTX PT has a first-party
       spatial Stable Plane Resolve with one to three path layers and raw
-      fallback; ReSTIR PT/GI retain raw output until selected candidates carry
+      fallback; RESTIR PT/GI retain raw output until selected candidates carry
       a sound layer identity. NRD and PSR remain honestly disabled.
 - [x] The exact source snapshot builds, focused and full tests pass, a bundled
       scene completes a smoke exercise in Ray Marching and every Path Tracing
@@ -142,7 +142,7 @@ asset/package contracts:
 - `PathTracingSolver::{RtxPt, RestirPt, RestirGi}` chooses a preset over one
   transport resource set; a solver change resets all Path Tracing histories.
 - The transport owns current/accumulated radiance, sample count, optional
-  direct-reservoir history, ReSTIR GI local-checkpoint history, ReSTIR PT local
+  direct-reservoir history, RESTIR GI local-checkpoint history, RESTIR PT local
   seed/statistics history, and one invalidation fingerprint. Only the effective
   solver's history family is full resolution; no history survives a mismatched
   camera, light, geometry, material, environment, resolution, or transport
@@ -157,7 +157,7 @@ as follows:
 
 - UVSR will not copy or vendor RTXPT, RTXDI, RTXDI-Library, NRD, or NVAPI source.
   Their RTX SDK licenses do not clearly permit source incorporation into this
-  repository. The user-requested **RTX PT**, **ReSTIR PT**, **ReSTIR GI**, and
+  repository. The user-requested **RTX PT**, **RESTIR PT**, **RESTIR GI**, and
   **RTXDI** labels identify independently implemented algorithmic presets; the
   UI and engineering documentation must state that these are NVIDIA-reference-
   aligned UVSR implementations, not certified or bit-identical NVIDIA SDK
@@ -179,13 +179,13 @@ as follows:
   local tile feedback distribution is not implemented, the control must report
   the independently implemented adaptive approximation instead of claiming
   RTXPT identity.
-- ReSTIR PT is an executable UVSR seed-space subset. It persists a complete
+- RESTIR PT is an executable UVSR seed-space subset. It persists a complete
   deterministic `uint2` local path seed, replays the current, previous
   same-pixel, and one radiance-independent previous-neighbor seed through the
   exact receiving-pixel integrator, and replaces rather than adds the local
   indirect suffix. It does not implement NVIDIA's hybrid geometric
   reconnection, Jacobians, or recursive combined-reservoir feedback.
-- ReSTIR GI is an executable UVSR indirect-checkpoint subset. It combines
+- RESTIR GI is an executable UVSR indirect-checkpoint subset. It combines
   the current and previous same-pixel finite local indirect suffix, counts
   finite black proposals, and persists only the current local checkpoint with
   `M=1`. It has no secondary-surface spatial transform or reconnection.
@@ -364,7 +364,7 @@ as follows:
 - Build directory and runtime/GPU/resource lease: none.
 - Dependencies already integrated: none.
 - Interface/invariant contract: distinguish library APIs from sample behavior;
-  enumerate exact NEE/NEE-AT, SER, RTXDI, ReSTIR PT/GI, stable-plane, NRD,
+  enumerate exact NEE/NEE-AT, SER, RTXDI, RESTIR PT/GI, stable-plane, NRD,
   firefly, and PSR semantics/defaults with direct primary-source references.
 - Deliverable: implementable preset table, licensing constraints, source paths,
   and honest parity boundaries.
@@ -419,7 +419,7 @@ as follows:
 | UI topology and transitions | Source/animation/dropdown contracts plus live reversal | focused contracts and runtime smoke | passed; the final PT and RM drawer sets had single consistent margins and no retained blank envelopes |
 | Shader packaging and runtime bindings | shader bundle and renderer contracts | clean Release build and CTest | passed; 327 production shader tasks and 50 staged shader binaries |
 | Ray Marching unchanged | focused existing tests and matched smoke scene | Release CTest and live exercise | passed; Bistro returned from PT to the live raster renderer with its complete drawer set |
-| RTX PT/ReSTIR PT/ReSTIR GI execute | non-black stable output and per-preset statistics | isolated executable, same scene/camera | passed at 1920 x 1080; all three presets presented traced frames without crash or stall |
+| RTX PT/RESTIR PT/RESTIR GI execute | non-black stable output and per-preset statistics | isolated executable, same scene/camera | passed at 1920 x 1080; all three presets presented traced frames without crash or stall |
 | Accumulation/invalidation works | sample count/convergence and reset observations | contracts plus static and scene-transition exercise | passed; accumulation filled the progressive image, solver changes restarted it, and Sponza-to-Bistro invalidated and rebuilt transport |
 | Documentation is valid | Title Case, links, line counts, diff checks | repository scripts | passed; 115,620 first-party, 387,466 third-party, 503,086 total lines; diff check clean |
 | Independent risk review | shader/lifetime/licensing findings resolved | PT-REVIEW handoff | no P0/P1 findings remain in the frozen production source |
@@ -433,18 +433,18 @@ as follows:
 | 2026-08-12 | Keep Ray Marching as the default | Preserves current startup/output and makes Path Tracing opt-in | UI/runtime |
 | 2026-08-12 | Make raw transport the mandatory fallback | Optional NVIDIA capabilities must not make the base path tracer inert | core/denoising |
 | 2026-08-12 | Do not copy or vendor NVIDIA RTX SDK source | The reviewed releases use the proprietary RTX SDK license; first-party implementation avoids an unapproved source-redistribution decision | all |
-| 2026-08-12 | Initially keep unsupported namesake paths visible but capability-gated | This protected the first transport candidate from dormant or mislabeled branches; superseded for ReSTIR PT/GI on 2026-08-13 after sound subset contracts were frozen | core/UI/docs |
+| 2026-08-12 | Initially keep unsupported namesake paths visible but capability-gated | This protected the first transport candidate from dormant or mislabeled branches; superseded for RESTIR PT/GI on 2026-08-13 after sound subset contracts were frozen | core/UI/docs |
 | 2026-08-12 | Upload analytic lights through a growing structured buffer | The reviewed 16-light constant array silently lost valid scene lights; one dynamic buffer keeps NEE complete for the submitted list | core |
 | 2026-08-13 | Resolve every requested shader variant to an executable pipeline before dispatch | Optional PSO failures must not disable the baseline; authored settings remain visible while effective settings fall back first without RTXDI and then to Uniform RTX PT | core/UI |
 | 2026-08-13 | Keep common post-processing and command-list submission outside the raster fallback scope | The first runtime candidate skipped close/execute after a successful PT dispatch, so no traced work could reach the GPU or presentation | renderer |
 | 2026-08-13 | Clip whole drawers while collapsing instead of fading their complete contents | Height and opacity previously fell together, leaving large transparent layout envelopes; close-only clipping retains the smooth transition without blank gaps | UI |
 | 2026-08-13 | Canonicalize every submitted light record before upload and history hashing | Donut leaves light-type-irrelevant lanes unspecified, which could spuriously invalidate a static accumulation history | core/invalidation |
-| 2026-08-13 | Implement solver-specific clean-room ReSTIR subsets instead of relabeling RGB accumulation | ReSTIR GI may retain a complete indirect checkpoint, while ReSTIR PT must retain a deterministic primary-sample seed and replay it at the receiving pixel; neither path may double-count the local indirect term | core/solver/docs |
-| 2026-08-13 | Keep ReSTIR PT and GI payloads physically distinct behind shared reservoir statistics | Both solvers share finite `W`, target, and `M` update rules, reset epochs, and ping-pong lifecycle, but a GI radiance checkpoint is not a replayable PT sample identity | core/resource lifetime |
+| 2026-08-13 | Implement solver-specific clean-room RESTIR subsets instead of relabeling RGB accumulation | RESTIR GI may retain a complete indirect checkpoint, while RESTIR PT must retain a deterministic primary-sample seed and replay it at the receiving pixel; neither path may double-count the local indirect term | core/solver/docs |
+| 2026-08-13 | Keep RESTIR PT and GI payloads physically distinct behind shared reservoir statistics | Both solvers share finite `W`, target, and `M` update rules, reset epochs, and ping-pong lifecycle, but a GI radiance checkpoint is not a replayable PT sample identity | core/resource lifetime |
 | 2026-08-13 | Persist only local reservoirs and use previous-frame donors for the current estimate | Feeding recursively combined neighbor reservoirs back into history would require pairwise MIS or explicit non-overlap accounting; local-only persistence keeps the first executable subsets sound and bounded | core/solver |
-| 2026-08-13 | Replace fallback-only ReSTIR recipes with explicitly qualified executable UVSR subsets | Deterministic seed replay gives ReSTIR PT a real path-sample identity; same-pixel local checkpoints give ReSTIR GI a sound first temporal estimator. Both remain visibly below NVIDIA namesake parity without geometric/spatial reconnection | core/UI/docs |
+| 2026-08-13 | Replace fallback-only RESTIR recipes with explicitly qualified executable UVSR subsets | Deterministic seed replay gives RESTIR PT a real path-sample identity; same-pixel local checkpoints give RESTIR GI a sound first temporal estimator. Both remain visibly below NVIDIA namesake parity without geometric/spatial reconnection | core/UI/docs |
 | 2026-08-13 | Schedule Ray Marching attempts before guarded stochastic producers | A full-resolution prepare mask lets already-successful pixels skip stochastic visibility/shadow work while transactional resolve prevents partial producer failures from contaminating retained means | renderer/noise |
-| 2026-08-13 | Add a clean-room spatial path-layer resolve only to RTX PT | The un-resampled reference solver owns a sound primary/diffuse/specular split. ReSTIR winners do not yet carry layer identity, so they retain raw fallback rather than misclassifying donor paths | core/denoising/UI/docs |
+| 2026-08-13 | Add a clean-room spatial path-layer resolve only to RTX PT | The un-resampled reference solver owns a sound primary/diffuse/specular split. RESTIR winners do not yet carry layer identity, so they retain raw fallback rather than misclassifying donor paths | core/denoising/UI/docs |
 
 ## Progress and Handoffs
 
@@ -456,8 +456,8 @@ as follows:
 | 2026-08-12 | `/root` | technically verified except runtime | `build-path-tracing/bin/uvsr.exe` | all-target Release build, 308 shader tasks, 42 of 42 CTest, README counts, and 166 in-scope Title Case headings passed | runtime smoke when GPU lease is free; original feature gaps remain |
 | 2026-08-13 | Crash and submission repair | runtime candidate | `build-path-tracing-fix/bin/uvsr.exe` | Path Tracing selected without a crash; `0 tris` and changed lighting proved raster bypass; Sponza-to-Bistro scene load completed while PT remained active | rebuild required after subsequent light-canonicalization source repair |
 | 2026-08-13 | UI collapse repair | runtime candidate | `build-path-tracing-fix/bin/uvsr.exe` | Diffuse, Buffers, Aliasing, and Shadows collapsed without retained blank margins; Settings and scene selection remained responsive | preserve exact four-gate opt-in contract |
-| 2026-08-13 | Reservoir solver design | complete | frozen read-only audits | ReSTIR GI complete-indirect checkpoint and ReSTIR PT deterministic seed-space replay contracts frozen; no NVIDIA source copied | implement both as solver-specific shader variants and independently review estimator/resource lifetime |
-| 2026-08-13 | ReSTIR solver implementation | complete | 18 solver/RTXDI/NEE variants plus conditional GI/PT histories | all 18 DXC permutations, focused settings/source tests, direct pass compilation, independent P0/P1 review, and final live preset smoke passed | retain the qualified subset boundary |
+| 2026-08-13 | Reservoir solver design | complete | frozen read-only audits | RESTIR GI complete-indirect checkpoint and RESTIR PT deterministic seed-space replay contracts frozen; no NVIDIA source copied | implement both as solver-specific shader variants and independently review estimator/resource lifetime |
+| 2026-08-13 | RESTIR solver implementation | complete | 18 solver/RTXDI/NEE variants plus conditional GI/PT histories | all 18 DXC permutations, focused settings/source tests, direct pass compilation, independent P0/P1 review, and final live preset smoke passed | retain the qualified subset boundary |
 | 2026-08-13 | Ray Marching attempt scheduling | complete | prepare mask plus guarded visibility/shadow producers and transactional resolve | focused renderer/Heitz/sky contracts, production C++ compile, independent P0/P1 review, and final live reversal passed | retain transactional producer gating |
 | 2026-08-13 | RTX PT spatial path-layer resolve | complete | coherent primary/diffuse/specular signals plus fixed 5x5 cross-bilateral resolve | 19 DXC shaders, production C++ compile, 327-task package, focused tests, and independent resource/lifetime review passed after cache-release repair | exercise 1/2/3-layer modes in the final live smoke |
 | 2026-08-13 | Finite analytic emitters and direct seed identity | complete | transport-local directional-disk and visible-sphere sampling plus `R32_UINT` direct-reservoir seed history | all 18 DXC variants, focused tests, direct C++ compile, exact-PDF numerical contracts, final Release build, and independent estimator/resource review passed | retain exact proposal identity through reuse |
@@ -481,7 +481,7 @@ as follows:
   skip boundary. Focused contracts and independent review prove that no partial
   producer result can commit. The combined runtime exercise completed without
   a crash or stalled transition.
-- ReSTIR PT/GI are implemented as explicitly qualified clean-room
+- RESTIR PT/GI are implemented as explicitly qualified clean-room
   subsets. They must not be described as NVIDIA 1:1 implementations: the GI
   subset has no spatial secondary-surface reconnection, and the PT subset has
   seed-space replay but no hybrid geometric reconnection. RTX PT now has a
@@ -511,9 +511,9 @@ Stop and ask the user if:
   plan, with subject `feat: add path-tracing lighting solution`.
 - Verification summary: the final combined Release build completed all 327
   shader tasks and staged 50 shader binaries; all 42 CTest cases passed. The
-  exact executable selected and presented RTX PT, ReSTIR PT, and ReSTIR GI at
+  exact executable selected and presented RTX PT, RESTIR PT, and RESTIR GI at
   1920 x 1080, accumulated a static Sponza image, exercised three-layer Stable
-  Plane Resolve, loaded Bistro while ReSTIR GI remained selected, and returned
+  Plane Resolve, loaded Bistro while RESTIR GI remained selected, and returned
   to Ray Marching. It did not crash, stall, retain stale menu frames, or leave
   blank drawer envelopes. README counts and the final diff check are current.
 - Independent review: no P0 findings remain; solver-resource, Ray Marching
@@ -524,8 +524,8 @@ Stop and ask the user if:
 - Pushed/PR/merged, or intentionally local: direct fast-forward publication to
   `origin/main` was explicitly authorized; no pull request or merge commit is
   required.
-- Remaining experiments or follow-ups: add hybrid/geometric ReSTIR PT
-  reconnection, spatial secondary-surface ReSTIR GI transforms, native SER,
+- Remaining experiments or follow-ups: add hybrid/geometric RESTIR PT
+  reconnection, spatial secondary-surface RESTIR GI transforms, native SER,
   PSR, path NRD, and matched environment/emissive NEE before claiming NVIDIA
   namesake parity.
 - Active ownership released: all worker and coordinator path leases are

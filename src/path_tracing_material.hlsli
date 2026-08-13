@@ -435,7 +435,8 @@ float3 PathTracingSurfaceSignature(PathTracingSurface surface)
 
 bool PathTracingSurfaceSignaturesAreCompatible(
     float4 currentSignature,
-    float4 previousSignature)
+    float4 previousSignature,
+    bool requireCameraRelativeDepth)
 {
     if (!(currentSignature.w > 0.0f) ||
         currentSignature.w != previousSignature.w)
@@ -444,11 +445,15 @@ bool PathTracingSurfaceSignaturesAreCompatible(
     }
     const float normalDistance = length(
         currentSignature.xy - previousSignature.xy);
+    if (!(normalDistance < 0.12f))
+        return false;
+    if (!requireCameraRelativeDepth)
+        return true;
+
     const float depthScale = max(
         max(abs(currentSignature.z), abs(previousSignature.z)),
         1.0f);
-    return normalDistance < 0.12f &&
-        abs(currentSignature.z - previousSignature.z) <
+    return abs(currentSignature.z - previousSignature.z) <
             depthScale * 0.025f;
 }
 

@@ -112,6 +112,7 @@
 #include "ray_traced_flashlight_shadows.h"
 #include "ray_traced_sky_visibility.h"
 #include "renderer_statistics.h"
+#include "sample_accumulation_settings.h"
 #include "scene_catalog.h"
 #include "scene_loading.h"
 #include "scene_light_names.h"
@@ -943,8 +944,11 @@ enum class PbrLightingDebugView : uint32_t
     FinalSpecularEnvironment,
     CombinedEnvironment,
     SpecularOcclusion,
-    EnvironmentMip
+    EnvironmentMip,
+    SkyVisibility
 };
+static_assert(static_cast<uint32_t>(
+    PbrLightingDebugView::SkyVisibility) == 12u);
 
 static void ApplyPbrMaterialParameters(Material& material, float ior = 1.5f)
 {
@@ -1248,6 +1252,7 @@ struct UIData
         LightingSolution::RayMarching;
     PathTracingSettings                 PathTracing;
     bool                                AccumulateSamples = false;
+    SampleAccumulationSettings          SampleAccumulation;
     AntiAliasingSettings                AntiAliasing;
     bool                                TemporalAaSharpenEnabled = false;
     float                               TemporalAaSharpness =
@@ -1479,6 +1484,20 @@ private:
     bool                                m_FlashlightCollisionInitialized = false;
     bool                                m_FlashlightAimInitialized = false;
     bool                                m_FlashlightPoseValid = false;
+    FlashlightMotionSettings            m_FlashlightMotionSettings;
+    bool                                m_FlashlightMotionSettingsValid = false;
+    float3                              m_FlashlightCameraPosition = 0.f;
+    float3                              m_FlashlightCameraDirection =
+                                            float3(0.f, 0.f, -1.f);
+    float3                              m_FlashlightCameraUp =
+                                            float3(0.f, 1.f, 0.f);
+    bool                                m_FlashlightCameraPoseValid = false;
+    float3                              m_FlashlightSubmittedPosition = 0.f;
+    float3                              m_FlashlightSubmittedDirection =
+                                            float3(0.f, 0.f, -1.f);
+    float3                              m_FlashlightSubmittedRight =
+                                            float3(1.f, 0.f, 0.f);
+    bool                                m_FlashlightSubmittedPoseValid = false;
     std::vector<std::shared_ptr<Light>> m_SceneLightsWithoutFlashlight;
     std::vector<std::shared_ptr<Light>> m_EditableLights;
     std::shared_ptr<InstancedOpaqueDrawStrategy> m_OpaqueDrawStrategy;
@@ -1559,8 +1578,13 @@ private:
     const Scene*                        m_MaterialPickScene = nullptr;
     uint64_t                            m_AntiAliasingPhase = 0u;
     uint64_t                            m_LightingHistoryEpoch = 1u;
-    uint64_t                            m_LastLightingHistorySignature = 0u;
-    bool                                m_HasLightingHistorySignature = false;
+    uint64_t                            m_LightingAccumulationSchedulingCycle =
+                                            0u;
+    uint64_t                            m_LastLightingViewSignature = 0u;
+    uint64_t                            m_LastLightingDomainSignature = 0u;
+    bool                                m_HasLightingHistorySignatures = false;
+    bool                                m_LightingHistoryChangedByViewOnly =
+                                            false;
     uint64_t                            m_ScreenSpaceVisibilityPhase = 0u;
     uint64_t                            m_HeitzRatioEstimatorPhase = 0u;
     bool                                m_HeitzRatioEstimatorContributedLastFrame =
@@ -1569,6 +1593,11 @@ private:
                                             false;
     bool                                m_PathTransportDispatchedThisFrame =
                                             false;
+    uint32_t                            m_PathTracingDispatchPhaseCount = 1u;
+    uint64_t                            m_PathTracingEstimatedWorkUnitsPerPixel =
+                                            0u;
+    uint64_t                            m_PathTracingSubmittedSamplePassCount =
+                                            0u;
     bool                                m_RayTracedFlashlightShadowDispatchedThisFrame =
                                             false;
     bool                                m_ShadowDenoisingDispatchedThisFrame =
@@ -1724,7 +1753,7 @@ public:
             std::make_unique<PathTracingStablePlaneResolvePass>(
                 GetDevice(),
                 m_ShaderFactory);
-        m_PathTracingPass->SetStablePlaneResolveSupported(
+        m_PathTracingPass->SetSpatialPathResolveSupported(
             m_PathTracingStablePlaneResolvePass->IsSupported());
         m_LightingAccumulationPass =
             std::make_unique<LightingAccumulationPass>(
@@ -2028,6 +2057,7 @@ public:
         m_ui.Lighting = LightingSolution::RayMarching;
         m_ui.PathTracing = PathTracingSettings{};
         m_ui.AccumulateSamples = false;
+        m_ui.SampleAccumulation = SampleAccumulationSettings{};
         m_ui.AntiAliasing = AntiAliasingSettings{};
         m_ui.TemporalAaSharpenEnabled = false;
         m_ui.TemporalAaSharpness = TemporalAaDefaultSharpness;
@@ -2333,6 +2363,18 @@ public:
         m_FlashlightCollisionInitialized = false;
         m_FlashlightAimInitialized = false;
         m_FlashlightPoseValid = false;
+        m_FlashlightMotionSettingsValid = false;
+        m_FlashlightCameraPoseValid = false;
+        m_FlashlightSubmittedPoseValid = false;
+    }
+
+    static bool SameFlashlightVector(
+        const float3& left,
+        const float3& right)
+    {
+        return left.x == right.x &&
+            left.y == right.y &&
+            left.z == right.z;
     }
 
     void ApplyFlashlightPresentation()
@@ -2448,6 +2490,36 @@ public:
         const float3 cameraDirection =
             normalize(camera.GetDir());
         const float3 cameraUp = normalize(camera.GetUp());
+        const float3 cameraPosition = camera.GetPosition();
+        const FlashlightMotionSettings motionSettings =
+            ResolveFlashlightMotionSettings(settings);
+        const bool cameraPoseChanged =
+            !m_FlashlightCameraPoseValid ||
+            !SameFlashlightVector(
+                cameraPosition,
+                m_FlashlightCameraPosition) ||
+            !SameFlashlightVector(
+                cameraDirection,
+                m_FlashlightCameraDirection) ||
+            !SameFlashlightVector(cameraUp, m_FlashlightCameraUp);
+        const bool motionSettingsChanged =
+            !m_FlashlightMotionSettingsValid ||
+            motionSettings != m_FlashlightMotionSettings;
+        m_FlashlightCameraPosition = cameraPosition;
+        m_FlashlightCameraDirection = cameraDirection;
+        m_FlashlightCameraUp = cameraUp;
+        m_FlashlightCameraPoseValid = true;
+        m_FlashlightMotionSettings = motionSettings;
+        m_FlashlightMotionSettingsValid = true;
+        if (!ShouldAdvanceFlashlightMotion(
+                motionSettings,
+                m_FlashlightPoseValid,
+                cameraPoseChanged,
+                motionSettingsChanged))
+        {
+            return;
+        }
+
         float3 cameraRight = cross(cameraDirection, cameraUp);
         if (!(lengthSquared(cameraRight) > 1e-12f))
             cameraRight = float3(1.f, 0.f, 0.f);
@@ -2458,7 +2530,6 @@ public:
             ResolveFlashlightMountPose(
                 settings.cameraHorizontalOffsetMeters,
                 settings.cameraVerticalOffsetMeters);
-        const float3 cameraPosition = camera.GetPosition();
         const float3 desiredFlashlightPosition =
             cameraPosition +
             cameraDirection *
@@ -2651,17 +2722,34 @@ public:
             !m_FlashlightNode)
             return;
 
-        const double3 positionDelta =
-            double3(m_FlashlightResolvedPosition) -
-            m_Flashlight->GetPosition();
-        if (dot(positionDelta, positionDelta) > 1e-20)
+        const bool positionChanged =
+            !m_FlashlightSubmittedPoseValid ||
+            !SameFlashlightVector(
+                m_FlashlightResolvedPosition,
+                m_FlashlightSubmittedPosition);
+        const bool orientationChanged =
+            !m_FlashlightSubmittedPoseValid ||
+            !SameFlashlightVector(
+                m_FlashlightResolvedDirection,
+                m_FlashlightSubmittedDirection) ||
+            !SameFlashlightVector(
+                m_FlashlightResolvedRight,
+                m_FlashlightSubmittedRight);
+        if (positionChanged)
             m_Flashlight->SetPosition(
                 double3(m_FlashlightResolvedPosition));
 
-        SetFlashlightDirectionAndRoll(
-            m_Flashlight,
-            m_FlashlightResolvedDirection,
-            m_FlashlightResolvedRight);
+        if (orientationChanged)
+        {
+            SetFlashlightDirectionAndRoll(
+                m_Flashlight,
+                m_FlashlightResolvedDirection,
+                m_FlashlightResolvedRight);
+        }
+        m_FlashlightSubmittedPosition = m_FlashlightResolvedPosition;
+        m_FlashlightSubmittedDirection = m_FlashlightResolvedDirection;
+        m_FlashlightSubmittedRight = m_FlashlightResolvedRight;
+        m_FlashlightSubmittedPoseValid = true;
     }
 
     void AttachFlashlightToScene()
@@ -2683,6 +2771,7 @@ public:
             m_Scene->GetSceneGraph()->GetRootNode(),
             m_FlashlightNode);
 
+        m_FlashlightSubmittedPoseValid = false;
         ApplyFlashlightPresentation();
         UpdateFlashlightTransform();
     }
@@ -2923,7 +3012,8 @@ public:
     {
 
         InvalidateLightingAccumulationHistory();
-        m_HasLightingHistorySignature = false;
+        m_HasLightingHistorySignatures = false;
+        m_LightingHistoryChangedByViewOnly = false;
         if (m_PathTracingPass)
             m_PathTracingPass->ResetHistory();
         if (m_LightingAccumulationPass)
@@ -3790,10 +3880,15 @@ public:
 
     void EnsureRayTracedSkyVisibilityPass()
     {
+        const bool debugSelected =
+            m_ui.Lighting == LightingSolution::RayMarching &&
+            m_ui.LightingDebugView ==
+                PbrLightingDebugView::SkyVisibility;
         if (!m_ui.Representation.allowRayTraversal ||
             !m_ui.RayTracedSkyVisibility.enabled ||
-            !HasRayTracedSkyVisibilityConsumer(
-                m_ui.RayTracedSkyVisibility) ||
+            (!HasRayTracedSkyVisibilityConsumer(
+                    m_ui.RayTracedSkyVisibility) &&
+                !debugSelected) ||
             m_RayTracedSkyVisibilityPass ||
             !SupportsRayTracedSkyVisibility())
         {
@@ -3992,8 +4087,12 @@ public:
                     RayTracedFlashlightShadowPass::IsDeviceSupported(
                         GetDevice())) ||
                 (m_ui.RayTracedSkyVisibility.enabled &&
-                    HasRayTracedSkyVisibilityConsumer(
-                        m_ui.RayTracedSkyVisibility) &&
+                    (HasRayTracedSkyVisibilityConsumer(
+                            m_ui.RayTracedSkyVisibility) ||
+                        (m_ui.Lighting ==
+                                LightingSolution::RayMarching &&
+                            m_ui.LightingDebugView ==
+                                PbrLightingDebugView::SkyVisibility)) &&
                     SupportsRayTracedSkyVisibility()));
             if (!worldRepresentationRequested ||
                 !m_WorldSpaceRepresentation ||
@@ -4256,7 +4355,7 @@ public:
                     std::make_unique<PathTracingStablePlaneResolvePass>(
                         GetDevice(),
                         m_ShaderFactory);
-                m_PathTracingPass->SetStablePlaneResolveSupported(
+                m_PathTracingPass->SetSpatialPathResolveSupported(
                     m_PathTracingStablePlaneResolvePass->IsSupported());
                 m_LightingAccumulationPass =
                     std::make_unique<LightingAccumulationPass>(
@@ -4365,8 +4464,10 @@ public:
             !pathTracingSelected &&
             m_ui.Representation.allowRayTraversal &&
             m_ui.RayTracedSkyVisibility.enabled &&
-            HasRayTracedSkyVisibilityConsumer(
-                m_ui.RayTracedSkyVisibility) &&
+            (HasRayTracedSkyVisibilityConsumer(
+                    m_ui.RayTracedSkyVisibility) ||
+                m_ui.LightingDebugView ==
+                    PbrLightingDebugView::SkyVisibility) &&
             SupportsRayTracedSkyVisibility();
         const bool worldRepresentationSelected =
             heitzRatioEstimatorSelected ||
@@ -4416,6 +4517,9 @@ public:
 
         const ResolvedAntiAliasingSettings antiAliasing =
             m_ui.GetResolvedAntiAliasingSettings();
+        const bool rayMarchingAccumulationOwnsTemporalHistory =
+            m_ui.Lighting == LightingSolution::RayMarching &&
+            m_ui.AccumulateSamples;
         const bool temporalSharpenEnabled =
             antiAliasing.sharpeningAllowed &&
             ShouldSharpenTemporalAa(
@@ -4428,6 +4532,8 @@ public:
                 antiAliasing.historyStorage ==
                     TemporalAaHistoryStorage::Compact);
         const bool temporalAaWillRender =
+            !pathTracingSelected &&
+            !rayMarchingAccumulationOwnsTemporalHistory &&
             m_ui.UsesLongTermTemporalAA() &&
             m_TemporalAAPass &&
             m_TemporalAAPass->PrepareForRender(
@@ -4483,7 +4589,9 @@ public:
             m_RayTracedSkyVisibilityPass &&
             m_RayTracedSkyVisibilityPass->IsSupported() &&
             worldRepresentationReady &&
-            (skyVisibilityDiffuseIblAvailable ||
+            (m_ui.LightingDebugView ==
+                    PbrLightingDebugView::SkyVisibility ||
+                skyVisibilityDiffuseIblAvailable ||
                 skyVisibilitySpecularIblAvailable);
         const bool screenSpaceVisibilityRequested =
             m_ui.HasActiveScreenSpaceVisibilityConsumer();
@@ -4619,13 +4727,28 @@ public:
                 m_LightingAccumulationPass->IsValid();
             if (prepareRayMarchingSchedule)
             {
+                SampleAccumulationSettings effectiveAccumulation =
+                    m_ui.SampleAccumulation;
+                if (screenSpaceVisibilityRequested &&
+                    m_ui.ScreenSpaceVisibility.resolution !=
+                        VisibilityResolution::Full)
+                {
+                    // One reduced-resolution visibility sample is shared by
+                    // an entire full-resolution footprint. Independent
+                    // adaptive masks would assign incompatible per-pixel
+                    // sequence phases to that single sample, so this topology
+                    // uses the complete every-pixel schedule.
+                    effectiveAccumulation.scheduling =
+                        SampleAccumulationScheduling::EveryPixel;
+                }
                 lightingSampleSchedule =
                     m_LightingAccumulationPass->PrepareAttempts(
                         m_CommandList,
                         uint32_t(windowWidth),
                         uint32_t(windowHeight),
                         true,
-                        uint64_t(GetFrameIndex()),
+                        effectiveAccumulation,
+                        m_LightingAccumulationSchedulingCycle,
                         m_LightingHistoryEpoch);
                 lightingSampleSchedulePrepared =
                     lightingSampleSchedule.token != 0u;
@@ -4724,6 +4847,10 @@ public:
         {
             PathTracingInputs pathInputs;
             pathInputs.view = m_View.get();
+            pathInputs.previousView =
+                m_LightingHistoryChangedByViewOnly && m_PreviousView
+                ? m_PreviousView.get()
+                : nullptr;
             pathInputs.width = uint32_t(windowWidth);
             pathInputs.height = uint32_t(windowHeight);
             pathInputs.materialVisibility = rayMaterialVisibility;
@@ -4754,7 +4881,10 @@ public:
                 : 0u;
             pathInputs.schedulingSerial = uint64_t(GetFrameIndex());
             pathInputs.historyEpoch = m_LightingHistoryEpoch;
+            pathInputs.historyResetByViewOnly =
+                m_LightingHistoryChangedByViewOnly;
             pathInputs.accumulateSamples = m_ui.AccumulateSamples;
+            pathInputs.accumulationSettings = m_ui.SampleAccumulation;
             pathInputs.settings =
                 SanitizePathTracingSettings(m_ui.PathTracing);
             BeginRendererStage(RendererTimingStage::PathTransport);
@@ -4764,6 +4894,15 @@ public:
             EndRendererStage(RendererTimingStage::PathTransport);
             m_PathTransportDispatchedThisFrame =
                 pathTracingResult.dispatched;
+            if (pathTracingResult)
+            {
+                m_PathTracingDispatchPhaseCount =
+                    pathTracingResult.dispatchPhaseCount;
+                m_PathTracingEstimatedWorkUnitsPerPixel =
+                    pathTracingResult.estimatedWorkUnitsPerPixel;
+                m_PathTracingSubmittedSamplePassCount =
+                    pathTracingResult.submittedSamplePassCount;
+            }
         }
         bool stablePlaneResolvedThisFrame = false;
         if (pathTracingResult &&
@@ -4778,7 +4917,13 @@ public:
                 PathTracingDebugView::FinalImage)
         {
             PathTracingStablePlaneResolveInputs resolveInputs;
+            const SampleAccumulationSettings resolveAccumulation =
+                SanitizeSampleAccumulationSettings(
+                    m_ui.SampleAccumulation);
             resolveInputs.rawMean = pathTracingResult.rawMean;
+            resolveInputs.colorVariance = pathTracingResult.colorVariance;
+            resolveInputs.successfulSampleCount =
+                pathTracingResult.successfulSampleCount;
             resolveInputs.residualMean = pathTracingResult.residualMean;
             resolveInputs.diffuseSuffixMean =
                 pathTracingResult.diffuseSuffixMean;
@@ -4789,6 +4934,12 @@ public:
             resolveInputs.stablePlaneCount = std::max(
                 m_ui.PathTracing.stablePlaneCount,
                 1u);
+            resolveInputs.resolveStrength =
+                m_ui.PathTracing.spatialResolveStrength;
+            resolveInputs.accumulationAveraging =
+                resolveAccumulation.averaging;
+            resolveInputs.accumulationEffectiveHistory =
+                resolveAccumulation.effectiveHistory;
             // Resolve failure is presentation-local. The transport dispatch
             // and raw history remain valid and m_Display still contains this
             // frame's raw preview.
@@ -5049,7 +5200,14 @@ public:
                 inputs.frameIndex = GetFrameIndex();
                 return inputs;
             };
+            // The sample accumulator must be the only temporal estimator in
+            // this path. Feeding temporally denoised or repeatedly denoised
+            // skipped signals into its mean would correlate samples and could
+            // preserve pre-motion history.
+            const bool rayMarchingDenoisingAllowed =
+                !rayMarchingAccumulationOwnsTemporalHistory;
             const bool ambientOcclusionDenoisingReady =
+                rayMarchingDenoisingAllowed &&
                 runScreenSpaceVisibility &&
                 m_ui.ScreenSpaceVisibility.HasActiveAmbientOcclusion() &&
                 m_ui.ScreenSpaceVisibility.ambientOcclusion
@@ -5057,6 +5215,7 @@ public:
                 m_ui.Denoising.ambientOcclusion.method !=
                     DenoisingMethodChoice::None;
             const bool diffuseGiDenoisingReady =
+                rayMarchingDenoisingAllowed &&
                 runScreenSpaceVisibility &&
                 m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
                 m_ui.ScreenSpaceVisibility.indirectDiffuse
@@ -5164,6 +5323,7 @@ public:
                 flashlightShadowResult.visibility;
             const bool shadowDenoisingExpected =
                 m_DenoisingPass &&
+                rayMarchingDenoisingAllowed &&
                 (flashlightShadowResult ||
                     (heitzShadowResult &&
                         !m_ui.DirectionalShadows.ratioEstimator
@@ -5175,7 +5335,8 @@ public:
             }
             if (m_DenoisingPass)
             {
-                if (flashlightShadowResult)
+                if (rayMarchingDenoisingAllowed &&
+                    flashlightShadowResult)
                 {
                     DenoisingInputs inputs = makeDenoisingInputs(
                         flashlightShadowResult.visibility,
@@ -5216,7 +5377,8 @@ public:
             bool sunVisibilityDenoised = false;
             if (m_DenoisingPass)
             {
-                if (heitzShadowResult &&
+                if (rayMarchingDenoisingAllowed &&
+                    heitzShadowResult &&
                     !m_ui.DirectionalShadows.ratioEstimator.hardShadows)
                 {
                     DenoisingInputs inputs = makeDenoisingInputs(
@@ -5271,7 +5433,8 @@ public:
                 : nullptr;
             if (m_DenoisingPass)
             {
-                if (skyVisibilityResult)
+                if (rayMarchingDenoisingAllowed &&
+                    skyVisibilityResult)
                 {
                     DenoisingInputs inputs = makeDenoisingInputs(
                         skyVisibilityResult.visibility,
@@ -5721,8 +5884,29 @@ public:
                 m_RenderTargets->DeferredMsaaColor;
         }
 
-        nvrhi::ITexture* antiAliasedTexture =
-            sceneColor;
+        nvrhi::ITexture* accumulatedSceneColor = sceneColor;
+        bool lightingAccumulationResolvedThisFrame = false;
+        if (lightingSampleSchedulePrepared &&
+            m_LightingAccumulationPass)
+        {
+            // Accumulation is the only long-term history owner in this mode.
+            // It consumes the raw scene-linear frame, never TAA's already
+            // temporal/clipped output, so every accepted sample has equal and
+            // unbiased ownership in the progressive mean.
+            const LightingAccumulationResult accumulationResult =
+                m_LightingAccumulationPass->Resolve(
+                    m_CommandList,
+                    sceneColor,
+                    lightingSampleSchedule);
+            if (accumulationResult)
+            {
+                accumulatedSceneColor = accumulationResult.sceneLinear;
+                lightingAccumulationResolvedThisFrame = true;
+                ++m_LightingAccumulationSchedulingCycle;
+            }
+        }
+
+        nvrhi::ITexture* antiAliasedTexture = accumulatedSceneColor;
         if (temporalAaWillRender)
         {
             antiAliasedTexture = m_TemporalAAPass->Render(
@@ -5751,21 +5935,6 @@ public:
                             antiAliasedTexture);
             }
 
-        }
-
-        if (lightingSampleSchedulePrepared &&
-            m_LightingAccumulationPass)
-        {
-            // Resolve the exact producer-side attempt mask against the actual
-            // scene-linear presentation source. Only this successful dispatch
-            // is allowed to advance the epoch and history write index.
-            const LightingAccumulationResult accumulationResult =
-                m_LightingAccumulationPass->Resolve(
-                m_CommandList,
-                antiAliasedTexture,
-                lightingSampleSchedule);
-            if (accumulationResult)
-                antiAliasedTexture = accumulationResult.sceneLinear;
         }
 
         const bool diagnosticExposureView = pathTracingSelected
@@ -5855,10 +6024,14 @@ public:
 
         m_CommandList->close();
         GetDevice()->executeCommandList(m_CommandList);
-        if (m_RenderTargets->MotionVectorsEnabled)
+        if (m_RenderTargets->MotionVectorsEnabled || pathTracingSelected)
             CaptureCurrentViewForMotionVectors();
-        if (temporalAaRenderedThisFrame)
+        if (temporalAaRenderedThisFrame ||
+            (lightingAccumulationResolvedThisFrame &&
+                antiAliasing.temporalEnabled))
+        {
             ++m_AntiAliasingPhase;
+        }
         if (heitzShadowResult.dispatched &&
             heitzShadowResult.stochastic &&
             shadowNoiseSettings.animate)
@@ -5971,6 +6144,7 @@ public:
 
     void InvalidateLightingAccumulationHistory()
     {
+        m_LightingAccumulationSchedulingCycle = 0u;
         ++m_LightingHistoryEpoch;
         if (m_LightingHistoryEpoch == 0u)
             m_LightingHistoryEpoch = 1u;
@@ -5999,6 +6173,7 @@ public:
         bool skyVisibilityStochasticRequested,
         bool rayTracedSkyVisibilityReady)
     {
+        uint64_t viewSignature = 1469598103934665603ull;
         uint64_t signature = 1469598103934665603ull;
 
         if (m_View)
@@ -6008,8 +6183,8 @@ public:
             const dm::affine3 worldToView = m_View->GetViewMatrix();
             const dm::float4x4 viewToClip =
                 m_View->GetProjectionMatrix(false);
-            HashLightingHistoryValue(signature, worldToView);
-            HashLightingHistoryValue(signature, viewToClip);
+            HashLightingHistoryValue(viewSignature, worldToView);
+            HashLightingHistoryValue(viewSignature, viewToClip);
         }
 
         HashLightingHistoryValue(signature, width);
@@ -6097,6 +6272,7 @@ public:
         HashLightingHistoryValue(signature, m_ui.ShowEnvironmentBackground);
         HashLightingHistoryValue(signature, m_ui.Lighting);
         HashLightingHistoryValue(signature, m_ui.AccumulateSamples);
+        HashLightingHistoryValue(signature, m_ui.SampleAccumulation);
 
         if (m_ui.AccumulateSamples ||
             m_ui.Lighting == LightingSolution::PathTracing)
@@ -6109,9 +6285,9 @@ public:
         if (m_ui.Lighting == LightingSolution::RayMarching &&
             m_ui.AccumulateSamples)
         {
-            // Ray-marching accumulation consumes the resolved scene-linear
-            // source after TAA. Keep retained means compatible with every
-            // upstream anti-aliasing choice that can change that source.
+            // Accumulation owns long-term temporal history and consumes raw
+            // scene-linear frames. TAA's selected jitter still diversifies the
+            // raw raster input, while its history/clipping stage is bypassed.
             const ResolvedAntiAliasingSettings antiAliasing =
                 m_ui.GetResolvedAntiAliasingSettings();
             HashLightingHistoryValue(
@@ -6121,46 +6297,7 @@ public:
             if (antiAliasing.temporalEnabled)
             {
                 HashLightingHistoryValue(
-                    signature, antiAliasing.temporalQuality);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.temporalCostMode);
-                HashLightingHistoryValue(
                     signature, antiAliasing.temporalJitterSequence);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.temporal.motionSource);
-                HashLightingHistoryValue(
-                    signature,
-                    antiAliasing.temporal.currentReconstruction);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.temporal.historyFilter);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.temporal.rectification);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.historyStorage);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.depthValidation);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.historyWeight);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.motionTrust);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.rectificationClip);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.blendDomain);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.sharpeningAllowed);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.historyFrames);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.historyStrength);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.optimizedCompute);
-                HashLightingHistoryValue(
-                    signature, antiAliasing.fusedOutput);
-                HashLightingHistoryValue(
-                    signature, m_ui.TemporalAaSharpenEnabled);
-                HashLightingHistoryValue(
-                    signature, m_ui.TemporalAaSharpness);
             }
 
             // Upstream scheduling may retain each stochastic producer's raw
@@ -6257,6 +6394,8 @@ public:
             const FlashlightSettings& flashlight = m_ui.Flashlight;
             HashLightingHistoryValue(signature, m_ui.FlashlightEnabled);
             HashLightingHistoryValue(signature, flashlight.realisticLens);
+            HashLightingHistoryValue(
+                signature, flashlight.stationaryWhenIdle);
             HashLightingHistoryValue(signature, flashlight.castShadows);
             HashLightingHistoryValue(
                 signature, flashlight.outputHitDistance);
@@ -6355,26 +6494,37 @@ public:
             HashLightingHistoryValue(signature, pathing.reuseDirectReservoirs);
             HashLightingHistoryValue(signature, pathing.reusePathReservoirs);
             HashLightingHistoryValue(signature, pathing.reuseIndirectGiReservoirs);
-            HashLightingHistoryValue(signature, pathing.stablePlaneCount);
-            HashLightingHistoryValue(signature, pathing.usePsr);
+            HashLightingHistoryValue(
+                signature,
+                pathing.reuseRevalidatedProposalsDuringMotion);
             HashLightingHistoryValue(signature, pathing.enableFireflyFilter);
             HashLightingHistoryValue(signature, pathing.fireflyThreshold);
             HashLightingHistoryValue(signature, pathing.denoiser);
         }
 
-        if (!m_HasLightingHistorySignature ||
-            signature != m_LastLightingHistorySignature)
+        const bool viewChanged =
+            !m_HasLightingHistorySignatures ||
+            viewSignature != m_LastLightingViewSignature;
+        const bool domainChanged =
+            !m_HasLightingHistorySignatures ||
+            signature != m_LastLightingDomainSignature;
+        m_LightingHistoryChangedByViewOnly =
+            m_HasLightingHistorySignatures &&
+            viewChanged && !domainChanged;
+        if (viewChanged || domainChanged)
         {
             InvalidateLightingAccumulationHistory();
-            m_LastLightingHistorySignature = signature;
-            m_HasLightingHistorySignature = true;
+            m_LastLightingViewSignature = viewSignature;
+            m_LastLightingDomainSignature = signature;
+            m_HasLightingHistorySignatures = true;
         }
     }
 
     void ResetImageBasedLightingHistory()
     {
         InvalidateLightingAccumulationHistory();
-        m_HasLightingHistorySignature = false;
+        m_HasLightingHistorySignatures = false;
+        m_LightingHistoryChangedByViewOnly = false;
         ResetAntiAliasingState();
         InvalidateRendererStageTiming(
             RendererTimingStage::ShadowRayDispatch);
@@ -6490,6 +6640,22 @@ public:
         return m_PathTracingPass
             ? m_PathTracingPass->GetCapabilities()
             : unavailable;
+    }
+
+    [[nodiscard]] uint32_t GetPathTracingDispatchPhaseCount() const
+    {
+        return m_PathTracingDispatchPhaseCount;
+    }
+
+    [[nodiscard]] uint64_t
+        GetPathTracingEstimatedWorkUnitsPerPixel() const
+    {
+        return m_PathTracingEstimatedWorkUnitsPerPixel;
+    }
+
+    [[nodiscard]] uint64_t GetPathTracingSubmittedSamplePassCount() const
+    {
+        return m_PathTracingSubmittedSamplePassCount;
     }
 
     PathTracingSceneDomainStatus GetPathTracingSceneDomainStatus() const
@@ -12065,6 +12231,17 @@ private:
                 return false;
             }
         }
+        else if (path == "pathing.reuse-proposals-during-motion")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.reuseRevalidatedProposalsDuringMotion,
+                defaults.reuseRevalidatedProposalsDuringMotion,
+                value,
+                error);
+        }
         else
         {
             handled = false;
@@ -12211,6 +12388,242 @@ private:
                 m_ui.AccumulateSamples = candidate;
                 m_app->ResetImageBasedLightingHistory();
             }
+            return true;
+        }
+        if (path == "noise.accumulation-history-preset")
+        {
+            static constexpr std::array<std::pair<std::string_view,
+                SampleAccumulationHistoryPreset>, 5> Options = {{
+                { "quick-preview",
+                    SampleAccumulationHistoryPreset::QuickPreview },
+                { "responsive",
+                    SampleAccumulationHistoryPreset::Responsive },
+                { "balanced",
+                    SampleAccumulationHistoryPreset::Balanced },
+                { "stable", SampleAccumulationHistoryPreset::Stable },
+                { "very-stable",
+                    SampleAccumulationHistoryPreset::VeryStable }
+            }};
+            SampleAccumulationSettings candidate = m_ui.SampleAccumulation;
+            SampleAccumulationHistoryPreset preset =
+                GetMatchingSampleAccumulationHistoryPreset(candidate);
+            if (operation == CommandValueOperation::Get)
+            {
+                value = preset == SampleAccumulationHistoryPreset::Count
+                    ? "custom"
+                    : std::string(Options[static_cast<size_t>(preset)].first);
+                return true;
+            }
+            if (preset == SampleAccumulationHistoryPreset::Count)
+                preset = SampleAccumulationHistoryPreset::Balanced;
+            if (!ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    preset,
+                    SampleAccumulationHistoryPreset::Balanced,
+                    Options,
+                    value,
+                    error,
+                    GetMatchingSampleAccumulationHistoryPreset(candidate) ==
+                        SampleAccumulationHistoryPreset::Count))
+            {
+                return false;
+            }
+            candidate = ApplySampleAccumulationHistoryPreset(
+                candidate,
+                preset);
+            m_ui.SampleAccumulation = candidate;
+            m_app->ResetImageBasedLightingHistory();
+            return true;
+        }
+        if (path == "noise.accumulation-workload-preset")
+        {
+            static constexpr std::array<std::pair<std::string_view,
+                SampleAccumulationWorkloadPreset>, 4> Options = {{
+                { "full-quality",
+                    SampleAccumulationWorkloadPreset::FullQuality },
+                { "balanced",
+                    SampleAccumulationWorkloadPreset::Balanced },
+                { "performance",
+                    SampleAccumulationWorkloadPreset::Performance },
+                { "maximum-savings",
+                    SampleAccumulationWorkloadPreset::MaximumSavings }
+            }};
+            SampleAccumulationSettings candidate = m_ui.SampleAccumulation;
+            SampleAccumulationWorkloadPreset preset =
+                GetMatchingSampleAccumulationWorkloadPreset(candidate);
+            if (operation == CommandValueOperation::Get)
+            {
+                value = preset == SampleAccumulationWorkloadPreset::Count
+                    ? "custom"
+                    : std::string(Options[static_cast<size_t>(preset)].first);
+                return true;
+            }
+            if (preset == SampleAccumulationWorkloadPreset::Count)
+                preset = SampleAccumulationWorkloadPreset::Balanced;
+            if (!ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    preset,
+                    SampleAccumulationWorkloadPreset::Balanced,
+                    Options,
+                    value,
+                    error,
+                    GetMatchingSampleAccumulationWorkloadPreset(candidate) ==
+                        SampleAccumulationWorkloadPreset::Count))
+            {
+                return false;
+            }
+            candidate = ApplySampleAccumulationWorkloadPreset(
+                candidate,
+                preset);
+            m_ui.SampleAccumulation = candidate;
+            m_app->ResetImageBasedLightingHistory();
+            return true;
+        }
+        if (path == "noise.accumulation-mode" ||
+            path == "noise.accumulation-averaging" ||
+            path == "noise.accumulation-scheduling" ||
+            path == "noise.accumulation-effective-history" ||
+            path == "noise.accumulation-minimum-samples" ||
+            path == "noise.accumulation-target-error" ||
+            path == "noise.accumulation-minimum-update-rate")
+        {
+            SampleAccumulationSettings candidate =
+                m_ui.SampleAccumulation;
+            const SampleAccumulationSettings defaults;
+            const SampleAccumulationSettings originDefaults =
+                ApplySampleAccumulationPreset(candidate, candidate.preset);
+            bool handled = true;
+            if (path == "noise.accumulation-mode")
+            {
+                static constexpr std::array<std::pair<
+                    std::string_view, SampleAccumulationPreset>, 3>
+                    Options = {{
+                        { "progressive", SampleAccumulationPreset::Progressive },
+                        { "responsive", SampleAccumulationPreset::Responsive },
+                        { "variance-guided",
+                            SampleAccumulationPreset::VarianceGuided }
+                    }};
+                SampleAccumulationPreset preset = candidate.preset;
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    preset,
+                    defaults.preset,
+                    Options,
+                    value,
+                    error,
+                    IsSampleAccumulationPresetCustomized(candidate));
+                if (handled && operation != CommandValueOperation::Get)
+                {
+                    candidate = ApplySampleAccumulationPreset(
+                        candidate, preset);
+                }
+            }
+            else if (path == "noise.accumulation-averaging")
+            {
+                static constexpr std::array<std::pair<
+                    std::string_view, SampleAccumulationAveraging>, 2>
+                    Options = {{
+                        { "cumulative",
+                            SampleAccumulationAveraging::Cumulative },
+                        { "exponential",
+                            SampleAccumulationAveraging::Exponential }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.averaging,
+                    originDefaults.averaging,
+                    Options,
+                    value,
+                    error);
+            }
+            else if (path == "noise.accumulation-scheduling")
+            {
+                static constexpr std::array<std::pair<
+                    std::string_view, SampleAccumulationScheduling>, 2>
+                    Options = {{
+                        { "every-pixel",
+                            SampleAccumulationScheduling::EveryPixel },
+                        { "variance-guided",
+                            SampleAccumulationScheduling::VarianceGuided }
+                    }};
+                handled = ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.scheduling,
+                    originDefaults.scheduling,
+                    Options,
+                    value,
+                    error);
+            }
+            else if (path == "noise.accumulation-effective-history")
+            {
+                handled = ApplyCommandUnsigned(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.effectiveHistory,
+                    originDefaults.effectiveHistory,
+                    SampleAccumulationMinimumEffectiveHistory,
+                    SampleAccumulationMaximumEffectiveHistory,
+                    value,
+                    error);
+            }
+            else if (path == "noise.accumulation-minimum-samples")
+            {
+                handled = ApplyCommandUnsigned(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.minimumSamples,
+                    originDefaults.minimumSamples,
+                    SampleAccumulationMinimumWarmupSamples,
+                    SampleAccumulationMaximumWarmupSamples,
+                    value,
+                    error);
+            }
+            else if (path == "noise.accumulation-target-error")
+            {
+                handled = ApplyCommandFloat(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.targetRelativeError,
+                    originDefaults.targetRelativeError,
+                    SampleAccumulationMinimumTargetRelativeError,
+                    SampleAccumulationMaximumTargetRelativeError,
+                    value,
+                    error);
+            }
+            else
+            {
+                handled = ApplyCommandFloat(
+                    operation,
+                    arguments,
+                    path,
+                    candidate.minimumUpdateRate,
+                    originDefaults.minimumUpdateRate,
+                    SampleAccumulationMinimumUpdateRate,
+                    SampleAccumulationMaximumUpdateRate,
+                    value,
+                    error);
+            }
+
+            if (!handled)
+                return false;
+            if (operation == CommandValueOperation::Get)
+                return true;
+            m_ui.SampleAccumulation =
+                SanitizeSampleAccumulationSettings(candidate);
+            m_app->ResetImageBasedLightingHistory();
             return true;
         }
         NoiseSettings candidate = m_ui.Noise;
@@ -12648,8 +13061,8 @@ private:
         else if (path == "anti-aliasing.taa.quality")
         {
             const bool temporalQualityCustom =
-                candidate.temporal.stationaryBypass !=
-                    defaults.temporal.stationaryBypass ||
+                candidate.temporal.nearestTexelDepth !=
+                    defaults.temporal.nearestTexelDepth ||
                 !(candidate.temporal.algorithmOverrides ==
                     defaults.temporal.algorithmOverrides);
             handled = ApplyCommandEnum(operation, arguments, path,
@@ -12658,8 +13071,8 @@ private:
                 temporalQualityCustom);
             if (handled && operation != CommandValueOperation::Get)
             {
-                candidate.temporal.stationaryBypass =
-                    defaults.temporal.stationaryBypass;
+                candidate.temporal.nearestTexelDepth =
+                    defaults.temporal.nearestTexelDepth;
                 candidate.temporal.algorithmOverrides =
                     defaults.temporal.algorithmOverrides;
             }
@@ -12685,26 +13098,26 @@ private:
         {
             static constexpr std::array<std::pair<
                 std::string_view, TemporalAaDepthValidation>, 2> Options = {{
-                    { "stationary-bypass",
-                        TemporalAaDepthValidation::MovingPoint },
+                    { "nearest-texel",
+                        TemporalAaDepthValidation::NearestTexel },
                     { "four-texel-footprint",
                         TemporalAaDepthValidation::FourTexelFootprint }
                 }};
             TemporalAaDepthValidation validation =
-                candidate.temporal.stationaryBypass
-                ? TemporalAaDepthValidation::MovingPoint
+                candidate.temporal.nearestTexelDepth
+                ? TemporalAaDepthValidation::NearestTexel
                 : TemporalAaDepthValidation::FourTexelFootprint;
             const TemporalAaDepthValidation defaultValidation =
-                defaults.temporal.stationaryBypass
-                ? TemporalAaDepthValidation::MovingPoint
+                defaults.temporal.nearestTexelDepth
+                ? TemporalAaDepthValidation::NearestTexel
                 : TemporalAaDepthValidation::FourTexelFootprint;
             handled = ApplyCommandEnum(
                 operation, arguments, path, validation,
                 defaultValidation, Options, value, error);
             if (handled && operation != CommandValueOperation::Get)
             {
-                candidate.temporal.stationaryBypass =
-                    validation == TemporalAaDepthValidation::MovingPoint;
+                candidate.temporal.nearestTexelDepth =
+                    validation == TemporalAaDepthValidation::NearestTexel;
             }
         }
         else if (path == "anti-aliasing.taa.temporal-cost")
@@ -13121,7 +13534,7 @@ private:
         if (path == "debug.path-tracing.view")
         {
             static constexpr std::array<std::pair<
-                std::string_view, PathTracingDebugView>, 9> Options = {{
+                std::string_view, PathTracingDebugView>, 11> Options = {{
                     { "final", PathTracingDebugView::FinalImage },
                     { "albedo", PathTracingDebugView::Albedo },
                     { "geometric-normal",
@@ -13130,14 +13543,18 @@ private:
                         PathTracingDebugView::ShadingNormal },
                     { "sample-count",
                         PathTracingDebugView::SampleCount },
-                    { "retry-probability",
-                        PathTracingDebugView::RetryProbability },
-                    { "stable-plane",
-                        PathTracingDebugView::StablePlane },
+                    { "update-rate",
+                        PathTracingDebugView::UpdateRate },
+                    { "signal-group",
+                        PathTracingDebugView::SignalGroup },
                     { "direct-reservoir",
                         PathTracingDebugView::DirectReservoir },
                     { "indirect-reservoir",
-                        PathTracingDebugView::IndirectReservoir }
+                        PathTracingDebugView::IndirectReservoir },
+                    { "primary-transport",
+                        PathTracingDebugView::PrimaryTransport },
+                    { "indirect-transport",
+                        PathTracingDebugView::IndirectTransport }
                 }};
             PathTracingDebugView candidate =
                 m_ui.PathTracing.debugView;
@@ -13180,7 +13597,7 @@ private:
                         PathTracingDebugView::IndirectReservoir &&
                     !indirectReservoirExecutable)
                 {
-                    error = "debug.path-tracing.view=indirect-reservoir requires an executable ReSTIR PT seed-replay or ReSTIR GI checkpoint estimator.";
+                    error = "debug.path-tracing.view=indirect-reservoir requires an executable RESTIR PT seed-replay or RESTIR GI checkpoint estimator.";
                     return false;
                 }
                 m_ui.PathTracing.debugView = candidate;
@@ -13221,7 +13638,7 @@ private:
         if (path == "debug.pbr.filter")
         {
             static constexpr std::array<std::pair<
-                std::string_view, PbrLightingDebugView>, 12> Options = {{
+                std::string_view, PbrLightingDebugView>, 13> Options = {{
                     { "final", PbrLightingDebugView::None },
                     { "surface-normals", PbrLightingDebugView::ShadingNormal },
                     { "geometry-normals", PbrLightingDebugView::GeometricNormal },
@@ -13233,19 +13650,33 @@ private:
                     { "specular-environment", PbrLightingDebugView::FinalSpecularEnvironment },
                     { "all-environment-light", PbrLightingDebugView::CombinedEnvironment },
                     { "specular-visibility", PbrLightingDebugView::SpecularOcclusion },
-                    { "environment-level", PbrLightingDebugView::EnvironmentMip }
+                    { "environment-level", PbrLightingDebugView::EnvironmentMip },
+                    { "sky-visibility", PbrLightingDebugView::SkyVisibility }
                 }};
+            PbrLightingDebugView candidate = m_ui.LightingDebugView;
             const bool handled = ApplyCommandEnum(
                 operation,
                 arguments,
                 path,
-                m_ui.LightingDebugView,
+                candidate,
                 PbrLightingDebugView::None,
                 Options,
                 value,
                 error);
             if (handled && operation != CommandValueOperation::Get)
+            {
+                if (candidate == PbrLightingDebugView::SkyVisibility &&
+                    (!m_ui.RayTracedSkyVisibility.enabled ||
+                        !m_ui.Representation.allowRayTraversal ||
+                        !m_app->SupportsRayTracedSkyVisibility()))
+                {
+                    error = "debug.pbr.filter=sky-visibility requires enabled, "
+                        "supported Ray Traced Sky Visibility and ray traversal.";
+                    return false;
+                }
+                m_ui.LightingDebugView = candidate;
                 m_app->ResetImageBasedLightingHistory();
+            }
             return handled;
         }
         error = "Internal Debug command binding is missing for '" +
@@ -13529,7 +13960,8 @@ private:
                     "The requested ray traced sky visibility configuration is not supported.";
                 return false;
             }
-            if (candidate.enabled &&
+            if (operation != CommandValueOperation::Reset &&
+                candidate.enabled &&
                 !m_app->SupportsRayTracedSkyVisibility())
             {
                 error =
@@ -13775,20 +14207,22 @@ private:
                 m_app->GetPathTracingCapabilities();
             bool handled = true;
 
-            if (path == "denoising.path-tracing.stable-planes")
+            if (path == "denoising.path-tracing.signal-groups")
             {
+                const uint32_t solverSignalGroupDefault =
+                    ApplyPathTracingSolverPreset(
+                        candidate.solver).stablePlaneCount;
                 handled = ApplyCommandUnsigned(
                     operation, arguments, path,
                     candidate.stablePlaneCount,
-                    defaults.stablePlaneCount,
-                    candidate.denoiser ==
-                            PathTracingDenoiser::StablePlaneResolve
-                        ? 1u
-                        : 0u,
-                    PathTracingMaxStablePlaneCount,
+                    solverSignalGroupDefault,
+                    1u,
+                    candidate.solver == PathTracingSolver::RtxPt
+                        ? PathTracingMaxStablePlaneCount
+                        : 2u,
                     value, error);
                 if (handled && candidate.denoiser ==
-                    PathTracingDenoiser::StablePlaneResolve)
+                    PathTracingDenoiser::SpatialPathResolve)
                 {
                     candidate.stablePlaneCount = std::max(
                         candidate.stablePlaneCount,
@@ -13796,24 +14230,22 @@ private:
                 }
                 if (handled && operation != CommandValueOperation::Get &&
                     candidate.denoiser ==
-                        PathTracingDenoiser::StablePlaneResolve &&
-                    !capabilities.CanUseStablePlaneResolve(candidate))
+                        PathTracingDenoiser::SpatialPathResolve &&
+                    !capabilities.CanUseSpatialPathResolve(candidate))
                 {
-                    error = "Stable Plane Resolve is available only for the RTX PT solver; this selection renders the raw path mean.";
+                    error = "Spatial Path Resolve is unavailable for this signal-group selection.";
                     return false;
                 }
             }
-            else if (path == "denoising.path-tracing.psr")
+            else if (path == "denoising.path-tracing.resolve-strength")
             {
-                handled = ApplyCommandBool(
-                    operation, arguments, path, candidate.usePsr,
-                    defaults.usePsr, value, error);
-                if (handled && operation != CommandValueOperation::Get &&
-                    candidate.usePsr && !capabilities.psrSupported)
-                {
-                    error = "denoising.path-tracing.psr is unavailable because this build has no executable PSR stage.";
-                    return false;
-                }
+                handled = ApplyCommandFloat(
+                    operation, arguments, path,
+                    candidate.spatialResolveStrength,
+                    defaults.spatialResolveStrength,
+                    PathTracingMinSpatialResolveStrength,
+                    PathTracingMaxSpatialResolveStrength,
+                    value, error);
             }
             else if (path ==
                 "denoising.path-tracing.firefly-filter")
@@ -13837,18 +14269,16 @@ private:
             else if (path == "denoising.path-tracing.method")
             {
                 static constexpr std::array<std::pair<
-                    std::string_view, PathTracingDenoiser>, 4> Options = {{
+                    std::string_view, PathTracingDenoiser>, 2> Options = {{
                     { "raw", PathTracingDenoiser::Raw },
-                    { "stable-plane-resolve",
-                        PathTracingDenoiser::StablePlaneResolve },
-                    { "nrd-reblur", PathTracingDenoiser::NrdReblur },
-                    { "nrd-relax", PathTracingDenoiser::NrdRelax }
+                    { "spatial-path-resolve",
+                        PathTracingDenoiser::SpatialPathResolve }
                 }};
                 handled = ApplyCommandEnum(
                     operation, arguments, path, candidate.denoiser,
                     defaults.denoiser, Options, value, error);
                 if (candidate.denoiser ==
-                    PathTracingDenoiser::StablePlaneResolve)
+                    PathTracingDenoiser::SpatialPathResolve)
                 {
                     candidate.stablePlaneCount = std::max(
                         candidate.stablePlaneCount,
@@ -13856,18 +14286,10 @@ private:
                 }
                 if (handled && operation != CommandValueOperation::Get &&
                     candidate.denoiser ==
-                        PathTracingDenoiser::StablePlaneResolve &&
-                    !capabilities.CanUseStablePlaneResolve(candidate))
+                        PathTracingDenoiser::SpatialPathResolve &&
+                    !capabilities.CanUseSpatialPathResolve(candidate))
                 {
-                    error = "Stable Plane Resolve is available only for executable RTX PT in this build; ReSTIR selections use raw output.";
-                    return false;
-                }
-                if (handled && operation != CommandValueOperation::Get &&
-                    (candidate.denoiser == PathTracingDenoiser::NrdReblur ||
-                        candidate.denoiser == PathTracingDenoiser::NrdRelax) &&
-                    !capabilities.nrdSupported)
-                {
-                    error = "No validated path-transport NRD adapter is available in this build.";
+                    error = "Spatial Path Resolve is unavailable for this signal-group selection.";
                     return false;
                 }
             }
@@ -13885,7 +14307,11 @@ private:
             {
                 m_ui.PathTracing =
                     SanitizePathTracingSettings(candidate);
-                m_app->ResetImageBasedLightingHistory();
+                const bool reconstructionOnlyMutation =
+                    path == "denoising.path-tracing.signal-groups" ||
+                    path == "denoising.path-tracing.resolve-strength";
+                if (!reconstructionOnlyMutation)
+                    m_app->ResetImageBasedLightingHistory();
             }
             return true;
         }
@@ -14322,6 +14748,18 @@ private:
                 path,
                 candidate.realisticLens,
                 defaults.realisticLens,
+                value,
+                error);
+        }
+        else if (path ==
+            "light.selected.flashlight.stationary-when-idle")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.stationaryWhenIdle,
+                defaults.stationaryWhenIdle,
                 value,
                 error);
         }
@@ -14887,14 +15325,16 @@ private:
                 "The requested ray-traced shadow noise configuration is invalid.";
             return false;
         }
-        if (candidate.ratioEstimator.enabled &&
+        if (operation != CommandValueOperation::Reset &&
+            candidate.ratioEstimator.enabled &&
             !m_app->HasPrimaryDirectionalLight())
         {
             error =
                 "Directional shadow techniques require a primary directional light.";
             return false;
         }
-        if (candidate.ratioEstimator.enabled &&
+        if (operation != CommandValueOperation::Reset &&
+            candidate.ratioEstimator.enabled &&
             !m_app->SupportsHeitzRatioEstimatorShadows())
         {
             error =
@@ -17334,7 +17774,6 @@ private:
             "Configure the shared path-transport solver.");
         if (!pathingOpen)
         {
-            ImGui::Spacing();
             return;
         }
 
@@ -17443,7 +17882,7 @@ private:
             ImGui::EndCombo();
         }
         ImGui::SetItemTooltip(
-            "Start from a UVSR-owned RTX PT, ReSTIR PT, or ReSTIR GI "
+            "Start from a UVSR-owned RTX PT, RESTIR PT, or RESTIR GI "
             "transport configuration. The controls remain editable after the "
             "preset is applied.");
         const bool selectedSolverExecutable = pipelineResolution.executable &&
@@ -17610,8 +18049,59 @@ private:
         }
         EndVisuallyDisabledUiScope(rtxdiPresentation);
 
+        if (ImGui::Checkbox(
+                "Reuse Validated RESTIR Proposals During Motion",
+                &settings.reuseRevalidatedProposalsDuringMotion))
+        {
+            m_app->ResetImageBasedLightingHistory();
+        }
+        static constexpr char ReuseRestirMotionTooltip[] =
+            "Keep validated direct-light proposals and replayable RESTIR PT "
+            "seeds during camera motion. Means and RESTIR GI reset.";
+        static_assert(sizeof(ReuseRestirMotionTooltip) - 1u <= 120u);
+        ImGui::SetItemTooltip("%s", ReuseRestirMotionTooltip);
+        if (DrawPresetResetIcon(
+                "PathTracingReuseProposalsDuringMotion",
+                settings.reuseRevalidatedProposalsDuringMotion !=
+                    PathTracingSettings{}
+                        .reuseRevalidatedProposalsDuringMotion))
+        {
+            settings.reuseRevalidatedProposalsDuringMotion =
+                PathTracingSettings{}
+                    .reuseRevalidatedProposalsDuringMotion;
+            m_app->ResetImageBasedLightingHistory();
+        }
+
+        ImGui::TextDisabled(
+            "Temporal AA bypassed; path accumulation owns history.");
+        const uint32_t pathDispatchPhaseCount =
+            m_app->GetPathTracingDispatchPhaseCount();
+        const uint64_t pathEstimatedWorkUnitsPerPixel =
+            m_app->GetPathTracingEstimatedWorkUnitsPerPixel();
+        if (pathDispatchPhaseCount <= 1u)
+        {
+            ImGui::TextDisabled(
+                "Path updates: full frame / ~%llu work units per pixel",
+                static_cast<unsigned long long>(
+                    pathEstimatedWorkUnitsPerPixel));
+        }
+        else
+        {
+            ImGui::TextDisabled(
+                "Path updates: 1/%u frame lattice / ~%llu units per pixel",
+                pathDispatchPhaseCount,
+                static_cast<unsigned long long>(
+                    pathEstimatedWorkUnitsPerPixel));
+        }
+        ImGui::SetItemTooltip(
+            "The lattice is a safety limit for extreme transport settings. "
+            "Ordinary presets should report full-frame updates.");
+        ImGui::TextDisabled(
+            "Submitted path passes: %llu",
+            static_cast<unsigned long long>(
+                m_app->GetPathTracingSubmittedSamplePassCount()));
+
         EndDrawerBody();
-        ImGui::Spacing();
     }
 
     void DrawMaterialDrawer(float settingsControlWidth)
@@ -19770,11 +20260,529 @@ protected:
             {
                 m_app->ResetImageBasedLightingHistory();
             }
-            ImGui::SetItemTooltip(
-                "Retain every finite successful sample, including black and "
-                "environment misses. Pixels with more successes are retried "
-                "less often; camera, lighting, geometry, material, environment, "
-                "resolution, solver, or shader changes reset all history.");
+            static constexpr char AccumulateSamplesTooltip[] =
+                "Average finite scene-linear samples while the camera, scene, "
+                "and lighting are still. Any change clears history.";
+            static_assert(sizeof(AccumulateSamplesTooltip) - 1u <= 120u);
+            ImGui::SetItemTooltip("%s", AccumulateSamplesTooltip);
+            if (BeginAnimatedToggleRegion(
+                    "##SampleAccumulationControls",
+                    m_ui.AccumulateSamples))
+            {
+                SampleAccumulationSettings& accumulation =
+                    m_ui.SampleAccumulation;
+                const SampleAccumulationSettings accumulationDefaults;
+                static constexpr const char* AccumulationPresetLabels[] = {
+                    "Progressive Mean",
+                    "Responsive Mean",
+                    "Variance Guided"
+                };
+                const int accumulationPreset = std::clamp(
+                    static_cast<int>(accumulation.preset),
+                    0,
+                    static_cast<int>(
+                        std::size(AccumulationPresetLabels)) - 1);
+                const bool accumulationPresetCustomized =
+                    IsSampleAccumulationPresetCustomized(accumulation);
+                std::string accumulationPresetPreview =
+                    AccumulationPresetLabels[accumulationPreset];
+                if (accumulationPresetCustomized)
+                    accumulationPresetPreview += " (Custom)";
+                const SampleAccumulationSettings accumulationPresetDefaults =
+                    ApplySampleAccumulationPreset(
+                        accumulation, accumulation.preset);
+                bool accumulationChanged = false;
+                SetNextLabeledControlWidth(
+                    "Accumulation Mode",
+                    settingsControlWidth);
+                if (BeginRoundedCombo(
+                        "Accumulation Mode",
+                        accumulationPresetPreview.c_str()))
+                {
+                    for (int index = 0;
+                        index < static_cast<int>(
+                            std::size(AccumulationPresetLabels));
+                        ++index)
+                    {
+                        const auto selected =
+                            static_cast<SampleAccumulationPreset>(index);
+                        DrawDeferredDropdownOption(
+                            AccumulationPresetLabels[index],
+                            AccumulationPresetLabels[index],
+                            !accumulationPresetCustomized &&
+                                accumulation.preset == selected,
+                            [this, selected]()
+                            {
+                                SampleAccumulationSettings& settings =
+                                    m_ui.SampleAccumulation;
+                                settings = ApplySampleAccumulationPreset(
+                                    settings,
+                                    selected);
+                                settings =
+                                    SanitizeSampleAccumulationSettings(
+                                        settings);
+                                m_app->ResetImageBasedLightingHistory();
+                            });
+                        if (accumulation.preset == selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                static constexpr char AccumulationModeTooltip[] =
+                    "Choose a starting profile. Editing any control keeps its "
+                    "name and appends (Custom).";
+                static_assert(sizeof(AccumulationModeTooltip) - 1u <= 120u);
+                ImGui::SetItemTooltip("%s", AccumulationModeTooltip);
+                if (DrawPresetResetIcon(
+                        "Sample Accumulation Mode",
+                        accumulation != accumulationDefaults))
+                {
+                    QueueDeferredControlUiAction(
+                        [this, accumulationDefaults]()
+                        {
+                            m_ui.SampleAccumulation = accumulationDefaults;
+                            m_app->ResetImageBasedLightingHistory();
+                        });
+                }
+
+                const char* averagingSummary =
+                    accumulation.averaging ==
+                            SampleAccumulationAveraging::Cumulative
+                        ? "cumulative mean"
+                        : "exponential mean";
+                if (accumulation.scheduling ==
+                    SampleAccumulationScheduling::EveryPixel)
+                {
+                    ImGui::TextDisabled(
+                        "Every pixel / %s", averagingSummary);
+                }
+                else
+                {
+                    ImGui::TextDisabled(
+                        "Warmup %u / %.2f%% error / >=%.2f%% updates / %s",
+                        accumulation.minimumSamples,
+                        accumulation.targetRelativeError * 100.f,
+                        accumulation.minimumUpdateRate * 100.f,
+                        averagingSummary);
+                }
+
+                static constexpr const char* AveragingLabels[] = {
+                        "Cumulative Mean", "Exponential Mean"
+                    };
+                    const int averaging = std::clamp(
+                        static_cast<int>(accumulation.averaging),
+                        0,
+                        static_cast<int>(std::size(AveragingLabels)) - 1);
+                    SetNextLabeledControlWidth(
+                        "Averaging",
+                        settingsControlWidth);
+                    if (BeginRoundedCombo(
+                            "Averaging",
+                            AveragingLabels[averaging]))
+                    {
+                        for (int index = 0;
+                            index < static_cast<int>(
+                                std::size(AveragingLabels));
+                            ++index)
+                        {
+                            const auto selected =
+                                static_cast<SampleAccumulationAveraging>(index);
+                            DrawDeferredDropdownOption(
+                                AveragingLabels[index],
+                                AveragingLabels[index],
+                                accumulation.averaging == selected,
+                                [this, selected]()
+                                {
+                                    SampleAccumulationSettings& settings =
+                                        m_ui.SampleAccumulation;
+                                    settings.averaging = selected;
+                                    settings =
+                                        SanitizeSampleAccumulationSettings(
+                                            settings);
+                                    m_app->ResetImageBasedLightingHistory();
+                                });
+                            if (accumulation.averaging == selected)
+                                ImGui::SetItemDefaultFocus();
+                        }
+                        ImGui::EndCombo();
+                    }
+                    static constexpr char AccumulationAveragingTooltip[] =
+                        "Cumulative is an unbiased progressive mean. "
+                        "Exponential responds faster but retains a noise "
+                        "floor.";
+                    static_assert(
+                        sizeof(AccumulationAveragingTooltip) - 1u <= 120u);
+                    ImGui::SetItemTooltip(
+                        "%s", AccumulationAveragingTooltip);
+                    if (DrawPresetResetIcon(
+                            "Sample Accumulation Averaging",
+                            accumulation.averaging !=
+                                accumulationPresetDefaults.averaging))
+                    {
+                        QueueDeferredControlUiAction(
+                            [this, accumulationPresetDefaults]()
+                            {
+                                SampleAccumulationSettings& settings =
+                                    m_ui.SampleAccumulation;
+                                settings.averaging =
+                                    accumulationPresetDefaults.averaging;
+                                m_app->ResetImageBasedLightingHistory();
+                            });
+                    }
+
+                    static constexpr const char* SchedulingLabels[] = {
+                        "Every Pixel", "Variance Guided"
+                    };
+                    const int scheduling = std::clamp(
+                        static_cast<int>(accumulation.scheduling),
+                        0,
+                        static_cast<int>(std::size(SchedulingLabels)) - 1);
+                    SetNextLabeledControlWidth(
+                        "Scheduling",
+                        settingsControlWidth);
+                    if (BeginRoundedCombo(
+                            "Scheduling",
+                            SchedulingLabels[scheduling]))
+                    {
+                        for (int index = 0;
+                            index < static_cast<int>(
+                                std::size(SchedulingLabels));
+                            ++index)
+                        {
+                            const auto selected =
+                                static_cast<SampleAccumulationScheduling>(
+                                    index);
+                            DrawDeferredDropdownOption(
+                                SchedulingLabels[index],
+                                SchedulingLabels[index],
+                                accumulation.scheduling == selected,
+                                [this, selected]()
+                                {
+                                    SampleAccumulationSettings& settings =
+                                        m_ui.SampleAccumulation;
+                                    settings.scheduling = selected;
+                                    settings =
+                                        SanitizeSampleAccumulationSettings(
+                                            settings);
+                                    m_app->ResetImageBasedLightingHistory();
+                                });
+                            if (accumulation.scheduling == selected)
+                                ImGui::SetItemDefaultFocus();
+                        }
+                        ImGui::EndCombo();
+                    }
+                    static constexpr char AccumulationSchedulingTooltip[] =
+                        "Every Pixel samples all eligible pixels. Variance "
+                        "Guided uses deterministic bounded revisits after "
+                        "warmup.";
+                    static_assert(
+                        sizeof(AccumulationSchedulingTooltip) - 1u <= 120u);
+                    ImGui::SetItemTooltip(
+                        "%s", AccumulationSchedulingTooltip);
+                    if (DrawPresetResetIcon(
+                            "Sample Accumulation Scheduling",
+                            accumulation.scheduling !=
+                                accumulationPresetDefaults.scheduling))
+                    {
+                        QueueDeferredControlUiAction(
+                            [this, accumulationPresetDefaults]()
+                            {
+                                SampleAccumulationSettings& settings =
+                                    m_ui.SampleAccumulation;
+                                settings.scheduling =
+                                    accumulationPresetDefaults.scheduling;
+                                m_app->ResetImageBasedLightingHistory();
+                            });
+                    }
+
+                        static constexpr std::array<
+                            SampleAccumulationHistoryPreset, 5>
+                            HistoryPresets = {
+                                SampleAccumulationHistoryPreset::QuickPreview,
+                                SampleAccumulationHistoryPreset::Responsive,
+                                SampleAccumulationHistoryPreset::Balanced,
+                                SampleAccumulationHistoryPreset::Stable,
+                                SampleAccumulationHistoryPreset::VeryStable
+                            };
+                        static constexpr const char* HistoryPresetTooltips[] = {
+                            "8 samples: quickest response and the most residual noise.",
+                            "32 samples: responsive smoothing for interactive editing.",
+                            "64 samples: balanced smoothing and response.",
+                            "256 samples: steadier output with slower adaptation.",
+                            "1024 samples: maximum stability and the slowest adaptation."
+                        };
+                        int selectedHistoryPreset = -1;
+                        for (int index = 0;
+                            index < int(HistoryPresets.size());
+                            ++index)
+                        {
+                            if (accumulation.effectiveHistory ==
+                                GetSampleAccumulationHistoryPresetValue(
+                                    HistoryPresets[index]))
+                            {
+                                selectedHistoryPreset = index;
+                                break;
+                            }
+                        }
+                        const char* historyPresetPreview =
+                            selectedHistoryPreset >= 0
+                            ? GetSampleAccumulationHistoryPresetLabel(
+                                HistoryPresets[selectedHistoryPreset]).data()
+                            : "Custom";
+                        SetNextLabeledControlWidth(
+                            "History Preset",
+                            settingsControlWidth);
+                        if (BeginRoundedCombo(
+                                "History Preset",
+                                historyPresetPreview))
+                        {
+                            for (int index = 0;
+                                index < int(HistoryPresets.size());
+                                ++index)
+                            {
+                                const SampleAccumulationHistoryPreset preset =
+                                    HistoryPresets[index];
+                                const std::string_view label =
+                                    GetSampleAccumulationHistoryPresetLabel(
+                                        preset);
+                                DrawDeferredDropdownOption(
+                                    label.data(),
+                                    label.data(),
+                                    selectedHistoryPreset == index,
+                                    [this, preset]()
+                                    {
+                                        SampleAccumulationSettings& settings =
+                                            m_ui.SampleAccumulation;
+                                        settings =
+                                            ApplySampleAccumulationHistoryPreset(
+                                                settings,
+                                                preset);
+                                        m_app->ResetImageBasedLightingHistory();
+                                    });
+                                ImGui::SetItemTooltip(
+                                    "%s",
+                                    HistoryPresetTooltips[index]);
+                                if (selectedHistoryPreset == index)
+                                    ImGui::SetItemDefaultFocus();
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::SetItemTooltip(
+                            "Choose an Effective History shortcut. Manual edits "
+                            "remain available and mark the mode Custom.");
+
+                        int effectiveHistory =
+                            static_cast<int>(accumulation.effectiveHistory);
+                        if (DrawSliderInt(
+                                "Effective History",
+                                &effectiveHistory,
+                                static_cast<int>(
+                                    SampleAccumulationMinimumEffectiveHistory),
+                                static_cast<int>(
+                                    SampleAccumulationMaximumEffectiveHistory),
+                                "%d samples"))
+                        {
+                            accumulation.effectiveHistory =
+                                static_cast<uint32_t>(effectiveHistory);
+                            accumulationChanged = true;
+                        }
+                        ImGui::SetItemTooltip(
+                            "Set the asymptotic history length used by the "
+                            "exponential mean.");
+                        if (DrawPresetResetIcon(
+                                "Sample Accumulation Effective History",
+                                accumulation.effectiveHistory !=
+                                    accumulationPresetDefaults.
+                                        effectiveHistory))
+                        {
+                            accumulation.effectiveHistory =
+                                accumulationPresetDefaults.effectiveHistory;
+                            accumulationChanged = true;
+                        }
+
+                        static constexpr std::array<
+                            SampleAccumulationWorkloadPreset, 4>
+                            WorkloadPresets = {
+                                SampleAccumulationWorkloadPreset::FullQuality,
+                                SampleAccumulationWorkloadPreset::Balanced,
+                                SampleAccumulationWorkloadPreset::Performance,
+                                SampleAccumulationWorkloadPreset::MaximumSavings
+                            };
+                        static constexpr const char* WorkloadPresetTooltips[] = {
+                            "Ease up after 32 samples, target 1% error, and keep at least 25% of pixels active.",
+                            "Ease up after 16 samples, target 2% error, and keep at least 6.25% active.",
+                            "Ease up after 8 samples, target 4% error, and keep at least 3.125% active.",
+                            "Ease up after 4 samples, target 8% error, and keep at least 1.5625% active."
+                        };
+                        int selectedWorkloadPreset = -1;
+                        for (int index = 0;
+                            index < int(WorkloadPresets.size());
+                            ++index)
+                        {
+                            const SampleAccumulationWorkloadValues values =
+                                GetSampleAccumulationWorkloadPresetValues(
+                                    WorkloadPresets[index]);
+                            if (accumulation.minimumSamples ==
+                                    values.minimumSamples &&
+                                accumulation.targetRelativeError ==
+                                    values.targetRelativeError &&
+                                accumulation.minimumUpdateRate ==
+                                    values.minimumUpdateRate)
+                            {
+                                selectedWorkloadPreset = index;
+                                break;
+                            }
+                        }
+                        const char* workloadPresetPreview =
+                            selectedWorkloadPreset >= 0
+                            ? GetSampleAccumulationWorkloadPresetLabel(
+                                WorkloadPresets[selectedWorkloadPreset]).data()
+                            : "Custom";
+                        SetNextLabeledControlWidth(
+                            "Adaptive Workload",
+                            settingsControlWidth);
+                        if (BeginRoundedCombo(
+                                "Adaptive Workload",
+                                workloadPresetPreview))
+                        {
+                            for (int index = 0;
+                                index < int(WorkloadPresets.size());
+                                ++index)
+                            {
+                                const SampleAccumulationWorkloadPreset preset =
+                                    WorkloadPresets[index];
+                                const std::string_view label =
+                                    GetSampleAccumulationWorkloadPresetLabel(
+                                        preset);
+                                DrawDeferredDropdownOption(
+                                    label.data(),
+                                    label.data(),
+                                    selectedWorkloadPreset == index,
+                                    [this, preset]()
+                                    {
+                                        SampleAccumulationSettings& settings =
+                                            m_ui.SampleAccumulation;
+                                        settings =
+                                            ApplySampleAccumulationWorkloadPreset(
+                                                settings,
+                                                preset);
+                                        m_app->ResetImageBasedLightingHistory();
+                                    });
+                                ImGui::SetItemTooltip(
+                                    "%s",
+                                    WorkloadPresetTooltips[index]);
+                                if (selectedWorkloadPreset == index)
+                                    ImGui::SetItemDefaultFocus();
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::SetItemTooltip(
+                            "Variance Guided only. Choose when work tapers and "
+                            "the guaranteed long-term revisit floor.");
+
+                        int minimumSamples =
+                            static_cast<int>(accumulation.minimumSamples);
+                        if (DrawSliderInt(
+                                "Warmup Samples",
+                                &minimumSamples,
+                                static_cast<int>(
+                                    SampleAccumulationMinimumWarmupSamples),
+                                static_cast<int>(
+                                    SampleAccumulationMaximumWarmupSamples),
+                                "%d"))
+                        {
+                            accumulation.minimumSamples =
+                                static_cast<uint32_t>(minimumSamples);
+                            accumulationChanged = true;
+                        }
+                        static constexpr char WarmupSamplesTooltip[] =
+                            "Variance Guided only. Attempt every pixel until "
+                            "its variance estimate has this many samples.";
+                        static_assert(
+                            sizeof(WarmupSamplesTooltip) - 1u <= 120u);
+                        ImGui::SetItemTooltip("%s", WarmupSamplesTooltip);
+                        if (DrawPresetResetIcon(
+                                "Sample Accumulation Minimum Samples",
+                                accumulation.minimumSamples !=
+                                    accumulationPresetDefaults.minimumSamples))
+                        {
+                            accumulation.minimumSamples =
+                                accumulationPresetDefaults.minimumSamples;
+                            accumulationChanged = true;
+                        }
+
+                        float targetErrorPercent =
+                            accumulation.targetRelativeError * 100.f;
+                        if (DrawSliderFloat(
+                                "Target Error",
+                                &targetErrorPercent,
+                                SampleAccumulationMinimumTargetRelativeError *
+                                    100.f,
+                                SampleAccumulationMaximumTargetRelativeError *
+                                    100.f,
+                                "%.2f%%"))
+                        {
+                            accumulation.targetRelativeError =
+                                targetErrorPercent * 0.01f;
+                            accumulationChanged = true;
+                        }
+                        static constexpr char TargetErrorTooltip[] =
+                            "Variance Guided only. Map the largest per-channel "
+                            "relative standard error to a revisit rate.";
+                        static_assert(
+                            sizeof(TargetErrorTooltip) - 1u <= 120u);
+                        ImGui::SetItemTooltip("%s", TargetErrorTooltip);
+                        if (DrawPresetResetIcon(
+                                "Sample Accumulation Target Error",
+                                accumulation.targetRelativeError !=
+                                    accumulationPresetDefaults.
+                                        targetRelativeError))
+                        {
+                            accumulation.targetRelativeError =
+                                accumulationPresetDefaults.
+                                    targetRelativeError;
+                            accumulationChanged = true;
+                        }
+
+                        float minimumUpdatePercent =
+                            accumulation.minimumUpdateRate * 100.f;
+                        if (DrawSliderFloat(
+                                "Minimum Update Rate",
+                                &minimumUpdatePercent,
+                                SampleAccumulationMinimumUpdateRate * 100.f,
+                                SampleAccumulationMaximumUpdateRate * 100.f,
+                                "%.2f%%"))
+                        {
+                            accumulation.minimumUpdateRate =
+                                minimumUpdatePercent * 0.01f;
+                            accumulationChanged = true;
+                        }
+                        static constexpr char MinimumUpdateRateTooltip[] =
+                            "Variance Guided only. Set the revisit floor; 6.25% "
+                            "guarantees at least one attempt every 16 cycles.";
+                        static_assert(
+                            sizeof(MinimumUpdateRateTooltip) - 1u <= 120u);
+                        ImGui::SetItemTooltip(
+                            "%s", MinimumUpdateRateTooltip);
+                        if (DrawPresetResetIcon(
+                                "Sample Accumulation Minimum Update Rate",
+                                accumulation.minimumUpdateRate !=
+                                    accumulationPresetDefaults.
+                                        minimumUpdateRate))
+                        {
+                            accumulation.minimumUpdateRate =
+                                accumulationPresetDefaults.minimumUpdateRate;
+                            accumulationChanged = true;
+                        }
+
+                if (accumulationChanged)
+                {
+                    accumulation = SanitizeSampleAccumulationSettings(
+                        accumulation);
+                    m_app->ResetImageBasedLightingHistory();
+                }
+                EndAnimatedToggleRegion();
+            }
             if (m_ui.Lighting == LightingSolution::PathTracing &&
                 !m_ui.AccumulateSamples)
             {
@@ -20630,13 +21638,15 @@ protected:
 
             EndDrawerBody();
         }
-        ImGui::Spacing();
         EndAnimatedToggleRegion();
         }
         const bool denoisingOpen = DrawCollapsingHeader(
             "Denoising",
-            "Choose NVIDIA NRD denoisers independently for occlusion, "
-            "illumination, shadows, and sky visibility.");
+            m_ui.Lighting == LightingSolution::PathTracing
+                ? "Choose raw transport or confidence-aware Spatial Path "
+                  "Resolve for the active path solver."
+                : "Choose NVIDIA NRD denoisers independently for occlusion, "
+                  "illumination, shadows, and sky visibility.");
         if (denoisingOpen)
         {
             BeginDrawerBody("##DenoisingBody", settingsControlWidth);
@@ -20938,34 +21948,28 @@ protected:
                         "##PathTracingDenoiser",
                         GetPathTracingDenoiserLabel(pathing.denoiser)))
                 {
-                    static constexpr std::array<PathTracingDenoiser, 4>
+                    static constexpr std::array<PathTracingDenoiser, 2>
                         Methods = {
                             PathTracingDenoiser::Raw,
-                            PathTracingDenoiser::StablePlaneResolve,
-                            PathTracingDenoiser::NrdReblur,
-                            PathTracingDenoiser::NrdRelax
+                            PathTracingDenoiser::SpatialPathResolve
                         };
                     for (const PathTracingDenoiser method : Methods)
                     {
-                        const bool nrdMethod =
-                            method == PathTracingDenoiser::NrdReblur ||
-                            method == PathTracingDenoiser::NrdRelax;
-                        const bool stablePlaneMethod =
+                        const bool spatialResolveMethod =
                             method ==
-                                PathTracingDenoiser::StablePlaneResolve;
+                                PathTracingDenoiser::SpatialPathResolve;
                         PathTracingSettings methodSettings = pathing;
                         methodSettings.denoiser = method;
-                        if (stablePlaneMethod)
+                        if (spatialResolveMethod)
                         {
                             methodSettings.stablePlaneCount = std::max(
                                 methodSettings.stablePlaneCount,
                                 1u);
                         }
                         const bool unavailable =
-                            (nrdMethod && !capabilities.nrdSupported) ||
-                            (stablePlaneMethod &&
-                                !capabilities.CanUseStablePlaneResolve(
-                                    methodSettings));
+                            spatialResolveMethod &&
+                                !capabilities.CanUseSpatialPathResolve(
+                                    methodSettings);
                         const bool selected = method == pathing.denoiser;
                         if (unavailable)
                             ImGui::BeginDisabled();
@@ -20977,7 +21981,7 @@ protected:
                             {
                                 m_ui.PathTracing.denoiser = method;
                                 if (method == PathTracingDenoiser::
-                                    StablePlaneResolve)
+                                    SpatialPathResolve)
                                 {
                                     m_ui.PathTracing.stablePlaneCount =
                                         std::max(
@@ -20989,25 +21993,9 @@ protected:
                             });
                         if (unavailable)
                         {
-                            if (nrdMethod)
-                            {
-                                ImGui::SetItemTooltip(
-                                    "Unavailable: this build has no validated "
-                                    "path-transport NRD adapter.");
-                            }
-                            else
-                            {
-                                ImGui::SetItemTooltip(
-                                    pathing.solver == PathTracingSolver::RtxPt
-                                        ? "Unavailable: the transport signal "
-                                          "formats or spatial resolve pipeline "
-                                          "could not be initialized. Raw output "
-                                          "remains active."
-                                        : "Unavailable for ReSTIR PT/GI: the "
-                                          "selected reservoir candidate does not "
-                                          "yet persist a stable-plane identity. "
-                                          "Raw output remains active.");
-                            }
+                            ImGui::SetItemTooltip(
+                                "Unavailable: the path signal formats or "
+                                "spatial resolve pipeline could not initialize.");
                             ImGui::EndDisabled();
                         }
                         if (selected)
@@ -21016,66 +22004,63 @@ protected:
                     ImGui::EndCombo();
                 }
 
-                const bool stablePlaneSelected = pathing.denoiser ==
-                    PathTracingDenoiser::StablePlaneResolve;
-                const bool stablePlaneAvailable =
-                    capabilities.CanUseStablePlaneResolve(pathing);
-                const bool stablePlanePresentation =
+                const bool spatialResolveSelected = pathing.denoiser ==
+                    PathTracingDenoiser::SpatialPathResolve;
+                const bool spatialResolveAvailable =
+                    capabilities.CanUseSpatialPathResolve(pathing);
+                const bool spatialResolvePresentation =
                     BeginVisuallyDisabledUiScope(
-                        "##PathTracingStablePlanesUnavailable",
-                        !stablePlaneSelected || !stablePlaneAvailable);
-                int stablePlaneCount = int(std::max(
+                        "##PathTracingSignalGroupsUnavailable",
+                        !spatialResolveSelected || !spatialResolveAvailable);
+                int signalGroupCount = int(std::max(
                     pathing.stablePlaneCount,
                     1u));
                 if (DrawSliderInt(
-                        "Stable Planes",
-                        &stablePlaneCount,
+                        "Signal Groups",
+                        &signalGroupCount,
                         1,
-                        int(PathTracingMaxStablePlaneCount)))
+                        pathing.solver == PathTracingSolver::RtxPt
+                            ? int(PathTracingMaxStablePlaneCount)
+                            : 2))
                 {
-                    pathing.stablePlaneCount = uint32_t(stablePlaneCount);
-                    m_app->ResetImageBasedLightingHistory();
+                    pathing.stablePlaneCount = uint32_t(signalGroupCount);
                 }
-                if (stablePlaneAvailable)
+                if (spatialResolveAvailable)
                 {
                     ImGui::SetItemTooltip(
-                        "Use one merged path signal, two primary/indirect "
-                        "signals, or three primary/diffuse/specular signals "
-                        "in UVSR's spatial-only edge-aware resolve.");
+                        pathing.solver == PathTracingSolver::RtxPt
+                            ? "Use merged, primary/indirect, or primary plus "
+                              "diffuse/specular groups in the spatial resolve."
+                            : "Use one merged group or separate primary and "
+                              "indirect transport groups in the spatial resolve.");
                 }
-                else if (!stablePlaneSelected)
+                else if (!spatialResolveSelected)
                 {
                     ImGui::SetItemTooltip(
-                        "Select Stable Plane Resolve to configure one to "
-                        "three spatial reconstruction signals.");
+                        "Select Spatial Path Resolve to configure signal groups.");
                 }
                 else
                 {
                     ImGui::SetItemTooltip(
-                        pathing.solver == PathTracingSolver::RtxPt
-                            ? "Unavailable: signal allocation or the resolve "
-                              "pipeline is unsupported; raw output is used."
-                            : "Unavailable for ReSTIR PT/GI until the winning "
-                              "candidate persists its plane identity; raw "
-                              "output is used.");
+                        "Unavailable: signal allocation or the resolve pipeline "
+                        "is unsupported; raw output is used.");
                 }
-                EndVisuallyDisabledUiScope(stablePlanePresentation);
-
-                const bool psrPresentation = BeginVisuallyDisabledUiScope(
-                    "##PathTracingPsrUnavailable",
-                    !capabilities.psrSupported);
-                if (ImGui::Checkbox(
-                        "Primary-Surface Replacement",
-                        &pathing.usePsr))
+                float spatialResolvePercent =
+                    pathing.spatialResolveStrength * 100.f;
+                if (DrawSliderFloat(
+                        "Resolve Strength",
+                        &spatialResolvePercent,
+                        0.f,
+                        100.f,
+                        "%.0f%%"))
                 {
-                    m_app->ResetImageBasedLightingHistory();
+                    pathing.spatialResolveStrength =
+                        spatialResolvePercent * 0.01f;
                 }
                 ImGui::SetItemTooltip(
-                    capabilities.psrSupported
-                        ? "Enable primary-surface replacement."
-                        : "Unavailable: this build has no executable "
-                          "primary-surface replacement stage.");
-                EndVisuallyDisabledUiScope(psrPresentation);
+                    "Blend from the raw accumulated mean toward the "
+                    "confidence-aware spatial result.");
+                EndVisuallyDisabledUiScope(spatialResolvePresentation);
 
                 if (ImGui::Checkbox(
                         "Firefly Clamp (Biased)",
@@ -21274,7 +22259,6 @@ protected:
 
             EndDrawerBody();
         }
-        ImGui::Spacing();
         EndAnimatedToggleRegion();
         }
         if (BeginAnimatedToggleRegion(
@@ -21358,21 +22342,21 @@ protected:
                     aliasing.temporal.enabled))
             {
             const bool temporalQualityCustom =
-                aliasing.temporal.stationaryBypass !=
-                    aliasingDefaults.temporal.stationaryBypass ||
+                aliasing.temporal.nearestTexelDepth !=
+                    aliasingDefaults.temporal.nearestTexelDepth ||
                 !(aliasing.temporal.algorithmOverrides ==
                     aliasingDefaults.temporal.algorithmOverrides);
             const auto applyTemporalQualityPreset =
                 [settings = &aliasing,
-                    stationaryBypass =
-                        aliasingDefaults.temporal.stationaryBypass,
+                    nearestTexelDepth =
+                        aliasingDefaults.temporal.nearestTexelDepth,
                     algorithmOverrides =
                         aliasingDefaults.temporal.algorithmOverrides](
                     AntiAliasingQuality quality)
                 {
                     settings->temporal.quality = quality;
-                    settings->temporal.stationaryBypass =
-                        stationaryBypass;
+                    settings->temporal.nearestTexelDepth =
+                        nearestTexelDepth;
                     settings->temporal.algorithmOverrides =
                         algorithmOverrides;
                 };
@@ -21563,10 +22547,10 @@ protected:
                 }
 
                 static constexpr const char* DepthValidationLabels[] = {
-                    "Stationary Bypass", "Four-Texel Footprint"
+                    "Nearest Texel", "Four-Texel Footprint"
                 };
                 int depthValidation =
-                    aliasing.temporal.stationaryBypass ? 0 : 1;
+                    aliasing.temporal.nearestTexelDepth ? 0 : 1;
                 SetNextLabeledControlWidth(
                     "Depth Validation",
                     settingsControlWidth);
@@ -21577,19 +22561,19 @@ protected:
                         static_cast<int>(
                             std::size(DepthValidationLabels))))
                 {
-                    aliasing.temporal.stationaryBypass =
+                    aliasing.temporal.nearestTexelDepth =
                         depthValidation == 0;
                 }
                 ImGui::SetItemTooltip(
-                    "Use a moving-point check for stationary samples or "
-                    "validate the complete four-texel footprint.");
+                    "Validate the nearest reprojected depth texel or the "
+                    "complete four-texel interpolation footprint.");
                 if (DrawNestedDropdownResetIcon(
                         "TemporalDepthValidation",
-                        aliasing.temporal.stationaryBypass !=
-                            aliasingDefaults.temporal.stationaryBypass))
+                        aliasing.temporal.nearestTexelDepth !=
+                            aliasingDefaults.temporal.nearestTexelDepth))
                 {
-                    aliasing.temporal.stationaryBypass =
-                        aliasingDefaults.temporal.stationaryBypass;
+                    aliasing.temporal.nearestTexelDepth =
+                        aliasingDefaults.temporal.nearestTexelDepth;
                 }
 
                 static constexpr const char* MotionSourceLabels[] = {
@@ -22219,7 +23203,6 @@ protected:
             ImGui::PopID();
             EndDrawerBody();
         }
-        ImGui::Spacing();
         EndAnimatedToggleRegion();
         }
         const bool debugOpen = DrawCollapsingHeader(
@@ -22363,12 +23346,17 @@ protected:
                 "Specular Environment",
                 "All Environment Light",
                 "Specular Visibility",
-                "Environment Level"
+                "Environment Level",
+                "Sky Visibility"
             };
             const int lightingView = std::clamp(
                 static_cast<int>(m_ui.LightingDebugView),
                 0,
                 static_cast<int>(std::size(LightingLabels)) - 1);
+            const bool skyVisibilityDebugAvailable =
+                m_ui.RayTracedSkyVisibility.enabled &&
+                m_ui.Representation.allowRayTraversal &&
+                m_app->SupportsRayTracedSkyVisibility();
             SetNextLabeledControlWidth(
                 "Information Filter", settingsControlWidth);
             if (BeginRoundedCombo(
@@ -22383,6 +23371,11 @@ protected:
                         static_cast<PbrLightingDebugView>(index);
                     const bool selected =
                         candidate == m_ui.LightingDebugView;
+                    const bool available =
+                        candidate != PbrLightingDebugView::SkyVisibility ||
+                        skyVisibilityDebugAvailable;
+                    if (!available)
+                        ImGui::BeginDisabled();
                     DrawDeferredDropdownOption(
                         LightingLabels[index],
                         LightingLabels[index],
@@ -22392,6 +23385,13 @@ protected:
                             m_ui.LightingDebugView = candidate;
                             m_app->ResetImageBasedLightingHistory();
                         });
+                    if (!available)
+                    {
+                        ImGui::SetItemTooltip(
+                            "Enable supported ray traversal and Ray Traced Sky "
+                            "Visibility to inspect this signal.");
+                        ImGui::EndDisabled();
+                    }
                     if (selected)
                         ImGui::SetItemDefaultFocus();
                 }
@@ -22452,16 +23452,18 @@ protected:
                                 pathing.debugView)))
                     {
                         static constexpr std::array<
-                            PathTracingDebugView, 9> Views = {
+                            PathTracingDebugView, 11> Views = {
                                 PathTracingDebugView::FinalImage,
                                 PathTracingDebugView::Albedo,
                                 PathTracingDebugView::GeometricNormal,
                                 PathTracingDebugView::ShadingNormal,
                                 PathTracingDebugView::SampleCount,
-                                PathTracingDebugView::RetryProbability,
-                                PathTracingDebugView::StablePlane,
+                                PathTracingDebugView::UpdateRate,
+                                PathTracingDebugView::SignalGroup,
                                 PathTracingDebugView::DirectReservoir,
-                                PathTracingDebugView::IndirectReservoir
+                                PathTracingDebugView::IndirectReservoir,
+                                PathTracingDebugView::PrimaryTransport,
+                                PathTracingDebugView::IndirectTransport
                             };
                         for (const PathTracingDebugView view : Views)
                         {
@@ -23208,6 +24210,8 @@ protected:
                     {
                         FlashlightSettings& flashlight =
                             m_ui.Flashlight;
+                        const FlashlightSettings flashlightBeforeControls =
+                            flashlight;
                         const FlashlightSettings defaults =
                             DefaultFlashlightSettings;
                         const auto floatChanged =
@@ -23239,12 +24243,9 @@ protected:
                                 m_ui.Lighting ==
                                     LightingSolution::RayMarching))
                         {
-                        if (ImGui::Checkbox(
-                                "Cast Shadows",
-                                &flashlight.castShadows))
-                        {
-                            m_app->ResetImageBasedLightingHistory();
-                        }
+                        ImGui::Checkbox(
+                            "Cast Shadows",
+                            &flashlight.castShadows);
                         ImGui::SetItemTooltip(
                             "Trace flashlight visibility through the shared "
                             "scene representation.");
@@ -23255,18 +24256,14 @@ protected:
                         {
                             flashlight.castShadows =
                                 defaults.castShadows;
-                            m_app->ResetImageBasedLightingHistory();
                         }
                         if (BeginAnimatedToggleRegion(
                                 "##FlashlightShadowControls",
                                 flashlight.castShadows))
                         {
-                            if (ImGui::Checkbox(
-                                    "Output Hit Distance##Flashlight",
-                                    &flashlight.outputHitDistance))
-                            {
-                                m_app->ResetImageBasedLightingHistory();
-                            }
+                            ImGui::Checkbox(
+                                "Output Hit Distance##Flashlight",
+                                &flashlight.outputHitDistance);
                             ImGui::SetItemTooltip(
                                 "Output the physical closest blocker distance "
                                 "used by shadow denoising. This adds a ray "
@@ -23278,7 +24275,6 @@ protected:
                             {
                                 flashlight.outputHitDistance =
                                     defaults.outputHitDistance;
-                                m_app->ResetImageBasedLightingHistory();
                             }
                             EndAnimatedToggleRegion();
                         }
@@ -23340,6 +24336,30 @@ protected:
                             {
                                 flashlight.hotspotStrength =
                                     defaults.hotspotStrength;
+                            }
+
+                            ImGui::Checkbox(
+                                "Stationary When Idle",
+                                &flashlight.stationaryWhenIdle);
+                            static constexpr char
+                                FlashlightStationaryWhenIdleTooltip[] =
+                                    "Freeze the flashlight pose when the active "
+                                    "camera rests. Camera motion or motion-setting "
+                                    "changes resume it.";
+                            static_assert(
+                                sizeof(FlashlightStationaryWhenIdleTooltip) -
+                                    1u <=
+                                120u);
+                            ImGui::SetItemTooltip(
+                                "%s",
+                                FlashlightStationaryWhenIdleTooltip);
+                            if (DrawPresetResetIcon(
+                                    "Flashlight Stationary When Idle",
+                                    flashlight.stationaryWhenIdle !=
+                                        defaults.stationaryWhenIdle))
+                            {
+                                flashlight.stationaryWhenIdle =
+                                    defaults.stationaryWhenIdle;
                             }
 
                             DrawBoundedSliderFloat(
@@ -23425,7 +24445,7 @@ protected:
                                 defaults.beamSizeDegrees;
                         }
 
-                        bool angularSizeChanged = DrawBoundedSliderFloat(
+                        DrawBoundedSliderFloat(
                             "Angular Size",
                             &flashlight.angularSizeDegrees,
                             FlashlightMinimumAngularSizeDegrees,
@@ -23445,10 +24465,7 @@ protected:
                         {
                             flashlight.angularSizeDegrees =
                                 defaults.angularSizeDegrees;
-                            angularSizeChanged = true;
                         }
-                        if (angularSizeChanged)
-                            m_app->ResetImageBasedLightingHistory();
 
                         DrawSliderFloat(
                             "Beam Roundness",
@@ -23601,6 +24618,8 @@ protected:
                                 defaults.cameraVerticalOffsetMeters;
                         }
 
+                        if (flashlight != flashlightBeforeControls)
+                            m_app->ResetImageBasedLightingHistory();
                     }
                     else
                     {
@@ -23950,7 +24969,6 @@ protected:
             drawRatioEstimatorShadowControls();
             EndDrawerBody();
         }
-        ImGui::Spacing();
         EndAnimatedToggleRegion();
         }
 

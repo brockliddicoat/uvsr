@@ -182,7 +182,7 @@ namespace
         using namespace uvsr;
 
         const HeitzRatioEstimatorShadowSettings ratioSettings;
-        assert(!ratioSettings.enabled);
+        assert(ratioSettings.enabled);
         assert(!ratioSettings.hardShadows);
         assert(ratioSettings.useRatioEstimator);
         assert(!ratioSettings.outputHitDistance);
@@ -197,7 +197,7 @@ namespace
             ratioSettings));
 
         const DirectionalShadowSettings directionalSettings;
-        assert(!directionalSettings.ratioEstimator.enabled);
+        assert(directionalSettings.ratioEstimator.enabled);
         assert(directionalSettings.ratioEstimator.sampleRateLog2 ==
             ratioSettings.sampleRateLog2);
         assert(directionalSettings.ratioEstimator.rayBias ==

@@ -17,7 +17,7 @@ struct RayTracedSkyVisibilityConstants
     uint reverseDepth;
     uint floatDepth;
 
-    uint attemptMaskEnabled;
+    uint sampleSequenceMode;
     uint3 padding0;
 };
 

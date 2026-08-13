@@ -115,6 +115,11 @@ int main(int argc, char** argv)
         rendererSource,
         "m_pbrdeferredlightingpass",
         "the renderer must retain its singular deferred PBR path");
+    RequireContains(
+        rendererSource,
+        "static_assert(static_cast<uint32_t>("
+            "pbrlightingdebugview::skyvisibility)==12u);",
+        "the CPU Sky Visibility debug ordinal must match both shaders");
     Require(
         rendererSource.find("m_forwardpass") == std::string::npos &&
             rendererSource.find("renderermode::forward") ==
@@ -157,6 +162,19 @@ int main(int argc, char** argv)
             "ray-traced sky visibility must bind independently at t22");
         RequireContains(
             *shader,
+            "constboolshowskyvisibility="
+                "g_pbrdeferred.lightingdebugview==12u;",
+            "the sky debug view must request the scalar independently of IBL application");
+        RequireContains(
+            *shader,
+            "elseif(showskyvisibility)",
+            "the sky debug branch must remain available without a light probe");
+        RequireContains(
+            *shader,
+            "=skyvisibility.xxx;",
+            "the sky debug branch must emit a grayscale visibility field");
+        RequireContains(
+            *shader,
             "if(encoding==uvsr_direct_visibility_rgb_rgba16f)"
                 "{returnsaturate(encoded.rgb);}"
                 "returnsaturate(encoded.r).xxx;",
@@ -195,6 +213,20 @@ int main(int argc, char** argv)
             "each deferred variant must evaluate attached local-light shadow "
             "maps");
     }
+
+    RequireContains(
+        deferredPass,
+        "constboolhasskyvisibilityconsumer="
+            "applyskyvisibilitytodiffuseibl||"
+            "applyskyvisibilitytospecularibl||"
+            "lightingdebugview==12u;",
+        "the deferred pass must bind sky visibility for the debug view even when both IBL effects are off");
+    RequireContains(
+        deferredPass,
+        ":(applyskyvisibilitytospecularibl?"
+            "uvsr_sky_visibility_apply_specular_ibl:"
+            "uvsr_sky_visibility_apply_neither))",
+        "a debug-only sky texture must encode Neither when both IBL effects are off");
     RequireContains(
         pbrCore,
         "boolhaspositivefinitepbrsignal(float3signal,floatthroughput)",

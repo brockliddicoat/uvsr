@@ -508,8 +508,11 @@ namespace uvsr
             : 1u;
         constants.noisePattern =
             static_cast<uint32_t>(noiseSettings.pattern);
-        constants.attemptMaskEnabled =
-            sampleSchedule.enabled && stochastic ? 1u : 0u;
+        constants.sampleSequenceMode = static_cast<uint32_t>(
+            ResolveLightingSampleSequenceMode(
+                sampleSchedule,
+                stochastic,
+                noiseSettings.animate));
         commandList->writeBuffer(
             m_ConstantBuffer,
             &constants,

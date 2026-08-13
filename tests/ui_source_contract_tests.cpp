@@ -395,6 +395,26 @@ namespace
                 "General-specific root geometry and clipping");
         }
 
+        const std::string_view pathingDrawer = ExtractSection(
+            viewer,
+            "void DrawPathingDrawer(float settingsControlWidth)",
+            "void DrawMaterialDrawer(float settingsControlWidth)",
+            "conditional Pathing drawer");
+        Require(
+            CountOccurrences(
+                Compact(pathingDrawer),
+                "ImGui::Spacing();") == 0u,
+            "conditional Pathing delegates both collapsed and expanded "
+            "trailing Tight spacing to its animated wrapper.");
+        RequireOrdered(
+            pathingDrawer,
+            {
+                "RTXDI Reservoir Stages",
+                "Reuse Validated RESTIR Proposals During Motion",
+                "Means and RESTIR GI reset."
+            },
+            "selective camera-motion proposal reuse control and safety copy");
+
         struct Drawer
         {
             std::string_view begin;
@@ -487,6 +507,18 @@ namespace
                     CountOccurrences(compact, "EndDrawerBody();") == 1u,
                 std::string(drawer.label) +
                     " drawer must balance one body begin and end.");
+            if (drawer.label == "Diffuse" || drawer.label == "Buffers" ||
+                drawer.label == "Aliasing" || drawer.label == "Shadows")
+            {
+                const size_t bodyEnd = compact.rfind("EndDrawerBody();");
+                Require(
+                    bodyEnd != std::string::npos &&
+                        compact.find("ImGui::Spacing();", bodyEnd) ==
+                            std::string::npos,
+                    std::string(drawer.label) +
+                        " delegates its sole trailing Tight gap to the "
+                        "whole-drawer animation wrapper.");
+            }
         }
 
         for (const std::string_view retiredDrawer : {
@@ -750,6 +782,109 @@ namespace
                 "m_app->ResetNoiseSamplingHistory("
             },
             "global Noise configuration and history reset");
+        RequireOrdered(
+            drawer,
+            {
+                "\"Accumulate Samples\"",
+                "##SampleAccumulationControls",
+                "\"Accumulation Mode\"",
+                "\"Averaging\"",
+                "\"Scheduling\"",
+                "\"History Preset\"",
+                "\"Effective History\"",
+                "\"Adaptive Workload\"",
+                "\"Warmup Samples\"",
+                "\"Target Error\"",
+                "\"Minimum Update Rate\""
+            },
+            "sample accumulation preset and Custom control order");
+        RequireExactStrings(
+            ExtractSection(
+                drawer,
+                "static constexpr const char* AccumulationPresetLabels[] = {",
+                "};",
+                "sample accumulation preset labels"),
+            {
+                "Progressive Mean",
+                "Responsive Mean",
+                "Variance Guided"
+            },
+            "sample accumulation preset labels");
+        const std::string_view accumulationControls = ExtractSection(
+            drawer,
+            "\"Accumulate Samples\"",
+            "if (m_ui.Lighting == LightingSolution::PathTracing",
+            "sample accumulation controls");
+        Require(
+            CountOccurrences(
+                accumulationControls,
+                "BeginRoundedCombo(") == 5u &&
+                CountOccurrences(
+                    accumulationControls,
+                    "DrawDeferredDropdownOption(") == 5u,
+            "all layout-changing sample accumulation dropdowns must defer "
+            "their mutations");
+        RequireAbsent(
+            accumulationControls,
+            "ImGui::Combo(",
+            "sample accumulation immediate layout-changing dropdowns");
+        Require(
+            CountOccurrences(
+                accumulationControls,
+                "BeginAnimatedToggleRegion(") == 1u &&
+                CountOccurrences(
+                    accumulationControls,
+                    "##SampleAccumulationControls") == 1u,
+            "sample accumulation tuning must use one stable enabled-only "
+            "animated region");
+        Require(
+            CountOccurrences(
+                accumulationControls,
+                "Variance Guided only.") == 4u,
+            "adaptive-only accumulation fields must state their applicability");
+        RequireAbsent(
+            accumulationControls,
+            "SampleAccumulationPreset::Custom",
+            "removed Custom accumulation enum");
+        RequireAbsent(
+            accumulationControls,
+            "ReconcileSampleAccumulationPreset",
+            "removed automatic accumulation-preset reconciliation");
+        RequireContains(
+            accumulationControls,
+            "Warmup %u / %.2f%% error / >=%.2f%% updates / %s",
+            "live variance-guided accumulation summary");
+        RequireContains(
+            accumulationControls,
+            "deterministic bounded revisits after ",
+            "variance-guided scheduling guarantee tooltip");
+        Require(
+            CountOccurrences(accumulationControls, "<= 120u") == 7u,
+            "every new accumulation tooltip must prove it fits the authored "
+            "120-code-point limit");
+        RequireContains(
+            accumulationControls,
+            "m_app->ResetImageBasedLightingHistory();",
+            "sample accumulation policy history reset");
+        for (const std::string_view contract : {
+                std::string_view(
+                    "SampleAccumulationHistoryPreset::QuickPreview"),
+                std::string_view(
+                    "SampleAccumulationHistoryPreset::VeryStable"),
+                std::string_view(
+                    "ApplySampleAccumulationHistoryPreset("),
+                std::string_view(
+                    "SampleAccumulationWorkloadPreset::FullQuality"),
+                std::string_view(
+                    "SampleAccumulationWorkloadPreset::MaximumSavings"),
+                std::string_view(
+                    "ApplySampleAccumulationWorkloadPreset(") })
+        {
+            RequireContains(
+                accumulationControls,
+                contract,
+                "history and adaptive-workload preset controls");
+        }
 
         for (const std::string_view label : {
                 std::string_view("Specify Noise##Visibility"),
@@ -792,7 +927,17 @@ namespace
                     "\"64x64|128x128|256x256|512x512\")"),
                 std::string_view(
                     "Value(\"noise.animate-samples\",Kind::Boolean,"
-                    "Section::Noise,\"on|off\")") })
+                    "Section::Noise,\"on|off\")"),
+                std::string_view(
+                    "Value(\"noise.accumulation-mode\",Kind::Enum,"
+                    "Section::Noise,"
+                    "\"progressive|responsive|variance-guided\")"),
+                std::string_view(
+                    "Value(\"noise.accumulation-averaging\",Kind::Enum,"
+                    "Section::Noise,\"cumulative|exponential\")"),
+                std::string_view(
+                    "Value(\"noise.accumulation-scheduling\",Kind::Enum,"
+                    "Section::Noise,\"every-pixel|variance-guided\")") })
         {
             RequireContains(
                 compactCatalog,
@@ -1055,11 +1200,53 @@ namespace
             },
             "the exact NRD-disabled message remains the final Ray Marching "
             "Denoising content before the Path Tracing body");
+        const std::string_view pathDenoising = ExtractSection(
+            denoising,
+            "\"##PathTracingDenoisingBody\"",
+            "EndDrawerBody();",
+            "Path Tracing Denoising body");
+        for (const std::string_view contract : {
+                std::string_view("PathTracingDenoiser::Raw"),
+                std::string_view(
+                    "PathTracingDenoiser::SpatialPathResolve"),
+                std::string_view("\"Signal Groups\""),
+                std::string_view("\"Resolve Strength\""),
+                std::string_view("CanUseSpatialPathResolve") })
+        {
+            RequireContains(
+                pathDenoising,
+                contract,
+                "solver-wide spatial path denoising");
+        }
+        for (const std::string_view removedPathOption : {
+                std::string_view("PathTracingDenoiser::NrdReblur"),
+                std::string_view("PathTracingDenoiser::NrdRelax"),
+                std::string_view("Primary-Surface Replacement") })
+        {
+            RequireAbsent(
+                pathDenoising,
+                removedPathOption,
+                "removed unimplemented path denoiser option");
+        }
+        const std::string_view pathResolvePresentationControls =
+            ExtractSection(
+                pathDenoising,
+                "\"Signal Groups\"",
+                "\"Firefly Clamp (Biased)\"",
+                "Spatial Path Resolve presentation controls");
+        RequireAbsent(
+            pathResolvePresentationControls,
+            "ResetImageBasedLightingHistory",
+            "signal grouping and resolve strength must re-resolve existing transport without discarding it");
         for (const std::string_view path : {
                 std::string_view("denoising.ao.method"),
                 std::string_view("denoising.gi.method"),
                 std::string_view("denoising.shadows.method"),
-                std::string_view("denoising.sky.method") })
+                std::string_view("denoising.sky.method"),
+                std::string_view("denoising.path-tracing.method"),
+                std::string_view("denoising.path-tracing.signal-groups"),
+                std::string_view(
+                    "denoising.path-tracing.resolve-strength") })
         {
             RequireContains(catalog, path, "Denoising command catalog");
         }
@@ -1847,8 +2034,8 @@ namespace
             "Algorithm-owned Quality custom state");
         RequireContains(
             aliasing,
-            "aliasing.temporal.stationaryBypass !=\n"
-            "                    aliasingDefaults.temporal.stationaryBypass ||",
+            "aliasing.temporal.nearestTexelDepth !=\n"
+            "                    aliasingDefaults.temporal.nearestTexelDepth ||",
             "Depth Validation Quality ownership");
         RequireContains(
             aliasing,
@@ -1949,8 +2136,8 @@ namespace
             "Quality group reset visibility");
         RequireContains(
             aliasing,
-            "settings->temporal.stationaryBypass =\n"
-            "                        stationaryBypass;",
+            "settings->temporal.nearestTexelDepth =\n"
+            "                        nearestTexelDepth;",
             "Quality group Depth Validation reset");
         RequireContains(
             aliasing,
@@ -2223,8 +2410,8 @@ namespace
             "Multisample Adaptive Quality default");
         RequireContains(
             Compact(temporalSettings),
-            "boolstationaryBypass=true;",
-            "Stationary Bypass default");
+            "boolnearestTexelDepth=false;",
+            "Four Texel Footprint default");
         for (const std::string_view retired : {
                 std::string_view("AntiAliasingMethod"),
                 std::string_view("Sample Resurrection"),
@@ -2298,9 +2485,23 @@ namespace
                 "Specular Environment",
                 "All Environment Light",
                 "Specular Visibility",
-                "Environment Level"
+                "Environment Level",
+                "Sky Visibility"
             },
             "PBR information-filter labels");
+        RequireOrdered(
+            debug,
+            {
+                "const bool skyVisibilityDebugAvailable =",
+                "m_ui.RayTracedSkyVisibility.enabled",
+                "m_ui.Representation.allowRayTraversal",
+                "m_app->SupportsRayTracedSkyVisibility()",
+                "candidate != PbrLightingDebugView::SkyVisibility ||",
+                "skyVisibilityDebugAvailable",
+                "ImGui::BeginDisabled()",
+                "Enable supported ray traversal and Ray Traced Sky"
+            },
+            "Sky Visibility debug availability cue");
         for (const std::string_view state : {
                 std::string_view("m_ui.WhiteWorld"),
                 std::string_view(
@@ -2831,8 +3032,8 @@ namespace
             "inline constexpr std::array<std::string_view, 5>",
             "Settings command catalog");
         const std::vector<CatalogEntry> entries = ParseCatalog(catalog);
-        Require(entries.size() == 209u,
-            "Settings command catalog must contain exactly 209 entries.");
+        Require(entries.size() == 220u,
+            "Settings command catalog must contain exactly 218 entries.");
 
         std::set<std::string> names;
         std::set<std::string> actions;
@@ -2846,8 +3047,8 @@ namespace
             else
                 ++valueCount;
         }
-        Require(valueCount == 205u,
-            "Settings command catalog must contain exactly 205 values.");
+        Require(valueCount == 216u,
+            "Settings command catalog must contain exactly 216 values.");
         Require(actions == std::set<std::string>{
                 "open-scene-folder",
                 "reset-settings",
@@ -2978,11 +3179,52 @@ namespace
             "bool DispatchPathingCommandValue(",
             "bool DispatchRepresentationCommandValue(",
             "Pathing command dispatcher");
+        RequireContains(
+            pathingDispatcher,
+            "pathing.reuse-proposals-during-motion",
+            "selective path proposal-reuse command binding");
+        RequireContains(
+            pathingDispatcher,
+            "reuseRevalidatedProposalsDuringMotion",
+            "selective path proposal-reuse setting mutation");
         const std::string_view noiseDispatcher = ExtractSection(
             viewer,
             "bool DispatchNoiseCommandValue(",
             "bool DispatchVisibilityCommandValue(",
             "Noise command dispatcher");
+        for (const std::string_view presetCommand : {
+                std::string_view("noise.accumulation-history-preset"),
+                std::string_view("noise.accumulation-workload-preset"),
+                std::string_view(
+                    "GetMatchingSampleAccumulationHistoryPreset"),
+                std::string_view(
+                    "GetMatchingSampleAccumulationWorkloadPreset") })
+        {
+            RequireContains(
+                noiseDispatcher,
+                presetCommand,
+                "accumulation shortcut command binding");
+        }
+        RequireOrdered(
+            noiseDispatcher,
+            {
+                "const SampleAccumulationSettings originDefaults =",
+                "ApplySampleAccumulationPreset(candidate, candidate.preset);",
+                "candidate.averaging,",
+                "originDefaults.averaging,",
+                "candidate.scheduling,",
+                "originDefaults.scheduling,",
+                "candidate.effectiveHistory,",
+                "originDefaults.effectiveHistory,",
+                "candidate.minimumSamples,",
+                "originDefaults.minimumSamples,",
+                "candidate.targetRelativeError,",
+                "originDefaults.targetRelativeError,",
+                "candidate.minimumUpdateRate,",
+                "originDefaults.minimumUpdateRate,"
+            },
+            "per-field accumulation command resets use the selected preset "
+            "recipe");
         const std::string_view directionalShadowDispatcher = ExtractSection(
             viewer,
             "bool DispatchDirectionalShadowCommandValue(",
@@ -3178,6 +3420,23 @@ namespace
             "!m_ui.DirectionalShadows.ratioEstimator.noise.specifyNoise,"
             "!m_ui.RayTracedSkyVisibility.noise.specifyNoise,true)",
             "global Noise history isolation");
+
+        const std::string compactPathDenoisingDispatcher =
+            Compact(denoisingDispatcher);
+        RequireContains(
+            compactPathDenoisingDispatcher,
+            "constuint32_tsolverSignalGroupDefault="
+                "ApplyPathTracingSolverPreset("
+                "candidate.solver).stablePlaneCount;",
+            "Path Tracing signal-group reset must use the active solver's compatible preset");
+        RequireContains(
+            compactPathDenoisingDispatcher,
+            "constboolreconstructionOnlyMutation="
+                "path==\"denoising.path-tracing.signal-groups\"||"
+                "path==\"denoising.path-tracing.resolve-strength\";"
+                "if(!reconstructionOnlyMutation)"
+                "m_app->ResetImageBasedLightingHistory();",
+            "presentation-only path reconstruction commands must preserve accumulated transport");
 
         const std::string compactDirectionalShadowDispatcher =
             Compact(directionalShadowDispatcher);
@@ -5017,6 +5276,20 @@ namespace
             },
             "toggle-region disabled presentation unwinds after its immediate "
             "semantic item scope");
+        RequireContains(
+            Compact(toggleRegionEnd),
+            "ImGui::PopItemWidth();ImGui::EndChild();"
+                "constautostateIterator=",
+            "animated toggle wrappers retain one ordinary parent-side "
+            "ItemSpacing gap after their child");
+        RequireAbsent(
+            toggleRegionEnd,
+            "ImGuiStyleVar_ItemSpacing",
+            "animated toggle wrapper spacing override");
+        RequireAbsent(
+            toggleRegionEnd,
+            "style.ItemSpacing.y",
+            "animated toggle wrapper direct spacing override");
         RequireAbsent(
             viewer,
             "FreezeAnimatedToggleVisualValues",
@@ -5331,9 +5604,9 @@ namespace
         Require(
             CountOccurrences(
                 viewer,
-                "BeginVisuallyDisabledUiScope(") == 7u,
+                "BeginVisuallyDisabledUiScope(") == 6u,
             "the visual disabled helper has one definition, two effective-"
-            "sample slider call sites, and four capability-gated Path Tracing "
+            "sample slider call sites, and three capability-gated Path Tracing "
             "call sites");
 
         const std::string_view checkboxOverride = ExtractSection(
@@ -7559,12 +7832,35 @@ namespace
         RequireOrdered(
             lightsDrawer,
             {
-                "bool angularSizeChanged = DrawBoundedSliderFloat(",
-                "angularSizeChanged = true;",
-                "if (angularSizeChanged)",
+                "##RealisticFlashlightControls",
+                "\"Stationary When Idle\"",
+                "&flashlight.stationaryWhenIdle",
+                "FlashlightStationaryWhenIdleTooltip",
+                "\"Sway\"",
+                "\"Aim Correction\""
+            },
+            "flashlight idle lock placement and explanation");
+        const std::string_view flashlightControls = ExtractSection(
+            lightsDrawer,
+            "##RayMarchingFlashlightVisibility",
+            "const auto selectedLightIterator",
+            "flashlight struct controls");
+        RequireOrdered(
+            flashlightControls,
+            {
+                "flashlight != flashlightBeforeControls",
                 "m_app->ResetImageBasedLightingHistory();"
             },
-            "flashlight Angular Size UI history reset");
+            "flashlight struct changes reset temporal histories together");
+        Require(
+            CountOccurrences(
+                flashlightControls,
+                "m_app->ResetImageBasedLightingHistory();") == 1u,
+            "one aggregate reset must own every flashlight struct mutation");
+        RequireContains(
+            flashlightControls,
+            "sizeof(FlashlightStationaryWhenIdleTooltip) -",
+            "flashlight idle tooltip bounded-length assertion");
         for (const std::string_view retiredMovementUi : {
                 std::string_view("\"Adjustment Speed\""),
                 std::string_view("\"Time to Action\""),

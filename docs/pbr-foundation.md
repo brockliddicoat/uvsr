@@ -149,13 +149,14 @@ donor is re-evaluated at the receiving surface rather than at the light center.
 RTX PT is the reference Monte Carlo solver. Uniform, Power, and UVSR's
 current-vertex adaptive NEE are active. The optional first-party RTXDI-like
 direct reservoir replaces primary-hit NEE and can reuse a compatible
-previous-frame same-pixel candidate plus one compatible previous-frame
-neighbor.
+reprojected prior-frame candidate plus one compatible neighbor around that
+prior-view pixel.
 
-ReSTIR PT is an executable seed-replay subset. It re-integrates deterministic
-prior local seeds at the receiving pixel and resamples their indirect suffixes
-with the current one; it has no stored reconnection vertex, hybrid shift, or
-geometric reconnection. ReSTIR GI is an executable temporal-checkpoint subset.
+RESTIR PT is an executable seed-replay subset. It projects the current primary
+surface through the prior view, re-integrates deterministic donor seeds at the
+receiving pixel, and combines their indirect suffixes with the current one; it
+has no stored reconnection vertex, hybrid shift, or geometric reconnection.
+RESTIR GI is an executable temporal-checkpoint subset.
 It resamples the current and previous same-pixel local indirect suffixes without
 a cross-pixel secondary-surface transform. Both persist only the current local
 record, add the current primary base exactly once, and remain explicitly
@@ -208,7 +209,8 @@ The Debug drawer separates presentation from information:
 - Physically Based Lighting selects Default, Surface Normals, Geometry
   Normals, Normal Difference, Diffuse Environment, Environment Direction,
   Reflected Environment, Reflectance Response, Specular Environment, All
-  Environment Light, Specular Visibility, or Environment Level.
+  Environment Light, Specular Visibility, Environment Level, or Sky
+  Visibility.
 
 World appearance remains independent from information filters. A Physically
 Based Lighting filter keeps Visibility executing so traced data stays valid,
@@ -219,13 +221,17 @@ available in main.
 
 Path Tracing replaces the screen-space Visibility and deferred PBR debug bodies
 with transport-owned views of the current first-hit albedo, geometric and
-shading normals, successful-sample count, retry probability, transient
-stable-plane classification, and current direct-reservoir state. RTX PT may
-also persist its path-layer and first-hit guide set for UVSR's spatial-only
-Stable Plane Resolve; raw output remains independent. There is no
-Primary-Surface Replacement stage. Indirect Reservoir displays the resampled
-indirect suffix while an
-effective ReSTIR PT seed-replay or ReSTIR GI checkpoint policy is active and is
+shading normals, successful-sample count, deterministic update rate, transient
+signal-group classification, current direct-reservoir state, primary transport,
+and indirect transport. Primary Transport contains the first-hit environment,
+emission, and direct-light contribution; Indirect Transport contains the solved
+continuation suffix. Every solver may also persist primary/indirect signal
+groups and first-hit guides for UVSR's spatial-only Spatial Path Resolve; RTX PT
+alone can expose a third diffuse/specular continuation split. Raw output remains
+independent.
+There is no Primary-Surface Replacement stage. Indirect Reservoir displays the
+resampled indirect suffix while an
+effective RESTIR PT seed-replay or RESTIR GI checkpoint policy is active and is
 disabled otherwise. Debug selection preserves estimator settings and the
 history epoch; changing the view forces one all-pixel attempt so transient data
 is coherent, and successful attempts enter the running mean normally.

@@ -916,7 +916,11 @@ namespace uvsr
         constants.resolutionScale = resolutionScale;
         constants.noisePattern = static_cast<uint32_t>(
             noiseSettings.pattern);
-        constants.attemptMaskEnabled = sampleSchedule.enabled ? 1u : 0u;
+        constants.sampleSequenceMode = static_cast<uint32_t>(
+            ResolveLightingSampleSequenceMode(
+                sampleSchedule,
+                true,
+                noiseSettings.animate));
         constants.visibilityDebugView = std::min(
             static_cast<uint32_t>(settings.debugView), 3u);
         constants.packedEdgeMode = packedEdgesEnabled

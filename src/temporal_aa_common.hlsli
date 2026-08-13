@@ -31,6 +31,8 @@ static const float UvsrTemporalFp16SubnormalHalfUlp =
 // closed instead of turning that uncertainty into a broad silhouette window.
 static const float UvsrTemporalMinimumRelativeDeviceDepthPrecision =
     0.0009765625;
+static const uint UvsrTemporalDepthStorageCurrentFp16 = 1u;
+static const uint UvsrTemporalDepthStorageHistoryFp16 = 2u;
 float UvsrTemporalMotionValidity(float4 packedMotion)
 {
     return float(
@@ -97,10 +99,25 @@ float UvsrTemporalDeviceDepthError(
         sourceDepthPairQuantizationError;
 }
 
+float UvsrTemporalStoredDeviceDepthError(
+    float deviceDepth,
+    bool storedAsFp16)
+{
+    if (!storedAsFp16)
+        return 0.0;
+    if (UvsrTemporalDeviceDepthValidity(deviceDepth) == 0.0)
+        return UvsrTemporalFarViewDepth;
+
+    return max(
+        abs(deviceDepth) * UvsrTemporalFp16RelativeHalfUlp,
+        UvsrTemporalFp16SubnormalHalfUlp);
+}
+
 float UvsrTemporalDeviceDepthPrecisionValidity(
     float expectedPreviousDeviceDepth,
     float quantizedDeviceDepthDelta,
-    float sourceDepthPairQuantizationError)
+    float sourceDepthPairQuantizationError,
+    uint depthStorageFlags)
 {
     if (UvsrTemporalDeviceDepthValidity(
             expectedPreviousDeviceDepth) == 0.0 ||
@@ -114,7 +131,11 @@ float UvsrTemporalDeviceDepthPrecisionValidity(
     const float deviceDepthError =
         UvsrTemporalDeviceDepthError(
             quantizedDeviceDepthDelta,
-            sourceDepthPairQuantizationError);
+            sourceDepthPairQuantizationError) +
+        UvsrTemporalStoredDeviceDepthError(
+            expectedPreviousDeviceDepth - quantizedDeviceDepthDelta,
+            (depthStorageFlags &
+                UvsrTemporalDepthStorageCurrentFp16) != 0u);
     return float(
         deviceDepthError <=
             expectedPreviousDeviceDepth *
@@ -125,13 +146,16 @@ float UvsrTemporalDeviceDepthViewAllowance(
     float expectedPreviousDeviceDepth,
     float quantizedDeviceDepthDelta,
     float sourceDepthPairQuantizationError,
+    float storedDeviceDepthError,
     float4x4 projection)
 {
     if (UvsrTemporalDeviceDepthValidity(
             expectedPreviousDeviceDepth) == 0.0 ||
         !isfinite(quantizedDeviceDepthDelta) ||
         !isfinite(sourceDepthPairQuantizationError) ||
-        sourceDepthPairQuantizationError < 0.0)
+        sourceDepthPairQuantizationError < 0.0 ||
+        !isfinite(storedDeviceDepthError) ||
+        storedDeviceDepthError < 0.0)
     {
         return 0.0;
     }
@@ -145,7 +169,8 @@ float UvsrTemporalDeviceDepthViewAllowance(
         expectedPreviousDeviceDepth +
             UvsrTemporalDeviceDepthError(
                 quantizedDeviceDepthDelta,
-                sourceDepthPairQuantizationError),
+                sourceDepthPairQuantizationError) +
+            storedDeviceDepthError,
         1.0);
     const float quantizedExpectedViewDepth =
         UvsrTemporalLinearViewDepth(
@@ -164,13 +189,16 @@ float UvsrTemporalDeviceDepthFartherViewAllowance(
     float expectedPreviousDeviceDepth,
     float quantizedDeviceDepthDelta,
     float sourceDepthPairQuantizationError,
+    float storedDeviceDepthError,
     float4x4 projection)
 {
     if (UvsrTemporalDeviceDepthValidity(
             expectedPreviousDeviceDepth) == 0.0 ||
         !isfinite(quantizedDeviceDepthDelta) ||
         !isfinite(sourceDepthPairQuantizationError) ||
-        sourceDepthPairQuantizationError < 0.0)
+        sourceDepthPairQuantizationError < 0.0 ||
+        !isfinite(storedDeviceDepthError) ||
+        storedDeviceDepthError < 0.0)
     {
         return 0.0;
     }
@@ -178,7 +206,8 @@ float UvsrTemporalDeviceDepthFartherViewAllowance(
     const float deviceDepthError =
         UvsrTemporalDeviceDepthError(
             quantizedDeviceDepthDelta,
-            sourceDepthPairQuantizationError);
+            sourceDepthPairQuantizationError) +
+        storedDeviceDepthError;
     if (deviceDepthError >= expectedPreviousDeviceDepth)
         return UvsrTemporalFarViewDepth;
 
@@ -305,15 +334,108 @@ UvsrTemporalReverseZFootprint
 float UvsrTemporalFootprintHasConsistentGeometry(
     UvsrTemporalReverseZFootprint footprint)
 {
-    // A reverse-Z depth Gather is a discrete four-texel ownership test, not a
-    // value to interpolate. Every lane must belong to finite geometry. In
-    // particular, a mixed geometry/background footprint cannot authorize a
-    // bilinear history-color sample from the other side of a silhouette.
-    // Requiring the full valid mask also fails closed on corrupt/invalid depth
-    // without changing legal all-geometry footprints.
+    // Every lane touched by bilinear history color must belong to finite
+    // geometry. In particular, a mixed geometry/background footprint cannot
+    // authorize a color sample from the other side of a silhouette. Requiring
+    // the full valid mask also fails closed on corrupt/invalid depth.
     return float(
         footprint.validMask == 0xfu &&
         footprint.backgroundMask == 0u);
+}
+
+float UvsrTemporalFootprintDepthCoherence(
+    UvsrTemporalReverseZFootprint footprint,
+    float4x4 projection)
+{
+    const float valid =
+        UvsrTemporalFootprintHasConsistentGeometry(footprint);
+    const float nearestViewDepth =
+        UvsrTemporalLinearViewDepth(
+            footprint.nearestValidDeviceDepth,
+            projection);
+    const float farthestViewDepth =
+        UvsrTemporalLinearViewDepth(
+            footprint.farthestValidDeviceDepth,
+            projection);
+    const float relativeRange =
+        abs(farthestViewDepth - nearestViewDepth) /
+        max(nearestViewDepth, 1e-3);
+
+    // Infinite reverse-Z device depth is affine over a planar surface, so its
+    // bilinear value at the history coordinate represents arbitrary ordinary
+    // surface slope. The complete footprint span remains useful as a
+    // discontinuity confidence: begin tapering at 0.5% view-depth variation
+    // and reject a footprint spanning 5% or more.
+    return valid *
+        (1.0 - smoothstep(0.005, 0.05, relativeRange));
+}
+
+float UvsrTemporalDeviceDepthAccepted(
+    float expectedPreviousDeviceDepth,
+    float quantizedDeviceDepthDelta,
+    float sourceDepthPairQuantizationError,
+    float previousDeviceDepth,
+    uint depthStorageFlags,
+    float4x4 projection,
+    float baseViewDepthAllowance)
+{
+    if (UvsrTemporalDeviceDepthValidity(
+            expectedPreviousDeviceDepth) == 0.0 ||
+        UvsrTemporalDeviceDepthValidity(previousDeviceDepth) == 0.0 ||
+        !isfinite(quantizedDeviceDepthDelta) ||
+        UvsrTemporalDeviceDepthPrecisionValidity(
+            expectedPreviousDeviceDepth,
+            quantizedDeviceDepthDelta,
+            sourceDepthPairQuantizationError,
+            depthStorageFlags) == 0.0)
+    {
+        return 0.0;
+    }
+
+    const float expectedViewDepth =
+        UvsrTemporalLinearViewDepth(
+            expectedPreviousDeviceDepth,
+            projection);
+    const float previousViewDepth =
+        UvsrTemporalLinearViewDepth(
+            previousDeviceDepth,
+            projection);
+    const float currentDeviceDepthError =
+        UvsrTemporalStoredDeviceDepthError(
+            expectedPreviousDeviceDepth - quantizedDeviceDepthDelta,
+            (depthStorageFlags &
+                UvsrTemporalDepthStorageCurrentFp16) != 0u);
+    const float historyDeviceDepthError =
+        UvsrTemporalStoredDeviceDepthError(
+            previousDeviceDepth,
+            (depthStorageFlags &
+                UvsrTemporalDepthStorageHistoryFp16) != 0u);
+    if (historyDeviceDepthError >
+            previousDeviceDepth *
+                UvsrTemporalMinimumRelativeDeviceDepthPrecision)
+    {
+        return 0.0;
+    }
+    const float nearerViewAllowance =
+        UvsrTemporalDeviceDepthViewAllowance(
+            expectedPreviousDeviceDepth,
+            quantizedDeviceDepthDelta,
+            sourceDepthPairQuantizationError,
+            currentDeviceDepthError + historyDeviceDepthError,
+            projection);
+    const float fartherViewAllowance =
+        UvsrTemporalDeviceDepthFartherViewAllowance(
+            expectedPreviousDeviceDepth,
+            quantizedDeviceDepthDelta,
+            sourceDepthPairQuantizationError,
+            currentDeviceDepthError + historyDeviceDepthError,
+            projection);
+    const float baseAllowance = max(baseViewDepthAllowance, 0.0);
+    return float(
+        expectedViewDepth <=
+            previousViewDepth + baseAllowance + nearerViewAllowance &&
+        previousViewDepth <=
+            expectedViewDepth + baseAllowance + fartherViewAllowance);
 }
 
 float UvsrTemporalDepthAccepted(
@@ -321,6 +443,8 @@ float UvsrTemporalDepthAccepted(
     float quantizedDeviceDepthDelta,
     float sourceDepthPairQuantizationError,
     UvsrTemporalReverseZFootprint footprint,
+    float filteredPreviousDeviceDepth,
+    uint depthStorageFlags,
     float4x4 projection,
     float baseViewDepthAllowance)
 {
@@ -330,31 +454,28 @@ float UvsrTemporalDepthAccepted(
         UvsrTemporalDeviceDepthPrecisionValidity(
             expectedPreviousDeviceDepth,
             quantizedDeviceDepthDelta,
-            sourceDepthPairQuantizationError) == 0.0 ||
+            sourceDepthPairQuantizationError,
+            depthStorageFlags) == 0.0 ||
         UvsrTemporalFootprintHasConsistentGeometry(footprint) == 0.0)
     {
         return 0.0;
     }
 
-    const float expectedViewDepth =
-        UvsrTemporalLinearViewDepth(
-            expectedPreviousDeviceDepth,
-            projection);
-    const float historyViewDepth =
-        UvsrTemporalLinearViewDepth(
-            footprint.farthestValidDeviceDepth,
-            projection);
-    const float quantizationViewAllowance =
-        UvsrTemporalDeviceDepthViewAllowance(
+    // Validate depth at the same bilinear coordinate used by history color.
+    // Comparing both extrema directly to one expected depth would incorrectly
+    // reject an ordinary sloped plane. The separate footprint-coherence factor
+    // rejects foreground/wall mixtures and attenuates near discontinuities.
+    return UvsrTemporalFootprintDepthCoherence(
+            footprint,
+            projection) *
+        UvsrTemporalDeviceDepthAccepted(
             expectedPreviousDeviceDepth,
             quantizedDeviceDepthDelta,
             sourceDepthPairQuantizationError,
-            projection);
-    return step(
-        expectedViewDepth,
-        historyViewDepth +
-            baseViewDepthAllowance +
-            quantizationViewAllowance);
+            filteredPreviousDeviceDepth,
+            depthStorageFlags,
+            projection,
+            baseViewDepthAllowance);
 }
 
 #endif

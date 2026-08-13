@@ -39,7 +39,7 @@ namespace
         float sourceDepthPairQuantizationError;
         float maximumHistoryWeight;
         uint32_t behaviorFlags;
-        uint32_t behaviorPadding;
+        uint32_t depthStorageFlags;
     };
 
     struct alignas(16) TemporalAaOutputConstants
@@ -56,6 +56,10 @@ namespace
             sourceDepthPairQuantizationError) == 112u);
     static_assert(
         offsetof(TemporalAaBlendConstants, behaviorFlags) == 120u);
+    static_assert(
+        offsetof(
+            TemporalAaBlendConstants,
+            depthStorageFlags) == 124u);
     static_assert(sizeof(TemporalAaOutputConstants) == 16u);
 
     bool SupportsMinimumHistoryFormat(
@@ -459,7 +463,6 @@ namespace uvsr
             settings.rectificationClip,
             settings.blendDomain);
         constexpr uint32_t minimumDefaultBehaviorFlags =
-            UVSR_TAA_BEHAVIOR_MOVING_POINT_DEPTH |
             UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT |
             UVSR_TAA_BEHAVIOR_SQUARED_MOTION_TRUST |
             UVSR_TAA_BEHAVIOR_TIGHT_RECTIFICATION |
@@ -724,7 +727,6 @@ namespace uvsr
             settings.rectificationClip,
             settings.blendDomain);
         constexpr uint32_t minimumDefaultBehaviorFlags =
-            UVSR_TAA_BEHAVIOR_MOVING_POINT_DEPTH |
             UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT |
             UVSR_TAA_BEHAVIOR_SQUARED_MOTION_TRUST |
             UVSR_TAA_BEHAVIOR_TIGHT_RECTIFICATION |
@@ -844,7 +846,12 @@ namespace uvsr
             float(settings.historyFrames) /
             float(settings.historyFrames + 1u);
         blendConstants.behaviorFlags = behaviorFlags;
-        blendConstants.behaviorPadding = 0u;
+        // Minimum always packs current depth through binary16 LDS and normally
+        // stores persistent depth as R16_FLOAT. Track the two conversions
+        // independently because the persistent texture can fall back to R32.
+        blendConstants.depthStorageFlags = useMinimum
+            ? 1u | (m_Timings.minimumDepthIsR16 ? 2u : 0u)
+            : 0u;
         blendConstants.projection =
             currentView.GetProjectionMatrix(false);
         blendConstants.reciprocalBufferDimensions =
@@ -935,7 +942,7 @@ namespace uvsr
             m_Timings.historyDepthSamples =
                 m_LastHistoryInputValid &&
                     settings.depthValidation ==
-                        TemporalAaDepthValidation::MovingPoint
+                        TemporalAaDepthValidation::NearestTexel
                     ? 1u
                     : 0u;
             m_Timings.dispatchCount = 1u;
@@ -991,13 +998,13 @@ namespace uvsr
         blendState.bindings = { m_BlendBindingSets[source] };
         m_Timings.historyColorSamples =
             GetTemporalAaHistoryColorSampleCount(options.historyFilter);
-        const bool movingPointDepthValidation =
+        const bool nearestTexelDepthValidation =
             settings.depthValidation ==
-                TemporalAaDepthValidation::MovingPoint;
+                TemporalAaDepthValidation::NearestTexel;
         m_Timings.historyDepthGathers =
-            movingPointDepthValidation ? 0u : 1u;
+            nearestTexelDepthValidation ? 0u : 1u;
         m_Timings.historyDepthSamples =
-            movingPointDepthValidation
+            nearestTexelDepthValidation
                 ? 1u
                 : GetTemporalAaHistoryDepthSampleCount(
                     options.historyFilter);

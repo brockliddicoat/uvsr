@@ -48,8 +48,8 @@ Aliasing, and Shadows drawers from the active layout:
 1. **General** selects the graphics adapter, Adaptive Sync, camera, and scene.
 2. **Representation** controls whether ray traversal is allowed and configures
    the shared BVH, BLAS, and TLAS policies.
-3. **Noise** defines the shared precomputed noise pattern, resolution, and
-   animation policy.
+3. **Noise** defines the shared precomputed noise pattern, resolution,
+   animation policy, and progressive accumulation mode.
 4. **Diffuse** controls Occlusion, Illumination, sampling, and
    reconstruction.
 5. **Denoising** selects Ray Marching NRD processing or the supported Path
@@ -221,10 +221,11 @@ running forever.
 Pathing follows General and appears only while Path Tracing is selected. The
 drawer configures policies around one shared transport core:
 
-- **Solver** applies an editable **RTX PT**, **ReSTIR PT**, or **ReSTIR GI**
-  recipe. RTX PT is the reference Monte Carlo solver. ReSTIR PT executes
-  deterministic seed-space replay from the current path, the prior same-pixel
-  seed, and one prior-frame neighbor seed. ReSTIR GI executes current plus
+- **Solver** applies an editable **RTX PT**, **RESTIR PT**, or **RESTIR GI**
+  recipe. RTX PT is the reference Monte Carlo solver. RESTIR PT executes
+  deterministic seed-space replay from the current path, a reprojected
+  prior-pixel seed, and one neighbor seed around that prior-view location.
+  RESTIR GI executes current plus
   prior same-pixel indirect-checkpoint resampling. The UI identifies both as
   first-party clean-room subsets and states that geometric reconnection,
   spatial GI transformation, and NVIDIA namesake parity are unavailable.
@@ -243,10 +244,16 @@ drawer configures policies around one shared transport core:
 - The **RTXDI Reservoir Stages** option selects UVSR's first-party RTXDI-like
   direct-light reservoir for any requested preset. It replaces conventional NEE
   at the primary hit; later path vertices retain conventional NEE. Compatible
-  previous-frame same-pixel and one-neighbor direct reuse is active when the
-  selected recipe requests it. This stage is orthogonal to ReSTIR PT path-seed
-  replay and ReSTIR GI indirect-checkpoint reuse, and every solver preset starts
+  reprojected prior-pixel and one-neighbor direct reuse is active when the
+  selected recipe requests it. This stage is orthogonal to RESTIR PT path-seed
+  replay and RESTIR GI indirect-checkpoint reuse, and every solver preset starts
   with it disabled.
+- The **Reuse Validated RESTIR Proposals During Motion** option defaults off.
+  When enabled, a camera-only change reprojects prior direct-light proposals
+  and replayable RESTIR PT seeds into the current pixel, then fully re-evaluates
+  them. Accumulated radiance, signal groups, and RESTIR GI checkpoints always
+  reset, and any scene, material, light, or transport change clears every
+  affected history.
 - **Shader Execution Reordering** is disabled with an availability explanation.
   The current Shader Model 6.5 RayQuery path has no native SER implementation
   and does not pretend to reorder execution.
@@ -264,8 +271,8 @@ presents the live Ray Marching fallback rather than freezing an old frame.
 
 The executable transport, direct reservoir, seed replay, and temporal GI
 checkpoints are independent first-party UVSR implementations, not copied,
-one-to-one, or certified NVIDIA SDK integrations. ReSTIR PT has no hybrid or
-geometric reconnection, and ReSTIR GI has no cross-pixel secondary-surface
+one-to-one, or certified NVIDIA SDK integrations. RESTIR PT has no hybrid or
+geometric reconnection, and RESTIR GI has no cross-pixel secondary-surface
 transform. See
 [Path Tracing Transport](path-tracing-transport.md) for the exact supported
 domain, preset boundary, and extension contract.
@@ -305,20 +312,46 @@ queries.
 
 The Noise drawer defaults to **Spatiotemporal Blue**, **128x128**, animated
 sampling, and **Accumulate Samples** off. Accumulate Samples is available in
-both lighting solutions. Successful scene-linear samples remain in a per-pixel
-mean, and pixels with more successes receive a progressively smaller retry
-probability driven by an unconditional frame serial rather than the optional
-Animate Samples phase. Any camera, geometry, material, light, environment,
-resolution, solution, solver, transport, scene, or shader change clears the
-history.
+both lighting solutions. Enabling it reveals three starting profiles:
+**Progressive Mean**, **Responsive Mean**, and factory-default **Variance
+Guided**. Every averaging, scheduling, effective-history, warmup, target-error,
+and minimum-update-rate control remains exposed. Editing one retains the chosen
+profile as its origin and displays `<Profile> (Custom)`; reselecting the profile
+reapplies its complete vector.
+
+**History Preset** maps desired response to Effective History without hiding
+the slider: Quick Preview is 8 samples, Responsive is 32, Balanced is 64,
+Stable is 256, and Very Stable is 1024. **Adaptive Workload** controls when
+Variance Guided eases work. Full Quality uses 32 warmup samples, one-percent
+error, and a 25-percent floor; Balanced uses 16, two percent, and 1/16;
+Performance uses 8, four percent, and 1/32; Maximum Savings uses 4, eight
+percent, and 1/64. Manual edits remain available and report Custom.
+
+Variance Guided takes 16 samples everywhere, then uses the largest per-channel
+relative standard error and a deterministic bounded revisit interval to reduce
+eligible ray work without abandoning low-variance pixels. **Warmup Samples**
+sets when easing may begin, **Target Error** controls how aggressively estimated
+uncertainty reduces work, and **Minimum Update Rate** bounds the longest revisit
+cycle. The old harmonic retry probability is removed. Stationary successful
+counts own their sample phases, so skipped frames consume no samples. During
+camera motion, reset samples instead use the live animated frame phase when
+**Animate Samples** is on, preventing the noise texture from appearing stuck to
+the camera. Camera motion still clears accumulated means, RGB variances, counts,
+stable signals, and RESTIR GI radiance history. The Pathing motion option may
+retain only reprojected, revalidated direct proposals and replayable RESTIR PT
+seeds.
 
 For Ray Marching, a prepare shader creates the attempt mask before stochastic
 screen-space visibility, Heitz shadow, ray-traced flashlight, and ray-traced
 sky producers. Rejected pixels skip that guarded work, while required raster,
-deferred, anti-aliasing, and presentation passes continue. A matching resolve
-then commits only a finite attempted scene-linear result; rejected or invalid
-pixels preserve the prior mean and count exactly. Disabling accumulation
-bypasses the full-resolution Ray Marching accumulation history.
+deferred, and presentation passes continue. A matching resolve commits the raw
+scene-linear frame before TAA; rejected or invalid pixels preserve the prior
+mean, RGB variance, and count exactly. While Ray Marching accumulation is
+active, it is the sole long-term history owner and TAA's history/blend stage is
+bypassed. Ray Marching denoisers are also bypassed so their temporal estimates
+cannot be averaged again or preserve pre-motion signal history. A selected TAA
+jitter sequence may still diversify raw raster samples. Disabling accumulation
+bypasses the full-resolution Ray Marching history.
 
 With accumulation off, Path Tracing continuously replaces each pixel with a
 one-sample estimate. That is useful for immediate change feedback but can be
@@ -390,18 +423,30 @@ occlusion only profile, or separate contrast/power axis.
 
 The Denoising drawer remains visible in both lighting solutions. Ray Marching
 retains its AO, GI, Shadows, and Sky Visibility signal groups. Path Tracing
-replaces those groups with transport controls. **Raw (No Denoising)** and the
-explicitly biased **Firefly Clamp** plus threshold are executable. For RTX PT,
-**Stable Plane Resolve** exposes one to three clean-room spatial path layers:
-merged; primary-local versus indirect; or primary-local, diffuse suffix, and
-specular suffix. It becomes active only after a complete coherent signal cycle
-and falls back to the raw mean on unsupported formats, allocation, or resolve
-failure. ReSTIR PT/GI retain the selected preference but use raw output because
-their winning candidates do not yet persist a path-layer identity. The filter
-is spatial-only and intentionally biased; it is not NVIDIA Stable Planes
-parity. **Primary-Surface Replacement**, NRD ReBLUR, and NRD ReLAX remain
-disabled because no validated path-transport adapters exist. Inactive
-solution-specific values remain stored while their body is collapsed.
+replaces those groups with transport controls. **Spatial Path Resolve** is the
+factory path-denoising method for all three solvers. One signal group filters
+the combined path; two independently filter primary and indirect transport.
+RTX PT additionally supports three groups—primary, diffuse continuation, and
+specular continuation—because only its unresampled path retains a trustworthy
+first-lobe identity. RESTIR PT and RESTIR GI therefore cap the control at two.
+
+The resolve is a spatial-only, confidence-aware 5x5 bilateral filter. It uses
+the persistent RGB variance and exact successful-sample count for radiance-edge
+rejection, converts variance to standard error using the active accumulation
+history, never uses inverse-variance estimator weighting, and fades its
+correction toward the exact raw mean as confidence grows. Primary guides are
+initialized from a deterministic center ray and remain stable across later
+jittered samples. **Resolve Strength** blends from raw to filtered output;
+strength and signal-group edits preserve the accumulated transport. Missing
+guides, nonfinite data, unsupported formats,
+allocation failure, or resolve failure returns the raw mean. **Raw (No
+Denoising)** and the explicitly biased **Firefly Clamp** remain available.
+
+The old path NRD and Primary-Surface Replacement entries were removed because
+they had no executable adapters. A truthful path NRD integration requires
+demodulated diffuse/specular radiance, matching in-lobe hit distances, and path
+motion guides that UVSR does not yet produce. The existing Ray Marching NRD
+backend cannot correctly consume an accumulated combined path mean.
 
 For Ray Marching, NRD processing is available only when UVSR is built with the
 optional NVIDIA NRD backend and the selected signal provides its complete
@@ -477,13 +522,17 @@ High, and Ultra choices, and its own default-closed **Advanced** tree. Temporal
 Advanced opens directly on its current algorithm controls. Its first control is
 **Jitter Sequence**,
 with Rotated Grid 4, Uniform Helix 4, Halton 8, Halton 16, Halton 32, and Sobol
-32 choices. Filament Halton 16 is the factory default. The selector owns its
+32 choices. Filament Halton 8 is the factory default. The selector owns its
 own reset and does not make Quality or Cost Custom. Changing it restarts
-temporal history at phase zero. **Depth Validation** follows, with Stationary
-Bypass and Four-Texel Footprint choices. Reconstruction, history, motion, and
-rectification come next. A default-closed **Cost** submenu is last. Its **Mode**
-selects Full Quality, Reduced, or Minimum, followed by storage, weighting,
-motion trust, clipping, blending, and sharpening policies. Inherited dropdowns preview
+temporal history at phase zero. **Depth Validation** follows, with Nearest Texel
+and Four-Texel Footprint choices. Four-Texel Footprint is the factory default.
+Both modes validate stationary reprojection depth, preventing projection jitter
+from accepting unrelated silhouette history. Reconstruction, history, motion,
+and rectification come next. A default-closed **Cost** submenu is last. Its
+**Mode** selects Full Quality, Reduced, or Minimum, followed by storage,
+weighting, motion trust, clipping, blending, and sharpening policies. Linear
+RGB is the factory blend domain; the optional luminance-compressed domain can
+otherwise bias a long nonlinear mean darker. Inherited dropdowns preview
 their effective choice and list every concrete choice once; the adjacent reset
 icon reattaches a row to its recipe. Only Preset Sharpening retains an
 **(Automatic)** choice. History Frames displays 1 through 32 and History
@@ -496,6 +545,12 @@ preset-and-owned-settings group; the Cost Mode reset does the same for Cost.
 Choosing a named preset reapplies the complete group, and choosing a
 preset-equivalent Advanced value reattaches that row. Disabling the technique
 does not erase stored choices.
+
+When Ray Marching **Accumulate Samples** is enabled, that accumulator consumes
+raw scene-linear frames and becomes the sole long-term history owner. TAA's
+temporal blend and Ray Marching denoisers are bypassed in that state, while the
+selected TAA jitter sequence can still diversify the raw raster input. Path
+Tracing resolves TAA off.
 
 Fast Approximate Quality owns Edge Sharpness, Relative Edge Threshold, and
 Minimum Edge Threshold. Low uses 2, 0.25, and 0.06; Medium uses 4, 0.1875, and
@@ -550,8 +605,8 @@ The enabled route differs by applying its bounded exposure multiplier to
 scene-linear input before the same established AgX transform; it does not
 replace that transform's clamps or output handling.
 
-Ray Traced Sky Visibility is off by default and traces the current frame at full
-resolution. Its independently collapsible section remains closable while the
+Ray Traced Sky Visibility defaults on at two samples per pixel and traces the
+current frame at full resolution. Its independently collapsible section remains closable while the
 effect is enabled, matching the other effect sections. **Effect Diffuse** and
 **Effect Specular** both default on, so enabling sky
 visibility applies the same geometric visibility to the diffuse and specular
@@ -573,7 +628,8 @@ reach. The `32m`, `16m`, `8m`, `4m`, and `2m` choices intentionally ignore
 farther occluders and are bounded visibility rather than exact sky visibility.
 **Ray Bias** uses the same geometric normal origin clearance policy as ray
 traced sun shadows. Disabled, unsupported, unavailable, and enabled with neither
-IBL consumer states supply white visibility and preserve the old image.
+an IBL consumer nor the Sky Visibility debug view supply white visibility and
+preserve the old image.
 
 ## Debug Drawer
 
@@ -584,17 +640,28 @@ independently collapsible:
 - **Visibility** selects Default, Ambient Visibility, Traced Indirect, or
   Applied Indirect.
 - **Physically Based Lighting** selects Default or a concise information
-  filter such as Surface Normals, Reflectance Response, or Specular Visibility.
+  filter such as Surface Normals, Reflectance Response, Specular Visibility, or
+  the ray-traced Sky Visibility scalar.
 
 Path Tracing retains World and replaces the screen-space Visibility and
 deferred Physically Based Lighting groups with **Transport**. Transport selects
 Final Image, first-hit Albedo, Geometric Normal, Shading Normal, Sample Count,
-Retry Probability, Stable Plane, or Direct Reservoir. Stable Plane exposes only
+Update Rate, Signal Group, Direct Reservoir, Indirect Reservoir, Primary
+Transport, or Indirect Transport. Primary and Indirect Transport are noisy
+current-sample components whose sum follows the selected solver before the
+online mean; Primary also includes primary emission and camera-miss environment
+and is not merely direct lighting. Signal Group exposes only
 the shader's classification/debug data, not a reconstruction result. Indirect
-Reservoir displays the active ReSTIR PT seed-replay or ReSTIR GI checkpoint
+Reservoir displays the active RESTIR PT seed-replay or RESTIR GI checkpoint
 estimate and is disabled for RTX PT or when the selected subset's reuse policy
 is inactive. Direct Reservoir is meaningful only while its independent stage
 is active.
+
+Path Tracing does not expose a Sky Visibility scalar. Its environment misses
+are radiance contributions folded into primary or indirect transport, while
+continuation rays are BSDF-sampled. A truthful per-surface sky-visibility view
+would require another estimator or extra probe rays rather than a debug-only
+route through an existing signal.
 
 World appearance changes and information filters are separate state. A
 physically based lighting filter keeps Visibility running so its history and
@@ -603,7 +670,7 @@ the filtered presentation. An explicit Visibility view takes precedence when
 both selectors are active. The removed screen space directional shadow
 diagnostics do not remain as hidden main branch state.
 
-All three Debug selectors defer their renderer mutation until the native popup
+All Debug selectors defer their renderer mutation until the native popup
 has closed, the 250-millisecond settle interval has elapsed, and one complete
 idle Settings frame has been presented. Selecting a White world mode therefore
 does not rewrite materials or recreate render passes inside the popup's click
@@ -642,6 +709,14 @@ the light volume from crossing a wall without using scene depth to retract the
 mount or retarget the beam. Lens sway is applied afterward to direction only
 and cannot change the collision solution or resolved light position.
 
+**Stationary When Idle** defaults on. The last resolved flashlight
+position, direction, and roll are frozen bit-for-bit as soon as the active
+camera pose stops changing. Sway time and aim correction pause rather than
+advancing invisibly or snapping back. Real camera motion or a transform-affecting
+flashlight setting resumes motion and resets lighting accumulation; the next
+idle pose remains stable. Redundant light transforms are not submitted while
+idle, so the scene graph no longer invalidates progressive history every frame.
+
 The rejected receiver-driven centering work, including its depth probes,
 temporal controls, diagnostics, observed pillar sticking, and future
 investigation notes, is preserved in
@@ -655,7 +730,7 @@ flashlight instance before deferred lighting applies it.
 ## Shadows
 
 **Ray Traced Shadows** controls visibility for the primary directional sun and
-defaults off. The sun itself initializes with irradiance `8` and a `0.2`
+defaults on at two samples per pixel. The sun itself initializes with irradiance `8` and a `0.2`
 degree full angular size. A zero angular size or **Hard Shadows** selects one
 center ray.
 
@@ -751,6 +826,14 @@ settings. Type a section prefix such as
 exact paths and accepted values. A `list` result uses `/` between each row's
 supported verbs and value domain.
 
+Representative controls added for progressive history are
+`noise.accumulation-mode`, `noise.accumulation-averaging`,
+`noise.accumulation-scheduling`, `noise.accumulation-effective-history`,
+`noise.accumulation-minimum-samples`, `noise.accumulation-target-error`, and
+`noise.accumulation-minimum-update-rate`. The flashlight idle lock is
+`light.selected.flashlight.stationary-when-idle`. TAA previous-depth values are
+`nearest-texel` and `four-texel-footprint`.
+
 Renderer mutations are rejected while a scene load owns renderer resources.
 Interface-only commands remain available. Accepted renderer changes use the
 same post-ImGui mutation boundary as visible controls.
@@ -804,31 +887,55 @@ that moving away restores the authored offset. Pan across rows of pillars and
 confirm scene-depth changes do not retract the mount or retarget the beam.
 Change Sway and confirm it changes only beam direction, never the physical
 mount position. Reset Color and confirm the beam returns to pure white.
-restores smoothly without crossing the surface. Hold a stationary trackpad
-touch while pressing V and confirm roll leveling completes; then confirm actual
+Enable Stationary When Idle with nonzero Sway and accumulation. Confirm the
+submitted pose and lighting epoch stop changing after the camera rests while
+the successful sample count continues to advance. Move the camera by one real
+input delta and confirm the motion frame is rejected, the first stable frame
+starts a fresh history, and later idle frames remain stable. Disable the toggle
+and confirm continuous sway returns. Hold a stationary trackpad touch
+while pressing V and confirm roll leveling completes; then confirm actual
 camera-look movement cancels it.
 
 Switch to Path Tracing and verify RTX PT over opaque and alpha-tested surfaces
 with Uniform, Power, and NEE-AT selection. Confirm NEE Candidates changes
 conventional direct-light work, RTXDI Reservoir Stages replaces primary NEE,
 and compatible previous-frame direct reuse survives only unchanged surfaces.
-ReSTIR PT must report seed-space replay, use the current path plus prior
-same-pixel and one-neighbor seeds, and disclose that geometric reconnection is
-unavailable. ReSTIR GI must report current plus prior same-pixel indirect
-checkpoints and disclose that spatial reconnection is unavailable. Confirm the
-Indirect Reservoir view follows the active subset and that combined estimates
-never become the next frame's persistent local record. Confirm Stable Plane
-Resolve executes in RTX PT with one, two, and three layers and that ReSTIR
-modes report raw fallback. Confirm SER, Primary-Surface Replacement, and path
-NRD remain disabled.
+RESTIR PT must report seed-space replay, use the current path plus reprojected
+prior-pixel and neighbor seeds during camera-only reuse, and disclose that
+geometric reconnection is unavailable. RESTIR GI must report current plus prior
+same-pixel indirect checkpoints and disclose that spatial reconnection is
+unavailable. Confirm the Indirect Reservoir view follows the active subset and
+that combined estimates never become the next frame's persistent local record.
+Confirm Spatial Path Resolve executes with one and two groups for every solver,
+and with three groups for RTX PT only. Confirm SER remains disabled and no
+nonfunctional path NRD or Primary-Surface Replacement option is presented.
 Exercise the biased Firefly Clamp separately from the unclamped reference and
 verify every estimator-affecting change resets accumulation.
 
-With Ray Marching accumulation enabled, confirm the prepare mask reaches every
-guarded stochastic visibility producer before it dispatches and that a matching
-resolve alone advances the history write index. Rejected attempts and
-non-finite candidates must retain the prior mean and count; camera, light,
-geometry, and material motion must force an all-pixel restart.
+Exercise Progressive Mean, Responsive Mean, Variance Guided, and at least one
+Custom combination in both lighting solutions. Progressive must advance each
+eligible pixel's successful count on every scheduling visit. Variance Guided
+must complete its all-pixel warmup and revisit every pixel within the configured
+maximum interval. With Animate Samples off, accepted samples must still advance
+each pixel's stochastic sequence. For Ray Marching, confirm the prepare mask
+reaches every guarded stochastic visibility producer before dispatch and that a
+matching raw scene-linear resolve alone advances the history write index. TAA
+history must be bypassed while this accumulator owns history. Rejected attempts
+and non-finite candidates must retain the prior mean, RGB variance, and count;
+camera, light, geometry, and material motion must force an all-pixel restart in
+every accumulation mode.
+
+Exercise every History Preset and Adaptive Workload recipe, then edit each
+underlying slider and confirm the visible values remain authoritative. In Path
+Tracing, ordinary presets must report a full-frame update; only extreme work
+vectors may report a bounded 1/N lattice. Compare solvers by accepted samples
+and wall-clock convergence as well as FPS.
+
+Exercise TAA at static high-contrast silhouettes with both depth-validation
+choices and the normal and Minimum cost routes. Stationary pixels must still
+read previous depth, and increasing history must not produce a bright geometry
+outline or the prior nonlinear dark/low-contrast shift under the Linear RGB
+default.
 
 On an NRD build, exercise every supported method, quality, resolution, and
 history endpoint. Verify that a missing hit output or an active sky/sun Ratio

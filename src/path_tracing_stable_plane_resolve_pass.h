@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <memory>
 
+#include "sample_accumulation_settings.h"
+
 namespace donut::engine
 {
     class ShaderFactory;
@@ -19,8 +21,14 @@ namespace uvsr
         nvrhi::ITexture* diffuseSuffixMean = nullptr;
         nvrhi::ITexture* primaryNormalRoughness = nullptr;
         nvrhi::ITexture* primaryViewZ = nullptr;
+        nvrhi::ITexture* colorVariance = nullptr;
+        nvrhi::ITexture* successfulSampleCount = nullptr;
         nvrhi::ITexture* output = nullptr;
         uint32_t stablePlaneCount = 1u;
+        float resolveStrength = 1.f;
+        SampleAccumulationAveraging accumulationAveraging =
+            SampleAccumulationAveraging::Cumulative;
+        uint32_t accumulationEffectiveHistory = 64u;
     };
 
     // A small first-party, spatial-only reconstruction pass. It intentionally

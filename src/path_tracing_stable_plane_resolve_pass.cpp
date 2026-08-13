@@ -5,6 +5,7 @@
 #include <donut/engine/ShaderFactory.h>
 
 #include <algorithm>
+#include <cmath>
 
 using namespace donut::engine;
 using namespace donut::math;
@@ -13,6 +14,8 @@ using namespace donut::math;
 
 static_assert(sizeof(PathTracingStablePlaneResolveConstants) % 16u == 0u,
     "Stable-plane resolve constants must preserve HLSL alignment.");
+static_assert(sizeof(PathTracingStablePlaneResolveConstants) == 32u,
+    "Stable-plane resolve constants must match the 32-byte HLSL ABI.");
 
 namespace uvsr
 {
@@ -63,6 +66,8 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_SRV(2),
             nvrhi::BindingLayoutItem::Texture_SRV(3),
             nvrhi::BindingLayoutItem::Texture_SRV(4),
+            nvrhi::BindingLayoutItem::Texture_SRV(5),
+            nvrhi::BindingLayoutItem::Texture_SRV(6),
             nvrhi::BindingLayoutItem::Texture_UAV(0)
         };
         m_BindingLayout = device->createBindingLayout(layoutDescription);
@@ -97,6 +102,9 @@ namespace uvsr
             m_BoundInputs.primaryNormalRoughness !=
                 inputs.primaryNormalRoughness ||
             m_BoundInputs.primaryViewZ != inputs.primaryViewZ ||
+            m_BoundInputs.colorVariance != inputs.colorVariance ||
+            m_BoundInputs.successfulSampleCount !=
+                inputs.successfulSampleCount ||
             m_BoundInputs.output != inputs.output;
         if (bindingChanged)
         {
@@ -116,6 +124,9 @@ namespace uvsr
             nvrhi::BindingSetItem::Texture_SRV(
                 3, inputs.primaryNormalRoughness),
             nvrhi::BindingSetItem::Texture_SRV(4, inputs.primaryViewZ),
+            nvrhi::BindingSetItem::Texture_SRV(5, inputs.colorVariance),
+            nvrhi::BindingSetItem::Texture_SRV(
+                6, inputs.successfulSampleCount),
             nvrhi::BindingSetItem::Texture_UAV(0, inputs.output)
         };
         m_BindingSet = m_Device->createBindingSet(
@@ -158,6 +169,14 @@ namespace uvsr
                 rawDescription.width,
                 rawDescription.height) ||
             !IsMatchingTexture2D(
+                inputs.colorVariance,
+                rawDescription.width,
+                rawDescription.height) ||
+            !IsMatchingTexture2D(
+                inputs.successfulSampleCount,
+                rawDescription.width,
+                rawDescription.height) ||
+            !IsMatchingTexture2D(
                 inputs.output,
                 rawDescription.width,
                 rawDescription.height) ||
@@ -171,6 +190,18 @@ namespace uvsr
             rawDescription.width,
             rawDescription.height };
         constants.stablePlaneCount = inputs.stablePlaneCount;
+        constants.resolveStrength = std::isfinite(inputs.resolveStrength)
+            ? std::clamp(inputs.resolveStrength, 0.f, 1.f)
+            : 1.f;
+        constants.accumulationAveraging = static_cast<uint32_t>(
+            IsValidSampleAccumulationAveraging(
+                inputs.accumulationAveraging)
+            ? inputs.accumulationAveraging
+            : SampleAccumulationAveraging::Cumulative);
+        constants.accumulationEffectiveHistory = std::clamp(
+            inputs.accumulationEffectiveHistory,
+            SampleAccumulationMinimumEffectiveHistory,
+            SampleAccumulationMaximumEffectiveHistory);
         commandList->writeBuffer(
             m_ConstantBuffer,
             &constants,
@@ -179,7 +210,7 @@ namespace uvsr
         nvrhi::ComputeState state;
         state.pipeline = m_Pipeline;
         state.bindings = { m_BindingSet };
-        commandList->beginMarker("Path Stable Plane Resolve");
+        commandList->beginMarker("Spatial Path Resolve");
         commandList->setComputeState(state);
         commandList->dispatch(
             div_ceil(rawDescription.width, 8u),

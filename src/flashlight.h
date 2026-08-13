@@ -13,6 +13,7 @@ namespace uvsr
     struct FlashlightSettings
     {
         bool realisticLens = true;
+        bool stationaryWhenIdle = true;
         bool castShadows = true;
         bool outputHitDistance = false;
         float peakIntensityCandela = 600.f;
@@ -30,6 +31,69 @@ namespace uvsr
         float hotspotStrength = 0.70f;
         float swayDegrees = 0.20f;
         float aimCorrectionSeconds = 0.05f;
+
+        [[nodiscard]] constexpr bool operator==(
+            const FlashlightSettings& other) const
+        {
+            return realisticLens == other.realisticLens &&
+                stationaryWhenIdle == other.stationaryWhenIdle &&
+                castShadows == other.castShadows &&
+                outputHitDistance == other.outputHitDistance &&
+                peakIntensityCandela == other.peakIntensityCandela &&
+                rangeMeters == other.rangeMeters &&
+                cameraHorizontalOffsetMeters ==
+                    other.cameraHorizontalOffsetMeters &&
+                cameraVerticalOffsetMeters ==
+                    other.cameraVerticalOffsetMeters &&
+                beamSizeDegrees == other.beamSizeDegrees &&
+                angularSizeDegrees == other.angularSizeDegrees &&
+                beamRoundness == other.beamRoundness &&
+                edgeSoftness == other.edgeSoftness &&
+                colorLinearRed == other.colorLinearRed &&
+                colorLinearGreen == other.colorLinearGreen &&
+                colorLinearBlue == other.colorLinearBlue &&
+                hotspotSize == other.hotspotSize &&
+                hotspotStrength == other.hotspotStrength &&
+                swayDegrees == other.swayDegrees &&
+                aimCorrectionSeconds == other.aimCorrectionSeconds;
+        }
+
+        [[nodiscard]] constexpr bool operator!=(
+            const FlashlightSettings& other) const
+        {
+            return !(*this == other);
+        }
+    };
+
+    struct FlashlightMotionSettings
+    {
+        bool realisticLens = true;
+        bool stationaryWhenIdle = true;
+        float cameraHorizontalOffsetMeters = 0.f;
+        float cameraVerticalOffsetMeters = 0.f;
+        float angularSizeDegrees = 0.f;
+        float swayDegrees = 0.f;
+        float aimCorrectionSeconds = 0.f;
+
+        [[nodiscard]] constexpr bool operator==(
+            const FlashlightMotionSettings& other) const
+        {
+            return realisticLens == other.realisticLens &&
+                stationaryWhenIdle == other.stationaryWhenIdle &&
+                cameraHorizontalOffsetMeters ==
+                    other.cameraHorizontalOffsetMeters &&
+                cameraVerticalOffsetMeters ==
+                    other.cameraVerticalOffsetMeters &&
+                angularSizeDegrees == other.angularSizeDegrees &&
+                swayDegrees == other.swayDegrees &&
+                aimCorrectionSeconds == other.aimCorrectionSeconds;
+        }
+
+        [[nodiscard]] constexpr bool operator!=(
+            const FlashlightMotionSettings& other) const
+        {
+            return !(*this == other);
+        }
     };
 
     struct FlashlightLobeSettings
@@ -244,6 +308,35 @@ namespace uvsr
             FlashlightMinimumAimCorrectionSeconds,
             FlashlightMaximumAimCorrectionSeconds);
         return result;
+    }
+
+    [[nodiscard]] inline FlashlightMotionSettings
+        ResolveFlashlightMotionSettings(
+            const FlashlightSettings& untrustedSettings)
+    {
+        const FlashlightSettings settings =
+            SanitizeFlashlightSettings(untrustedSettings);
+        return {
+            settings.realisticLens,
+            settings.stationaryWhenIdle,
+            settings.cameraHorizontalOffsetMeters,
+            settings.cameraVerticalOffsetMeters,
+            settings.angularSizeDegrees,
+            settings.swayDegrees,
+            settings.aimCorrectionSeconds
+        };
+    }
+
+    [[nodiscard]] inline constexpr bool ShouldAdvanceFlashlightMotion(
+        const FlashlightMotionSettings& settings,
+        bool poseValid,
+        bool cameraPoseChanged,
+        bool motionSettingsChanged)
+    {
+        return !settings.stationaryWhenIdle ||
+            !poseValid ||
+            cameraPoseChanged ||
+            motionSettingsChanged;
     }
 
     [[nodiscard]] inline FlashlightLobeSettings

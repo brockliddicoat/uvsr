@@ -112,16 +112,16 @@ namespace
         using namespace uvsr;
 
         const RayTracedSkyVisibilitySettings settings;
-        assert(!settings.enabled);
+        assert(settings.enabled);
         assert(settings.applyToDiffuseIbl);
         assert(settings.applyToSpecularIbl);
         assert(settings.useRatioEstimator);
         assert(!settings.outputHitDistance);
         assert(HasRayTracedSkyVisibilityConsumer(settings));
-        assert(settings.sampleRateLog2 == 0);
+        assert(settings.sampleRateLog2 == 1);
         assert(ResolveRayTracedSkyVisibilitySampleCount(
-            settings.sampleRateLog2) == 1u);
-        assert(ResolveRayTracedSkyVisibilityTraceCount(settings) == 1u);
+            settings.sampleRateLog2) == 2u);
+        assert(ResolveRayTracedSkyVisibilityTraceCount(settings) == 2u);
         const NoiseSettings defaultNoise;
         assert(!settings.noise.specifyNoise);
         assert(settings.noise.custom == defaultNoise);

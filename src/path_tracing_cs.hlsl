@@ -2,6 +2,7 @@
 
 #include <donut/shaders/binding_helpers.hlsli>
 #include "path_tracing_cb.h"
+#include "sample_accumulation.hlsli"
 
 cbuffer c_PathTracing : register(b0)
 {
@@ -63,6 +64,7 @@ RWTexture2D<float4> u_DiffuseSuffixMean : register(u10);
 RWTexture2D<float4> u_PrimaryNormalRoughness : register(u11);
 RWTexture2D<float> u_PrimaryViewZ : register(u12);
 RWTexture2D<uint> u_DirectSampleSeed : register(u13);
+RWTexture2D<float4> u_ColorVariance : register(u14);
 
 #include "noise_sampling.hlsli"
 #include "path_tracing_material.hlsli"
@@ -73,10 +75,12 @@ static const uint UVSR_PATH_DEBUG_ALBEDO = 1u;
 static const uint UVSR_PATH_DEBUG_GEOMETRIC_NORMAL = 2u;
 static const uint UVSR_PATH_DEBUG_SHADING_NORMAL = 3u;
 static const uint UVSR_PATH_DEBUG_SAMPLE_COUNT = 4u;
-static const uint UVSR_PATH_DEBUG_RETRY = 5u;
+static const uint UVSR_PATH_DEBUG_UPDATE_RATE = 5u;
 static const uint UVSR_PATH_DEBUG_STABLE_PLANE = 6u;
 static const uint UVSR_PATH_DEBUG_DIRECT_RESERVOIR = 7u;
 static const uint UVSR_PATH_DEBUG_GI_RESERVOIR = 8u;
+static const uint UVSR_PATH_DEBUG_PRIMARY_TRANSPORT = 9u;
+static const uint UVSR_PATH_DEBUG_INDIRECT_TRANSPORT = 10u;
 
 bool PathTracingFlagIsSet(uint flag)
 {
@@ -103,6 +107,90 @@ int2 PathTracingPreviousNeighbor(
         int2(pixel) + offsets[direction],
         int2(0, 0),
         int2(g_PathTracing.dispatchExtent) - 1);
+}
+#endif
+
+bool PathTracingResolvePreviousDonorPixel(
+    uint2 currentPixel,
+    float3 currentWorldPosition,
+    bool currentSurfaceValid,
+    out int2 previousPixel,
+    out bool reprojected)
+{
+    previousPixel = int2(currentPixel);
+    reprojected = g_PathTracing.previousViewValid != 0u;
+    if (!reprojected)
+        return true;
+    if (!currentSurfaceValid || !all(isfinite(currentWorldPosition)))
+        return false;
+
+    const float4 previousClip = mul(
+        float4(currentWorldPosition, 1.0f),
+        g_PathTracing.previousView.matWorldToClipNoOffset);
+    if (!all(isfinite(previousClip)) ||
+        !(previousClip.w > 1.0e-6f) ||
+        previousClip.z < 0.0f ||
+        previousClip.z > previousClip.w)
+    {
+        return false;
+    }
+
+    const float2 previousNdc = previousClip.xy / previousClip.w;
+    const float2 previousWindow = previousNdc *
+            g_PathTracing.previousView.clipToWindowScale +
+        g_PathTracing.previousView.clipToWindowBias;
+    const float2 previousLocal = previousWindow -
+        g_PathTracing.previousView.viewportOrigin;
+    if (!all(isfinite(previousLocal)) ||
+        any(previousLocal < 0.0f) ||
+        any(previousLocal >= g_PathTracing.previousView.viewportSize))
+    {
+        return false;
+    }
+
+    const int2 candidate = int2(floor(previousLocal));
+    if (any(candidate < 0) ||
+        any(candidate >= int2(g_PathTracing.dispatchExtent)))
+    {
+        return false;
+    }
+    previousPixel = candidate;
+    return true;
+}
+
+#if UVSR_PT_RTXDI
+void PathTracingCarryDirectProposal(uint2 pixel)
+{
+    if (g_PathTracing.previousViewValid != 0u)
+    {
+        // A failed camera-motion sample has no current world position to
+        // reproject. Invalidate its proposal instead of copying an unrelated
+        // screen-space identity into the new history.
+        u_DirectReservoir[pixel] = 0.0f;
+        u_Surface[pixel] = 0.0f;
+        u_DirectSampleSeed[pixel] = 0u;
+        return;
+    }
+    u_DirectReservoir[pixel] =
+        t_PreviousDirectReservoir[int2(pixel)];
+    u_Surface[pixel] = t_PreviousSurface[int2(pixel)];
+    u_DirectSampleSeed[pixel] =
+        t_PreviousDirectSampleSeed[int2(pixel)];
+}
+#endif
+
+#if UVSR_PT_SOLVER == 1
+void PathTracingCarryReplaySeed(uint2 pixel)
+{
+    if (g_PathTracing.previousViewValid != 0u)
+    {
+        u_PathSeed[pixel] = 0u;
+        u_PathSeedStatistics[pixel] = 0.0f;
+        return;
+    }
+    u_PathSeed[pixel] = t_PreviousPathSeed[int2(pixel)];
+    u_PathSeedStatistics[pixel] =
+        t_PreviousPathSeedStatistics[int2(pixel)];
 }
 #endif
 
@@ -212,52 +300,74 @@ PathTracingReservoir PathTracingBuildDirectReservoir(
 
     if (PathTracingFlagIsSet(UVSR_PATH_TRACING_FLAG_REUSE_DIRECT))
     {
-        const float4 temporalSurface = t_PreviousSurface[int2(pixel)];
-        if (PathTracingSurfaceSignaturesAreCompatible(
-                surfaceSignature, temporalSurface))
+        int2 previousCenter;
+        bool reprojected;
+        const bool previousCenterValid =
+            PathTracingResolvePreviousDonorPixel(
+                pixel,
+                surface.position,
+                true,
+                previousCenter,
+                reprojected);
+        if (previousCenterValid)
         {
-            const PathTracingReservoir temporal =
-                PathTracingLoadReservoir(
-                    t_PreviousDirectReservoir[int2(pixel)],
-                    t_PreviousDirectSampleSeed[int2(pixel)]);
-            const uint temporalLight = uint(max(temporal.selected, 0.0f));
-            const float target = PathTracingLuminance(
-                PathTracingEvaluateUnshadowedLight(
-                    surface,
-                    viewDirection,
-                    temporalLight,
-                    temporal.selectedSampleSeed));
-            PathTracingReservoirCombine(
-                reservoir,
-                temporal,
-                target,
-                PathTracingRandom(randomStream));
-        }
-
-        const int2 neighbor = PathTracingPreviousNeighbor(
-            pixel, randomStream.seed, 0x93b21f4du);
-        if (any(neighbor != int2(pixel)))
-        {
-            const float4 spatialSurface = t_PreviousSurface[neighbor];
+            const float4 temporalSurface =
+                t_PreviousSurface[previousCenter];
             if (PathTracingSurfaceSignaturesAreCompatible(
-                    surfaceSignature, spatialSurface))
+                    surfaceSignature,
+                    temporalSurface,
+                    !reprojected))
             {
-                const PathTracingReservoir spatial =
+                const PathTracingReservoir temporal =
                     PathTracingLoadReservoir(
-                        t_PreviousDirectReservoir[neighbor],
-                        t_PreviousDirectSampleSeed[neighbor]);
-                const uint spatialLight = uint(max(spatial.selected, 0.0f));
+                        t_PreviousDirectReservoir[previousCenter],
+                        t_PreviousDirectSampleSeed[previousCenter]);
+                const uint temporalLight = uint(max(
+                    temporal.selected, 0.0f));
                 const float target = PathTracingLuminance(
                     PathTracingEvaluateUnshadowedLight(
                         surface,
                         viewDirection,
-                        spatialLight,
-                        spatial.selectedSampleSeed));
+                        temporalLight,
+                        temporal.selectedSampleSeed));
                 PathTracingReservoirCombine(
                     reservoir,
-                    spatial,
+                    temporal,
                     target,
                     PathTracingRandom(randomStream));
+            }
+
+            const int2 neighbor = PathTracingPreviousNeighbor(
+                uint2(previousCenter),
+                randomStream.seed,
+                0x93b21f4du);
+            if (any(neighbor != previousCenter))
+            {
+                const float4 spatialSurface =
+                    t_PreviousSurface[neighbor];
+                if (PathTracingSurfaceSignaturesAreCompatible(
+                        surfaceSignature,
+                        spatialSurface,
+                        true))
+                {
+                    const PathTracingReservoir spatial =
+                        PathTracingLoadReservoir(
+                            t_PreviousDirectReservoir[neighbor],
+                            t_PreviousDirectSampleSeed[neighbor]);
+                    const uint spatialLight = uint(max(
+                        spatial.selected, 0.0f));
+                    const float target = PathTracingLuminance(
+                        PathTracingEvaluateUnshadowedLight(
+                            surface,
+                            viewDirection,
+                            spatialLight,
+                            spatial.selectedSampleSeed));
+                    PathTracingReservoirCombine(
+                        reservoir,
+                        spatial,
+                        target,
+                        PathTracingRandom(randomStream));
+                }
             }
         }
     }
@@ -293,6 +403,7 @@ struct PathTracingSampleResult
     float3 albedo;
     float3 geometricNormal;
     float3 shadingNormal;
+    float3 primaryWorldPosition;
     float4 stablePlane;
     float4 surfaceSignature;
     float4 primaryNormalRoughness;
@@ -303,6 +414,57 @@ struct PathTracingSampleResult
     uint firstContinuationIsDiffuse;
     uint valid;
 };
+
+void PathTracingLoadPrimaryResolveGuide(
+    uint2 pixel,
+    out float4 normalRoughness,
+    out float viewZ)
+{
+    normalRoughness = 0.0f;
+    viewZ = 0.0f;
+
+    // Reconstruction guides describe the deterministic pixel center. They do
+    // not replace the stochastic radiance ray and therefore cannot bias the
+    // path estimator. PathTracingTraceSurface preserves the same alpha-tested
+    // material-visibility contract as the primary transport query.
+    float3 rayOrigin;
+    float3 rayDirection;
+    PathTracingGenerateCameraRay(
+        pixel,
+        float2(0.5f, 0.5f),
+        rayOrigin,
+        rayDirection);
+    PathTracingSurface surface;
+    if (!PathTracingTraceSurface(
+            t_WorldBvh,
+            rayOrigin,
+            rayDirection,
+            g_PathTracing.rayBias,
+            g_PathTracing.maximumRayDistance,
+            surface))
+    {
+        return;
+    }
+
+    const PbrPreparedMaterial material =
+        PathTracingPrepareMaterial(surface);
+    const float centerViewZ = abs(mul(
+        float4(surface.position, 1.0f),
+        g_PathTracing.view.matWorldToView).z);
+    const float centerRoughness = sqrt(max(material.alpha, 0.0f));
+    if (!all(isfinite(surface.shadingNormal)) ||
+        dot(surface.shadingNormal, surface.shadingNormal) <= 0.25f ||
+        !isfinite(centerRoughness) ||
+        !isfinite(centerViewZ) || !(centerViewZ > 0.0f))
+    {
+        return;
+    }
+
+    normalRoughness = float4(
+        surface.shadingNormal,
+        saturate(centerRoughness));
+    viewZ = centerViewZ;
+}
 
 PathTracingSampleResult PathTracingIntegrate(
     uint2 pixel,
@@ -365,6 +527,7 @@ PathTracingSampleResult PathTracingIntegrate(
             result.albedo = max(surface.material.diffuseAlbedo, 0.0f);
             result.geometricNormal = surface.geometricNormal;
             result.shadingNormal = surface.shadingNormal;
+            result.primaryWorldPosition = surface.position;
             const PbrPreparedMaterial primaryMaterial =
                 PathTracingPrepareMaterial(surface);
             const float primaryViewZ = abs(mul(
@@ -576,7 +739,9 @@ void PathTracingReplaySeedCandidate(
 float3 PathTracingResolveSeedReplay(
     uint2 pixel,
     uint2 currentSeed,
-    float3 currentIndirectSuffix)
+    float3 currentIndirectSuffix,
+    float3 currentWorldPosition,
+    bool currentSurfaceValid)
 {
     if (!PathTracingFlagIsSet(
             UVSR_PATH_TRACING_FLAG_REPLAY_PATH_SEEDS))
@@ -584,10 +749,24 @@ float3 PathTracingResolveSeedReplay(
         return currentIndirectSuffix;
     }
 
+    int2 previousCenter;
+    bool reprojected;
+    if (!PathTracingResolvePreviousDonorPixel(
+            pixel,
+            currentWorldPosition,
+            currentSurfaceValid,
+            previousCenter,
+            reprojected))
+    {
+        return currentIndirectSuffix;
+    }
+
     // Choose the previous-frame neighbor independently of every radiance and
-    // target before any replay candidate is evaluated.
+    // target before any replay candidate is evaluated. Camera motion centers
+    // both donors on the reprojected prior pixel; replay itself always starts
+    // from the current pixel and therefore retains no prior radiance.
     const int2 neighbor = PathTracingPreviousNeighbor(
-        pixel,
+        uint2(previousCenter),
         currentSeed,
         0x50544e42u);
     PathTracingRandomStream reservoirStream =
@@ -600,17 +779,17 @@ float3 PathTracingResolveSeedReplay(
         PathTracingRandom(reservoirStream));
 
     const float4 temporalStatistics =
-        t_PreviousPathSeedStatistics[int2(pixel)];
+        t_PreviousPathSeedStatistics[previousCenter];
     if (PathTracingStoredSeedIsLocal(temporalStatistics))
     {
         PathTracingReplaySeedCandidate(
             pixel,
-            t_PreviousPathSeed[int2(pixel)],
+            t_PreviousPathSeed[previousCenter],
             reservoirStream,
             reservoir);
     }
 
-    if (any(neighbor != int2(pixel)))
+    if (any(neighbor != previousCenter))
     {
         const float4 neighborStatistics =
             t_PreviousPathSeedStatistics[neighbor];
@@ -657,8 +836,10 @@ float PathTracingFireflyScale(float3 value)
 float3 PathTracingDebugColor(
     float3 rawMean,
     uint successfulSampleCount,
+    float updateRate,
     PathTracingSampleResult sample,
-    float3 solvedIndirectSuffix)
+    float3 solvedIndirectSuffix,
+    float fireflyScale)
 {
     if (g_PathTracing.debugView == UVSR_PATH_DEBUG_ALBEDO)
         return sample.albedo;
@@ -672,11 +853,12 @@ float3 PathTracingDebugColor(
             log2(float(successfulSampleCount) + 1.0f) / 16.0f);
         return value.xxx;
     }
-    if (g_PathTracing.debugView == UVSR_PATH_DEBUG_RETRY)
+    if (g_PathTracing.debugView == UVSR_PATH_DEBUG_UPDATE_RATE)
     {
-        const float probability = 1.0f /
-            (float(successfulSampleCount) + 1.0f);
-        return float3(probability, probability * probability, 0.0f);
+        return float3(
+            updateRate,
+            updateRate * updateRate,
+            0.0f);
     }
     if (g_PathTracing.debugView == UVSR_PATH_DEBUG_STABLE_PLANE)
         return sample.stablePlane.rgb;
@@ -698,38 +880,52 @@ float3 PathTracingDebugColor(
     }
     if (g_PathTracing.debugView == UVSR_PATH_DEBUG_GI_RESERVOIR)
         return PathTracingApplyFireflyFilter(solvedIndirectSuffix);
+    if (g_PathTracing.debugView == UVSR_PATH_DEBUG_PRIMARY_TRANSPORT)
+        return max(sample.primaryBase, 0.0f) * fireflyScale;
+    if (g_PathTracing.debugView == UVSR_PATH_DEBUG_INDIRECT_TRANSPORT)
+        return max(solvedIndirectSuffix, 0.0f) * fireflyScale;
     return PathTracingApplyFireflyFilter(rawMean);
+}
+
+uint PathTracingAccumulationCycleModulo(uint interval)
+{
+    if (interval <= 1u)
+        return 0u;
+    const uint twoTo32Modulo =
+        ((0xffffffffu % interval) + 1u) % interval;
+    const uint highContribution =
+        (g_PathTracing.schedulingSerialHigh % interval) *
+            twoTo32Modulo;
+    return (
+        (g_PathTracing.schedulingSerialLow % interval) +
+        highContribution) % interval;
 }
 
 void PathTracingWriteDisplay(uint2 pixel, float4 color)
 {
     u_Display[pixel] = color;
-    if (!PathTracingFlagIsSet(
-            UVSR_PATH_TRACING_FLAG_REPLICATE_PREVIEW))
-    {
-        return;
-    }
-
-    // A history reset during continuous movement always restarts at lattice
-    // phase zero. Replicate that freshly traced representative through its
-    // disjoint tile so the current frame remains fully visible; later phases
-    // replace these coarse values with exact per-pixel samples after motion.
-    [loop]
-    for (uint y = 0u; y < g_PathTracing.schedulingGrid.y; ++y)
-    {
-        [loop]
-        for (uint x = 0u; x < g_PathTracing.schedulingGrid.x; ++x)
-        {
-            const uint2 target = pixel + uint2(x, y);
-            if (all(target < g_PathTracing.dispatchExtent))
-                u_Display[target] = color;
-        }
-    }
 }
 
 [numthreads(8, 8, 1)]
 void main(uint2 dispatchPixel : SV_DispatchThreadID)
 {
+    if (PathTracingFlagIsSet(
+            UVSR_PATH_TRACING_FLAG_REPLICATE_PREVIEW))
+    {
+        if (any(dispatchPixel >= g_PathTracing.dispatchExtent))
+            return;
+        // Reset always restarts at phase zero. Read the representative traced
+        // by the preceding sparse dispatch and initialize only presentation;
+        // no radiance, count, variance, or proposal history is fabricated.
+        const uint2 source =
+            (dispatchPixel / g_PathTracing.schedulingGrid) *
+                g_PathTracing.schedulingGrid;
+        if (all(dispatchPixel == source))
+            return;
+        u_Display[dispatchPixel] = u_Display[source];
+        return;
+    }
+
     const uint2 pixel = dispatchPixel * g_PathTracing.schedulingGrid +
         g_PathTracing.schedulingPhase;
     if (any(pixel >= g_PathTracing.dispatchExtent))
@@ -739,28 +935,52 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         UVSR_PATH_TRACING_FLAG_ACCUMULATE_SAMPLES);
     const bool refreshDebug = PathTracingFlagIsSet(
         UVSR_PATH_TRACING_FLAG_REFRESH_DEBUG);
-    const uint oldCount = u_SuccessfulSampleCount[pixel];
-    const float retryProbability = oldCount == 0u
-        ? 1.0f
-        : 1.0f / (float(oldCount) + 1.0f);
+    uint oldCount = u_SuccessfulSampleCount[pixel];
+    float3 oldMean = u_RawMean[pixel].rgb;
+    const float4 oldVarianceState = u_ColorVariance[pixel];
+    float3 oldVariance = oldVarianceState.rgb;
+    uint failedAttemptSalt =
+        isfinite(oldVarianceState.a) && oldVarianceState.a >= 0.0f
+            ? min((uint)oldVarianceState.a, 0x00ffffffu)
+            : 0u;
+    if (oldCount > 0u &&
+        (!all(isfinite(oldMean)) || !all(isfinite(oldVariance))))
+    {
+        // Repair a single poisoned pixel locally. The next attempt starts a
+        // fresh finite estimator without waiting for a global history reset.
+        oldCount = 0u;
+        oldMean = 0.0f;
+        oldVariance = 0.0f;
+        failedAttemptSalt = 0u;
+    }
+    const uint updateInterval = UvsrSampleUpdateInterval(
+        g_PathTracing.accumulationScheduling,
+        g_PathTracing.accumulationAveraging,
+        g_PathTracing.accumulationEffectiveHistory,
+        g_PathTracing.accumulationMinimumSamples,
+        g_PathTracing.accumulationTargetRelativeError,
+        g_PathTracing.accumulationMinimumUpdateRate,
+        oldCount,
+        oldMean,
+        oldVariance);
+    const float updateRate = rcp(float(updateInterval));
+    const uint scheduleCycleModulo =
+        PathTracingAccumulationCycleModulo(updateInterval);
+    const uint updatePhase = updateInterval > 1u
+        ? PathTracingHash(
+            pixel.x ^ PathTracingHash(pixel.y + 0x9e3779b9u)) %
+                updateInterval
+        : 0u;
+    const bool scheduledUpdate = updateInterval == 1u ||
+        (scheduleCycleModulo + updatePhase) % updateInterval == 0u;
     const bool attempt = refreshDebug || !accumulate || oldCount == 0u ||
-        PathTracingRetryVariate(
-            pixel,
-            oldCount,
-            g_PathTracing.schedulingSerialLow,
-            g_PathTracing.schedulingSerialHigh) < retryProbability;
+        scheduledUpdate;
 
     if (!attempt)
     {
 #if UVSR_PT_RTXDI
         if (PathTracingFlagIsSet(UVSR_PATH_TRACING_FLAG_REUSE_DIRECT))
-        {
-            u_DirectReservoir[pixel] =
-                t_PreviousDirectReservoir[int2(pixel)];
-            u_Surface[pixel] = t_PreviousSurface[int2(pixel)];
-            u_DirectSampleSeed[pixel] =
-                t_PreviousDirectSampleSeed[int2(pixel)];
-        }
+            PathTracingCarryDirectProposal(pixel);
 #endif
 #if UVSR_PT_SOLVER == 2
         if (PathTracingFlagIsSet(
@@ -775,45 +995,56 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #if UVSR_PT_SOLVER == 1
         if (PathTracingFlagIsSet(
                 UVSR_PATH_TRACING_FLAG_REPLAY_PATH_SEEDS))
-        {
-            u_PathSeed[pixel] = t_PreviousPathSeed[int2(pixel)];
-            u_PathSeedStatistics[pixel] =
-                t_PreviousPathSeedStatistics[int2(pixel)];
-        }
+            PathTracingCarryReplaySeed(pixel);
 #endif
         return;
     }
 
+    // Accumulation consumes the precomputed sequence by this pixel's own
+    // successful-sample index. It therefore keeps advancing even when the
+    // cosmetic Animate Samples switch is off, and a skipped adaptive frame
+    // cannot consume a sequence element.
+    const bool animateHistoryReset = PathTracingFlagIsSet(
+        UVSR_PATH_TRACING_FLAG_ANIMATE_HISTORY_RESET);
+    const uint sampleSequencePhase = accumulate && !animateHistoryReset
+        ? oldCount
+        : g_PathTracing.sampleSequencePhase;
     const float precomputedNoise = UVSRSamplePrecomputedNoise(
         t_Noise,
         g_PathTracing.noisePattern,
         pixel,
         g_PathTracing.dispatchExtent,
-        g_PathTracing.sampleSequencePhase,
+        sampleSequencePhase,
         0x50545243u);
     const uint2 continuationSeed = PathTracingMakeSampleSeed(
         pixel,
-        g_PathTracing.sampleSequencePhase,
+        sampleSequencePhase,
         oldCount,
-        g_PathTracing.schedulingSerialLow,
-        g_PathTracing.schedulingSerialHigh,
+        accumulate ? 0u : g_PathTracing.schedulingSerialLow,
+        accumulate ? 0u : g_PathTracing.schedulingSerialHigh,
+        accumulate ? failedAttemptSalt : 0u,
         precomputedNoise);
     const PathTracingSampleResult sample =
         PathTracingIntegrate(pixel, continuationSeed, true);
     if (sample.valid == 0u)
     {
+        // Keep accepted samples indexed only by successful count, but advance
+        // a separate exactly represented retry salt so a rejected stationary
+        // attempt cannot replay the same seed forever. Adaptive skips return
+        // above without touching this value.
+        const uint nextFailedAttemptSalt = accumulate
+            ? (failedAttemptSalt < 0x00ffffffu
+                ? failedAttemptSalt + 1u
+                : 1u)
+            : 0u;
+        u_ColorVariance[pixel] = float4(
+            oldVariance, float(nextFailedAttemptSalt));
         // Preserve the previous compatible reservoir state when numerical
         // rejection prevents a successful sample. CPU ping-pong still
         // advances after this dispatch.
 #if UVSR_PT_RTXDI
         if (PathTracingFlagIsSet(UVSR_PATH_TRACING_FLAG_REUSE_DIRECT))
-        {
-            u_DirectReservoir[pixel] =
-                t_PreviousDirectReservoir[int2(pixel)];
-            u_Surface[pixel] = t_PreviousSurface[int2(pixel)];
-            u_DirectSampleSeed[pixel] =
-                t_PreviousDirectSampleSeed[int2(pixel)];
-        }
+            PathTracingCarryDirectProposal(pixel);
 #endif
 #if UVSR_PT_SOLVER == 2
         if (PathTracingFlagIsSet(
@@ -828,11 +1059,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 #if UVSR_PT_SOLVER == 1
         if (PathTracingFlagIsSet(
                 UVSR_PATH_TRACING_FLAG_REPLAY_PATH_SEEDS))
-        {
-            u_PathSeed[pixel] = t_PreviousPathSeed[int2(pixel)];
-            u_PathSeedStatistics[pixel] =
-                t_PreviousPathSeedStatistics[int2(pixel)];
-        }
+            PathTracingCarryReplaySeed(pixel);
 #endif
         return;
     }
@@ -847,7 +1074,9 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     solvedIndirectSuffix = PathTracingResolveSeedReplay(
         pixel,
         continuationSeed,
-        sample.indirectSuffix);
+        sample.indirectSuffix,
+        sample.primaryWorldPosition,
+        sample.surfaceSignature.w > 0.0f);
 #endif
     // The local suffix is replaced by the selected/resampled suffix. It is
     // never added a second time beside the reservoir estimate.
@@ -859,21 +1088,37 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         ? (oldCount == 0xffffffffu ? oldCount : oldCount + 1u)
         : 1u;
     const float meanWeight = accumulate
-        ? (newCount > oldCount ? 1.0f / float(newCount) : 0.0f)
+        ? UvsrSampleMeanWeight(
+            g_PathTracing.accumulationAveraging,
+            g_PathTracing.accumulationEffectiveHistory,
+            oldCount,
+            newCount)
         : 1.0f;
-    const float3 oldMean = u_RawMean[pixel].rgb;
     // Firefly handling is a deliberately biased robustness mode. When it is
     // enabled, filter the successful attempt before it enters persistent
     // history so the option has a stable and effective accumulated result.
     const float fireflyScale = PathTracingFireflyScale(solverRadiance);
     const float3 accumulatedSample = solverRadiance * fireflyScale;
-    const float3 newMean = accumulate
-        ? lerp(oldMean, accumulatedSample, meanWeight)
-        : accumulatedSample;
+    const float3 newMean = oldCount == 0u || !accumulate
+        ? accumulatedSample
+        : lerp(oldMean, accumulatedSample, meanWeight);
+    const float3 newVariance = oldCount == 0u || !accumulate
+        ? 0.0f
+        : UvsrSampleVarianceUpdate(
+            g_PathTracing.accumulationAveraging,
+            oldCount,
+            newCount,
+            oldVariance,
+            oldMean,
+            accumulatedSample,
+            newMean,
+            meanWeight);
 
     u_RawMean[pixel] = float4(newMean, 1.0f);
     u_SuccessfulSampleCount[pixel] = newCount;
-#if UVSR_PT_SOLVER == 0
+    // A successful sample consumes the retry and starts the next successful
+    // sequence element without carrying failure state forward.
+    u_ColorVariance[pixel] = float4(newVariance, 0.0f);
     if (PathTracingFlagIsSet(
             UVSR_PATH_TRACING_FLAG_WRITE_STABLE_SIGNALS))
     {
@@ -888,22 +1133,31 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 : 0.0f;
         const float3 previousResidual = u_ResidualMean[pixel].rgb;
         const float3 previousDiffuse = u_DiffuseSuffixMean[pixel].rgb;
-        const float3 residualMean = accumulate
-            ? lerp(previousResidual, residualSample, meanWeight)
-            : residualSample;
-        const float3 diffuseMean = accumulate
-            ? lerp(previousDiffuse, diffuseSuffixSample, meanWeight)
-            : diffuseSuffixSample;
+        const float3 residualMean = oldCount == 0u || !accumulate ||
+                !all(isfinite(previousResidual))
+            ? residualSample
+            : lerp(previousResidual, residualSample, meanWeight);
+        const float3 diffuseMean = oldCount == 0u || !accumulate ||
+                !all(isfinite(previousDiffuse))
+            ? diffuseSuffixSample
+            : lerp(previousDiffuse, diffuseSuffixSample, meanWeight);
         u_ResidualMean[pixel] = float4(residualMean, 1.0f);
         u_DiffuseSuffixMean[pixel] = float4(diffuseMean, 1.0f);
-        // A primary miss writes deterministic invalid guides. The resolve
-        // recognizes them and returns this pixel's raw mean without sampling
-        // neighboring geometry or sky.
-        u_PrimaryNormalRoughness[pixel] =
-            sample.primaryNormalRoughness;
-        u_PrimaryViewZ[pixel] = sample.primaryViewZ;
+        if (!accumulate || oldCount == 0u)
+        {
+            // Initialize once from a deterministic center ray. Later jittered
+            // samples update radiance only, so silhouette guides cannot toggle
+            // between hit and miss while the accumulated mean converges.
+            float4 primaryNormalRoughness;
+            float primaryViewZ;
+            PathTracingLoadPrimaryResolveGuide(
+                pixel,
+                primaryNormalRoughness,
+                primaryViewZ);
+            u_PrimaryNormalRoughness[pixel] = primaryNormalRoughness;
+            u_PrimaryViewZ[pixel] = primaryViewZ;
+        }
     }
-#endif
 #if UVSR_PT_RTXDI
     if (PathTracingFlagIsSet(UVSR_PATH_TRACING_FLAG_REUSE_DIRECT))
     {
@@ -949,8 +1203,10 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     const float3 debugColor = PathTracingDebugColor(
         newMean,
         newCount,
+        updateRate,
         sample,
-        solvedIndirectSuffix);
+        solvedIndirectSuffix,
+        fireflyScale);
     PathTracingWriteDisplay(
         pixel,
         float4(min(max(debugColor, 0.0f), 65504.0f), 1.0f));

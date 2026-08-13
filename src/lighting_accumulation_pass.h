@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sample_accumulation_settings.h"
+
 #include <nvrhi/nvrhi.h>
 
 #include <array>
@@ -13,13 +15,23 @@ namespace donut::engine
 
 namespace uvsr
 {
+    enum class LightingSampleSequenceMode : uint32_t
+    {
+        FramePhase = 0u,
+        SuccessfulSampleCount = 1u,
+        AnimatedFrameOnHistoryReset = 2u
+    };
+
     struct LightingSampleSchedule
     {
         nvrhi::ITexture* attemptMask = nullptr;
         bool enabled = false;
+        bool historyReset = false;
 
         // Renderer-private transaction identity. Producers must treat this as
-        // opaque and consume only attemptMask/enabled.
+        // opaque and consume only attemptMask/enabled. When enabled, each
+        // nonzero mask value encodes successfulSampleCount + 1 so producers
+        // can use the accepted sample's per-pixel sequence index.
         uint64_t token = 0u;
 
         [[nodiscard]] explicit operator bool() const
@@ -27,6 +39,19 @@ namespace uvsr
             return attemptMask != nullptr;
         }
     };
+
+    [[nodiscard]] inline constexpr LightingSampleSequenceMode
+        ResolveLightingSampleSequenceMode(
+            const LightingSampleSchedule& schedule,
+            bool stochastic,
+            bool animateSamples)
+    {
+        if (!schedule.enabled)
+            return LightingSampleSequenceMode::FramePhase;
+        return stochastic && schedule.historyReset && animateSamples
+            ? LightingSampleSequenceMode::AnimatedFrameOnHistoryReset
+            : LightingSampleSequenceMode::SuccessfulSampleCount;
+    }
 
     struct LightingAccumulationResult
     {
@@ -59,6 +84,7 @@ namespace uvsr
             uint32_t width,
             uint32_t height,
             bool accumulateSamples,
+            const SampleAccumulationSettings& settings,
             uint64_t schedulingSerial,
             uint64_t historyEpoch);
 
@@ -93,6 +119,7 @@ namespace uvsr
         nvrhi::ComputePipelineHandle m_ResolvePipeline;
         std::array<nvrhi::TextureHandle, 2> m_Mean;
         std::array<nvrhi::TextureHandle, 2> m_Count;
+        std::array<nvrhi::TextureHandle, 2> m_ColorVariance;
         nvrhi::TextureHandle m_AttemptMask;
         nvrhi::TextureHandle m_DisabledAttemptMask;
         std::array<nvrhi::BindingSetHandle, 2> m_PrepareBindingSets;
@@ -109,6 +136,7 @@ namespace uvsr
         uint32_t m_PreparedWriteIndex = 0u;
         bool m_PreparedResetHistory = true;
         bool m_PreparedAccumulationEnabled = false;
+        SampleAccumulationSettings m_PreparedSettings;
         bool m_HasHistoryEpoch = false;
     };
 }

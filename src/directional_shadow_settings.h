@@ -25,7 +25,7 @@ namespace uvsr
 
     struct HeitzRatioEstimatorShadowSettings
     {
-        bool enabled = false;
+        bool enabled = true;
         bool hardShadows = false;
         bool useRatioEstimator = true;
         bool outputHitDistance = false;

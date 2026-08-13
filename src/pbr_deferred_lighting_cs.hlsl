@@ -199,6 +199,29 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
     float2 environmentBrdf = 0.0f;
     float3 environmentDiffuse = 0.0f;
     float3 environmentSpecular = 0.0f;
+    float skyVisibility = 1.0f;
+    const bool showSkyVisibility =
+        g_PbrDeferred.lightingDebugView == 12u;
+    const bool applySkyVisibilityToDiffuseIbl =
+        g_PbrDeferred.skyVisibilityApplication ==
+            UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL ||
+        g_PbrDeferred.skyVisibilityApplication ==
+            UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
+    const bool applySkyVisibilityToSpecularIbl =
+        g_PbrDeferred.skyVisibilityApplication ==
+            UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL ||
+        g_PbrDeferred.skyVisibilityApplication ==
+            UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
+    if (showSkyVisibility ||
+        applySkyVisibilityToDiffuseIbl ||
+        applySkyVisibilityToSpecularIbl)
+    {
+        const float sampledSkyVisibility =
+            t_SkyVisibility[pixelPosition];
+        skyVisibility = isfinite(sampledSkyVisibility)
+            ? saturate(sampledSkyVisibility)
+            : 1.0f;
+    }
     if (g_Deferred.numLightProbes > 0u)
     {
         const bool needDiffuseEnvironment =
@@ -213,28 +236,6 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
             g_PbrDeferred.separateIndirect == 0 ||
             (g_PbrDeferred.lightingDebugView >= 6u &&
                 g_PbrDeferred.lightingDebugView <= 9u);
-        float skyVisibility = 1.0f;
-        const bool applySkyVisibilityToDiffuseIbl =
-            g_PbrDeferred.skyVisibilityApplication ==
-                UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL ||
-            g_PbrDeferred.skyVisibilityApplication ==
-                UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
-        const bool applySkyVisibilityToSpecularIbl =
-            g_PbrDeferred.skyVisibilityApplication ==
-                UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL ||
-            g_PbrDeferred.skyVisibilityApplication ==
-                UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
-        if ((needDiffuseEnvironment &&
-                applySkyVisibilityToDiffuseIbl) ||
-            (needSpecularEnvironment &&
-                applySkyVisibilityToSpecularIbl))
-        {
-            const float sampledSkyVisibility =
-                t_SkyVisibility[pixelPosition];
-            skyVisibility = isfinite(sampledSkyVisibility)
-                ? saturate(sampledSkyVisibility)
-                : 1.0f;
-        }
         if (needDiffuseEnvironment &&
             environmentProbe.diffuseScale > 0.0f)
         {
@@ -362,6 +363,10 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
                         (environmentProbe.mipLevels - 1.0f)
                     : 0.0f;
             lightingDebugColor = normalizedMip.xxx;
+        }
+        else if (showSkyVisibility)
+        {
+            lightingDebugColor = skyVisibility.xxx;
         }
     }
 

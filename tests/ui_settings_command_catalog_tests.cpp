@@ -53,7 +53,7 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 209u);
+    static_assert(UiSettingsCommandCatalog.size() == 220u);
     static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 14u);
     static_assert(static_cast<std::uint8_t>(UiSettingsCommandKind::Float4) == 7u);
     static_assert(Action("test", Section::General, "test").supportedVerbs ==
@@ -62,15 +62,15 @@ int main()
     constexpr std::array<std::size_t, 14> ExpectedSectionCounts = {
         15u, // UI
         7u,  // General
-        7u,  // Pathing
+        8u,  // Pathing
         4u,  // Representation
-        4u,  // Noise
+        13u, // Noise
         24u, // Visibility
         27u, // Denoising
         31u, // Aliasing
         4u,  // Debug
         25u, // Sky
-        26u, // Lights
+        27u, // Lights
         11u, // Directional Shadows
         21u, // Materials
         3u   // Footer
@@ -118,12 +118,22 @@ int main()
         "pathing.nee",
         "pathing.nee-candidates",
         "pathing.rtxdi",
+        "pathing.reuse-proposals-during-motion",
         "pathing.russian-roulette-start",
         "pathing.ser",
         "pathing.solver"
     };
     const std::set<std::string> ExpectedNoise = {
         "noise.accumulate-samples",
+        "noise.accumulation-averaging",
+        "noise.accumulation-effective-history",
+        "noise.accumulation-history-preset",
+        "noise.accumulation-minimum-samples",
+        "noise.accumulation-minimum-update-rate",
+        "noise.accumulation-mode",
+        "noise.accumulation-scheduling",
+        "noise.accumulation-target-error",
+        "noise.accumulation-workload-preset",
         "noise.animate-samples",
         "noise.pattern",
         "noise.resolution"
@@ -154,8 +164,8 @@ int main()
         "denoising.path-tracing.firefly-filter",
         "denoising.path-tracing.firefly-threshold",
         "denoising.path-tracing.method",
-        "denoising.path-tracing.psr",
-        "denoising.path-tracing.stable-planes"
+        "denoising.path-tracing.resolve-strength",
+        "denoising.path-tracing.signal-groups"
     };
     const std::set<std::string> ExpectedDirectionalShadows = {
         "shadows.ray-traced.animate-samples",
@@ -257,15 +267,15 @@ int main()
     }
 
     Require(names.size() == UiSettingsCommandCatalog.size(),
-        "the compact catalog must contain 209 unique commands");
+        "the compact catalog must contain 220 unique commands");
     Require(sectionCounts == ExpectedSectionCounts,
         "section counts must match the current UI");
     Require(actionCount == 4u,
         "only open-folder, reset, capture, and restart actions remain");
-    Require(UiSettingsCommandCatalog.size() - actionCount == 205u,
-        "the compact catalog must contain 205 values");
-    Require(dynamicCount == 49u,
-        "runtime lights and materials must retain their 49 dynamic controls");
+    Require(UiSettingsCommandCatalog.size() - actionCount == 216u,
+        "the compact catalog must contain 216 values");
+    Require(dynamicCount == 50u,
+        "runtime lights and materials must retain their 50 dynamic controls");
     Require(dynamicSelections == ExpectedDynamicSelections,
         "dynamic selections must cover adapters, scenes, lights, and materials");
     Require(visibility == ExpectedVisibility,
@@ -317,12 +327,40 @@ int main()
     requireDomain("pathing.nee-candidates", "integer 1..63");
     requireDomain("pathing.ser", "on|off");
     requireDomain("pathing.rtxdi", "on|off");
+    requireDomain("pathing.reuse-proposals-during-motion", "on|off");
     requireDomain("noise.pattern",
         "spatial-white|spatial-blue|spatiotemporal-blue");
     requireDomain("noise.resolution",
         "64x64|128x128|256x256|512x512");
     requireDomain("noise.animate-samples", "on|off");
     requireDomain("noise.accumulate-samples", "on|off");
+    requireDomain(
+        "noise.accumulation-mode",
+        "progressive|responsive|variance-guided");
+    requireDomain(
+        "noise.accumulation-averaging",
+        "cumulative|exponential");
+    requireDomain(
+        "noise.accumulation-scheduling",
+        "every-pixel|variance-guided");
+    requireDomain(
+        "noise.accumulation-effective-history",
+        "integer 2..4096");
+    requireDomain(
+        "noise.accumulation-history-preset",
+        "quick-preview|responsive|balanced|stable|very-stable|custom (get only)");
+    requireDomain(
+        "noise.accumulation-minimum-samples",
+        "integer 2..256");
+    requireDomain(
+        "noise.accumulation-target-error",
+        "float 0.001..0.25");
+    requireDomain(
+        "noise.accumulation-minimum-update-rate",
+        "float 0.00390625..1");
+    requireDomain(
+        "noise.accumulation-workload-preset",
+        "full-quality|balanced|performance|maximum-savings|custom (get only)");
     requireDomain("visibility.specify-noise", "on|off");
     requireDomain("visibility.noise-pattern",
         "spatial-white|spatial-blue|spatiotemporal-blue");
@@ -338,7 +376,7 @@ int main()
     requireDomain("anti-aliasing.taa.jitter-sequence",
         "rotated-grid-4|uniform-helix-4|halton-8|halton-16|halton-32|sobol-32");
     requireDomain("anti-aliasing.taa.previous-depth",
-        "stationary-bypass|four-texel-footprint");
+        "nearest-texel|four-texel-footprint");
     requireDomain("anti-aliasing.taa.history.frames",
         "-1 or integer 1..32; -1 uses quality preset");
     requireDomain("anti-aliasing.taa.history.strength",
@@ -400,11 +438,13 @@ int main()
     requireDomain("denoising.sky.method", "none|reblur|relax");
     requireDomain(
         "denoising.path-tracing.method",
-        "raw|stable-plane-resolve|nrd-reblur|nrd-relax");
+        "raw|spatial-path-resolve");
     requireDomain(
-        "denoising.path-tracing.stable-planes",
-        "integer 0..3");
-    requireDomain("denoising.path-tracing.psr", "on|off");
+        "denoising.path-tracing.signal-groups",
+        "integer 1..3; RESTIR supports 1..2");
+    requireDomain(
+        "denoising.path-tracing.resolve-strength",
+        "float 0..1");
     requireDomain(
         "denoising.path-tracing.firefly-filter",
         "on|off");
@@ -416,7 +456,10 @@ int main()
     requireDomain("denoising.sky.resolution", "quarter|half|full");
     requireDomain(
         "debug.path-tracing.view",
-        "final|albedo|geometric-normal|shading-normal|sample-count|retry-probability|stable-plane|direct-reservoir|indirect-reservoir");
+        "final|albedo|geometric-normal|shading-normal|sample-count|update-rate|signal-group|direct-reservoir|indirect-reservoir|primary-transport|indirect-transport");
+    requireDomain(
+        "debug.pbr.filter",
+        "final|surface-normals|geometry-normals|normal-difference|diffuse-environment|environment-direction|reflected-environment|brdf-response|specular-environment|all-environment-light|specular-visibility|environment-level|sky-visibility");
     requireDomain("sky.auto-exposure.enabled", "on|off");
     requireDomain(
         "sky.auto-exposure.exposure-compensation",
@@ -433,6 +476,9 @@ int main()
     requireDomain(
         "light.selected.flashlight.angular-size",
         "degrees 0..20 at 1 meter; flashlight_1");
+    requireDomain(
+        "light.selected.flashlight.stationary-when-idle",
+        "on|off; flashlight_1");
 
     const auto requireKindAndSection = [](
         std::string_view name,
@@ -516,6 +562,20 @@ int main()
         "noise.animate-samples", Kind::Boolean, Section::Noise);
     requireKindAndSection(
         "noise.accumulate-samples", Kind::Boolean, Section::Noise);
+    requireKindAndSection(
+        "noise.accumulation-mode", Kind::Enum, Section::Noise);
+    requireKindAndSection(
+        "noise.accumulation-averaging", Kind::Enum, Section::Noise);
+    requireKindAndSection(
+        "noise.accumulation-scheduling", Kind::Enum, Section::Noise);
+    requireKindAndSection(
+        "noise.accumulation-effective-history", Kind::Integer, Section::Noise);
+    requireKindAndSection(
+        "noise.accumulation-minimum-samples", Kind::Integer, Section::Noise);
+    requireKindAndSection(
+        "noise.accumulation-target-error", Kind::Float, Section::Noise);
+    requireKindAndSection(
+        "noise.accumulation-minimum-update-rate", Kind::Float, Section::Noise);
     requireKindAndSection(
         "visibility.specify-noise", Kind::Boolean, Section::Visibility);
     requireKindAndSection(
@@ -608,6 +668,10 @@ int main()
         "sky.auto-exposure.adjustment-period", Kind::Float, Section::Sky);
     requireKindAndSection(
         "light.selected.flashlight.angular-size", Kind::Float, Section::Lights);
+    requireKindAndSection(
+        "light.selected.flashlight.stationary-when-idle",
+        Kind::Boolean,
+        Section::Lights);
     Require(!Find("light.selected.flashlight.adjustment-speed") &&
             !Find("light.selected.flashlight.time-to-action"),
         "retired flashlight camera-centering controls must remain absent");
@@ -625,7 +689,7 @@ int main()
             !Find("visibility.reconstruction.method") &&
             !Find("visibility.buffers.preset") &&
             !Find("anti-aliasing.method") &&
-            !Find("anti-aliasing.taa.stationary-bypass") &&
+            !Find("anti-aliasing.taa.nearest-texel") &&
             !Find("debug.visibility.indirect-diffuse-only") &&
             !Find("debug.shadows.edge-overlay") &&
             !Find("debug.shadows.overlay-opacity") &&

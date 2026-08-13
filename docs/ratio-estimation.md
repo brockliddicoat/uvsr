@@ -165,7 +165,7 @@ never owns it.
 The Shadows drawer contains one independently collapsible **Ray Traced
 Shadows** group. It exposes **Enabled**, **Ratio Estimator**, **Output Hit
 Distance**, **Hard Shadows**, **Samples Per Pixel**, **Specify Noise**, **Max
-Distance**, and **Ray Bias**. Factory defaults keep the producer disabled, Ratio
+Distance**, and **Ray Bias**. Factory defaults keep the producer enabled, Ratio
 Estimator on, Output Hit Distance off, two ratio samples, hard mode off, global
 noise inheritance active, and Ray Bias at `0.002`. Enabling Specify Noise
 reveals private Pattern, Resolution, and Animate Samples controls.

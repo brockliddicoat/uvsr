@@ -13,11 +13,11 @@ production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 115,620 non-blank source lines.
+**First-Party Lines of Code:** 120,079 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,466 non-blank source lines.
 
-**Total Lines of Code:** 503,086 non-blank source lines.
+**Total Lines of Code:** 507,545 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -34,10 +34,11 @@ with `tools/update_readme_line_counts.cmd --write`.
   sun, sky, and flashlight visibility plus zero-raster complete path transport
   through the same alpha-tested world representation.
 - **Configurable Path Tracing:** Executable RTX PT plus first-party clean-room
-  ReSTIR PT seed-replay and ReSTIR GI temporal-checkpoint subsets share one
+  RESTIR PT seed-replay and RESTIR GI temporal-checkpoint subsets share one
   Lambert/GGX transport core with NEE, emissive and environment paths,
   progressive accumulation, an optional direct reservoir, a clean-room
-  spatial path-layer resolve for RTX PT, and transport debug views. The
+  confidence-aware spatial path resolve for every solver, and transport debug
+  views. RTX PT additionally exposes a diffuse/specular continuation split. The
   subsets do not claim NVIDIA parity, geometric reconnection, or a spatial GI
   transform.
 - **Ratio Estimators:** Correlated visible and unshadowed RGB responses reduce

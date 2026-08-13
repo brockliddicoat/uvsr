@@ -303,7 +303,8 @@ int main(int argc, char** argv)
     RequireOrdered(
         shader,
         {
-            "constuintphase=g_Heitz.sampleSequencePhase;",
+            "float2HeitzSample2D(uint2dispatchPosition,"
+                "uintsampleIndex,uintphase)",
             "constuintfirstDimension=sampleIndex*2u;",
             "constuintsequenceIndex=sampleIndex+1u;",
             "constfloat2noiseShift=float2(",
@@ -354,13 +355,19 @@ int main(int argc, char** argv)
         "material-aware base output binding layout");
     RequireContains(
         shader,
-        "if(g_Heitz.attemptMaskEnabled!=0u&&"
-            "t_AttemptMask[pixelPosition]==0u){return;}",
+        "if(sampleScheduleEnabled&&attemptToken==0u){return;}",
         "stochastic attempt mask must exit before G-buffer and ray work");
     RequireContains(
+        shader,
+        "constuintsampleSequencePhase=UvsrResolveSampleSequencePhase("
+            "g_Heitz.sampleSequenceMode,attemptToken,"
+            "g_Heitz.sampleSequencePhase);",
+        "stochastic samples must consume the accepted pixel's successful-sample phase");
+    RequireContains(
         pass,
-        "constants.attemptMaskEnabled="
-            "sampleSchedule.enabled&&stochastic?1u:0u;",
+        "constants.sampleSequenceMode=static_cast<uint32_t>("
+            "ResolveLightingSampleSequenceMode("
+            "sampleSchedule,stochastic,noiseSettings.animate));",
         "every stochastic soft-sun mode must consume the attempt mask");
     RequireContains(
         pass,
@@ -437,7 +444,8 @@ int main(int argc, char** argv)
 
     RequireContains(
         settings,
-        "boolhardShadows=false;booluseRatioEstimator=true;"
+        "boolenabled=true;boolhardShadows=false;"
+            "booluseRatioEstimator=true;"
             "booloutputHitDistance=false;int32_tsampleRateLog2=1;"
             "floatrayBias=0.002f;",
         "soft ratio, disabled hit output, integer rate, and low geometric bias defaults");

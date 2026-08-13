@@ -30,7 +30,9 @@ cbuffer Constants : register(b1)
     float SourceDepthPairQuantizationError;
     float MaximumHistoryWeight;
     uint TemporalBehaviorFlags;
-    uint TemporalBehaviorPadding;
+    // Current depth always passes through FP16 LDS; persistent history is
+    // independently marked when its selected format is R16_FLOAT.
+    uint DepthStorageFlags;
 }
 
 static const uint kTileWidth = 18u;
@@ -49,7 +51,6 @@ bool TemporalBehaviorEnabled(uint flag)
     // shader variant reads the same uniform flags only when a Developer Option
     // changes one of these policies.
     static const uint kMinimumBehaviorFlags =
-        UVSR_TAA_BEHAVIOR_MOVING_POINT_DEPTH |
         UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT |
         UVSR_TAA_BEHAVIOR_SQUARED_MOTION_TRUST |
         UVSR_TAA_BEHAVIOR_TIGHT_RECTIFICATION |
@@ -200,6 +201,7 @@ struct PreparedPixel
     float currentDepth;
     float2 historyUv;
     float velocitySquared;
+    float historySupport;
     uint inBounds;
     uint useHistory;
 };
@@ -212,6 +214,7 @@ PreparedPixel PreparePixel(uint2 pixel, uint tileIndex)
     prepared.currentDepth = LoadCurrentDepth(tileIndex);
     prepared.historyUv = 0.0f;
     prepared.velocitySquared = 0.0f;
+    prepared.historySupport = 0.0f;
     prepared.inBounds = all(pixel < BufferDimensions) ? 1u : 0u;
     prepared.useHistory = 0u;
     if (prepared.inBounds == 0u ||
@@ -241,30 +244,28 @@ PreparedPixel PreparePixel(uint2 pixel, uint tileIndex)
 
     [branch]
     if (TemporalBehaviorEnabled(
-            UVSR_TAA_BEHAVIOR_MOVING_POINT_DEPTH))
+            UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH))
     {
-        // Minimum's default policy keeps nominally stationary history without
-        // sampling the jittered previous-depth grid. Moving pixels pay one
-        // point read.
-        if (prepared.velocitySquared > 1e-4f ||
-            abs(motion.z) > 1e-6f)
+        // Compact history still validates the nearest jittered previous-depth
+        // texel for stationary samples. Otherwise subpixel silhouette motion
+        // can accept unrelated background or foreground history.
+        int2 depthPixel = clamp(
+            int2(floor(historyDepthPixel + 0.5f)),
+            int2(0, 0),
+            int2(BufferDimensions) - 1);
+        float previousDepth =
+            PreviousDepth.Load(int3(depthPixel, 0));
+        prepared.historySupport = UvsrTemporalDeviceDepthAccepted(
+                expectedPreviousDepth,
+                motion.z,
+                SourceDepthPairQuantizationError,
+                previousDepth,
+                DepthStorageFlags,
+                Projection,
+                1e-3f);
+        if (prepared.historySupport == 0.0f)
         {
-            int2 depthPixel = clamp(
-                int2(floor(historyDepthPixel + 0.5f)),
-                int2(0, 0),
-                int2(BufferDimensions) - 1);
-            float previousDepth =
-                PreviousDepth.Load(int3(depthPixel, 0));
-            float depthTolerance = max(
-                max(5e-4f, SourceDepthPairQuantizationError),
-                max(abs(previousDepth), abs(expectedPreviousDepth)) *
-                    0.01f);
-            if (!IsDepthValid(previousDepth) ||
-                abs(previousDepth - expectedPreviousDepth) >
-                    depthTolerance)
-            {
-                return prepared;
-            }
+            return prepared;
         }
     }
     else
@@ -275,13 +276,21 @@ PreparedPixel PreparePixel(uint2 pixel, uint tileIndex)
                 ReciprocalBufferDimensions);
         UvsrTemporalReverseZFootprint footprint =
             UvsrTemporalReduceReverseZFootprint(previousDepths);
-        if (UvsrTemporalDepthAccepted(
+        float filteredPreviousDepth = PreviousDepth.SampleLevel(
+            LinearSampler,
+            (historyDepthPixel + 0.5f) *
+                ReciprocalBufferDimensions,
+            0.0f);
+        prepared.historySupport = UvsrTemporalDepthAccepted(
                 expectedPreviousDepth,
                 motion.z,
                 SourceDepthPairQuantizationError,
                 footprint,
+                filteredPreviousDepth,
+                DepthStorageFlags,
                 Projection,
-                1e-3f) == 0.0f)
+                1e-3f);
+        if (prepared.historySupport == 0.0f)
         {
             return prepared;
         }
@@ -343,7 +352,8 @@ void ResolvePreparedPixel(
         MaximumHistoryWeight,
         clamp(TemporalBlendFactor, 0.0f, 2.0f) *
             MaximumHistoryWeight *
-            motionTrust);
+            motionTrust *
+            prepared.historySupport);
     float3 resolved = TemporalBehaviorEnabled(
             UVSR_TAA_BEHAVIOR_LINEAR_BLEND_DOMAIN)
         ? lerp(

@@ -263,7 +263,7 @@ int main(int argc, char** argv)
     const auto invalidJitter = uvsr::GetTemporalAaJitter(
         static_cast<Jitter>(999u), 0u);
     const auto defaultJitter =
-        uvsr::GetTemporalAaJitter(Jitter::Halton23x16, 0u);
+        uvsr::GetTemporalAaJitter(Jitter::Halton23x8, 0u);
     uvsr::AntiAliasingSettings invalidJitterSettings;
     invalidJitterSettings.temporal.jitterSequence =
         static_cast<Jitter>(999u);
@@ -271,12 +271,12 @@ int main(int argc, char** argv)
         uvsr::ResolveAntiAliasingSettings(invalidJitterSettings);
     passed &= Check(
         uvsr::GetTemporalAaJitterSequenceLength(
-            static_cast<Jitter>(999u)) == 16u &&
+            static_cast<Jitter>(999u)) == 8u &&
             invalidJitter.x == defaultJitter.x &&
             invalidJitter.y == defaultJitter.y &&
             invalidJitterResolved.temporalJitterSequence ==
-                Jitter::Halton23x16,
-        "invalid jitter selections must fall back to Filament Halton 16");
+                Jitter::Halton23x8,
+        "invalid jitter selections must fall back to Filament Halton 8");
 
     constexpr auto jitterDelta =
         uvsr::GetTemporalAaCurrentToPreviousJitter(
@@ -292,8 +292,8 @@ int main(int argc, char** argv)
         !defaults.temporal.enabled &&
             defaults.temporal.quality == Quality::Medium &&
             defaults.temporal.costMode == Cost::Reduced &&
-            defaults.temporal.jitterSequence == Jitter::Halton23x16 &&
-            defaults.temporal.stationaryBypass &&
+            defaults.temporal.jitterSequence == Jitter::Halton23x8 &&
+            !defaults.temporal.nearestTexelDepth &&
             !defaults.fastApproximate.enabled &&
             defaults.fastApproximate.quality == Quality::Ultra &&
             NearlyEqual(
@@ -324,11 +324,13 @@ int main(int argc, char** argv)
             !defaultResolved.fastApproximateEnabled &&
             !defaultResolved.cmaa2Enabled &&
             defaultResolved.temporalJitterSequence ==
-                Jitter::Halton23x16 &&
+                Jitter::Halton23x8 &&
             defaultResolved.rasterSampleCount == 1u &&
             defaultResolved.depthValidation ==
-                uvsr::TemporalAaDepthValidation::MovingPoint,
-        "disabled AA defaults must preserve Stationary Bypass without work");
+                uvsr::TemporalAaDepthValidation::FourTexelFootprint &&
+            defaultResolved.blendDomain ==
+                uvsr::TemporalAaBlendDomain::LinearRgb,
+        "disabled AA defaults must preserve validated linear-RGB history");
 
     for (uint32_t mask = 0u; mask < 16u; ++mask)
     {
@@ -517,11 +519,11 @@ int main(int argc, char** argv)
 
     uvsr::AntiAliasingSettings fourTexel = defaults;
     fourTexel.temporal.enabled = true;
-    fourTexel.temporal.stationaryBypass = false;
+    fourTexel.temporal.nearestTexelDepth = false;
     passed &= Check(
         uvsr::ResolveAntiAliasingSettings(fourTexel).depthValidation ==
             uvsr::TemporalAaDepthValidation::FourTexelFootprint,
-        "Stationary Bypass must be a direct normal TAA setting");
+        "Nearest Texel must be a direct normal TAA setting");
 
     uvsr::AntiAliasingSettings advanced = defaults;
     advanced.temporal.enabled = true;
@@ -583,7 +585,7 @@ int main(int argc, char** argv)
     uvsr::AntiAliasingSettings msaaOnlyChange = minimum;
     msaaOnlyChange.msaa.enabled = true;
     uvsr::AntiAliasingSettings temporalImageChange = minimum;
-    temporalImageChange.temporal.stationaryBypass = false;
+    temporalImageChange.temporal.nearestTexelDepth = true;
     uvsr::AntiAliasingSettings jitterSequenceChange = minimum;
     jitterSequenceChange.temporal.jitterSequence = Jitter::Halton23x32;
     uvsr::AntiAliasingSettings disabledJitterChange = defaults;
@@ -619,6 +621,51 @@ int main(int argc, char** argv)
     const std::array<float, 4> silhouetteDepths = {
         0.5f, 0.f, 0.5f, 0.5f
     };
+    const std::array<float, 4> finiteNearFarDepths = {
+        0.5f, 0.05f, 0.5f, 0.05f
+    };
+    constexpr float idealFarDeviceDepth = 0.010004f;
+    const float compactCurrentDeviceDepth =
+        uvsr::RoundTripTemporalAaPositiveBinary16(
+            idealFarDeviceDepth);
+    const float compactCurrentDepthError =
+        uvsr::GetTemporalAaStoredDeviceDepthError(
+            compactCurrentDeviceDepth,
+            true);
+    const auto r32HistoryViewAllowances =
+        uvsr::GetTemporalAaInfiniteReverseZViewAllowances(
+            compactCurrentDeviceDepth,
+            compactCurrentDepthError);
+    const float compactExpectedFarViewDepth =
+        0.1f / compactCurrentDeviceDepth;
+    const float r32HistoryFarViewDepth =
+        0.1f / idealFarDeviceDepth;
+
+    constexpr float previousSlopedDeviceDepth = 0.010007f;
+    const float compactHistoryDeviceDepth =
+        uvsr::RoundTripTemporalAaPositiveBinary16(
+            previousSlopedDeviceDepth);
+    const float compactMotionDepth =
+        uvsr::RoundTripTemporalAaPositiveBinary16(
+            previousSlopedDeviceDepth - idealFarDeviceDepth);
+    const float compactExpectedSlopedDeviceDepth =
+        compactCurrentDeviceDepth + compactMotionDepth;
+    const float compactMotionDepthError = std::max(
+        std::abs(compactMotionDepth) * 0.00048828125f,
+        0.0000000298023223876953125f);
+    const float compactHistoryDepthError =
+        uvsr::GetTemporalAaStoredDeviceDepthError(
+            compactHistoryDeviceDepth,
+            true);
+    const auto r16HistoryViewAllowances =
+        uvsr::GetTemporalAaInfiniteReverseZViewAllowances(
+            compactExpectedSlopedDeviceDepth,
+            compactCurrentDepthError + compactMotionDepthError +
+                compactHistoryDepthError);
+    const float compactExpectedSlopedViewDepth =
+        0.1f / compactExpectedSlopedDeviceDepth;
+    const float compactHistorySlopedViewDepth =
+        0.1f / compactHistoryDeviceDepth;
     passed &= Check(
         uvsr::TemporalAaFootprintHasConsistentGeometry(
             uvsr::ReduceTemporalAaReverseZFootprint(coherentDepths)) &&
@@ -626,6 +673,43 @@ int main(int argc, char** argv)
                 uvsr::ReduceTemporalAaReverseZFootprint(
                     silhouetteDepths)),
         "reverse-Z history validation must reject mixed silhouettes");
+    passed &= Check(
+            uvsr::TemporalAaFootprintHasConsistentGeometry(
+                uvsr::ReduceTemporalAaReverseZFootprint(
+                    finiteNearFarDepths)) &&
+            uvsr::TemporalAaViewDepthFootprintAccepted(
+                10.f,
+                10.f,
+                9.9893f,
+                10.0107f) &&
+            !uvsr::TemporalAaViewDepthFootprintAccepted(
+                1.f,
+                1.f,
+                1.f,
+                10.f) &&
+            !uvsr::TemporalAaViewDepthAccepted(
+                1000.f,
+                500.f,
+                0.f,
+                0.f),
+        "sloped planes must retain history while finite foreground/wall "
+        "footprints and far reverse-Z mismatches fail validation");
+    passed &= Check(
+        std::abs(
+            compactExpectedFarViewDepth -
+            r32HistoryFarViewDepth) > 1e-3f &&
+            uvsr::TemporalAaViewDepthAccepted(
+                compactExpectedFarViewDepth,
+                r32HistoryFarViewDepth,
+                r32HistoryViewAllowances.nearer,
+                r32HistoryViewAllowances.farther) &&
+            uvsr::TemporalAaViewDepthAccepted(
+                compactExpectedSlopedViewDepth,
+                compactHistorySlopedViewDepth,
+                r16HistoryViewAllowances.nearer,
+                r16HistoryViewAllowances.farther),
+        "Minimum TAA must budget FP16 current depth for R32 history fallback "
+        "and both FP16 storage errors for R16 history");
     passed &= Check(
         uvsr::IsTemporalAaMotionValid({ 0.f, 0.f, 0.f, 1.f }) &&
             !uvsr::IsTemporalAaMotionValid({
@@ -644,6 +728,10 @@ int main(int argc, char** argv)
             sourceDirectory / "temporal_aa_options.h");
         const std::string qualityShader = ReadTextFile(
             sourceDirectory / "temporal_aa_blend_cs.hlsl");
+        const std::string minimumShader = ReadTextFile(
+            sourceDirectory / "temporal_aa_minimum_cs.hlsl");
+        const std::string commonShader = ReadTextFile(
+            sourceDirectory / "temporal_aa_common.hlsli");
         const std::string resolveShader = ReadTextFile(
             sourceDirectory / "temporal_aa_resolve_cs.hlsl");
         const std::string cmaaHeader = ReadTextFile(
@@ -684,6 +772,7 @@ int main(int argc, char** argv)
                 lacksRetiredTaaText(temporalHeader) &&
                 lacksRetiredTaaText(temporalOptions) &&
                 lacksRetiredTaaText(qualityShader) &&
+                lacksRetiredTaaText(minimumShader) &&
                 lacksRetiredTaaText(resolveShader),
             "retired TAA resurrection, debug, pixel, kernel, or cache paths returned");
         passed &= Check(
@@ -696,6 +785,62 @@ int main(int argc, char** argv)
                 qualityShader.find("UVSR_TAA_LDS_SPLIT") ==
                     std::string::npos,
             "TAA must retain only 8x8 compute and legacy/packed LDS");
+        passed &= Check(
+            qualityShader.find("const bool stationary") ==
+                    std::string::npos &&
+                qualityShader.find("reprojectionAcceptance = 1.0") ==
+                    std::string::npos &&
+                qualityShader.find(
+                    "PreDepth.Load(int3(depthPixel, 0))") !=
+                    std::string::npos,
+            "reduced-cost TAA must depth-validate stationary silhouette history");
+        passed &= Check(
+            minimumShader.find("prepared.velocitySquared > 1e-4f") ==
+                    std::string::npos &&
+                minimumShader.find(
+                    "PreviousDepth.Load(int3(depthPixel, 0))") !=
+                    std::string::npos,
+            "minimum-cost TAA must depth-validate stationary silhouette history");
+        passed &= Check(
+            temporalPass.find(
+                "minimumDefaultBehaviorFlags =\n"
+                "            UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT") !=
+                    std::string::npos &&
+                minimumShader.find(
+                    "kMinimumBehaviorFlags =\n"
+                    "        UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT") !=
+                    std::string::npos,
+            "default Minimum TAA must select its statically folded four-texel "
+            "depth policy");
+        passed &= Check(
+                commonShader.find(
+                    "UvsrTemporalFootprintDepthCoherence(") !=
+                    std::string::npos &&
+                commonShader.find(
+                    "filteredPreviousDeviceDepth") !=
+                    std::string::npos &&
+                commonShader.find(
+                    "UvsrTemporalDeviceDepthFartherViewAllowance(") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "reprojectionAcceptance = UvsrTemporalDeviceDepthAccepted(") !=
+                    std::string::npos &&
+                minimumShader.find(
+                    "prepared.historySupport = UvsrTemporalDeviceDepthAccepted(") !=
+                    std::string::npos &&
+                temporalPass.find(
+                    "blendConstants.depthStorageFlags = useMinimum") !=
+                    std::string::npos &&
+                temporalPass.find(
+                    "m_Timings.minimumDepthIsR16 ? 2u : 0u") !=
+                    std::string::npos &&
+                minimumShader.find(
+                    "prepared.historySupport = UvsrTemporalDepthAccepted(") !=
+                    std::string::npos &&
+                qualityShader.find("max(5e-4") == std::string::npos &&
+                minimumShader.find("max(5e-4f") == std::string::npos,
+            "all TAA paths must use filtered footprint depth, discontinuity "
+            "confidence, and format-exact history-depth uncertainty");
         passed &= Check(
             cmaaHeader.find("Cmaa2ColorRange") == std::string::npos &&
                 cmaaSource.find("colorRange") == std::string::npos &&

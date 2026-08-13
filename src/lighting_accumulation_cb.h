@@ -9,7 +9,13 @@ struct LightingAccumulationConstants
 
     uint resetHistory;
     uint accumulateSamples;
-    uint2 padding;
+    uint averaging;
+    uint scheduling;
+
+    uint effectiveHistory;
+    uint minimumSamples;
+    float targetRelativeError;
+    float minimumUpdateRate;
 };
 
 #endif // UVSR_LIGHTING_ACCUMULATION_CB_H

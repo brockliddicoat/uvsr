@@ -142,6 +142,7 @@ namespace uvsr
         Value("pathing.nee-candidates", Kind::Integer, Section::Pathing, "integer 1..63"),
         Value("pathing.ser", Kind::Boolean, Section::Pathing, "on|off"),
         Value("pathing.rtxdi", Kind::Boolean, Section::Pathing, "on|off"),
+        Value("pathing.reuse-proposals-during-motion", Kind::Boolean, Section::Pathing, "on|off"),
 
         // Representation.
         Value("representation.bvh.build-preference", Kind::Enum, Section::Representation, "fast-trace|balanced|fast-build"),
@@ -154,6 +155,15 @@ namespace uvsr
         Value("noise.resolution", Kind::Enum, Section::Noise, "64x64|128x128|256x256|512x512"),
         Value("noise.animate-samples", Kind::Boolean, Section::Noise, "on|off"),
         Value("noise.accumulate-samples", Kind::Boolean, Section::Noise, "on|off"),
+        Value("noise.accumulation-mode", Kind::Enum, Section::Noise, "progressive|responsive|variance-guided"),
+        Value("noise.accumulation-averaging", Kind::Enum, Section::Noise, "cumulative|exponential"),
+        Value("noise.accumulation-scheduling", Kind::Enum, Section::Noise, "every-pixel|variance-guided"),
+        Value("noise.accumulation-effective-history", Kind::Integer, Section::Noise, "integer 2..4096"),
+        Value("noise.accumulation-history-preset", Kind::Enum, Section::Noise, "quick-preview|responsive|balanced|stable|very-stable|custom (get only)"),
+        Value("noise.accumulation-minimum-samples", Kind::Integer, Section::Noise, "integer 2..256"),
+        Value("noise.accumulation-target-error", Kind::Float, Section::Noise, "float 0.001..0.25"),
+        Value("noise.accumulation-minimum-update-rate", Kind::Float, Section::Noise, "float 0.00390625..1"),
+        Value("noise.accumulation-workload-preset", Kind::Enum, Section::Noise, "full-quality|balanced|performance|maximum-savings|custom (get only)"),
 
         // Visibility.
         Value("visibility.enabled", Kind::Boolean, Section::Visibility, "on|off"),
@@ -204,17 +214,17 @@ namespace uvsr
         Value("denoising.sky.history", Kind::Integer, Section::Denoising, "integer 1..32"),
         Value("denoising.sky.disocclusion", Kind::Float, Section::Denoising, "float 0.001..0.1"),
         Value("denoising.sky.anti-lag", Kind::Float, Section::Denoising, "float 0..1"),
-        Value("denoising.path-tracing.stable-planes", Kind::Integer, Section::Denoising, "integer 0..3"),
-        Value("denoising.path-tracing.psr", Kind::Boolean, Section::Denoising, "on|off"),
+        Value("denoising.path-tracing.signal-groups", Kind::Integer, Section::Denoising, "integer 1..3; RESTIR supports 1..2"),
+        Value("denoising.path-tracing.resolve-strength", Kind::Float, Section::Denoising, "float 0..1"),
         Value("denoising.path-tracing.firefly-filter", Kind::Boolean, Section::Denoising, "on|off"),
         Value("denoising.path-tracing.firefly-threshold", Kind::Float, Section::Denoising, "float 0.01..1000000"),
-        Value("denoising.path-tracing.method", Kind::Enum, Section::Denoising, "raw|stable-plane-resolve|nrd-reblur|nrd-relax"),
+        Value("denoising.path-tracing.method", Kind::Enum, Section::Denoising, "raw|spatial-path-resolve"),
 
         // Anti-Aliasing.
         Value("anti-aliasing.taa.enabled", Kind::Boolean, Section::Aliasing, "on|off"),
         Value("anti-aliasing.taa.quality", Kind::Enum, Section::Aliasing, "low|medium|high|ultra"),
         Value("anti-aliasing.taa.jitter-sequence", Kind::Enum, Section::Aliasing, "rotated-grid-4|uniform-helix-4|halton-8|halton-16|halton-32|sobol-32"),
-        Value("anti-aliasing.taa.previous-depth", Kind::Enum, Section::Aliasing, "stationary-bypass|four-texel-footprint"),
+        Value("anti-aliasing.taa.previous-depth", Kind::Enum, Section::Aliasing, "nearest-texel|four-texel-footprint"),
         Value("anti-aliasing.taa.temporal-cost", Kind::Enum, Section::Aliasing, "full-quality|reduced|minimum"),
         Value("anti-aliasing.taa.motion-source", Kind::Enum, Section::Aliasing, "preset|center|closest-cross|edge-dilation"),
         Value("anti-aliasing.taa.current-sample", Kind::Enum, Section::Aliasing, "preset|direct|de-jittered"),
@@ -246,8 +256,8 @@ namespace uvsr
         // Debug.
         Value("debug.world.materials", Kind::Enum, Section::Debug, "scene|white|white-detail|white-lighting"),
         Value("debug.visibility.view", Kind::Enum, Section::Debug, "final|ambient-visibility|traced-indirect|applied-indirect"),
-        Value("debug.pbr.filter", Kind::Enum, Section::Debug, "final|surface-normals|geometry-normals|normal-difference|diffuse-environment|environment-direction|reflected-environment|brdf-response|specular-environment|all-environment-light|specular-visibility|environment-level"),
-        Value("debug.path-tracing.view", Kind::Enum, Section::Debug, "final|albedo|geometric-normal|shading-normal|sample-count|retry-probability|stable-plane|direct-reservoir|indirect-reservoir"),
+        Value("debug.pbr.filter", Kind::Enum, Section::Debug, "final|surface-normals|geometry-normals|normal-difference|diffuse-environment|environment-direction|reflected-environment|brdf-response|specular-environment|all-environment-light|specular-visibility|environment-level|sky-visibility"),
+        Value("debug.path-tracing.view", Kind::Enum, Section::Debug, "final|albedo|geometric-normal|shading-normal|sample-count|update-rate|signal-group|direct-reservoir|indirect-reservoir|primary-transport|indirect-transport"),
 
         // Sky.
         Value("sky.environment", Kind::Enum, Section::Sky, "day-kloppenheim-03|bright-overcast-snow-field-2|soft-day-farm-field|night-kloppenheim-07|starry-night-qwantani|legacy-quadrangle-cloudy"),
@@ -291,6 +301,7 @@ namespace uvsr
         Value("light.selected.flashlight.cast-shadows", Kind::Boolean, Section::Lights, "on|off; flashlight_1", true, true),
         Value("light.selected.flashlight.output-hit-distance", Kind::Boolean, Section::Lights, "on|off; flashlight_1", true, true),
         Value("light.selected.flashlight.realistic", Kind::Boolean, Section::Lights, "on|off; flashlight_1", true, true),
+        Value("light.selected.flashlight.stationary-when-idle", Kind::Boolean, Section::Lights, "on|off; flashlight_1", true, true),
         Value("light.selected.flashlight.hotspot-size", Kind::Float, Section::Lights, "float 0.2..0.75; flashlight_1", true, true),
         Value("light.selected.flashlight.hotspot-strength", Kind::Float, Section::Lights, "float 0..0.9; flashlight_1", true, true),
         Value("light.selected.flashlight.sway", Kind::Float, Section::Lights, "degrees 0..2; flashlight_1", true, true),

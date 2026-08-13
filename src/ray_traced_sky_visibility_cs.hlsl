@@ -6,6 +6,7 @@
 #include "pbr_gbuffer.hlsli"
 #include "ray_traced_material_visibility.hlsli"
 #include "ray_traced_sky_visibility_cb.h"
+#include "sample_accumulation.hlsli"
 
 #ifndef OUTPUT_HIT_DISTANCE
 #define OUTPUT_HIT_DISTANCE 0
@@ -62,9 +63,9 @@ float SkyVisibilityRadicalInverse(uint index, uint base)
 
 float2 SkyVisibilitySample2D(
     uint2 dispatchPosition,
-    uint sampleIndex)
+    uint sampleIndex,
+    uint phase)
 {
-    const uint phase = g_SkyVisibility.sampleSequencePhase;
     const uint firstDimension = sampleIndex * 2u;
     const uint sequenceIndex = sampleIndex + 1u;
     const uint2 dispatchExtent =
@@ -247,11 +248,20 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
         return;
     const int2 pixelPosition =
         SkyVisibilityPixelPosition(dispatchPosition);
-    if (g_SkyVisibility.attemptMaskEnabled != 0u &&
-        t_AttemptMask[pixelPosition] == 0u)
+    const bool sampleScheduleEnabled = UvsrSampleScheduleEnabled(
+        g_SkyVisibility.sampleSequenceMode);
+    const uint attemptToken =
+        sampleScheduleEnabled
+            ? t_AttemptMask[pixelPosition]
+            : 0u;
+    if (sampleScheduleEnabled && attemptToken == 0u)
     {
         return;
     }
+    const uint sampleSequencePhase = UvsrResolveSampleSequencePhase(
+        g_SkyVisibility.sampleSequenceMode,
+        attemptToken,
+        g_SkyVisibility.sampleSequencePhase);
     const float4 normalChannels = t_GBufferNormals[pixelPosition];
     if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
     {
@@ -305,7 +315,10 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
     {
         const float3 direction = SkyVisibilitySampleCosineHemisphere(
             geometricNormal,
-            SkyVisibilitySample2D(dispatchPosition, sampleIndex));
+            SkyVisibilitySample2D(
+                dispatchPosition,
+                sampleIndex,
+                sampleSequencePhase));
         float hitDistance;
         if (SkyVisibilityTrace(rayOrigin, direction, hitDistance))
             ++visibleSampleCount;

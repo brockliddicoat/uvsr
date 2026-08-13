@@ -6,7 +6,7 @@ The **Aliasing** drawer exposes four animated, independently collapsible,
 default-off techniques:
 
 - **Temporal Reconstructive** performs long-term temporal reconstruction in
-  scene-linear space.
+  scene-linear RGB.
 - **Fast Approximate** adapts Google Filament's FXAA implementation for
   current-frame edge smoothing after tone mapping.
 - **Conservative Morphological** performs conservative morphological
@@ -42,8 +42,8 @@ pinned revision `47c86eec22e56d75897e16651eb4d2abd64fc29a`:
 
 - **Rotated Grid 4**;
 - **Uniform Helix 4**;
-- **Halton 8**;
-- **Halton 16**, the Filament and UVSR factory default; and
+- **Halton 8**, the UVSR factory default;
+- **Halton 16**; and
 - **Halton 32**.
 
 The Halton choices use Filament's exact shared sequence, including its 409-entry
@@ -74,7 +74,11 @@ the
 and [pinned author code](https://github.com/Andrew-Helmer/stochastic-generation/tree/f90b115806675035c8c727bab4575ca5ba1760b6).
 
 Jitter Sequence remains independent from the Quality and Cost recipes. Its
-reset returns to Halton 16. A live sequence
+reset returns to Halton 8. The shorter cycle covers its complete distribution
+sooner after a reset and during short stationary runs. Its tradeoff is eight
+unique subpixel locations instead of sixteen before repetition, which can leave
+more periodic correlation or slightly less long-run edge diversity than Halton
+16 in difficult stationary scenes. A live sequence
 change invalidates temporal history, clears the previous-view jitter basis,
 and restarts phase zero so samples from two distributions never share one
 accumulated history.
@@ -84,19 +88,24 @@ accumulated history.
 Advanced begins directly with:
 
 - **Jitter Sequence**, with all six patterns described above;
-- **Depth Validation**, with Stationary Bypass and Four-Texel
-  Footprint choices;
+- **Depth Validation**, with Nearest Texel and Four-Texel Footprint choices;
 - motion source;
 - current-sample reconstruction;
 - history filter and rectification;
 - history frames and strength.
+
+Nearest Texel performs one previous-depth load for the reprojected sample.
+Four-Texel Footprint, the factory default, validates the complete bilinear
+support. Both choices validate nominally stationary pixels; neither grants
+unconditional history acceptance at a jittering silhouette.
 
 The default-closed Cost submenu comes last and contains:
 
 - **Mode**: Full Quality, Reduced, or Minimum;
 - robust or compact history storage;
 - history weighting and motion trust;
-- rectification clipping and blend domain; and
+- rectification clipping and blend domain, with Linear RGB as the factory
+  blend domain; and
 - preset/output sharpening.
 
 Internal inheritance delegates a row to the selected Quality or Cost
@@ -118,12 +127,23 @@ Temporal Reconstructive preserves the stored configuration.
 
 ## History Contract
 
-TAA owns the renderer's only long-term image history. Effective image-policy,
-format, render-size, sample-topology, or camera-discontinuity changes reset that
-history. A live Jitter Sequence change also resets history and its phase.
-Fast-Approximate-only and CMAA2-only changes do not. MSAA topology
-changes rebuild the relevant render targets and invalidate history through the
-same image-key contract.
+TAA owns long-term image history only when Ray Marching **Accumulate Samples**
+is off. With that accumulator enabled, raw scene-linear samples are resolved
+before TAA and the TAA history/blend stage is bypassed, preventing one temporal
+estimator from averaging another. The selected jitter sequence may still
+diversify raw raster samples. Path Tracing resolves TAA off and owns its own
+progressive sample history.
+
+The default TAA blend operates directly in scene-linear RGB. The optional
+luminance-compressed domain remains an Advanced cost policy, but it is not the
+factory choice because averaging in a nonlinear compression domain can darken
+a long history and reduce contrast after inversion.
+
+Effective image-policy, format, render-size, sample-topology, or
+camera-discontinuity changes reset TAA history. A live Jitter Sequence change
+also resets history and its phase. Fast-Approximate-only and CMAA2-only changes
+do not. MSAA topology changes rebuild the relevant render targets and
+invalidate history through the same image-key contract.
 
 Robust history uses RGBA16F color and R32 depth. Compact history uses
 R11G11B10 color and R16 depth when the device and selected policy permit it.
@@ -213,14 +233,17 @@ anti-aliasing.msaa.samples
 
 Use Tab completion for the complete current catalog. Accepted image-changing
 mutations normalize the aggregate AA state and cross the renderer boundary at
-the same safe post-ImGui point as visible controls.
+the same safe post-ImGui point as visible controls. The previous-depth command
+accepts `nearest-texel` or `four-texel-footprint`.
 
 ## Validation Boundary
 
 Reference tests cover quality resolution, every Filament jitter sample,
 Sobol 32 prefix stratification and spacing, C++17 settings comparison,
 history keys and reset rules, all 16 independent enable combinations, reverse-Z
-footprints, motion validity, the Fast Approximate source/resource/provenance
-contract, retained shader axes, and the absence of resurrection/HDR-CMAA2 paths.
+footprints, stationary nearest-depth rejection in both normal and compact TAA
+shaders, motion validity, linear-RGB defaults, the Fast Approximate
+source/resource/provenance contract, retained shader axes, and the absence of
+resurrection/HDR-CMAA2 paths.
 Product validation still requires viewing each technique alone and the
 supported combined order on the exact candidate executable.

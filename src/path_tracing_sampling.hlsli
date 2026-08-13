@@ -76,12 +76,14 @@ uint2 PathTracingMakeSampleSeed(
     uint successfulSampleCount,
     uint serialLow,
     uint serialHigh,
+    uint failedAttemptSalt,
     float precomputedNoise)
 {
     uint low = PathTracingHash(pixel.x ^ (pixel.y * 0x632be5abu));
     low = PathTracingHash(low ^ samplePhase);
     low = PathTracingHash(low ^ successfulSampleCount * 0x85157af5u);
     low = PathTracingHash(low ^ serialLow);
+    low = PathTracingHash(low ^ failedAttemptSalt * 0x27d4eb2du);
     low ^= uint(saturate(precomputedNoise) * 4294967295.0f);
 
     uint high = PathTracingHash(pixel.y ^ (pixel.x * 0x68bc21ebu));
@@ -89,21 +91,9 @@ uint2 PathTracingMakeSampleSeed(
         0x9e3779b9u));
     high = PathTracingHash(high ^ successfulSampleCount * 0x02e5be93u);
     high = PathTracingHash(high ^ serialHigh);
+    high = PathTracingHash(high ^ failedAttemptSalt * 0x165667b1u);
     high ^= PathTracingHash(asuint(precomputedNoise));
     return uint2(PathTracingHash(low), PathTracingHash(high));
-}
-
-float PathTracingRetryVariate(
-    uint2 pixel,
-    uint successfulSampleCount,
-    uint serialLow,
-    uint serialHigh)
-{
-    uint seed = PathTracingHash(pixel.x ^ (pixel.y * 0x68bc21ebu));
-    seed = PathTracingHash(seed ^ serialLow);
-    seed = PathTracingHash(seed ^ PathTracingHash(serialHigh));
-    seed = PathTracingHash(seed ^ successfulSampleCount * 0x02e5be93u);
-    return (float(seed >> 8u) + 0.5f) * (1.0f / 16777216.0f);
 }
 
 float PathTracingLuminance(float3 value)
@@ -494,55 +484,56 @@ float PathTracingReservoirNormalization(
 
 struct PathTracingContributionReservoir
 {
-    float3 selectedContribution;
-    float sumTarget;
-    float selectedTarget;
+    float3 contributionMean;
+    float targetSum;
     uint candidateCount;
 };
 
 void PathTracingContributionReservoirUpdate(
     inout PathTracingContributionReservoir reservoir,
     float3 contribution,
-    float random)
+    float unusedRandom)
 {
     if (!all(isfinite(contribution)))
         return;
 
-    // Every finite proposal, including a successful black path, contributes
-    // one to M. Zero-target proposals are intentionally ineligible for
-    // selection but remain in the RIS normalization denominator.
-    reservoir.candidateCount += 1u;
+    // Conditional on the already-evaluated candidates, the previous
+    // luminance-proportional RIS estimator selected candidate i with t_i/S
+    // and returned C_i*S/(M*t_i). Its expectation is exactly sum(C_i)/M over
+    // eligible candidates. Accumulate that conditional expectation directly:
+    // this is the Rao-Blackwellized estimator and removes selection variance
+    // without changing the estimator's expectation. Every finite proposal,
+    // including a successful black path, still contributes one to M.
+    const uint newCandidateCount = reservoir.candidateCount + 1u;
     const float target = max(PathTracingLuminance(contribution), 0.0f);
-    if (!(target > UVSR_PATH_TARGET_EPSILON))
-        return;
-
-    const float newSumTarget = reservoir.sumTarget + target;
-    if (!isfinite(newSumTarget))
-        return;
-    if (random * newSumTarget < target)
-    {
-        reservoir.selectedContribution = contribution;
-        reservoir.selectedTarget = target;
-    }
-    reservoir.sumTarget = newSumTarget;
+    const float newTargetSum = reservoir.targetSum + target;
+    const bool eligible = target > UVSR_PATH_TARGET_EPSILON &&
+        isfinite(target) && isfinite(newTargetSum);
+    const float3 eligibleContribution = eligible
+        ? contribution
+        : 0.0f;
+    if (eligible)
+        reservoir.targetSum = newTargetSum;
+    const float inverseCount = rcp(float(newCandidateCount));
+    // Form the online mean as two bounded weighted terms. This avoids an
+    // otherwise unnecessary overflow when two individually finite HDR
+    // candidates approach the float maximum.
+    reservoir.contributionMean =
+        reservoir.contributionMean *
+            (float(reservoir.candidateCount) * inverseCount) +
+        eligibleContribution * inverseCount;
+    reservoir.candidateCount = newCandidateCount;
 }
 
 float3 PathTracingContributionReservoirEstimate(
     PathTracingContributionReservoir reservoir)
 {
     if (reservoir.candidateCount == 0u ||
-        !(reservoir.sumTarget > 0.0f) ||
-        !(reservoir.selectedTarget > UVSR_PATH_TARGET_EPSILON) ||
-        !all(isfinite(float4(
-            reservoir.selectedContribution,
-            reservoir.sumTarget))))
+        !all(isfinite(reservoir.contributionMean)))
     {
         return 0.0f;
     }
-    return reservoir.selectedContribution *
-        (reservoir.sumTarget /
-            (float(reservoir.candidateCount) *
-                reservoir.selectedTarget));
+    return reservoir.contributionMean;
 }
 
 float PathTracingLightPowerWeight(LightConstants light)

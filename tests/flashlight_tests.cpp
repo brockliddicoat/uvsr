@@ -113,6 +113,7 @@ int main()
 
     assert(!DefaultFlashlightEnabled);
     assert(DefaultFlashlightSettings.realisticLens);
+    assert(DefaultFlashlightSettings.stationaryWhenIdle);
     assert(DefaultFlashlightSettings.castShadows);
     assert(!DefaultFlashlightSettings.outputHitDistance);
     assert(std::string_view(FlashlightPublicName) ==
@@ -154,6 +155,33 @@ int main()
     assert(Near(DefaultFlashlightSettings.colorLinearRed, 1.f));
     assert(Near(DefaultFlashlightSettings.colorLinearGreen, 1.f));
     assert(Near(DefaultFlashlightSettings.colorLinearBlue, 1.f));
+    const FlashlightMotionSettings lockedMotion =
+        ResolveFlashlightMotionSettings(DefaultFlashlightSettings);
+    assert(lockedMotion.stationaryWhenIdle);
+    assert(!ShouldAdvanceFlashlightMotion(
+        lockedMotion, true, false, false));
+
+    FlashlightSettings unlockedSettings = DefaultFlashlightSettings;
+    unlockedSettings.stationaryWhenIdle = false;
+    const FlashlightMotionSettings unlockedMotion =
+        ResolveFlashlightMotionSettings(unlockedSettings);
+    assert(!unlockedMotion.stationaryWhenIdle);
+    assert(ShouldAdvanceFlashlightMotion(
+        unlockedMotion, true, false, false));
+    assert(ShouldAdvanceFlashlightMotion(
+        lockedMotion, true, true, false));
+    assert(ShouldAdvanceFlashlightMotion(
+        lockedMotion, true, false, true));
+    FlashlightSettings changedMotionSettings = DefaultFlashlightSettings;
+    changedMotionSettings.swayDegrees = std::nextafter(
+        changedMotionSettings.swayDegrees,
+        std::numeric_limits<float>::infinity());
+    assert(ResolveFlashlightMotionSettings(changedMotionSettings) !=
+        lockedMotion);
+    FlashlightSettings presentationOnlySettings = DefaultFlashlightSettings;
+    presentationOnlySettings.peakIntensityCandela += 1.f;
+    assert(ResolveFlashlightMotionSettings(presentationOnlySettings) ==
+        lockedMotion);
     const float defaultEmitterRadius = ResolveFlashlightEmitterRadiusMeters(
         DefaultFlashlightSettings.angularSizeDegrees);
     assert(Near(defaultEmitterRadius, 0.025f, 1e-6f));

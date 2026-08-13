@@ -7,6 +7,7 @@
 #include "pbr_gbuffer.hlsli"
 #include "ray_traced_material_visibility.hlsli"
 #include "ratio_estimator_shared.h"
+#include "sample_accumulation.hlsli"
 
 #ifndef OUTPUT_HIT_DISTANCE
 #define OUTPUT_HIT_DISTANCE 0
@@ -65,9 +66,9 @@ float HeitzRadicalInverse(uint index, uint base)
 
 float2 HeitzSample2D(
     uint2 dispatchPosition,
-    uint sampleIndex)
+    uint sampleIndex,
+    uint phase)
 {
-    const uint phase = g_Heitz.sampleSequencePhase;
     const uint firstDimension = sampleIndex * 2u;
     const uint sequenceIndex = sampleIndex + 1u;
     const uint2 dispatchExtent = uint2(g_Heitz.view.viewportSize);
@@ -269,11 +270,19 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
     if (!HeitzInViewport(dispatchPosition))
         return;
     const int2 pixelPosition = HeitzPixelPosition(dispatchPosition);
-    if (g_Heitz.attemptMaskEnabled != 0u &&
-        t_AttemptMask[pixelPosition] == 0u)
+    const bool sampleScheduleEnabled = UvsrSampleScheduleEnabled(
+        g_Heitz.sampleSequenceMode);
+    const uint attemptToken = sampleScheduleEnabled
+        ? t_AttemptMask[pixelPosition]
+        : 0u;
+    if (sampleScheduleEnabled && attemptToken == 0u)
     {
         return;
     }
+    const uint sampleSequencePhase = UvsrResolveSampleSequencePhase(
+        g_Heitz.sampleSequenceMode,
+        attemptToken,
+        g_Heitz.sampleSequencePhase);
     const float4 normalChannels = t_GBufferNormals[pixelPosition];
     if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
     {
@@ -322,7 +331,10 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
         const float3 directionToLight = g_Heitz.hardShadows != 0u
             ? HeitzLightCenterDirection()
             : HeitzSampleDirectionalEmitter(
-                HeitzSample2D(dispatchPosition, 0u));
+                HeitzSample2D(
+                    dispatchPosition,
+                    0u,
+                    sampleSequencePhase));
         if (!CanEvaluatePbrDirectSurfacePrepared(
                 preparedSurface,
                 directionToLight))
@@ -382,7 +394,10 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
         ++sampleIndex)
     {
         const float3 directionToLight = HeitzSampleDirectionalEmitter(
-            HeitzSample2D(dispatchPosition, sampleIndex));
+            HeitzSample2D(
+                dispatchPosition,
+                sampleIndex,
+                sampleSequencePhase));
         const float3 contribution = HeitzEvaluateNormalizedResponse(
             preparedMaterial,
             preparedSurface,

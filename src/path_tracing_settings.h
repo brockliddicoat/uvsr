@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 
@@ -28,9 +29,7 @@ namespace uvsr
     enum class PathTracingDenoiser : uint8_t
     {
         Raw,
-        StablePlaneResolve,
-        NrdReblur,
-        NrdRelax
+        SpatialPathResolve
     };
 
     enum class PathTracingDebugView : uint8_t
@@ -40,10 +39,12 @@ namespace uvsr
         GeometricNormal,
         ShadingNormal,
         SampleCount,
-        RetryProbability,
-        StablePlane,
+        UpdateRate,
+        SignalGroup,
         DirectReservoir,
-        IndirectReservoir
+        IndirectReservoir,
+        PrimaryTransport,
+        IndirectTransport
     };
 
     inline constexpr uint32_t PathTracingMinBounceCount = 1u;
@@ -64,6 +65,9 @@ namespace uvsr
     inline constexpr float PathTracingDefaultFireflyThreshold = 5.f;
     inline constexpr float PathTracingMinFireflyThreshold = 0.01f;
     inline constexpr float PathTracingMaxFireflyThreshold = 1000000.f;
+    inline constexpr float PathTracingDefaultSpatialResolveStrength = 1.f;
+    inline constexpr float PathTracingMinSpatialResolveStrength = 0.f;
+    inline constexpr float PathTracingMaxSpatialResolveStrength = 1.f;
 
     struct PathTracingSettings
     {
@@ -81,13 +85,22 @@ namespace uvsr
         bool reuseDirectReservoirs = false;
         bool reusePathReservoirs = false;
         bool reuseIndirectGiReservoirs = false;
+        // Camera motion may retain only proposal identities that are
+        // revalidated at the current pixel. Radiance means and RESTIR GI
+        // checkpoints always reset.
+        bool reuseRevalidatedProposalsDuringMotion = false;
 
         // Reconstruction controls consumed after raw transport completes.
-        uint32_t stablePlaneCount = 0u;
-        bool usePsr = false;
+        // One group filters the combined path. Two groups independently
+        // filter primary and indirect transport for every solver. The third
+        // RTX PT-only group separates diffuse and specular continuation.
+        uint32_t stablePlaneCount = 3u;
+        float spatialResolveStrength =
+            PathTracingDefaultSpatialResolveStrength;
         bool enableFireflyFilter = false;
         float fireflyThreshold = PathTracingDefaultFireflyThreshold;
-        PathTracingDenoiser denoiser = PathTracingDenoiser::Raw;
+        PathTracingDenoiser denoiser =
+            PathTracingDenoiser::SpatialPathResolve;
         PathTracingDebugView debugView = PathTracingDebugView::FinalImage;
     };
 
@@ -118,25 +131,26 @@ namespace uvsr
             (availabilityMask & (1u << variant)) != 0u;
     }
 
-    // UVSR's first stable-plane reconstruction stage is deliberately narrow:
-    // it consumes the un-resampled RTX PT decomposition only. ReSTIR
-    // candidates do not yet persist the winning path's plane identity, so
-    // filtering their mixed estimates would be an incorrect classification.
-    [[nodiscard]] constexpr bool IsStablePlaneResolveRequested(
+    [[nodiscard]] constexpr bool IsSpatialPathResolveRequested(
         const PathTracingSettings& settings) noexcept
     {
         return settings.denoiser ==
-                PathTracingDenoiser::StablePlaneResolve &&
+                PathTracingDenoiser::SpatialPathResolve &&
             settings.stablePlaneCount >= 1u;
     }
 
-    [[nodiscard]] constexpr bool CanUseStablePlaneResolve(
+    [[nodiscard]] constexpr bool CanUseSpatialPathResolve(
         const PathTracingSettings& settings,
         bool resolveSupported) noexcept
     {
+        // Candidate resampling keeps primary + solved-indirect transport
+        // additive, so one or two groups are valid for every solver. Only
+        // un-resampled RTX PT retains a trustworthy first-lobe identity for
+        // the three-group diffuse/specular split.
         return resolveSupported &&
-            settings.solver == PathTracingSolver::RtxPt &&
-            IsStablePlaneResolveRequested(settings);
+            IsSpatialPathResolveRequested(settings) &&
+            (settings.stablePlaneCount <= 2u ||
+                settings.solver == PathTracingSolver::RtxPt);
     }
 
     [[nodiscard]] constexpr PathTracingSettings
@@ -282,8 +296,8 @@ namespace uvsr
         switch (solver)
         {
         case PathTracingSolver::RtxPt: return "RTX PT";
-        case PathTracingSolver::RestirPt: return "ReSTIR PT";
-        case PathTracingSolver::RestirGi: return "ReSTIR GI";
+        case PathTracingSolver::RestirPt: return "RESTIR PT";
+        case PathTracingSolver::RestirGi: return "RESTIR GI";
         default: return "";
         }
     }
@@ -320,9 +334,7 @@ namespace uvsr
         switch (denoiser)
         {
         case PathTracingDenoiser::Raw:
-        case PathTracingDenoiser::StablePlaneResolve:
-        case PathTracingDenoiser::NrdReblur:
-        case PathTracingDenoiser::NrdRelax:
+        case PathTracingDenoiser::SpatialPathResolve:
             return true;
         default:
             return false;
@@ -335,10 +347,8 @@ namespace uvsr
         switch (denoiser)
         {
         case PathTracingDenoiser::Raw: return "Raw (No Denoising)";
-        case PathTracingDenoiser::StablePlaneResolve:
-            return "Stable Plane Resolve";
-        case PathTracingDenoiser::NrdReblur: return "NRD ReBLUR";
-        case PathTracingDenoiser::NrdRelax: return "NRD ReLAX";
+        case PathTracingDenoiser::SpatialPathResolve:
+            return "Spatial Path Resolve";
         default: return "";
         }
     }
@@ -353,10 +363,12 @@ namespace uvsr
         case PathTracingDebugView::GeometricNormal:
         case PathTracingDebugView::ShadingNormal:
         case PathTracingDebugView::SampleCount:
-        case PathTracingDebugView::RetryProbability:
-        case PathTracingDebugView::StablePlane:
+        case PathTracingDebugView::UpdateRate:
+        case PathTracingDebugView::SignalGroup:
         case PathTracingDebugView::DirectReservoir:
         case PathTracingDebugView::IndirectReservoir:
+        case PathTracingDebugView::PrimaryTransport:
+        case PathTracingDebugView::IndirectTransport:
             return true;
         default:
             return false;
@@ -374,13 +386,17 @@ namespace uvsr
             return "Geometric Normal";
         case PathTracingDebugView::ShadingNormal: return "Shading Normal";
         case PathTracingDebugView::SampleCount: return "Sample Count";
-        case PathTracingDebugView::RetryProbability:
-            return "Retry Probability";
-        case PathTracingDebugView::StablePlane: return "Stable Plane";
+        case PathTracingDebugView::UpdateRate:
+            return "Update Rate";
+        case PathTracingDebugView::SignalGroup: return "Signal Group";
         case PathTracingDebugView::DirectReservoir:
             return "Direct Reservoir";
         case PathTracingDebugView::IndirectReservoir:
             return "Indirect Reservoir";
+        case PathTracingDebugView::PrimaryTransport:
+            return "Primary Transport";
+        case PathTracingDebugView::IndirectTransport:
+            return "Indirect Transport";
         default: return "";
         }
     }
@@ -421,6 +437,7 @@ namespace uvsr
             settings.useRtxdi = false;
             settings.reuseDirectReservoirs = true;
             settings.reusePathReservoirs = true;
+            settings.stablePlaneCount = 2u;
             break;
 
         case PathTracingSolver::RestirGi:
@@ -430,6 +447,7 @@ namespace uvsr
             settings.useRtxdi = false;
             settings.reuseDirectReservoirs = true;
             settings.reuseIndirectGiReservoirs = true;
+            settings.stablePlaneCount = 2u;
             break;
 
         case PathTracingSolver::RtxPt:
@@ -457,8 +475,11 @@ namespace uvsr
             left.reusePathReservoirs == right.reusePathReservoirs &&
             left.reuseIndirectGiReservoirs ==
                 right.reuseIndirectGiReservoirs &&
+            left.reuseRevalidatedProposalsDuringMotion ==
+                right.reuseRevalidatedProposalsDuringMotion &&
             left.stablePlaneCount == right.stablePlaneCount &&
-            left.usePsr == right.usePsr &&
+            left.spatialResolveStrength ==
+                right.spatialResolveStrength &&
             left.enableFireflyFilter == right.enableFireflyFilter &&
             left.fireflyThreshold == right.fireflyThreshold &&
             left.denoiser == right.denoiser &&
@@ -484,6 +505,11 @@ namespace uvsr
             settings.neeCandidateCount >= PathTracingMinNeeCandidateCount &&
             settings.neeCandidateCount <= PathTracingMaxNeeCandidateCount &&
             settings.stablePlaneCount <= PathTracingMaxStablePlaneCount &&
+            IsFinitePathTracingFloat(settings.spatialResolveStrength) &&
+            settings.spatialResolveStrength >=
+                PathTracingMinSpatialResolveStrength &&
+            settings.spatialResolveStrength <=
+                PathTracingMaxSpatialResolveStrength &&
             IsFinitePathTracingFloat(settings.fireflyThreshold) &&
             settings.fireflyThreshold >= PathTracingMinFireflyThreshold &&
             settings.fireflyThreshold <= PathTracingMaxFireflyThreshold &&
@@ -516,6 +542,15 @@ namespace uvsr
             settings.stablePlaneCount,
             0u,
             PathTracingMaxStablePlaneCount);
+        if (!IsFinitePathTracingFloat(settings.spatialResolveStrength))
+        {
+            settings.spatialResolveStrength =
+                PathTracingDefaultSpatialResolveStrength;
+        }
+        settings.spatialResolveStrength = ClampPathTracingSetting(
+            settings.spatialResolveStrength,
+            PathTracingMinSpatialResolveStrength,
+            PathTracingMaxSpatialResolveStrength);
         if (!IsFinitePathTracingFloat(settings.fireflyThreshold))
             settings.fireflyThreshold = PathTracingDefaultFireflyThreshold;
         settings.fireflyThreshold = ClampPathTracingSetting(
@@ -525,39 +560,22 @@ namespace uvsr
 
         if (!IsValidPathTracingDenoiser(settings.denoiser))
             settings.denoiser = PathTracingDenoiser::Raw;
-        if (settings.denoiser == PathTracingDenoiser::StablePlaneResolve)
+        if (settings.denoiser == PathTracingDenoiser::SpatialPathResolve)
         {
             settings.stablePlaneCount = settings.stablePlaneCount == 0u
                 ? 1u
                 : settings.stablePlaneCount;
+            if (settings.solver != PathTracingSolver::RtxPt)
+            {
+                settings.stablePlaneCount = std::min(
+                    settings.stablePlaneCount,
+                    2u);
+            }
         }
         if (!IsValidPathTracingDebugView(settings.debugView))
             settings.debugView = PathTracingDebugView::FinalImage;
 
         return settings;
-    }
-
-    // A pixel with no successful samples is always attempted. Thereafter, the
-    // probability decreases harmonically while every success remains in the
-    // running mean, including successful black or miss samples.
-    [[nodiscard]] constexpr float GetAccumulationRetryProbability(
-        uint32_t successfulSampleCount) noexcept
-    {
-        return static_cast<float>(1.0 /
-            (static_cast<double>(successfulSampleCount) + 1.0));
-    }
-
-    [[nodiscard]] constexpr bool ShouldAttemptAccumulationSample(
-        uint32_t successfulSampleCount,
-        float unitVariate) noexcept
-    {
-        if (successfulSampleCount == 0u)
-            return true;
-
-        return IsFinitePathTracingFloat(unitVariate) &&
-            unitVariate >= 0.f && unitVariate < 1.f &&
-            unitVariate <
-                GetAccumulationRetryProbability(successfulSampleCount);
     }
 
     [[nodiscard]] constexpr uint32_t SaturatingIncrementSuccessfulSampleCount(

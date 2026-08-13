@@ -496,8 +496,11 @@ namespace uvsr
         constants.floatDepth = IsFloatingPointDepth(
             inputs.depth->getDesc().format) ? 1u : 0u;
         constants.useRatioEstimator = useRatioEstimator ? 1u : 0u;
-        constants.attemptMaskEnabled =
-            sampleSchedule.enabled && stochastic ? 1u : 0u;
+        constants.sampleSequenceMode = static_cast<uint32_t>(
+            ResolveLightingSampleSequenceMode(
+                sampleSchedule,
+                stochastic,
+                noiseSettings.animate));
         commandList->writeBuffer(
             m_ConstantBuffer, &constants, sizeof(constants));
 

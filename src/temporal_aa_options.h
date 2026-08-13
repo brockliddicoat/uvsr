@@ -109,7 +109,7 @@ namespace uvsr
     enum class TemporalAaDepthValidation : uint32_t
     {
         FourTexelFootprint,
-        MovingPoint,
+        NearestTexel,
         Count
     };
 
@@ -305,8 +305,8 @@ namespace uvsr
         AntiAliasingQuality quality = AntiAliasingQuality::Medium;
         TemporalAaCostMode costMode = TemporalAaCostMode::Reduced;
         TemporalAaJitterSequence jitterSequence =
-            TemporalAaJitterSequence::Halton23x16;
-        bool stationaryBypass = true;
+            TemporalAaJitterSequence::Halton23x8;
+        bool nearestTexelDepth = false;
         TemporalAaAlgorithmOverrides algorithmOverrides;
         TemporalAaBehaviorOverrides behaviorOverrides;
 
@@ -317,7 +317,7 @@ namespace uvsr
                 quality == other.quality &&
                 costMode == other.costMode &&
                 jitterSequence == other.jitterSequence &&
-                stationaryBypass == other.stationaryBypass &&
+                nearestTexelDepth == other.nearestTexelDepth &&
                 algorithmOverrides == other.algorithmOverrides &&
                 behaviorOverrides == other.behaviorOverrides;
         }
@@ -405,12 +405,12 @@ namespace uvsr
         TemporalAaCostMode temporalCostMode =
             TemporalAaCostMode::Reduced;
         TemporalAaJitterSequence temporalJitterSequence =
-            TemporalAaJitterSequence::Halton23x16;
+            TemporalAaJitterSequence::Halton23x8;
         TemporalAaOptions temporal;
         TemporalAaHistoryStorage historyStorage =
             TemporalAaHistoryStorage::Robust;
         TemporalAaDepthValidation depthValidation =
-            TemporalAaDepthValidation::MovingPoint;
+            TemporalAaDepthValidation::NearestTexel;
         TemporalAaHistoryWeightPolicy historyWeight =
             TemporalAaHistoryWeightPolicy::ConfidenceRecurrence;
         TemporalAaMotionTrust motionTrust =
@@ -418,7 +418,7 @@ namespace uvsr
         TemporalAaRectificationClip rectificationClip =
             TemporalAaRectificationClip::VelocityDilatedLine;
         TemporalAaBlendDomain blendDomain =
-            TemporalAaBlendDomain::LuminanceCompressed;
+            TemporalAaBlendDomain::LinearRgb;
         bool sharpeningAllowed = true;
         uint32_t historyFrames = 6u;
         float historyStrength = 1.f;
@@ -475,7 +475,7 @@ namespace uvsr
     {
         return value < TemporalAaJitterSequence::Count
             ? value
-            : TemporalAaJitterSequence::Halton23x16;
+            : TemporalAaJitterSequence::Halton23x8;
     }
 
     [[nodiscard]] inline constexpr Cmaa2EdgeDetector
@@ -922,8 +922,8 @@ namespace uvsr
             result.sharpeningAllowed = false;
         }
 
-        result.depthValidation = temporal.stationaryBypass
-            ? TemporalAaDepthValidation::MovingPoint
+        result.depthValidation = temporal.nearestTexelDepth
+            ? TemporalAaDepthValidation::NearestTexel
             : TemporalAaDepthValidation::FourTexelFootprint;
         result.temporal.motionSource = ResolveMotionSourceOverride(
             result.temporal.motionSource,
@@ -1007,7 +1007,7 @@ namespace uvsr
     {
         bool enabled = false;
         TemporalAaJitterSequence jitterSequence =
-            TemporalAaJitterSequence::Halton23x16;
+            TemporalAaJitterSequence::Halton23x8;
         TemporalAaOptions temporal;
         TemporalAaDepthValidation depthValidation =
             TemporalAaDepthValidation::FourTexelFootprint;
@@ -1018,7 +1018,7 @@ namespace uvsr
         TemporalAaRectificationClip rectificationClip =
             TemporalAaRectificationClip::VelocityDilatedLine;
         TemporalAaBlendDomain blendDomain =
-            TemporalAaBlendDomain::LuminanceCompressed;
+            TemporalAaBlendDomain::LinearRgb;
         uint32_t historyFrames = 0u;
         float historyStrength = 0.f;
 
@@ -1105,8 +1105,8 @@ namespace uvsr
         TemporalAaBlendDomain blendDomain)
     {
         return
-            (depthValidation == TemporalAaDepthValidation::MovingPoint
-                ? UVSR_TAA_BEHAVIOR_MOVING_POINT_DEPTH : 0u) |
+            (depthValidation == TemporalAaDepthValidation::NearestTexel
+                ? UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH : 0u) |
             (historyWeight ==
                     TemporalAaHistoryWeightPolicy::ImmediateHorizon
                 ? UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT : 0u) |

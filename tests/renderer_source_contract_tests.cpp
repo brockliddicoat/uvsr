@@ -1339,6 +1339,12 @@ int main(int argc, char** argv)
         flashlightReset,
         "m_FlashlightCollisionInitialized = false;",
         "flashlight collision cache reset");
+    passed &= ExpectContains(
+        flashlightReset,
+        "m_FlashlightMotionSettingsValid = false;\n"
+            "        m_FlashlightCameraPoseValid = false;\n"
+            "        m_FlashlightSubmittedPoseValid = false;",
+        "flashlight idle and submitted-pose cache reset");
     for (const std::string_view retiredState : {
             std::string_view("Receiver"),
             std::string_view("MountExtension"),
@@ -1360,6 +1366,11 @@ int main(int argc, char** argv)
         flashlightMotion,
         "if (!settings.realisticLens)",
         "simple flashlight camera-lock path");
+    passed &= ExpectOrdered(
+        flashlightMotion,
+        "if (!ShouldAdvanceFlashlightMotion(",
+        "ResolveFlashlightMountPose(",
+        "idle flashlight freezes before collision, aim correction, and sway");
     passed &= ExpectContains(
         flashlightMotion,
         "ResolveFlashlightMountPose(\n"
@@ -1490,9 +1501,26 @@ int main(int argc, char** argv)
         "flashlight shared resolved position");
     passed &= ExpectContains(
         flashlightTransform,
-        "SetFlashlightDirectionAndRoll(\n"
-            "            m_Flashlight,",
-        "single flashlight direction and roll publication");
+        "if (orientationChanged)\n"
+            "        {\n"
+            "            SetFlashlightDirectionAndRoll(\n"
+            "                m_Flashlight,",
+        "changed-only flashlight direction and roll publication");
+    passed &= ExpectOrdered(
+        flashlightTransform,
+        "const bool positionChanged =",
+        "m_Flashlight->SetPosition(",
+        "exact position comparison gates flashlight position publication");
+    passed &= ExpectOrdered(
+        flashlightTransform,
+        "if (orientationChanged)",
+        "SetFlashlightDirectionAndRoll(",
+        "exact orientation comparison gates flashlight rotation publication");
+    passed &= ExpectOrdered(
+        flashlightTransform,
+        "SetFlashlightDirectionAndRoll(",
+        "m_FlashlightSubmittedPoseValid = true;",
+        "submitted flashlight pose is cached only after publication");
 
     const std::string_view flashlightAttachment = ExtractSection(
         viewer,
@@ -1510,6 +1538,10 @@ int main(int argc, char** argv)
         flashlightAttachment,
         "m_FlashlightNode->SetName(FlashlightPublicName);",
         "public flashlight node identifier");
+    passed &= ExpectContains(
+        flashlightAttachment,
+        "m_FlashlightSubmittedPoseValid = false;",
+        "flashlight attachment invalidates submitted-pose identity");
     passed &= ExpectAbsent(
         viewer,
         "void RenderFlashlightShadow()",
@@ -1551,8 +1583,8 @@ int main(int argc, char** argv)
                 "m_RayTracedSkyVisibilityPass->Render(" },
             { "m_LightingAccumulationPass->PrepareAttempts(",
                 "m_ScreenSpaceVisibilityPass->Render(" },
-            { "antiAliasedTexture = m_TemporalAAPass->Render(",
-                "m_LightingAccumulationPass->Resolve(" } })
+            { "m_LightingAccumulationPass->Resolve(",
+                "antiAliasedTexture = m_TemporalAAPass->Render(" } })
     {
         passed &= ExpectOrdered(
             renderScene,
@@ -1562,11 +1594,74 @@ int main(int argc, char** argv)
     }
     passed &= ExpectContains(
         renderScene,
+        "m_LightingAccumulationSchedulingCycle,\n"
+            "                        m_LightingHistoryEpoch",
+        "ray accumulation uses its owned 64-bit committed scheduling cycle");
+    passed &= ExpectContains(
+        renderScene,
+        "lightingAccumulationResolvedThisFrame = true;\n"
+            "                ++m_LightingAccumulationSchedulingCycle;",
+        "only a committed ray accumulation frame advances adaptive scheduling");
+    passed &= ExpectOrdered(
+        viewer,
+        "void InvalidateLightingAccumulationHistory()",
+        "m_LightingAccumulationSchedulingCycle = 0u;",
+        "lighting history invalidation resets the owned scheduling cycle");
+    passed &= ExpectContains(
+        renderScene,
         "m_LightingAccumulationPass->Resolve(\n"
-            "                m_CommandList,\n"
-            "                antiAliasedTexture,\n"
-            "                lightingSampleSchedule);",
-        "ray-marching accumulation consumes the selected scene-linear source");
+            "                    m_CommandList,\n"
+            "                    sceneColor,\n"
+            "                    lightingSampleSchedule);",
+        "ray-marching accumulation consumes the raw scene-linear source");
+    passed &= ExpectContains(
+        renderScene,
+        "!pathTracingSelected &&\n"
+            "            !rayMarchingAccumulationOwnsTemporalHistory &&\n"
+            "            m_ui.UsesLongTermTemporalAA()",
+        "path tracing and ray accumulation both exclude TAA history ownership");
+    passed &= ExpectContains(
+        renderScene,
+        "const bool rayMarchingDenoisingAllowed =\n"
+            "                !rayMarchingAccumulationOwnsTemporalHistory;",
+        "ray-marching accumulation bypasses private denoiser history");
+    for (const std::string_view guardedDenoisingPath : {
+            std::string_view(
+                "rayMarchingDenoisingAllowed &&\n"
+                "                runScreenSpaceVisibility"),
+            std::string_view(
+                "rayMarchingDenoisingAllowed &&\n"
+                "                    flashlightShadowResult"),
+            std::string_view(
+                "rayMarchingDenoisingAllowed &&\n"
+                "                    heitzShadowResult"),
+            std::string_view(
+                "rayMarchingDenoisingAllowed &&\n"
+                "                    skyVisibilityResult") })
+    {
+        passed &= ExpectContains(
+            renderScene,
+            guardedDenoisingPath,
+            "accumulation-owned raw signal bypasses denoising");
+    }
+    passed &= ExpectContains(
+        renderScene,
+        "lightingAccumulationResolvedThisFrame &&\n"
+            "                antiAliasing.temporalEnabled",
+        "successful raw accumulation advances selected TAA jitter without "
+        "retaining TAA history");
+    passed &= ExpectContains(
+        renderScene,
+        "m_ui.ScreenSpaceVisibility.resolution !=\n"
+            "                        VisibilityResolution::Full",
+        "reduced-resolution visibility selects a footprint-coherent "
+        "accumulation schedule");
+    passed &= ExpectContains(
+        renderScene,
+        "effectiveAccumulation.scheduling =\n"
+            "                        SampleAccumulationScheduling::EveryPixel;",
+        "one reduced-resolution visibility sample cannot consume divergent "
+        "adaptive per-pixel phases");
     passed &= ExpectContains(
         renderScene,
         "!pathTracingSelected &&\n"
@@ -1624,8 +1719,31 @@ int main(int argc, char** argv)
         "full scheduling serial low word");
     passed &= ExpectContains(
         lightingAccumulationPrepareShader,
-        "g_Accumulation.schedulingSerialHigh",
-        "full scheduling serial high word");
+        "g_Accumulation.schedulingSerialHigh % interval",
+        "full 64-bit ray accumulation scheduling serial modulo");
+    passed &= ExpectContains(
+        lightingAccumulationPrepareShader,
+        "(previousCount % updateInterval) * coverageStep",
+        "successful samples decorrelate adaptive revisits from cyclic TAA "
+        "jitter");
+    passed &= ExpectContains(
+        lightingAccumulationPrepareShader,
+        "((updateInterval & 1u) == 0u ? 1u : 0u)",
+        "adaptive revisit stride stays odd without oversampling odd intervals");
+    passed &= ExpectContains(
+        lightingAccumulationPrepareShader,
+        "min(previousCount, 0xfffffffeu) + 1u",
+        "attempt mask encodes each accepted pixel's successful-sample phase");
+    passed &= ExpectContains(
+        lightingAccumulation,
+        "nvrhi::Format::R32_UINT,\n"
+            "            \"Lighting Sample Attempt Mask\"",
+        "active attempt tokens retain the full successful-sample index");
+    passed &= ExpectContains(
+        lightingAccumulation,
+        "nvrhi::Format::R32_UINT,\n"
+            "            \"Disabled Lighting Sample Attempt Mask\"",
+        "disabled and active attempt masks share one full-width token format");
     passed &= ExpectContains(
         lightingAccumulationPrepareShader,
         "Texture2D<float4> t_PreviousMean",
@@ -1644,12 +1762,12 @@ int main(int argc, char** argv)
         "reduced-resolution attempt-footprint column OR");
     passed &= ExpectContains(
         flashlightShadowShader,
-        "g_FlashlightShadows.attemptMaskEnabled != 0u",
+        "sampleScheduleEnabled",
         "finite-emitter flashlight sample attempt gate");
     passed &= ExpectContains(
         flashlightShadowPass,
-        "sampleSchedule.enabled && stochastic ? 1u : 0u",
-        "deterministic flashlight shadow ignores attempt mask");
+        "ResolveLightingSampleSequenceMode(",
+        "deterministic and stochastic flashlight shadows share adaptive work gating");
     passed &= ExpectContains(
         flashlightShadowPass,
         "m_BoundAttemptMask == attemptMask",
@@ -1690,6 +1808,23 @@ int main(int argc, char** argv)
             "            worldRepresentationReady",
         "unsupported scene domains cannot dispatch partial path transport");
     passed &= ExpectContains(
+        renderScene,
+        "pathInputs.previousView =\n"
+            "                m_LightingHistoryChangedByViewOnly && m_PreviousView\n"
+            "                ? m_PreviousView.get()\n"
+            "                : nullptr;",
+        "camera-only path resets receive the exact previous nonjittered view");
+    passed &= ExpectOrdered(
+        renderScene,
+        "pathInputs.previousView =",
+        "pathTracingResult = m_PathTracingPass->Render(",
+        "previous-view reprojection input precedes path transport dispatch");
+    passed &= ExpectContains(
+        renderScene,
+        "if (m_RenderTargets->MotionVectorsEnabled || pathTracingSelected)\n"
+            "            CaptureCurrentViewForMotionVectors();",
+        "path tracing captures a prior view without requiring raster motion-vector resources");
+    passed &= ExpectContains(
         viewer,
         "Path transport unavailable for transmissive, hair,",
         "pathing drawer explains strict scene-domain fallback");
@@ -1707,7 +1842,7 @@ int main(int argc, char** argv)
         "stable-plane resolve production translation unit");
     passed &= ExpectContains(
         viewer,
-        "m_PathTracingPass->SetStablePlaneResolveSupported(\n"
+        "m_PathTracingPass->SetSpatialPathResolveSupported(\n"
             "            m_PathTracingStablePlaneResolvePass->IsSupported());",
         "app-composed stable signal and resolve pipeline capability");
     passed &= ExpectOrdered(
@@ -1724,6 +1859,15 @@ int main(int argc, char** argv)
         renderScene,
         "pathTracingResult.signalEpoch == m_LightingHistoryEpoch",
         "stable resolve rejects transport signals from another history epoch");
+    passed &= ExpectContains(
+        renderScene,
+        "resolveInputs.colorVariance = pathTracingResult.colorVariance;",
+        "spatial path resolve consumes the estimator variance signal");
+    passed &= ExpectContains(
+        renderScene,
+        "resolveInputs.successfulSampleCount =\n"
+            "                pathTracingResult.successfulSampleCount;",
+        "spatial path resolve consumes exact per-pixel confidence counts");
     passed &= ExpectContains(
         renderScene,
         "pathTracingResult.stablePlaneResolveActive =\n"
@@ -1800,6 +1944,10 @@ int main(int argc, char** argv)
         synchronizeLightingHistory,
         "HashLightingHistoryValue(signature, flashlightProfile);",
         "retained lighting tracks the resolved flashlight beam profile");
+    passed &= ExpectContains(
+        synchronizeLightingHistory,
+        "signature, flashlight.stationaryWhenIdle",
+        "retained lighting tracks the flashlight idle-lock setting");
     passed &= ExpectOrdered(
         synchronizeLightingHistory,
         "LightConstants constants;",
@@ -1817,12 +1965,27 @@ int main(int argc, char** argv)
         "ray-marching accumulation history compatibility scope");
     passed &= ExpectContains(
         synchronizeLightingHistory,
-        "antiAliasing.temporal.currentReconstruction",
-        "ray-marching accumulation tracks resolved temporal reconstruction");
+        "antiAliasing.temporalJitterSequence",
+        "ray-marching accumulation tracks its raw raster jitter sequence");
     passed &= ExpectContains(
         synchronizeLightingHistory,
         "signature, antiAliasing.rasterSampleCount",
         "ray-marching accumulation tracks its raster source sample count");
+    passed &= ExpectAbsent(
+        synchronizeLightingHistory,
+        "pathing.spatialResolveStrength",
+        "presentation-only resolve strength must not invalidate transport history");
+    passed &= ExpectAbsent(
+        synchronizeLightingHistory,
+        "pathing.stablePlaneCount",
+        "active spatial signal grouping must re-resolve existing transport history");
+    passed &= ExpectContains(
+        renderScene,
+        "resolveInputs.accumulationAveraging =\n"
+            "                resolveAccumulation.averaging;\n"
+            "            resolveInputs.accumulationEffectiveHistory =\n"
+            "                resolveAccumulation.effectiveHistory;",
+        "Spatial Path Resolve receives the accumulation policy for effective-sample confidence");
     for (const std::string_view requiredHistoryInput : {
             std::string_view("worldStatus->contentRevision"),
             std::string_view("hashNoiseSettings(visibilityNoiseSettings);"),

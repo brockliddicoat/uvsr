@@ -123,11 +123,11 @@ namespace
     {
         RequireContains(
             settings,
-            "boolenabled=false;boolapplytodiffuseibl=true;"
+            "boolenabled=true;boolapplytodiffuseibl=true;"
                 "boolapplytospecularibl=true;booluseratioestimator=true;"
-                "booloutputhitdistance=false;int32_tsampleratelog2=0;"
+                "booloutputhitdistance=false;int32_tsampleratelog2=1;"
                 "floatraybias=0.002f;",
-            "sky visibility must default disabled, apply to both IBL lobes, retain the ratio estimator, and avoid hit output");
+            "sky visibility must default enabled at two samples, apply to both IBL lobes, retain the ratio estimator, and avoid hit output");
         RequireContains(
             settings,
             "rayvisibilitymaxdistancemaxdistance="
@@ -186,7 +186,7 @@ namespace
                 "floatraybias;",
                 "uintreversedepth;",
                 "uintfloatdepth;",
-                "uintattemptmaskenabled;"
+                "uintsamplesequencemode;"
             },
             "the producer constant block must carry only current-frame query state");
 
@@ -381,9 +381,15 @@ namespace
             "the producer shader must consume packed material normals");
         RequireContains(
             shader,
-            "if(g_skyvisibility.attemptmaskenabled!=0u&&"
-                "t_attemptmask[pixelposition]==0u){return;}",
+            "if(samplescheduleenabled&&attempttoken==0u){return;}",
             "the sample mask must exit before sky surface and ray work");
+        RequireContains(
+            shader,
+            "constuintsamplesequencephase="
+                "uvsrresolvesamplesequencephase("
+                "g_skyvisibility.samplesequencemode,attempttoken,"
+                "g_skyvisibility.samplesequencephase);",
+            "sky samples must consume the accepted pixel's successful-sample phase");
         RequireContains(
             shader,
             "texture2d<float4>t_gbuffernormals:register(t3);",
@@ -534,7 +540,8 @@ namespace
                 "for(uintsampleindex=0u;sampleindex<samplecount;"
                     "++sampleindex)",
                 "skyvisibilitysamplecosinehemisphere(",
-                "skyvisibilitysample2d(dispatchposition,sampleindex)",
+                "skyvisibilitysample2d(dispatchposition,sampleindex,"
+                    "samplesequencephase)",
                 "if(skyvisibilitytrace(rayorigin,direction,hitdistance))",
                 "++visiblesamplecount;",
                 "elsenearesthitdistance=min(nearesthitdistance,hitdistance);",
@@ -627,8 +634,10 @@ namespace
                 "!pathtracingselected&&"
                 "m_ui.representation.allowraytraversal&&"
                 "m_ui.raytracedskyvisibility.enabled&&"
-                "hasraytracedskyvisibilityconsumer("
-                    "m_ui.raytracedskyvisibility)&&"
+                "(hasraytracedskyvisibilityconsumer("
+                    "m_ui.raytracedskyvisibility)||"
+                "m_ui.lightingdebugview=="
+                    "pbrlightingdebugview::skyvisibility)&&"
                 "supportsraytracedskyvisibility();",
             "sky visibility must stay on the Ray Marching solution and select "
             "world representation through the shared ray traversal gate");
@@ -659,9 +668,11 @@ namespace
                 "m_raytracedskyvisibilitypass&&"
                 "m_raytracedskyvisibilitypass->issupported()&&"
                 "worldrepresentationready&&"
-                "(skyvisibilitydiffuseiblavailable||"
+                "(m_ui.lightingdebugview=="
+                    "pbrlightingdebugview::skyvisibility||"
+                    "skyvisibilitydiffuseiblavailable||"
                     "skyvisibilityspeculariblavailable);",
-            "sky queries must run only for an available selected IBL consumer");
+            "sky queries must run for either a selected debug view or an available IBL consumer");
         RequireContains(
             viewer,
             "constboolskyvisibilitydiffuseiblavailable="
@@ -794,10 +805,12 @@ namespace
             RequireOrdered(
                 *shader,
                 {
+                    "constboolshowskyvisibility=",
                     "constboolapplyskyvisibilitytodiffuseibl=",
                     "constboolapplyskyvisibilitytospecularibl=",
-                    "if((needdiffuseenvironment&&"
-                        "applyskyvisibilitytodiffuseibl)||",
+                    "if(showskyvisibility||"
+                        "applyskyvisibilitytodiffuseibl||"
+                        "applyskyvisibilitytospecularibl)",
                     "constfloatsampledskyvisibility="
                         "t_skyvisibility[pixelposition];",
                     "skyvisibility=isfinite(sampledskyvisibility)?"
@@ -937,8 +950,9 @@ namespace
             deferredPass,
             "constboolhasskyvisibilityconsumer="
                 "applyskyvisibilitytodiffuseibl||"
-                "applyskyvisibilitytospecularibl;",
-            "deferred lighting must accept either or both IBL consumers");
+                "applyskyvisibilitytospecularibl||"
+                "lightingdebugview==12u;",
+            "deferred lighting must accept either IBL consumer or the sky debug view");
         RequireContains(
             deferredPass,
             "nvrhi::itexture*activeskyvisibility="

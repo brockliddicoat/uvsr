@@ -8,6 +8,7 @@
 #include "ray_traced_material_visibility.hlsli"
 #include "ray_traced_flashlight_shadows_cb.h"
 #include "ray_traced_flashlight_shadows_shared.h"
+#include "sample_accumulation.hlsli"
 
 cbuffer c_FlashlightShadows : register(b0)
 {
@@ -121,7 +122,8 @@ float3 FlashlightShadowPrepareRayOrigin(
 
 RayTracedFlashlightShadowEncoding FlashlightShadowEvaluate(
     int2 pixelPosition,
-    uint2 dispatchPosition)
+    uint2 dispatchPosition,
+    uint sampleSequencePhase)
 {
     const float4 normalChannels = t_GBufferNormals[pixelPosition];
     if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
@@ -187,14 +189,14 @@ RayTracedFlashlightShadowEncoding FlashlightShadowEvaluate(
                 g_FlashlightShadows.noisePattern,
                 dispatchPosition,
                 dispatchExtent,
-                g_FlashlightShadows.sampleSequencePhase,
+                sampleSequencePhase,
                 0x400u),
             UVSRSamplePrecomputedNoise(
                 t_Noise,
                 g_FlashlightShadows.noisePattern,
                 dispatchPosition,
                 dispatchExtent,
-                g_FlashlightShadows.sampleSequencePhase,
+                sampleSequencePhase,
                 0x401u));
     }
 
@@ -263,13 +265,25 @@ void GenerateVisibility(uint2 dispatchPosition : SV_DispatchThreadID)
         return;
     const int2 pixelPosition =
         FlashlightShadowPixelPosition(dispatchPosition);
-    if (g_FlashlightShadows.attemptMaskEnabled != 0u &&
-        t_AttemptMask[pixelPosition] == 0u)
+    const bool sampleScheduleEnabled = UvsrSampleScheduleEnabled(
+        g_FlashlightShadows.sampleSequenceMode);
+    const uint attemptToken =
+        sampleScheduleEnabled
+            ? t_AttemptMask[pixelPosition]
+            : 0u;
+    if (sampleScheduleEnabled && attemptToken == 0u)
     {
         return;
     }
+    const uint sampleSequencePhase = UvsrResolveSampleSequencePhase(
+        g_FlashlightShadows.sampleSequenceMode,
+        attemptToken,
+        g_FlashlightShadows.sampleSequencePhase);
     const RayTracedFlashlightShadowEncoding result =
-        FlashlightShadowEvaluate(pixelPosition, dispatchPosition);
+        FlashlightShadowEvaluate(
+            pixelPosition,
+            dispatchPosition,
+            sampleSequencePhase);
     u_Visibility[pixelPosition] = result.visibility;
 }
 
@@ -281,13 +295,25 @@ void GenerateVisibilityAndHitDistance(
         return;
     const int2 pixelPosition =
         FlashlightShadowPixelPosition(dispatchPosition);
-    if (g_FlashlightShadows.attemptMaskEnabled != 0u &&
-        t_AttemptMask[pixelPosition] == 0u)
+    const bool sampleScheduleEnabled = UvsrSampleScheduleEnabled(
+        g_FlashlightShadows.sampleSequenceMode);
+    const uint attemptToken =
+        sampleScheduleEnabled
+            ? t_AttemptMask[pixelPosition]
+            : 0u;
+    if (sampleScheduleEnabled && attemptToken == 0u)
     {
         return;
     }
+    const uint sampleSequencePhase = UvsrResolveSampleSequencePhase(
+        g_FlashlightShadows.sampleSequenceMode,
+        attemptToken,
+        g_FlashlightShadows.sampleSequencePhase);
     const RayTracedFlashlightShadowEncoding result =
-        FlashlightShadowEvaluate(pixelPosition, dispatchPosition);
+        FlashlightShadowEvaluate(
+            pixelPosition,
+            dispatchPosition,
+            sampleSequencePhase);
     u_Visibility[pixelPosition] = result.visibility;
     u_HitDistance[pixelPosition] = result.hitDistance;
 }

@@ -449,7 +449,11 @@ namespace uvsr
         constants.reverseDepth = view.IsReverseDepth() ? 1u : 0u;
         constants.floatDepth = IsFloatingPointDepth(
             inputs.depth->getDesc().format) ? 1u : 0u;
-        constants.attemptMaskEnabled = sampleSchedule.enabled ? 1u : 0u;
+        constants.sampleSequenceMode = static_cast<uint32_t>(
+            ResolveLightingSampleSequenceMode(
+                sampleSchedule,
+                true,
+                noiseSettings.animate));
         commandList->writeBuffer(
             m_ConstantBuffer, &constants, sizeof(constants));
 

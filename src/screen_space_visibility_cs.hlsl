@@ -6,6 +6,7 @@
 #include "visibility_projection_shared.h"
 #include "screen_space_visibility_cb.h"
 #include "noise_sampling.hlsli"
+#include "sample_accumulation.hlsli"
 
 #ifndef VISIBILITY_ESTIMATOR
 #define VISIBILITY_ESTIMATOR 0
@@ -143,26 +144,32 @@ uint2 SamplingToFullPixel(uint2 samplingPixel)
     return min(samplingPixel * scale + scale / 2u, fullSize - 1u);
 }
 
-bool VisibilitySamplingFootprintRequested(uint2 samplingPixel)
+uint VisibilitySamplingFootprintAttemptToken(uint2 samplingPixel)
 {
-    if (g_Visibility.attemptMaskEnabled == 0u)
-        return true;
+    if (!UvsrSampleScheduleEnabled(g_Visibility.sampleSequenceMode))
+        return 0u;
 
     const uint scale = max(g_Visibility.resolutionScale, 1u);
     const uint2 fullSize = uint2(g_Visibility.fullResolution);
     const uint2 footprintBegin = samplingPixel * scale;
     const uint2 footprintEnd = min(footprintBegin + scale, fullSize);
+    uint selectedToken = 0u;
     [loop]
     for (uint y = footprintBegin.y; y < footprintEnd.y; ++y)
     {
         [loop]
         for (uint x = footprintBegin.x; x < footprintEnd.x; ++x)
         {
-            if (t_AttemptMask[uint2(x, y)] != 0u)
-                return true;
+            const uint token = t_AttemptMask[uint2(x, y)];
+            if (token != 0u)
+            {
+                selectedToken = selectedToken == 0u
+                    ? token
+                    : min(selectedToken, token);
+            }
         }
     }
-    return false;
+    return selectedToken;
 }
 
 float ProgressiveRadialSample(uint radialStratum, float rotation)
@@ -379,7 +386,10 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 {
     if (any(dispatchPixel >= uint2(g_Visibility.samplingResolution)))
         return;
-    if (!VisibilitySamplingFootprintRequested(dispatchPixel))
+    const uint attemptToken =
+        VisibilitySamplingFootprintAttemptToken(dispatchPixel);
+    if (UvsrSampleScheduleEnabled(g_Visibility.sampleSequenceMode) &&
+        attemptToken == 0u)
         return;
 
     uint2 receiverPixel = SamplingToFullPixel(dispatchPixel);
@@ -463,7 +473,10 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         return;
     }
 
-    uint phase = g_Visibility.sampleSequencePhase;
+    uint phase = UvsrResolveSampleSequencePhase(
+        g_Visibility.sampleSequenceMode,
+        attemptToken,
+        g_Visibility.sampleSequencePhase);
 #if RUNTIME_SAMPLE_PARITY > 0
     // The CPU clamps the count and selects a parity-matched shader. Keeping the
     // number in the cbuffer permits every 1-64 slider value to share one of two

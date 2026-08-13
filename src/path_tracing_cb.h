@@ -11,6 +11,7 @@
 #define UVSR_PATH_TRACING_FLAG_REUSE_DIRECT (1u << 2u)
 #define UVSR_PATH_TRACING_FLAG_REPLAY_PATH_SEEDS (1u << 3u)
 #define UVSR_PATH_TRACING_FLAG_WRITE_STABLE_SIGNALS (1u << 4u)
+#define UVSR_PATH_TRACING_FLAG_ANIMATE_HISTORY_RESET (1u << 5u)
 #define UVSR_PATH_TRACING_FLAG_FILTER_FIREFLIES (1u << 6u)
 #define UVSR_PATH_TRACING_FLAG_REVERSE_DEPTH (1u << 7u)
 #define UVSR_PATH_TRACING_FLAG_SHOW_ENVIRONMENT_BACKGROUND (1u << 9u)
@@ -20,6 +21,7 @@
 struct PathTracingConstants
 {
     PlanarViewConstants view;
+    PlanarViewConstants previousView;
     FlashlightBeamProfileBinding flashlight;
 
     float environmentScale;
@@ -42,7 +44,7 @@ struct PathTracingConstants
     uint schedulingSerialLow;
 
     uint schedulingSerialHigh;
-    uint schedulingPadding0;
+    uint previousViewValid;
     uint schedulingPadding1;
     uint schedulingPadding2;
 
@@ -50,6 +52,15 @@ struct PathTracingConstants
 
     uint2 schedulingGrid;
     uint2 schedulingPhase;
+
+    uint accumulationAveraging;
+    uint accumulationScheduling;
+    uint accumulationEffectiveHistory;
+    uint accumulationMinimumSamples;
+
+    float accumulationTargetRelativeError;
+    float accumulationMinimumUpdateRate;
+    uint2 accumulationPadding;
 };
 
 #endif // UVSR_PATH_TRACING_CB_H

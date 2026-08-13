@@ -137,7 +137,9 @@ cbuffer CB1 : register(b1)
     // out-of-bounds reprojection.
     float MaximumHistoryWeight;
     uint TemporalBehaviorFlags;
-    uint TemporalBehaviorPadding;
+    // Bit 0: current depth passed through FP16 LDS. Bit 1: persistent history
+    // depth uses R16_FLOAT. Robust history sets neither bit.
+    uint DepthStorageFlags;
 }
 
 struct MotionSelection
@@ -926,22 +928,6 @@ float GetCurrentReconstructionDepthSupport(
     return min(min(xSupport, ySupport), diagonalSupport);
 }
 
-float HistoryDepthFootprintCoherence(
-    UvsrTemporalReverseZFootprint footprint)
-{
-    float valid =
-        UvsrTemporalFootprintHasConsistentGeometry(footprint);
-    float nearestViewDepth =
-        LinearViewDepth(footprint.nearestValidDeviceDepth);
-    float farthestViewDepth =
-        LinearViewDepth(footprint.farthestValidDeviceDepth);
-    float relativeRange =
-        abs(farthestViewDepth - nearestViewDepth) /
-        max(nearestViewDepth, 1e-3);
-    return valid *
-        (1.0 - smoothstep(0.005, 0.05, relativeRange));
-}
-
 float HistoryTapDepthCoherence(
     float2 historyColorPixel,
     float expectedDeviceDepth,
@@ -961,6 +947,10 @@ float HistoryTapDepthCoherence(
         STtoUV(historyDepthPixel));
     UvsrTemporalReverseZFootprint tapFootprint =
         UvsrTemporalReduceReverseZFootprint(tapDeviceDepths);
+    float filteredTapDeviceDepth = PreDepth.SampleLevel(
+        LinearSampler,
+        STtoUV(historyDepthPixel),
+        0.0);
     float valid =
         expectedDepthValid *
         HistoryPositionInBounds(historyColorPixel) *
@@ -978,9 +968,10 @@ float HistoryTapDepthCoherence(
             quantizedDeviceDepthDelta,
             SourceDepthPairQuantizationError,
             tapFootprint,
+            filteredTapDeviceDepth,
+            DepthStorageFlags,
             Projection,
             1e-3) *
-        HistoryDepthFootprintCoherence(tapFootprint) *
         (1.0 - smoothstep(0.005, 0.05, relativeDifference));
 }
 
@@ -1455,7 +1446,8 @@ void ApplyTemporalBlend(
         UvsrTemporalDeviceDepthPrecisionValidity(
             expectedPreviousDeviceDepth,
             motion.velocity.z,
-            SourceDepthPairQuantizationError);
+            SourceDepthPairQuantizationError,
+            DepthStorageFlags);
     float velocitySquared =
         dot(motion.velocity.xy, motion.velocity.xy);
     float speedFactor = TemporalBehaviorEnabled(
@@ -1492,41 +1484,26 @@ void ApplyTemporalBlend(
     float reprojectionAcceptance = 0.0;
     [branch]
     if (TemporalBehaviorEnabled(
-            UVSR_TAA_BEHAVIOR_MOVING_POINT_DEPTH))
+            UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH))
     {
-        const bool stationary =
-            velocitySquared <= 1e-4 &&
-            abs(motion.velocity.z) <= 1e-6;
-        if (stationary)
-        {
-            // Minimum's strongest stability trade: a nominally stationary
-            // silhouette keeps history instead of allowing projection jitter
-            // to alternate a four-texel footprint between geometry and clear.
-            reprojectionAcceptance = 1.0;
-        }
-        else
-        {
-            int2 depthPixel = clamp(
-                int2(floor(historyDepthPixel + 0.5)),
-                int2(0, 0),
-                int2(BufferDim) - 1);
-            float previousDeviceDepth =
-                PreDepth.Load(int3(depthPixel, 0));
-            float depthTolerance = max(
-                max(5e-4, SourceDepthPairQuantizationError),
-                max(
-                    abs(previousDeviceDepth),
-                    abs(expectedPreviousDeviceDepth)) *
-                    0.01);
-            reprojectionAcceptance =
-                UvsrTemporalDeviceDepthValidity(
-                    previousDeviceDepth) *
-                float(
-                    abs(
-                        previousDeviceDepth -
-                        expectedPreviousDeviceDepth) <=
-                    depthTolerance);
-        }
+        // The reduced-cost mode validates one nearest previous-depth texel.
+        // It must never turn nominally stationary motion into unconditional
+        // history acceptance: projection jitter moves silhouette footprints
+        // even when the scene-space motion vector is zero.
+        int2 depthPixel = clamp(
+            int2(floor(historyDepthPixel + 0.5)),
+            int2(0, 0),
+            int2(BufferDim) - 1);
+        float previousDeviceDepth =
+            PreDepth.Load(int3(depthPixel, 0));
+        reprojectionAcceptance = UvsrTemporalDeviceDepthAccepted(
+            expectedPreviousDeviceDepth,
+            motion.velocity.z,
+            SourceDepthPairQuantizationError,
+            previousDeviceDepth,
+            DepthStorageFlags,
+            Projection,
+            1e-3);
     }
     else
     {
@@ -1537,17 +1514,18 @@ void ApplyTemporalBlend(
         UvsrTemporalReverseZFootprint historyDepthFootprint =
             UvsrTemporalReduceReverseZFootprint(
                 historyDeviceDepths);
-#if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_FIVE_TAP_CATMULL_ROM || \
-    TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_NINE_TAP_CATMULL_ROM
-        historyDepthSupport = HistoryDepthFootprintCoherence(
-            historyDepthFootprint);
-#endif
+        float filteredPreviousDeviceDepth = PreDepth.SampleLevel(
+            LinearSampler,
+            STtoUV(historyDepthPixel),
+            0.0);
         reprojectionAcceptance =
             UvsrTemporalDepthAccepted(
                 expectedPreviousDeviceDepth,
                 motion.velocity.z,
                 SourceDepthPairQuantizationError,
                 historyDepthFootprint,
+                filteredPreviousDeviceDepth,
+                DepthStorageFlags,
                 Projection,
                 1e-3);
     }

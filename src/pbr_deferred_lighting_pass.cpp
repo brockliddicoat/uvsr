@@ -542,7 +542,8 @@ void PbrDeferredLightingPass::Render(
         directLightVisibilities.sun);
     const bool hasSkyVisibilityConsumer =
         applySkyVisibilityToDiffuseIbl ||
-        applySkyVisibilityToSpecularIbl;
+        applySkyVisibilityToSpecularIbl ||
+        lightingDebugView == 12u;
     nvrhi::ITexture* activeSkyVisibility =
         hasSkyVisibilityConsumer &&
         IsSkyVisibilityTextureCompatible(skyVisibility, inputs)
@@ -564,7 +565,9 @@ void PbrDeferredLightingPass::Render(
             ? (applySkyVisibilityToSpecularIbl
                 ? UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL
                 : UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL)
-            : UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL)
+            : (applySkyVisibilityToSpecularIbl
+                ? UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL
+                : UVSR_SKY_VISIBILITY_APPLY_NEITHER))
         : UVSR_SKY_VISIBILITY_APPLY_NEITHER;
     constants.directVisibilityLightIndices = int2(-1);
     constants.directVisibilityEncodings = uint2(
