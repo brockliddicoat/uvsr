@@ -409,11 +409,51 @@ namespace
         RequireOrdered(
             pathingDrawer,
             {
-                "RTXDI Reservoir Stages",
-                "Reuse Validated RESTIR Proposals During Motion",
-                "Means and RESTIR GI reset."
+                "SetNextLabeledControlWidth(",
+                "Solver Preset##PathTracingSolver",
+                "Next Event Estimation##PathTracingNee",
+                "Light Candidates",
+                "Samples",
+                "Max Bounces",
+                "Spatial Neighbors",
+                "Russian Roulette",
+                "Shared Primary Surface",
+                "Shader Execution Reordering",
+                "Light Reservoir",
+                "Temporal Reuse",
+                "Motion Reuse",
+                "means still reset."
             },
-            "selective camera-motion proposal reuse control and safety copy");
+            "side-labeled path selectors, grouped sliders, and grouped toggles");
+        for (const std::string_view retiredPathingLabel : {
+                std::string_view("Next-Event Estimation"),
+                std::string_view("NEE Candidates"),
+                std::string_view("RTXDI Reservoir Stages"),
+                std::string_view("ReSTIR Resampling") })
+        {
+            RequireAbsent(
+                pathingDrawer,
+                retiredPathingLabel,
+                "retired Pathing label or standalone section header");
+        }
+        const std::string_view solverSelector = ExtractSection(
+            pathingDrawer,
+            "Solver Preset##PathTracingSolver",
+            "Next Event Estimation##PathTracingNee",
+            "Pathing solver selector");
+        RequireAbsent(
+            solverSelector,
+            "ImGui::TextDisabled(",
+            "gray solver explanation below the selector");
+        Require(
+            CountOccurrences(
+                pathingDrawer,
+                "SetNextLabeledControlWidth(") == 2u,
+            "both Pathing dropdowns must use the canonical compact labeled-row width helper.");
+        RequireAbsent(
+            pathingDrawer,
+            "ImGui::SetNextItemWidth(-FLT_MIN)",
+            "full-width Pathing dropdown");
 
         struct Drawer
         {
@@ -692,30 +732,43 @@ namespace
         const std::string_view representationStatus = ExtractSection(
             representation,
             "const char* representationState = \"Inactive\";",
-            "if (representationStatus.totalBlasCount > 0u)",
+            "if (BeginAnimatedTreeNode(",
             "Representation status presentation");
         RequireOrdered(
             representationStatus,
             {
                 "case WorldSpaceRepresentationState::Idle:",
                 "default:",
-                "if (representationStatus.state ==",
-                "WorldSpaceRepresentationState::Idle)",
-                "ImGui::TextDisabled(\"Status: Inactive\");",
+                "if (!representation.allowRayTraversal)",
+                "ImGui::TextDisabled(\"Status: Ray traversal disabled\");",
                 "else",
-                "ImGui::Text(\"Status: %s\", representationState);"
+                "ImGui::TextDisabled(\"Status: %s\", representationState);"
             },
-            "only the idle Representation state uses disabled status text");
-        Require(
-            CountOccurrences(
-                representationStatus,
-                "ImGui::TextDisabled(\"Status: Inactive\");") == 1u &&
-                CountOccurrences(
-                    representationStatus,
-                    "ImGui::Text(\"Status: %s\", representationState);") ==
-                    1u,
-            "Representation must keep one idle-only disabled status and one "
-            "ordinary presentation for every non-idle state.");
+            "subdued Representation status with master-toggle precedence");
+        RequireAbsent(
+            representationStatus,
+            "ImGui::Text(\"Status:",
+            "ordinary-color Representation status");
+        RequireAbsent(
+            representation,
+            "BLAS %u/%u  |  TLAS Instances %u",
+            "persistent acceleration-structure count row");
+        RequireOrdered(
+            representation,
+            {
+                "Bounding Volume Hierarchy##Representation",
+                "Bottom Level Acceleration Structures##Representation",
+                "Top Level Acceleration Structure##Representation"
+            },
+            "unhyphenated Representation section labels");
+        RequireAbsent(
+            representation,
+            "Bottom-Level",
+            "hyphenated Bottom Level label");
+        RequireAbsent(
+            representation,
+            "Top-Level",
+            "hyphenated Top Level label");
         RequireAbsent(
             representation,
             "Builds lazily when a ray traced technique needs it.",
@@ -850,10 +903,14 @@ namespace
             accumulationControls,
             "ReconcileSampleAccumulationPreset",
             "removed automatic accumulation-preset reconciliation");
-        RequireContains(
+        RequireAbsent(
             accumulationControls,
             "Warmup %u / %.2f%% error / >=%.2f%% updates / %s",
-            "live variance-guided accumulation summary");
+            "redundant live variance-guided accumulation summary");
+        RequireAbsent(
+            accumulationControls,
+            "Every pixel / %s",
+            "redundant every-pixel accumulation summary");
         RequireContains(
             accumulationControls,
             "deterministic bounded revisits after ",
@@ -1205,6 +1262,29 @@ namespace
             "\"##PathTracingDenoisingBody\"",
             "EndDrawerBody();",
             "Path Tracing Denoising body");
+        RequireOrdered(
+            pathDenoising,
+            {
+                "SetNextLabeledControlWidth(",
+                "Method##PathTracingDenoiser",
+                "BeginRoundedCombo(",
+                "##PathTracingSpatialResolveControls",
+                "spatialResolveSelected",
+                "##PathTracingSignalGroupsUnavailable",
+                "Signal Groups",
+                "Resolve Strength",
+                "EndAnimatedToggleRegion();",
+                "Firefly Clamp (Biased)"
+            },
+            "compact path denoiser selector and Raw-folded resolve controls");
+        RequireAbsent(
+            pathDenoising,
+            "ImGui::TextUnformatted(\"Method\")",
+            "top-labeled path denoiser selector");
+        RequireAbsent(
+            pathDenoising,
+            "ImGui::SetNextItemWidth(-FLT_MIN)",
+            "full-width path denoiser selector");
         for (const std::string_view contract : {
                 std::string_view("PathTracingDenoiser::Raw"),
                 std::string_view(
@@ -2522,6 +2602,31 @@ namespace
                     "DrawDeferredDropdownOption(") == 4u &&
                 CountOccurrences(debug, "ImGui::EndCombo();") == 4u,
             "Debug effects must use exactly four deferred rounded combos.");
+        const std::string_view transportDebug = ExtractSection(
+            debug,
+            "\"Transport##Debug\"",
+            "EndAnimatedToggleRegion();",
+            "Transport debug controls");
+        RequireOrdered(
+            transportDebug,
+            {
+                "SetNextLabeledControlWidth(",
+                "View##PathTracingDebugView",
+                "BeginRoundedCombo("
+            },
+            "compact side-labeled Transport debug selector");
+        RequireAbsent(
+            transportDebug,
+            "ImGui::TextUnformatted(\"View\")",
+            "top-labeled Transport debug selector");
+        RequireAbsent(
+            transportDebug,
+            "ImGui::SetNextItemWidth(-FLT_MIN)",
+            "full-width Transport debug selector");
+        RequireContains(
+            transportDebug,
+            "Inspect the selected path-transport surface, history, ",
+            "Transport debug selector tooltip");
         Require(
             CountOccurrences(debug, "for (int index = 0;") == 3u &&
                 CountOccurrences(debug, "[this, candidate]()") == 3u &&
@@ -3032,8 +3137,8 @@ namespace
             "inline constexpr std::array<std::string_view, 5>",
             "Settings command catalog");
         const std::vector<CatalogEntry> entries = ParseCatalog(catalog);
-        Require(entries.size() == 220u,
-            "Settings command catalog must contain exactly 218 entries.");
+        Require(entries.size() == 224u,
+            "Settings command catalog must contain exactly 224 entries.");
 
         std::set<std::string> names;
         std::set<std::string> actions;
@@ -3047,8 +3152,8 @@ namespace
             else
                 ++valueCount;
         }
-        Require(valueCount == 216u,
-            "Settings command catalog must contain exactly 216 values.");
+        Require(valueCount == 220u,
+            "Settings command catalog must contain exactly 220 values.");
         Require(actions == std::set<std::string>{
                 "open-scene-folder",
                 "reset-settings",
@@ -3187,6 +3292,16 @@ namespace
             pathingDispatcher,
             "reuseRevalidatedProposalsDuringMotion",
             "selective path proposal-reuse setting mutation");
+        for (const std::string_view resamplingCommand : {
+                std::string_view("pathing.samples-per-pixel"),
+                std::string_view("pathing.temporal-reuse"),
+                std::string_view("pathing.spatial-neighbors") })
+        {
+            RequireContains(
+                pathingDispatcher,
+                resamplingCommand,
+                "path sampling and ReSTIR command binding");
+        }
         const std::string_view noiseDispatcher = ExtractSection(
             viewer,
             "bool DispatchNoiseCommandValue(",
@@ -5604,10 +5719,9 @@ namespace
         Require(
             CountOccurrences(
                 viewer,
-                "BeginVisuallyDisabledUiScope(") == 6u,
-            "the visual disabled helper has one definition, two effective-"
-            "sample slider call sites, and three capability-gated Path Tracing "
-            "call sites");
+                "BeginVisuallyDisabledUiScope(") == 10u,
+            "the visual disabled helper has one definition, three non-Pathing "
+            "call sites, and six capability-gated Pathing call sites");
 
         const std::string_view checkboxOverride = ExtractSection(
             imguiUiOverride,
@@ -7705,7 +7819,33 @@ namespace
         RequireOrdered(
             skyDrawer,
             {
+                "SetNextLabeledControlWidth(",
+                "Environment##SkyEnvironment",
+                "BeginRoundedCombo("
+            },
+            "compact side-labeled Sky environment selector");
+        RequireAbsent(
+            skyDrawer,
+            "ImGui::TextUnformatted(\"Environment\")",
+            "top-labeled Sky environment selector");
+        const std::string_view skyDistance = ExtractSection(
+            skyDrawer,
+            "int maxDistance =",
+            "if (DrawPresetResetIcon(",
+            "Sky visibility maximum-distance selector");
+        RequireOrdered(
+            skyDistance,
+            {
+                "SetNextLabeledControlWidth(",
+                "Max Distance##RayTracedSkyVisibility",
+                "ImGui::Combo("
+            },
+            "compact side-labeled Sky visibility distance selector");
+        RequireOrdered(
+            skyDrawer,
+            {
                 "Environment Exposure",
+                "Show Environment Background",
                 "\"Auto Exposure##Sky\"",
                 "ImGuiTreeNodeFlags_DefaultOpen",
                 "\"Enable##AutoExposure\"",

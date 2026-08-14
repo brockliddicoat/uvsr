@@ -246,8 +246,8 @@ state takes precedence after interaction.
 
 Representation begins with **Allow Ray Traversal**, the single master permission
 for every ray traced effect. Switching it off preserves every effect's stored
-settings. Bounding Volume Hierarchy, Bottom-Level Acceleration
-Structures, and Top-Level Acceleration Structure groups start expanded. Their
+settings. Bounding Volume Hierarchy, Bottom Level Acceleration
+Structures, and Top Level Acceleration Structure groups start expanded. Their
 dropdowns use deferred mutations because build policy can invalidate shared
 renderer resources. The read-only status names unsupported, inactive, BLAS
 construction, TLAS construction, ready, or failed state.

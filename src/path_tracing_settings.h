@@ -51,6 +51,9 @@ namespace uvsr
     inline constexpr uint32_t PathTracingMaxBounceCount = 96u;
     inline constexpr uint32_t PathTracingMinNeeCandidateCount = 1u;
     inline constexpr uint32_t PathTracingMaxNeeCandidateCount = 63u;
+    inline constexpr uint32_t PathTracingMinSamplesPerPixel = 1u;
+    inline constexpr uint32_t PathTracingMaxSamplesPerPixel = 8u;
+    inline constexpr uint32_t PathTracingMaxSpatialNeighborCount = 4u;
     inline constexpr uint32_t PathTracingMaxStablePlaneCount = 3u;
     inline constexpr uint32_t PathTracingSolverCount = 3u;
     inline constexpr uint32_t PathTracingNeeModeCount = 3u;
@@ -59,10 +62,12 @@ namespace uvsr
         PathTracingNeeModeCount * PathTracingRtxdiModeCount;
     inline constexpr uint32_t PathTracingPipelineVariantCount =
         PathTracingSolverCount * PathTracingPipelineVariantsPerSolver;
+    inline constexpr uint32_t PathTracingPrimaryPipelineVariantCount =
+        PathTracingPipelineVariantsPerSolver;
     static_assert(PathTracingPipelineVariantCount < 32u);
     inline constexpr uint32_t PathTracingAllPipelineVariantsMask =
         (1u << PathTracingPipelineVariantCount) - 1u;
-    inline constexpr float PathTracingDefaultFireflyThreshold = 5.f;
+    inline constexpr float PathTracingDefaultFireflyThreshold = 3.f;
     inline constexpr float PathTracingMinFireflyThreshold = 0.01f;
     inline constexpr float PathTracingMaxFireflyThreshold = 1000000.f;
     inline constexpr float PathTracingDefaultSpatialResolveStrength = 1.f;
@@ -74,20 +79,27 @@ namespace uvsr
         // Transport controls consumed by the shared path integrator.
         PathTracingSolver solver = PathTracingSolver::RtxPt;
         PathTracingNeeMode neeMode = PathTracingNeeMode::Uniform;
-        uint32_t maxBounces = 8u;
-        uint32_t russianRouletteStart = 3u;
+        uint32_t maxBounces = 4u;
+        // Russian roulette uses the renderer's automatic third-vertex policy.
+        // The toggle is inert when no later ray can be avoided.
+        bool useRussianRoulette = true;
         uint32_t neeCandidateCount = 1u;
+        uint32_t samplesPerPixel = 2u;
         bool useSer = false;
+        // A full-resolution ray-traced receiver/direct baseline is shared by
+        // every indirect sample and supplies depth/motion for temporal AA.
+        bool sharedPrimarySurface = true;
 
-        // These switches select the optional reservoir stages around the same
-        // transport core. Presets initialize them, but the UI may edit them.
+        // ReSTIR reuse applies to every active reservoir family: optional
+        // primary-direct reservoirs, ReSTIR PT continuation seeds, and the
+        // bounded rough diffuse-tail ReSTIR GI checkpoint. Each family can
+        // consume temporal and previous-frame spatial donors.
         bool useRtxdi = false;
-        bool reuseDirectReservoirs = false;
-        bool reusePathReservoirs = false;
-        bool reuseIndirectGiReservoirs = false;
+        bool temporalReuse = false;
+        uint32_t spatialNeighborCount = 0u;
         // Camera motion may retain only proposal identities that are
-        // revalidated at the current pixel. Radiance means and RESTIR GI
-        // checkpoints always reset.
+        // reprojected and revalidated at the current receiver. Radiance means
+        // always reset; a failed current receiver invalidates its proposal.
         bool reuseRevalidatedProposalsDuringMotion = false;
 
         // Reconstruction controls consumed after raw transport completes.
@@ -97,10 +109,9 @@ namespace uvsr
         uint32_t stablePlaneCount = 3u;
         float spatialResolveStrength =
             PathTracingDefaultSpatialResolveStrength;
-        bool enableFireflyFilter = false;
+        bool enableFireflyFilter = true;
         float fireflyThreshold = PathTracingDefaultFireflyThreshold;
-        PathTracingDenoiser denoiser =
-            PathTracingDenoiser::SpatialPathResolve;
+        PathTracingDenoiser denoiser = PathTracingDenoiser::Raw;
         PathTracingDebugView debugView = PathTracingDebugView::FinalImage;
     };
 
@@ -139,6 +150,38 @@ namespace uvsr
             settings.stablePlaneCount >= 1u;
     }
 
+    [[nodiscard]] constexpr bool UsesDirectReservoirHistory(
+        const PathTracingSettings& settings) noexcept
+    {
+        return settings.useRtxdi &&
+            (settings.temporalReuse || settings.spatialNeighborCount > 0u);
+    }
+
+    [[nodiscard]] constexpr bool UsesPathSeedHistory(
+        const PathTracingSettings& settings) noexcept
+    {
+        return settings.solver == PathTracingSolver::RestirPt &&
+            (settings.temporalReuse || settings.spatialNeighborCount > 0u);
+    }
+
+    [[nodiscard]] constexpr bool UsesGiCheckpointHistory(
+        const PathTracingSettings& settings) noexcept
+    {
+        return settings.solver == PathTracingSolver::RestirGi &&
+            (settings.temporalReuse || settings.spatialNeighborCount > 0u);
+    }
+
+    [[nodiscard]] constexpr uint32_t GetAutomaticRussianRouletteStart(
+        const PathTracingSettings& settings) noexcept
+    {
+        // ZetaRay and NVIDIA's real-time path tracers use a toggle with a
+        // three-vertex minimum. Do not spend a random draw after the final
+        // useful continuation or on a path too short to save a ray.
+        return settings.useRussianRoulette && settings.maxBounces > 3u
+            ? 3u
+            : settings.maxBounces + 1u;
+    }
+
     [[nodiscard]] constexpr bool CanUseSpatialPathResolve(
         const PathTracingSettings& settings,
         bool resolveSupported) noexcept
@@ -159,7 +202,6 @@ namespace uvsr
     {
         if (!settings.useRtxdi)
         {
-            settings.reuseDirectReservoirs = false;
             if (settings.debugView ==
                 PathTracingDebugView::DirectReservoir)
             {
@@ -167,15 +209,11 @@ namespace uvsr
             }
         }
 
-        if (settings.solver != PathTracingSolver::RestirPt)
-            settings.reusePathReservoirs = false;
-        if (settings.solver != PathTracingSolver::RestirGi)
-            settings.reuseIndirectGiReservoirs = false;
         const bool indirectDebugAvailable =
             (settings.solver == PathTracingSolver::RestirPt &&
-                settings.reusePathReservoirs) ||
+                UsesPathSeedHistory(settings)) ||
             (settings.solver == PathTracingSolver::RestirGi &&
-                settings.reuseIndirectGiReservoirs);
+                UsesGiCheckpointHistory(settings));
         if (!indirectDebugAvailable &&
             settings.debugView ==
                 PathTracingDebugView::IndirectReservoir)
@@ -295,9 +333,10 @@ namespace uvsr
     {
         switch (solver)
         {
-        case PathTracingSolver::RtxPt: return "RTX PT";
-        case PathTracingSolver::RestirPt: return "RESTIR PT";
-        case PathTracingSolver::RestirGi: return "RESTIR GI";
+        case PathTracingSolver::RtxPt: return "Realtime Path Tracer";
+        case PathTracingSolver::RestirPt: return "Reservoir Path Tracer";
+        case PathTracingSolver::RestirGi:
+            return "Reservoir Indirect Lighting";
         default: return "";
         }
     }
@@ -323,7 +362,8 @@ namespace uvsr
         {
         case PathTracingNeeMode::Uniform: return "Uniform";
         case PathTracingNeeMode::Power: return "Power";
-        case PathTracingNeeMode::NeeAdaptiveTree: return "NEE-AT";
+        case PathTracingNeeMode::NeeAdaptiveTree:
+            return "Adaptively Temporally";
         default: return "";
         }
     }
@@ -427,26 +467,24 @@ namespace uvsr
         {
         case PathTracingSolver::RestirPt:
             settings.solver = PathTracingSolver::RestirPt;
-            settings.neeMode = PathTracingNeeMode::Power;
-            settings.maxBounces = 3u;
-            settings.russianRouletteStart = 3u;
+            // Uniform selection is O(1) per candidate. The prior Power preset
+            // rescanned the complete light list at every path vertex and made
+            // resampling cost scale catastrophically in many-light scenes.
+            settings.neeMode = PathTracingNeeMode::Uniform;
             settings.neeCandidateCount = 1u;
-            // RTXDI is an optional orthogonal primary-direct stage. Retain
-            // its reuse preference while keeping the solver executable
-            // without allocating the direct-reservoir history by default.
             settings.useRtxdi = false;
-            settings.reuseDirectReservoirs = true;
-            settings.reusePathReservoirs = true;
+            settings.temporalReuse = true;
+            settings.spatialNeighborCount = 1u;
             settings.stablePlaneCount = 2u;
             break;
 
         case PathTracingSolver::RestirGi:
             settings.solver = PathTracingSolver::RestirGi;
-            settings.neeMode = PathTracingNeeMode::Power;
+            settings.neeMode = PathTracingNeeMode::Uniform;
             settings.neeCandidateCount = 1u;
             settings.useRtxdi = false;
-            settings.reuseDirectReservoirs = true;
-            settings.reuseIndirectGiReservoirs = true;
+            settings.temporalReuse = true;
+            settings.spatialNeighborCount = 0u;
             settings.stablePlaneCount = 2u;
             break;
 
@@ -467,14 +505,14 @@ namespace uvsr
         return left.solver == right.solver &&
             left.neeMode == right.neeMode &&
             left.maxBounces == right.maxBounces &&
-            left.russianRouletteStart == right.russianRouletteStart &&
+            left.useRussianRoulette == right.useRussianRoulette &&
             left.neeCandidateCount == right.neeCandidateCount &&
+            left.samplesPerPixel == right.samplesPerPixel &&
             left.useSer == right.useSer &&
+            left.sharedPrimarySurface == right.sharedPrimarySurface &&
             left.useRtxdi == right.useRtxdi &&
-            left.reuseDirectReservoirs == right.reuseDirectReservoirs &&
-            left.reusePathReservoirs == right.reusePathReservoirs &&
-            left.reuseIndirectGiReservoirs ==
-                right.reuseIndirectGiReservoirs &&
+            left.temporalReuse == right.temporalReuse &&
+            left.spatialNeighborCount == right.spatialNeighborCount &&
             left.reuseRevalidatedProposalsDuringMotion ==
                 right.reuseRevalidatedProposalsDuringMotion &&
             left.stablePlaneCount == right.stablePlaneCount &&
@@ -500,10 +538,12 @@ namespace uvsr
             IsValidPathTracingNeeMode(settings.neeMode) &&
             settings.maxBounces >= PathTracingMinBounceCount &&
             settings.maxBounces <= PathTracingMaxBounceCount &&
-            settings.russianRouletteStart >= PathTracingMinBounceCount &&
-            settings.russianRouletteStart <= settings.maxBounces &&
             settings.neeCandidateCount >= PathTracingMinNeeCandidateCount &&
             settings.neeCandidateCount <= PathTracingMaxNeeCandidateCount &&
+            settings.samplesPerPixel >= PathTracingMinSamplesPerPixel &&
+            settings.samplesPerPixel <= PathTracingMaxSamplesPerPixel &&
+            settings.spatialNeighborCount <=
+                PathTracingMaxSpatialNeighborCount &&
             settings.stablePlaneCount <= PathTracingMaxStablePlaneCount &&
             IsFinitePathTracingFloat(settings.spatialResolveStrength) &&
             settings.spatialResolveStrength >=
@@ -529,14 +569,18 @@ namespace uvsr
             settings.maxBounces,
             PathTracingMinBounceCount,
             PathTracingMaxBounceCount);
-        settings.russianRouletteStart = ClampPathTracingSetting(
-            settings.russianRouletteStart,
-            PathTracingMinBounceCount,
-            settings.maxBounces);
         settings.neeCandidateCount = ClampPathTracingSetting(
             settings.neeCandidateCount,
             PathTracingMinNeeCandidateCount,
             PathTracingMaxNeeCandidateCount);
+        settings.samplesPerPixel = ClampPathTracingSetting(
+            settings.samplesPerPixel,
+            PathTracingMinSamplesPerPixel,
+            PathTracingMaxSamplesPerPixel);
+        settings.spatialNeighborCount = ClampPathTracingSetting(
+            settings.spatialNeighborCount,
+            0u,
+            PathTracingMaxSpatialNeighborCount);
 
         settings.stablePlaneCount = ClampPathTracingSetting(
             settings.stablePlaneCount,

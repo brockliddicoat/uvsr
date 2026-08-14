@@ -138,10 +138,14 @@ namespace uvsr
         Value("pathing.solver", Kind::Enum, Section::Pathing, "rtx-pt|restir-pt|restir-gi"),
         Value("pathing.nee", Kind::Enum, Section::Pathing, "uniform|power|nee-at"),
         Value("pathing.max-bounces", Kind::Integer, Section::Pathing, "integer 1..96"),
-        Value("pathing.russian-roulette-start", Kind::Integer, Section::Pathing, "integer 1..96 and no greater than max-bounces"),
+        Value("pathing.russian-roulette", Kind::Boolean, Section::Pathing, "on|off"),
         Value("pathing.nee-candidates", Kind::Integer, Section::Pathing, "integer 1..63"),
+        Value("pathing.samples-per-pixel", Kind::Integer, Section::Pathing, "integer 1..8"),
+        Value("pathing.shared-primary-surface", Kind::Boolean, Section::Pathing, "on|off"),
         Value("pathing.ser", Kind::Boolean, Section::Pathing, "on|off"),
         Value("pathing.rtxdi", Kind::Boolean, Section::Pathing, "on|off"),
+        Value("pathing.temporal-reuse", Kind::Boolean, Section::Pathing, "on|off"),
+        Value("pathing.spatial-neighbors", Kind::Integer, Section::Pathing, "integer 0..4"),
         Value("pathing.reuse-proposals-during-motion", Kind::Boolean, Section::Pathing, "on|off"),
 
         // Representation.

@@ -18,12 +18,14 @@ remain shared. Inactive Ray Marching settings are retained while their drawers
 are hidden.
 
 Path Tracing is deliberately one small transport implementation with policy
-controls around it. **RTX PT** is the reference Monte Carlo solver. **RESTIR
-PT** adds executable seed-space replay, and **RESTIR GI** adds executable
-same-pixel temporal indirect checkpoints. Both are first-party clean-room UVSR
-subsets over the shared integrator. Neither claims NVIDIA namesake parity,
-hybrid or geometric reconnection, or a spatial GI transformation; they are not
-alternate hidden renderers.
+controls around it. The Pathing drawer presents **Realtime Path Tracer** as the
+reference RTX PT solver, **Reservoir Path Tracer** as the ReSTIR PT seed-replay
+solver, and **Reservoir Indirect Lighting** as the ReSTIR GI reconnection solver.
+Reservoir Path Tracer adds temporal and previous-frame spatial seed replay;
+Reservoir Indirect Lighting reconnects a bounded rough diffuse-tail checkpoint.
+Both are first-party clean-room UVSR subsets over the shared integrator. Neither
+claims NVIDIA namesake parity, arbitrary full-path shifting, or a second hidden
+renderer.
 
 ## Supported Transport Domain
 
@@ -77,8 +79,10 @@ and is reported separately.
 Scene refresh
   -> world representation build or update
   -> environment and analytic-light preparation
-  -> path transport and optional reservoir policy
-  -> scene-linear running mean or current transport result
+  -> optional full-resolution Shared Primary Surface and direct baseline
+  -> indirect path transport and optional reservoir policy
+  -> direct + indirect scene-linear composition
+  -> optional path TAA when progressive accumulation is off
   -> auto exposure
   -> AgX
   -> optional Fast Approximate AA and CMAA2
@@ -87,10 +91,14 @@ Scene refresh
 
 Path Tracing does not execute the raster G-buffer, screen-space visibility,
 deferred lighting, selective ray-traced shadow or sky passes, the separate
-environment-background pass, MSAA, or TAA. The shared render-target owner may
-retain inactive raster support allocations so solution changes remain safe and
-reversible. Raster material picking may still run on demand because it is an
-inspection tool rather than a lighting prerequisite.
+environment-background pass, or MSAA. Shared Primary Surface is itself a
+full-resolution inline-DXR compute pass, not raster geometry. When it is active,
+non-accumulating Final Image output can use UVSR's motion/depth-validating TAA;
+progressive path accumulation remains the sole long-term history owner and
+bypasses TAA blending. The shared render-target owner may retain inactive raster
+support allocations so solution changes remain safe and reversible. Raster
+material picking may still run on demand because it is an inspection tool
+rather than a lighting prerequisite.
 
 The shared **Show Environment Background** setting suppresses only a primary
 miss. Secondary misses continue to carry environment radiance through the
@@ -102,9 +110,9 @@ transport solution.
 
 The path pass consumes one authoritative set of renderer inputs:
 
-- nonjittered current camera matrices and output extent;
-- the prior nonjittered camera matrices used only to locate revalidated
-  proposal and replay-seed donors after camera motion;
+- current and previous planar-view matrices, viewport metadata, and output
+  extent; Shared Primary uses the selected TAA jitter while motion output removes
+  current/previous jitter consistently;
 - the ready TLAS and compact-to-global geometry index map;
 - scene geometry and material structured buffers;
 - the scene bindless buffer and texture descriptor table;
@@ -122,8 +130,15 @@ only while its effective solver and reuse policy need it:
 
 - direct reuse owns two `RGBA32F` reservoirs, two `RGBA32F` primary-surface
   signatures, and two `R32_UINT` selected finite-emitter sample seeds;
-- RESTIR GI owns two `RGBA32F` local indirect checkpoints and two `R32_UINT`
-  local-validity counts; and
+- Shared Primary owns separate `RGBA32F` direct and indirect means, an
+  `R32_UINT` direct count, current `RGBA32F` position/hit data, two immediate-
+  frame `RG32_UINT` packed geometry/material signatures, three `RGBA16F`
+  prepared-material surfaces, `RGBA16F` motion, and `R32_FLOAT` device depth;
+- RESTIR GI owns two reconstructable history sides. Each side contains one
+  `RGBA32F` secondary-position/finalized-weight record, one `RGBA16F` tail-
+  radiance record, one `RGBA16F` packed secondary/receiver-normal record, and
+  one `RGBA32F` receiver-position/material record. Its legacy count slots are
+  one-pixel ABI-safe bindings rather than full-resolution storage;
 - RESTIR PT owns two `RG32_UINT` 64-bit local seeds and two `RGBA32F` local
   statistics records containing weight sum, selected target, `M`, and validity;
   and
@@ -138,39 +153,86 @@ reservoir may accompany either. Spatial Path Resolve signals become full
 resolution for every solver while one or two groups are requested; the
 three-group diffuse/specular continuation split is available only for RTX PT,
 whose current sample retains an unambiguous first-lobe identity. No other pass
-may reuse any history resource under a different epoch.
+may reuse estimator history under a different epoch. Shared Primary's packed
+geometry/material pair advances every successfully recorded full-resolution
+primary frame, independently of the slower reservoir/progressive ping-pong, so
+TAA never compares nonconsecutive presentation frames.
 
 ### Resource Budget
 
 The baseline path pass uses 44 bytes per output pixel: 16 for the running mean,
-4 for the sample count, 16 for RGB variance, and 8 for display. Optional direct
-history adds 72 bytes, Spatial Path Resolve signals add 28 bytes, RESTIR GI
-history adds 40 bytes, and RESTIR PT history adds 48 bytes per pixel. At 3840
-by 2160, excluding negligible one-pixel dummy bindings, the exact current
-allocation totals are:
+4 for the sample count, 16 for RGB variance, and 8 for display. Shared Primary
+adds 104 bytes, optional direct history adds 72 bytes, Spatial Path Resolve
+signals add 28 bytes, RESTIR GI history adds 96 bytes, and RESTIR PT history
+adds 48 bytes per pixel. At 3840 by 2160, excluding negligible one-pixel dummy
+bindings, representative exact path-pass totals are:
 
 | Active History | Bytes Per Pixel | Total At 3840 By 2160 |
 | --- | ---: | ---: |
 | Base transport only | 44 | 348.0 MiB |
 | Base plus Spatial Path Resolve signals | 72 | 569.5 MiB |
 | Base plus direct reuse | 116 | 917.6 MiB |
-| Base plus direct reuse and Spatial Path Resolve signals | 144 | 1,139.1 MiB |
-| Base plus RESTIR GI | 84 | 664.5 MiB |
-| Base plus RESTIR GI and direct reuse | 156 | 1,234.0 MiB |
 | Base plus RESTIR PT | 92 | 727.7 MiB |
 | Base plus RESTIR PT and direct reuse | 164 | 1,297.3 MiB |
+| Base plus Shared Primary | 148 | 1,170.7 MiB |
+| Base plus Shared Primary and Spatial Path Resolve | 176 | 1,392.2 MiB |
+| Base plus Shared Primary and RESTIR PT | 196 | 1,550.4 MiB |
+| Base plus Shared Primary and direct reuse | 220 | 1,740.2 MiB |
+| Base plus Shared Primary and RESTIR GI | 244 | 1,930.1 MiB |
+| Base plus Shared Primary, RESTIR GI, and direct reuse | 316 | 2,499.6 MiB |
 
 Direct RIS without temporal or neighbor reuse retains the baseline allocation.
-Allocation-topology changes clear bindings and every dependent history before
-dispatch.
+Shared Primary alone costs about 205.7 MiB at 1920 by 1080 and 822.7 MiB at
+3840 by 2160 before the 44-byte base. It also adds one full-frame primary/direct
+dispatch and its bandwidth every frame. Allocation-topology changes clear
+bindings and dependent estimator history before dispatch. If the Shared Primary
+topology cannot be allocated, UVSR permanently downgrades that active pass to
+the all-ray integrator and reports the unavailable requested stage instead of
+discarding Path Tracing for raster.
+
+### Shared Primary Surface and Motion Reconstruction
+
+Shared Primary Surface is an optional full-resolution inline-DXR compute pass.
+It traces one jittered material-aware camera ray at every render pixel, resolves
+the same alpha-tested `PathTracingSurface` used by the integrator, and writes a
+current receiver/material record. A miss writes an explicit invalid signature,
+depth, and motion value rather than exposing stale history. The pass evaluates
+primary emission or environment and the selected conventional/RTXDI direct
+policy into its own mean/count. Indirect transport then starts from the shared
+receiver and owns only the continuation suffix, so the final composition is
+`direct + indirect` exactly once.
+
+This split is also a presentation contract. Sparse or adaptively skipped
+indirect pixels still receive the current full-resolution direct baseline; that
+baseline never enters indirect radiance moments, GI payloads, or seed history.
+The tradeoff is one primary ray, direct-light work, and 104 bytes per pixel of
+additional persistent path-pass resources.
+
+The primary pass reconstructs a current-to-previous motion vector from each
+committed hit's previous vertex/instance transform. A separate immediate-frame
+signature ping-pong stores the exact material identifier and a half-packed
+geometric normal. Reprojection is valid only when the previous coordinate is in
+bounds, the material identifier matches, the normal dot product is at least
+0.8, and every value is finite. UVSR's TAA then performs its own previous-depth,
+motion, history-bounds, and rectification checks. Resource changes, explicit
+pass resets, render gaps, and failed dispatch preparation break the immediate
+signature chain; ordinary camera or supported instance/vertex motion does not.
+
+For non-accumulating Final Image output, the composed path signal, ray-traced
+device depth, and validated motion feed UVSR's existing TAA. Progressive path
+accumulation bypasses TAA history to avoid double temporal ownership, but still
+advances the authored camera-jitter sequence so stationary coverage converges.
+Diagnostic views remain raw and do not inherit TAA history.
 
 ### Primary and Continuation Rays
 
-The camera ray is derived directly from the inverse nonjittered projection and
-view transforms. Each continuation ray begins outside the committed geometric
-triangle plane and uses the current scene scale-aware ray limits. The transport
-state is intentionally compact: origin, direction, throughput, accumulated
-radiance, bounce index, and random state.
+The all-ray integrator derives each camera ray from the inverse nonjittered
+projection plus its own stochastic subpixel sample. Shared Primary derives its
+single receiver ray from the jittered current planar view so depth, motion, and
+TAA metadata describe the same sample. Each continuation ray begins outside the
+committed geometric triangle plane and uses the current scene scale-aware ray
+limits. The transport state is intentionally compact: origin, direction,
+throughput, accumulated radiance, bounce index, and random state.
 
 Inline DXR 1.1 `RayQuery` traversal keeps the baseline shader at Shader Model
 6.5. Path rays force triangles through one material-aware candidate callback.
@@ -227,25 +289,25 @@ The light sampler has three policy choices:
 
 - **Uniform** samples eligible lights uniformly.
 - **Power** samples them by a stable emitted-power estimate.
-- The **NEE-AT** policy selects a UVSR-owned binary adaptive tree whose weights
+- The **Adaptively Temporally** policy selects a UVSR-owned binary adaptive tree whose weights
   are rebuilt at the current path vertex over the complete submitted analytic
   light buffer.
 
 Each policy returns the discrete light-selection probability that normalizes
-its own direct estimate. **NEE Candidates** averages the configured number of
+its own direct estimate. **Light Candidates** averages the configured number of
 independent estimates in conventional RTX PT and supplies the same number of
-local candidates to the direct reservoir. The NEE-AT label does not claim
+local candidates to the direct reservoir. The Adaptively Temporally label does not claim
 NVIDIA RTXPT parity, identical feedback state, or identical output.
 
 The analytic-light buffer grows with the submitted scene list; the transport
 pass does not silently discard lights beyond a fixed constant-buffer limit.
 
-When **RTXDI Reservoir Stages** is enabled, UVSR's first-party direct reservoir
+When **Light Reservoir** is enabled, UVSR's first-party RTXDI-like direct reservoir
 replaces conventional NEE at the primary hit; later vertices retain
 conventional NEE. With direct reuse enabled and compatible history available,
-the reservoir projects the current primary world position through the prior
-nonjittered view, then considers the candidate at that prior-frame pixel and one
-neighboring candidate around it. Both require a compatible surface signature;
+the reservoir projects the hit's previous world position through the prior
+view, then considers the candidate at that prior-frame pixel plus zero through
+four configured neighboring candidates. All require a compatible surface signature;
 reused targets replay the selected light and complete persisted 32-bit emitter
 sample seed at the current surface, and selected-endpoint visibility is traced
 again. Invalid or off-screen reprojection contributes no temporal donor.
@@ -257,18 +319,19 @@ behavior.
 After direct and emitted contributions, one BSDF proposal advances throughput
 by `f * abs(n dot wi) / pdf`. A finite-value guard terminates invalid paths
 instead of storing NaN or infinity.
-After the configured starting bounce, Russian roulette uses a
-throughput-derived survival probability and divides surviving throughput by
-that probability. The explicit bounce cap remains a safety and performance
-bound.
+When the Russian Roulette toggle is on and at least one later ray can be saved,
+UVSR begins at the third useful vertex. It uses a throughput-derived survival
+probability and divides surviving throughput by that probability. Primary and
+final vertices never pay a useless random draw or continuation sample. The
+explicit bounce cap remains a safety and performance bound.
 
 The current core derives stable semantic random domains from one persisted
 64-bit sample seed. Camera jitter, continuation sampling, primary direct
 lighting, and reservoir selection therefore cannot shift one another's random
 dimensions. RESTIR PT can replay a donor seed through this exact integrator at
 the receiving pixel without depending on mutable frame, noise-texture, or
-prior-call state. Camera-only reuse locates that seed by projecting the current
-primary world position into the previous view; it does not graft old radiance
+prior-call state. Motion reuse locates that seed by projecting the hit's
+previous world position into the previous view; it does not graft old radiance
 onto the new camera path. A future hybrid reconnection solver may add recorded
 vertices and Jacobians, but it must not replace the material or transport math.
 
@@ -276,9 +339,9 @@ vertices and Jacobians, but it must not replace the material or transport math.
 
 | Requested Preset | Effective Solver | Direct Reservoir | Solver Reuse |
 | --- | --- | --- | --- |
-| **RTX PT** | RTX PT | Optional; preset default is off | Off |
-| **RESTIR PT** | RESTIR PT seed-replay subset | Optional; preset default is off | Current path plus replayed reprojected prior-pixel and one-neighbor seeds |
-| **RESTIR GI** | RESTIR GI checkpoint subset | Optional; preset default is off | Current plus prior same-pixel indirect checkpoint |
+| **Realtime Path Tracer** | RTX PT | Optional; preset default is off | Off |
+| **Reservoir Path Tracer** | ReSTIR PT seed-replay subset | Optional; preset default is off | Current path plus optional temporal and zero-to-four spatial seed replays |
+| **Reservoir Indirect Lighting** | Bounded ReSTIR GI rough diffuse-tail checkpoint subset | Optional; preset default is off | Current candidate plus optional temporal and zero-to-four previous-frame spatial reconnections |
 
 Selecting a preset produces a fresh editable settings recipe. Later changes do
 not create another transport implementation; they change policy fields and
@@ -286,12 +349,11 @@ invalidate histories whose estimator changed. The UI reports the qualified
 clean-room subset while it is executable and reports an effective fallback only
 when a required shader permutation or resource format is unavailable.
 
-The 18 executable shader variants are packaged independently as three solvers
-times RTXDI-off/on times Uniform, Power, and NEE-AT. Together with the two
-single-permutation lighting-accumulation shaders and one spatial path-layer
-resolve shader, they raise the production catalog from 306 to 327 shader tasks
-while remaining four additional staged families in a 50-binary runtime
-bundle. A missing optional variant does not
+The 18 executable transport variants are packaged independently as three
+solvers times direct-reservoir off/on times Uniform, Power, and Adaptively
+Temporally. Six matching Shared
+Primary variants bring the complete production catalog to 333 shader tasks in a
+51-binary runtime bundle. A missing optional variant does not
 disable Path Tracing or strand the selector on a raster image. UVSR tries the
 requested solver and NEE mode without RTXDI, then the same solver with Uniform
 NEE, then RTX PT with the requested NEE mode, and finally baseline Uniform RTX
@@ -301,30 +363,41 @@ makes the renderer use its live raster fallback.
 
 ### Reference Preset
 
-RTX PT is the reference preset. Direct reservoirs and the biased firefly filter
-are off by default. Uniform, power-weighted, and UVSR adaptive-tree NEE remain
-configurable. With the firefly filter disabled, the result is the shared
-integrator's current output or running mean without a reconstruction stage.
+RTX PT is the reference preset. Every preset starts at four bounces, two fresh
+samples, automatic Russian Roulette on, Raw denoising, Shared Primary Surface
+on, and the biased Firefly Clamp on at 3. Direct reservoirs remain off by
+default. Uniform, power-weighted, and UVSR adaptive-tree NEE remain configurable.
+Disabling the clamp restores the unclamped shared-integrator current output or
+running mean. RESTIR PT and RESTIR GI also start with Uniform NEE. This keeps their default
+light-selection work independent of analytic-light count; Power and Adaptively Temporally
+remain explicit quality/performance choices rather than hidden preset costs.
 
 ### Seed-Replay Path Subset
 
 The RESTIR PT recipe enables deterministic seed-space replay. The current
 pixel's local indirect suffix is one proposal. When compatible prior-frame
-history exists, the solver projects the current primary world position through
-the prior view, then replays the seed at that prior pixel and one neighboring
-seed through the exact same path integrator at the current pixel. The neighbor
-is chosen independently before any proposal contribution or target is
-evaluated.
+history exists, the solver projects the hit's previous world position through
+the prior view. **Temporal Reuse** controls the donor at that pixel, while
+**Spatial Neighbors** selects zero through four rotated cardinal donors around
+it. Each enabled donor is replayed through the exact same continuation
+integrator at the current pixel. UVSR fixes that donor set from the first
+successful receiver and traces it once per updated pixel/frame batch; every
+fresh sample combines with the cached donor aggregate instead of retracing the
+same full paths once per sample.
 
 Every finite proposal, including a successful black path, increments `M`.
 Because every RGB proposal is already fully evaluated, the solver uses their
 bounded online conditional arithmetic mean instead of randomly selecting one
 and multiplying it by `sumTarget / (M * selectedTarget)`. This
 Rao-Blackwellization preserves the old selector's conditional expectation while
-removing its avoidable selection variance. The current primary emission,
-environment, and analytic-direct base is then added exactly once. Replays may
-reconstruct the complete integrator result internally, but their primary base
-is discarded so the solver never double-counts it.
+removing its avoidable selection variance. In all-ray mode, the current primary
+emission, environment, and analytic-direct base is then added exactly once. In
+Shared Primary mode, the separate full-resolution direct mean owns that base.
+Replays may
+reconstruct primary geometry internally, but they skip primary environment,
+emission, and direct-light evaluation because that base would be discarded.
+The solver therefore neither double-counts the primary base nor pays its
+avoidable NEE cost for replay-only paths.
 
 History persists only the current frame's local 64-bit seed and local proposal
 statistics. It never feeds the combined contribution mean back into the next
@@ -333,26 +406,63 @@ seed-replay subset, not NVIDIA RTXDI-Library parity: it has no stored
 reconnection vertex, hybrid shift, geometric reconnection, or donor-camera
 path graft.
 
-### Temporal GI Checkpoint Subset
+### Temporal and Spatial GI Reconnection Subset
 
-The RESTIR GI recipe combines the current pixel's local indirect suffix with
-the previous frame's same-pixel local indirect checkpoint. It uses the same
-finite-proposal count and bounded conditional arithmetic mean as the seed-replay
-path. A successful black checkpoint participates in `M`, and the current
-primary base is added exactly once after combining the eligible suffixes.
+The RESTIR GI recipe extracts one reconnectable candidate from the first
+successful fresh path in the pixel/frame batch. The candidate records the first
+secondary position `x2`, its geometric normal, an approximate outgoing tail
+radiance `Lo`, the first-continuation PDF, and the current receiver position,
+normal, and exact material identifier. Eligibility is deliberately narrow:
+`x2` must be rough (`alpha >= 0.25`) and its prepared diffuse energy must exceed
+four times its specular F0 energy. Metallic, glossy, transmissive-looking,
+environment-only, and otherwise ineligible suffixes remain entirely local.
 
-The persistent payload is only the current local RGB indirect suffix, its
-target, and a one-proposal validity count. The combined estimate never feeds
-back into history. Because reuse is same-pixel and same-epoch, the subset needs
-no cross-pixel transform, visibility replay, Jacobian, secondary-surface
-reconnection, or spatial GI transform. It is not NVIDIA RTXDI-Library parity.
+The current proposal removes only its finite diffuse reconnectable contribution
+from the local suffix; every other contribution stays in a local residual. One
+temporal donor and zero through four rotated previous-frame cardinal donors may
+then enter a once-per-pixel reservoir. Receiver material, geometric normal, and
+local tangent-plane compatibility are checked before reconnection. At the donor
+secondary vertex, both signed hemispheres must be valid, the old and new
+directions must remain within 30 degrees, their cosine ratio must remain in
+`[0.5, 2]`, and the solid-angle Jacobian is accepted only in `[0.05, 20]`.
+The new receiver-to-`x2` segment traces visibility and re-evaluates the current
+receiver diffuse BSDF. Compatible black, occluded, or zero-weight donors retain
+their represented count `M` as zero trials. The selected estimate is added to
+the untouched local residual; any nonfinite/finalization failure returns the
+complete current suffix.
+
+History persists only the first fresh local `M=1` proposal, never the combined
+reservoir. The payload is sufficient for this bounded receiver reconnection but
+does not replay the full secondary material or arbitrary later glossy events.
+The cached `Lo` therefore remains a controlled rough diffuse-tail approximation,
+not direction-free full-path state and not NVIDIA RTXDI-Library parity.
 
 ### Direct-Lighting Reservoir Option
 
-The RTXDI Reservoir Stages option selects UVSR's RTXDI-like direct-light
+The **Light Reservoir** option selects UVSR's RTXDI-like direct-light
 reservoir stage for any preset. It is orthogonal to the effective solver.
 Disabling it returns the primary hit to conventional NEE without changing hit
 reconstruction, materials, or later path vertices.
+
+### Sampling and Resampling Controls
+
+**Samples** traces one through eight fresh paths at each updated pixel
+per frame. The paths use distinct sequence phases and enter one cumulative
+frame batch, so disabling long-term accumulation still presents the correct
+mean, variance, and successful count for that batch. With accumulation enabled,
+the same paths update the configured persistent mean one by one. Cost scales
+approximately linearly with this value; temporal and spatial ReSTIR candidates
+are additional work, not part of the fresh-path count. RESTIR PT fixes and
+traces its enabled replay donors once per updated pixel batch. RESTIR GI likewise
+performs donor reconnection only for the batch's first successful sample.
+
+**Temporal Reuse** independently enables the validated previous-frame donor for
+each active direct, RESTIR PT, or RESTIR GI reservoir family. **Spatial
+Neighbors** adds zero through four validated previous-frame cardinal donors for
+the direct reservoir, RESTIR PT, and RESTIR GI. The first re-evaluates light
+samples, the second replays complete continuation seeds, and the third performs
+the bounded secondary-surface reconnection above. Changing any of these settings
+resets incompatible history.
 
 ## Progressive Accumulation
 
@@ -384,12 +494,18 @@ visibly animated rather than appearing attached to the lens.
 
 Path Tracing performs the scheduling decision before traversal, so skipped
 pixels avoid the expensive path. Ordinary presets dispatch every output pixel
-on each sampling pass. A one-Gi-work-unit safety budget retains a bounded
-progressive lattice only for extreme resolution, bounce, light, or replay
-combinations; the Pathing drawer reports its estimated work per pixel, lattice
-phase count, and submitted sampling passes. On a reset with a remaining lattice,
-a separate full-resolution presentation-only preview prevents untouched black
-pixels without writing radiance history.
+on each sampling pass. A one-Gi-work-unit transport safety budget includes fresh
+samples and only replay donors with usable history; the independent full-frame
+Shared Primary dispatch has its own conservative bound. Reset and first-use
+frames are therefore charged for current paths rather than nonexistent replay
+work. A bounded progressive lattice remains only for extreme resolution,
+bounce, sample, light, or replay combinations; the Pathing drawer reports its
+estimated frame work, lattice phase count, and submitted sampling passes. With
+Shared Primary active, every presentation pixel already has a current direct
+baseline while sparse indirect work advances. In all-ray mode, a reset with a
+remaining lattice instead uses a separate full-resolution presentation-only
+preview that bilinearly reconstructs four traced representatives. Neither path
+writes fabricated fallback radiance into estimator history.
 
 Ray Marching dispatches a prepare shader before its stochastic screen-space
 visibility, Heitz shadow, ray-traced flashlight, and ray-traced sky producers.
@@ -406,9 +522,9 @@ sole long-term history owner while active, so TAA history and temporal blending
 are bypassed rather than averaged into a second estimator.
 
 With accumulation disabled, Ray Marching bypasses its full-resolution history,
-while Path Tracing attempts every eligible pixel and replaces history with
-count one. The latter remains a continuously refreshed one-sample estimate and
-can be extremely noisy in environment-lit interiors. Every accumulation mode
+while Path Tracing attempts every eligible pixel and replaces history with the
+current **Samples** frame batch. The result can still be extremely noisy
+in environment-lit interiors at low sample counts. Every accumulation mode
 converges only a stationary scene: any camera, geometry, material, light,
 environment, solver, or accumulation-policy change conservatively restarts all
 progressive radiance histories.
@@ -431,16 +547,27 @@ monotonic epoch. The epoch changes when any estimator input changes:
   method, noise, or accumulation settings; or
 - the accumulation toggle itself.
 
-Jitter alone does not reset history because Path Tracing does not use raster
-TAA jitter. **Reuse Validated RESTIR Proposals During Motion** is an opt-in
-exception for camera-only changes. It may retain direct-light proposals and
-RESTIR PT seeds, locate their donors through prior-view reprojection, validate
-them against the current primary surface, and fully re-evaluate them at the
-current pixel.
-Means, variances, counts, stable signals, and RESTIR GI radiance checkpoints
-always reset, and non-camera changes clear every affected family. A reset is
-otherwise conservative: discarding valid proposals costs convergence, while
-retaining stale radiance corrupts the image.
+Shared Primary uses the authored temporal jitter. Changing its enable state or
+sequence resets progressive path history so center-ray and jittered coverage are
+never mixed. Ordinary phase advancement does not reset history. Path TAA owns
+presentation history only while path accumulation is off; settings/domain
+changes reset that TAA state separately.
+
+**Motion Reuse** is an opt-in exception for camera-only estimator changes. It
+may retain direct-light, RESTIR PT seed, and reconnectable RESTIR GI proposals,
+locate their donors through prior-view reprojection, validate them against the
+current primary surface, and re-evaluate them at the current pixel. The control is
+unavailable when no temporal or spatial proposal family is active or when the
+selected work requires a sparse dispatch lattice. Stationary reuse is governed
+by **Temporal Reuse** and **Spatial Neighbors**, so toggling **Motion Reuse**
+while the camera is still intentionally changes nothing.
+Means, variances, counts, and stable signals always reset. Non-camera estimator
+changes clear every affected proposal family. Immediate Shared Primary
+geometry/material signatures are not estimator history: they advance across
+consecutive successful camera and supported object-motion frames, then use
+material, normal, bounds, and TAA depth checks to reject discontinuities. A
+render gap, topology/resource change, or explicit pass reset invalidates that
+chain. This keeps motion vectors useful without retaining stale radiance.
 
 ## Spatial Path Resolve and Denoising
 
@@ -452,6 +579,7 @@ current path retains a trustworthy first-lobe identity. RESTIR PT and RESTIR GI
 produce a combined selected or replayed continuation suffix, so they correctly
 cap the control at two groups.
 
+**Raw (No Denoising)** is the factory default for every solver. Optional
 **Spatial Path Resolve** is UVSR's bounded spatial-only edge-aware resolve over
 those accumulated signals. One group filters the combined path signal; two
 split primary from indirect transport; three split RTX PT into primary, diffuse
@@ -465,6 +593,17 @@ authored history minus one. Variance never becomes an
 inverse-variance estimator weight. The pass never temporally reprojects and
 never alters the raw mean; missing confidence, invalid guides, nonfinite output,
 or allocation failure returns exact sanitized raw radiance.
+Selecting Raw smoothly folds the Signal Groups and Resolve Strength controls;
+the compact side-labeled Method selector remains visible.
+
+With Shared Primary Surface active, that variance and successful-sample count
+belong to the indirect estimator. The direct estimator has its own mean and
+count, but this bounded resolve does not yet persist a separate direct-light
+variance. It can therefore under-filter a noisy direct-light signal, especially
+when **Samples** makes the indirect count grow faster than the once-per-frame
+direct count. This limitation affects only optional Spatial Path Resolve; the
+default Raw output, separated means, and Path TAA composition remain exact with
+respect to their retained samples.
 
 Normal, roughness, and depth guides come from a deterministic center-pixel
 primary query on the first accumulated sample and remain fixed until transport
@@ -484,7 +623,7 @@ A truthful path NRD adapter requires separately demodulated diffuse and specular
 radiance, matching in-lobe hit distances, and path-valid motion guides; UVSR's
 existing Ray Marching adapter does not satisfy that contract.
 
-**Firefly Clamp (Biased)** is executable. It limits each successful high-energy
+**Firefly Clamp (Biased)** defaults on with threshold 3. It limits each successful high-energy
 contribution before the persistent mean is updated. Consequently, the
 accumulated result is intentionally biased while the option is enabled; the
 pass exposes that state explicitly.
@@ -510,7 +649,7 @@ The design was checked against these official revisions:
 Those repositories use NVIDIA's RTX SDK license rather than a permissive
 open-source license. UVSR does not copy, vendor, or compile their sample or
 library source. The executable transport, adaptive light selection, direct
-reservoir, seed replay, and temporal GI checkpoints are first-party UVSR code
+reservoir, seed replay, and temporal/spatial GI reconnection are first-party UVSR code
 informed only at a high level by public algorithm descriptions. The RESTIR PT
 and RESTIR GI names identify explicitly qualified clean-room subsets. Nothing
 here is NVIDIA-certified, one-to-one, bit-identical, source-compatible with an
@@ -523,13 +662,23 @@ The implementation was also cross-checked against the current public
 [NVIDIA RTXPT](https://github.com/NVIDIA-RTX/RTXPT),
 [NRD](https://github.com/NVIDIA-RTX/NRD), and
 [RTXDI RESTIR PT](https://github.com/NVIDIA-RTX/RTXDI/blob/main/Doc/RestirPT.md)
-contracts. ZetaRay and RTXDI use substantially richer temporal/spatial path
-state and replay or reconnection machinery than UVSR's deliberately qualified
-subsets. RTXPT supplies multiple denoiser-ready path-space layers and guides,
-while NRD requires split radiance, in-lobe hit distance, surface guides, and
-motion data. Those comparisons motivated truthful naming, full-rate ordinary
-dispatch, reprojected proposal/seed lookup, and solver-compatible signal groups;
-they do not justify relabeling UVSR's combined radiance as valid NRD input.
+contracts. ZetaRay does not hide rasterized primary geometry beneath its path
+tracer: it traces an inline DXR camera ray into a shared G-buffer at every render
+pixel. Its direct-light and indirect-integrator passes are separate, however,
+so an indirect-only timer is not comparable with UVSR's complete path pass.
+UVSR's Shared Primary Surface adopts that high-level zero-raster topology: one
+full-frame ray-traced receiver/direct baseline, separate indirect transport,
+then composition. ZetaRay's current RESTIR GI spatial call is disabled; UVSR's
+bounded rough diffuse-tail spatial reconnection is a clean-room implementation
+of the public reservoir/Jacobian architecture rather than copied ZetaRay code.
+ZetaRay and RTXDI still use substantially richer temporal/spatial path state and
+replay or reconnection machinery than UVSR's deliberately qualified subsets.
+RTXPT supplies multiple denoiser-ready path-space layers and guides, while NRD
+requires split radiance, in-lobe hit distance, surface guides, and motion data.
+Those comparisons motivated truthful naming, a full-rate primary baseline,
+validated ray motion, reprojected proposal/seed lookup, configurable reuse, and
+solver-compatible signal groups; they do not justify relabeling UVSR's combined
+radiance as valid NRD input.
 
 UVSR still uses a compact counter-hashed sampler rather than a dimensioned
 Owen-scrambled low-discrepancy sequence, and its light selection lacks the
@@ -541,8 +690,8 @@ claims made by this repair.
 
 Future solvers extend policies and recorded path events, not the authoritative
 surface or BSDF implementation. Hybrid geometric reconnection, RESTIR PT
-Enhanced, spatial GI transforms, overlapping-technique MIS, larger neighbor
-reuse, or guiding may add:
+Enhanced, arbitrary glossy/full-sample GI reconnection, overlapping-technique
+MIS, larger neighbor reuse, or guiding may add:
 
 - stable semantic random dimensions;
 - candidate-generation and reservoir adapters;
@@ -557,14 +706,17 @@ epoch mismatch, or make the raw fallback depend on an optional SDK.
 ## Validation Contract
 
 The implementation is accepted only when focused contracts prove settings and
-presets, CPU/HLSL layout, all 18 path permutations, the 327-task/50-binary
-shader bundle, committed-hit material coverage, finite accumulation math,
+presets, CPU/HLSL layout, all 18 transport and six Shared Primary permutations,
+the 333-task/51-binary
+shader bundle, committed-hit material coverage, finite multi-sample batch math,
 history invalidation inputs, renderer pass ordering, and drawer gating. A
-Release build must exercise Ray Marching and RTX PT, the direct reservoir with
-and without compatible previous-frame reuse, RESTIR PT reprojected prior-pixel
-and neighbor seed replay, and RESTIR GI same-pixel checkpoint reuse. It must
-also prove that camera, light, geometry, and material motion clear every
-non-revalidated history.
+Release build must exercise Ray Marching and RTX PT, one and multiple fresh
+paths per pixel, the direct reservoir with temporal and zero-to-four spatial
+donors, RESTIR PT with temporal and independently configured spatial seed
+replay, and RESTIR GI with temporal and independently configured bounded spatial
+reconnection. It must also prove that camera, light, geometry, and material
+motion clear every non-revalidated estimator history while consecutive Shared
+Primary frames retain only compatible motion signatures.
 
 Debug views for first-hit albedo, geometric and shading normal, sample count,
 update rate, signal-group classification, the direct reservoir, the active
@@ -582,3 +734,9 @@ submission stages. The raster fallback scope may contain only raster-specific
 production; it must never enclose those shared presentation or submission
 stages. Preparing or unavailable transport must keep a live raster frame and
 scene-loading UI responsive until a complete path frame can be submitted.
+
+Shared Primary acceptance must compare total frame time and its own GPU stage at
+matched resolution, bounces, Samples, NEE, reuse, and accumulation state. It
+must also record path-pass allocation at 1080p and 4K: the default adds 104 bytes
+per pixel and a full-frame dispatch, so reduced black/disocclusion variance is
+not evidence of a performance win by itself.

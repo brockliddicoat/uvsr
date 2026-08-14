@@ -25,9 +25,9 @@ namespace uvsr
     struct PathTracingInputs
     {
         const donut::engine::IView* view = nullptr;
-        // Optional nonjittered previous-frame view used only to locate
-        // revalidated direct proposals and replayable path seeds. Supplying
-        // it never authorizes retaining radiance history.
+        // Optional previous-frame view used by ray-traced motion every frame.
+        // Proposal reuse has a separate explicit authorization so presentation
+        // reprojection cannot accidentally retain estimator state.
         const donut::engine::IView* previousView = nullptr;
         uint32_t width = 0u;
         uint32_t height = 0u;
@@ -81,6 +81,7 @@ namespace uvsr
         bool temporalGiCheckpointReuseSupported = false;
         bool spatialGiCheckpointReuseSupported = false;
         bool fullSampleReconnectionSupported = false;
+        bool sharedPrimarySurfaceSupported = false;
         // Transport signal formats and the executable reconstruction PSO are
         // reported separately. The app composes the latter after constructing
         // both independent passes.
@@ -123,6 +124,10 @@ namespace uvsr
     {
         nvrhi::ITexture* sceneLinearDisplay = nullptr;
         nvrhi::ITexture* rawMean = nullptr;
+        nvrhi::ITexture* directMean = nullptr;
+        nvrhi::ITexture* indirectMean = nullptr;
+        nvrhi::ITexture* temporalDepth = nullptr;
+        nvrhi::ITexture* motionVectors = nullptr;
         nvrhi::ITexture* successfulSampleCount = nullptr;
         nvrhi::ITexture* colorVariance = nullptr;
         nvrhi::ITexture* directReservoir = nullptr;
@@ -146,6 +151,8 @@ namespace uvsr
         bool completedSignalCycle = false;
         bool stablePlaneResolveActive = false;
         bool directReservoirActive = false;
+        bool sharedPrimarySurfaceActive = false;
+        bool sharedPrimarySurfaceRequestedButUnavailable = false;
         bool temporalReuseActive = false;
         bool spatialReuseActive = false;
         bool giCheckpointReuseActive = false;
@@ -154,9 +161,9 @@ namespace uvsr
         bool stablePlaneResolveRequestedButUnavailable = false;
         bool pathReuseRequestedButUnavailable = false;
         bool giReuseRequestedButUnavailable = false;
-        // RESTIR PT and RESTIR GI are executable clean-room subsets. They
-        // deliberately do not claim NVIDIA namesake parity or geometric
-        // reconnection.
+        // RESTIR PT and RESTIR GI are executable clean-room subsets. GI owns a
+        // bounded rough diffuse-tail geometric reconnection estimator; neither
+        // solver claims complete NVIDIA namesake parity.
         bool cleanRoomSolverSubsetActive = false;
         bool namesakeParityUnavailable = false;
         bool solverPresetRequestedButUnavailable = false;
@@ -210,6 +217,7 @@ namespace uvsr
         nvrhi::DeviceHandle m_Device;
         nvrhi::BindingLayoutHandle m_BindlessLayout;
         nvrhi::BindingLayoutHandle m_BindingLayout;
+        nvrhi::BindingLayoutHandle m_PrimaryBindingLayout;
         nvrhi::SamplerHandle m_Sampler;
         nvrhi::BufferHandle m_ConstantBuffer;
         nvrhi::BufferHandle m_LightBuffer;
@@ -217,12 +225,27 @@ namespace uvsr
             PathTracingPipelineVariantCount> m_Shaders;
         std::array<nvrhi::ComputePipelineHandle,
             PathTracingPipelineVariantCount> m_Pipelines;
-        std::array<nvrhi::BindingSetHandle, 2> m_BindingSets;
+        std::array<nvrhi::BindingSetHandle, 4> m_BindingSets;
+        std::array<nvrhi::ShaderHandle,
+            PathTracingPrimaryPipelineVariantCount> m_PrimaryShaders;
+        std::array<nvrhi::ComputePipelineHandle,
+            PathTracingPrimaryPipelineVariantCount> m_PrimaryPipelines;
+        std::array<nvrhi::BindingSetHandle, 4> m_PrimaryBindingSets;
 
         nvrhi::TextureHandle m_RawMean;
         nvrhi::TextureHandle m_SuccessfulSampleCount;
         nvrhi::TextureHandle m_ColorVariance;
         nvrhi::TextureHandle m_Display;
+        nvrhi::TextureHandle m_DirectMean;
+        nvrhi::TextureHandle m_DirectSampleCount;
+        nvrhi::TextureHandle m_IndirectMean;
+        nvrhi::TextureHandle m_SharedPositionHit;
+        std::array<nvrhi::TextureHandle, 2> m_SharedGeometryMaterial;
+        nvrhi::TextureHandle m_SharedNormalAlpha;
+        nvrhi::TextureHandle m_SharedDiffuse;
+        nvrhi::TextureHandle m_SharedSpecular;
+        nvrhi::TextureHandle m_PathMotion;
+        nvrhi::TextureHandle m_PathDepth;
         nvrhi::TextureHandle m_ResidualMean;
         nvrhi::TextureHandle m_DiffuseSuffixMean;
         nvrhi::TextureHandle m_PrimaryNormalRoughness;
@@ -232,6 +255,9 @@ namespace uvsr
         std::array<nvrhi::TextureHandle, 2> m_DirectSampleSeeds;
         std::array<nvrhi::TextureHandle, 2> m_GiCheckpointReservoirs;
         std::array<nvrhi::TextureHandle, 2> m_GiCheckpointCounts;
+        std::array<nvrhi::TextureHandle, 2> m_GiLo;
+        std::array<nvrhi::TextureHandle, 2> m_GiNormal;
+        std::array<nvrhi::TextureHandle, 2> m_GiReceiver;
         std::array<nvrhi::TextureHandle, 2> m_PathSeedReservoirs;
         std::array<nvrhi::TextureHandle, 2> m_PathSeedStatistics;
 
@@ -243,6 +269,7 @@ namespace uvsr
         uint32_t m_Height = 0u;
         uint32_t m_LightCapacity = 0u;
         uint32_t m_HistoryIndex = 0u;
+        uint32_t m_PrimarySurfaceIndex = 0u;
         uint32_t m_LastDebugView = ~0u;
         uint64_t m_LastHistoryEpoch = ~uint64_t(0u);
         uint64_t m_LastTransportSignature = 0u;
@@ -255,12 +282,14 @@ namespace uvsr
         bool m_DirectReservoirHistoryValid = false;
         bool m_GiCheckpointHistoryValid = false;
         bool m_PathSeedHistoryValid = false;
+        bool m_PrimarySurfaceHistoryValid = false;
         bool m_DebugRefreshActive = false;
         bool m_ResetRequested = true;
         bool m_DirectReuseResourcesFullResolution = false;
         bool m_GiReuseResourcesFullResolution = false;
         bool m_PathReuseResourcesFullResolution = false;
         bool m_StableSignalResourcesFullResolution = false;
+        bool m_SharedPrimaryResourcesFullResolution = false;
         bool m_CompletedSignalCycle = false;
         bool m_ReportedInvalidInput = false;
         bool m_ReportedUnsafeSchedule = false;
@@ -273,11 +302,17 @@ namespace uvsr
             bool directReuseRequired,
             bool giReuseRequired,
             bool pathReuseRequired,
-            bool stableSignalsRequired);
+            bool stableSignalsRequired,
+            bool sharedPrimaryRequired);
         [[nodiscard]] bool EnsureLightBuffer(uint32_t lightCount);
         [[nodiscard]] bool EnsureBindingSet(
             const PathTracingInputs& inputs,
-            uint32_t historyIndex);
+            uint32_t historyIndex,
+            uint32_t primarySurfaceIndex);
+        [[nodiscard]] bool EnsurePrimaryBindingSet(
+            const PathTracingInputs& inputs,
+            uint32_t historyIndex,
+            uint32_t primarySurfaceIndex);
         void ClearHistory(
             nvrhi::ICommandList* commandList,
             bool preserveRevalidatedProposals = false);

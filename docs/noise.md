@@ -82,9 +82,13 @@ remains part of the mean.
 Path Tracing makes the scheduling decision before traversal. Ordinary presets
 update the full frame each pass. A one-Gi synthetic work-unit safety budget
 introduces a bounded progressive lattice only for extreme combinations of
-resolution, lights, candidates, and bounces; the Pathing drawer reports the
-active phase count and estimated work. A skipped pixel retains its previous
-scene-linear mean, RGB variance, and count without tracing a path. Ray Marching
+resolution, fresh samples, lights, candidates, bounces, and usable replay
+donors; the Pathing drawer reports the active phase count and estimated work.
+Reset frames are charged only for current paths. When an extreme reset still
+needs a sparse lattice, a presentation-only bilinear preview replaces the old
+nearest-tile expansion without entering estimator history. A skipped pixel
+retains its previous scene-linear mean, RGB variance, and count without tracing
+a path. Ray Marching
 runs a prepare shader before stochastic screen-space visibility,
 Heitz shadow, ray-traced flashlight, and ray-traced sky producers. Each guarded
 producer consumes the same attempt token and returns early for a rejected
@@ -104,19 +108,24 @@ being averaged a second time. A matching transactional resolve commits only a
 finite attempted sample; rejected and non-finite attempts copy the prior mean,
 RGB variance, and count exactly. With accumulation disabled, Ray Marching
 bypasses its full-resolution history and Path Tracing continuously replaces each
-pixel with a one-sample estimate.
+pixel with the cumulative batch selected by **Samples**. Shared Primary Surface
+traces a full-resolution receiver/direct baseline before the indirect batch. Its
+validated depth and motion let TAA reconstruct non-accumulating final output;
+progressive path accumulation remains the sole history owner and only borrows
+the selected camera-jitter sequence.
 
 Path Tracing's **Firefly Clamp (Biased)** is part of the estimator rather than
 the noise schedule. When enabled, it limits each successful contribution before
 the persistent mean is updated, so the retained result is intentionally biased.
 
 All retained samples share the renderer's lighting-history epoch. Camera motion
-always discards every mean, variance, count, stable signal, and RESTIR GI
-radiance checkpoint. Path Tracing's optional **Reuse Validated RESTIR Proposals
-During Motion** may retain only surface-validated direct-light proposals and
-fully replayable RESTIR PT seeds across a camera-only change. Donors are
-reprojected through the prior camera, then fully re-evaluated at the current
-surface. It never retains accumulated radiance.
+always discards every mean, variance, count, and stable signal. Path Tracing's
+optional **Motion Reuse** may retain only surface-validated direct-light,
+fully replayable RESTIR PT, and reconnectable rough diffuse-tail RESTIR GI
+proposals across an eligible camera-only change. Donors are reprojected through
+the prior camera, then re-evaluated at the current receiver. It never retains
+accumulated radiance, intentionally has no effect while stationary, and is
+unavailable when the requested work needs a sparse dispatch lattice.
 Geometry, dynamic vertices, instance transforms, materials, lights,
 environment, output extent, lighting solution, solver, transport, accumulation
 policy, noise, scene, or shader changes clear every history family. Noise

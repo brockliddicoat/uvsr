@@ -14,9 +14,12 @@
 #define UVSR_PATH_TRACING_FLAG_ANIMATE_HISTORY_RESET (1u << 5u)
 #define UVSR_PATH_TRACING_FLAG_FILTER_FIREFLIES (1u << 6u)
 #define UVSR_PATH_TRACING_FLAG_REVERSE_DEPTH (1u << 7u)
+#define UVSR_PATH_TRACING_FLAG_TEMPORAL_REUSE (1u << 8u)
 #define UVSR_PATH_TRACING_FLAG_SHOW_ENVIRONMENT_BACKGROUND (1u << 9u)
 #define UVSR_PATH_TRACING_FLAG_REFRESH_DEBUG (1u << 10u)
-#define UVSR_PATH_TRACING_FLAG_REPLICATE_PREVIEW (1u << 11u)
+#define UVSR_PATH_TRACING_FLAG_RECONSTRUCT_PREVIEW (1u << 11u)
+#define UVSR_PATH_TRACING_FLAG_SHARED_PRIMARY_SURFACE (1u << 12u)
+#define UVSR_PATH_TRACING_FLAG_PRIMARY_SIGNATURE_HISTORY (1u << 13u)
 
 struct PathTracingConstants
 {
@@ -45,8 +48,8 @@ struct PathTracingConstants
 
     uint schedulingSerialHigh;
     uint previousViewValid;
-    uint schedulingPadding1;
-    uint schedulingPadding2;
+    uint samplesPerPixel;
+    uint spatialNeighborCount;
 
     uint4 rayMaterialLimits;
 
@@ -60,7 +63,8 @@ struct PathTracingConstants
 
     float accumulationTargetRelativeError;
     float accumulationMinimumUpdateRate;
-    uint2 accumulationPadding;
+    uint instanceCount;
+    uint proposalReprojectionValid;
 };
 
 #endif // UVSR_PATH_TRACING_CB_H

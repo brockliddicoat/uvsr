@@ -316,6 +316,7 @@ namespace
             "geometrybuffer==other.geometrybuffer&&"
                 "materialbuffer==other.materialbuffer&&"
                 "geometryindexmap==other.geometryindexmap&&"
+                "instancebuffer==other.instancebuffer&&"
                 "descriptortable==other.descriptortable;",
             "material visibility cache identity must include every bound resource");
         Require(

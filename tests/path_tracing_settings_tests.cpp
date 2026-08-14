@@ -28,21 +28,22 @@ namespace
         static_assert(IsValidPathTracingSettings(Defaults));
         static_assert(Defaults.solver == PathTracingSolver::RtxPt);
         static_assert(Defaults.neeMode == PathTracingNeeMode::Uniform);
-        static_assert(Defaults.maxBounces == 8u);
-        static_assert(Defaults.russianRouletteStart == 3u);
+        static_assert(Defaults.maxBounces == 4u);
+        static_assert(Defaults.useRussianRoulette);
+        static_assert(GetAutomaticRussianRouletteStart(Defaults) == 3u);
         static_assert(Defaults.neeCandidateCount == 1u);
+        static_assert(Defaults.samplesPerPixel == 2u);
         static_assert(!Defaults.useSer);
         static_assert(!Defaults.useRtxdi);
-        static_assert(!Defaults.reuseDirectReservoirs);
-        static_assert(!Defaults.reusePathReservoirs);
-        static_assert(!Defaults.reuseIndirectGiReservoirs);
+        static_assert(!Defaults.temporalReuse);
+        static_assert(Defaults.spatialNeighborCount == 0u);
         static_assert(!Defaults.reuseRevalidatedProposalsDuringMotion);
+        static_assert(Defaults.sharedPrimarySurface);
         static_assert(Defaults.stablePlaneCount == 3u);
         static_assert(Defaults.spatialResolveStrength == 1.f);
-        static_assert(!Defaults.enableFireflyFilter);
-        static_assert(Defaults.fireflyThreshold == 5.f);
-        static_assert(Defaults.denoiser ==
-            PathTracingDenoiser::SpatialPathResolve);
+        static_assert(Defaults.enableFireflyFilter);
+        static_assert(Defaults.fireflyThreshold == 3.f);
+        static_assert(Defaults.denoiser == PathTracingDenoiser::Raw);
         static_assert(Defaults.debugView ==
             PathTracingDebugView::FinalImage);
     }
@@ -60,11 +61,11 @@ namespace
         assert(IsValidPathTracingSolver(PathTracingSolver::RestirPt));
         assert(IsValidPathTracingSolver(PathTracingSolver::RestirGi));
         assert(GetPathTracingSolverLabel(PathTracingSolver::RtxPt) ==
-            std::string_view("RTX PT"));
+            std::string_view("Realtime Path Tracer"));
         assert(GetPathTracingSolverLabel(PathTracingSolver::RestirPt) ==
-            std::string_view("RESTIR PT"));
+            std::string_view("Reservoir Path Tracer"));
         assert(GetPathTracingSolverLabel(PathTracingSolver::RestirGi) ==
-            std::string_view("RESTIR GI"));
+            std::string_view("Reservoir Indirect Lighting"));
 
         assert(IsValidPathTracingNeeMode(PathTracingNeeMode::Uniform));
         assert(IsValidPathTracingNeeMode(PathTracingNeeMode::Power));
@@ -76,7 +77,7 @@ namespace
             std::string_view("Power"));
         assert(GetPathTracingNeeModeLabel(
             PathTracingNeeMode::NeeAdaptiveTree) ==
-            std::string_view("NEE-AT"));
+            std::string_view("Adaptively Temporally"));
 
         assert(IsValidPathTracingDenoiser(PathTracingDenoiser::Raw));
         assert(IsValidPathTracingDenoiser(
@@ -169,34 +170,41 @@ namespace
             ApplyPathTracingSolverPreset(PathTracingSolver::RtxPt);
         static_assert(RtxPt.solver == PathTracingSolver::RtxPt);
         static_assert(!RtxPt.useRtxdi);
-        static_assert(!RtxPt.reuseDirectReservoirs);
-        static_assert(!RtxPt.reusePathReservoirs);
-        static_assert(!RtxPt.reuseIndirectGiReservoirs);
+        static_assert(!RtxPt.temporalReuse);
+        static_assert(RtxPt.spatialNeighborCount == 0u);
+        static_assert(!UsesDirectReservoirHistory(RtxPt));
+        static_assert(!UsesPathSeedHistory(RtxPt));
+        static_assert(!UsesGiCheckpointHistory(RtxPt));
         static_assert(IsValidPathTracingSettings(RtxPt));
 
         constexpr PathTracingSettings RestirPt =
             ApplyPathTracingSolverPreset(PathTracingSolver::RestirPt);
         static_assert(RestirPt.solver == PathTracingSolver::RestirPt);
-        static_assert(RestirPt.neeMode == PathTracingNeeMode::Power);
-        static_assert(RestirPt.maxBounces == 3u);
-        static_assert(RestirPt.russianRouletteStart == 3u);
+        static_assert(RestirPt.neeMode == PathTracingNeeMode::Uniform);
+        static_assert(RestirPt.maxBounces == 4u);
+        static_assert(RestirPt.useRussianRoulette);
+        static_assert(GetAutomaticRussianRouletteStart(RestirPt) == 3u);
         static_assert(RestirPt.neeCandidateCount == 1u);
         static_assert(!RestirPt.useRtxdi);
-        static_assert(RestirPt.reuseDirectReservoirs);
-        static_assert(RestirPt.reusePathReservoirs);
+        static_assert(RestirPt.temporalReuse);
+        static_assert(RestirPt.spatialNeighborCount == 1u);
+        static_assert(!UsesDirectReservoirHistory(RestirPt));
+        static_assert(UsesPathSeedHistory(RestirPt));
         static_assert(RestirPt.stablePlaneCount == 2u);
-        static_assert(!RestirPt.reuseIndirectGiReservoirs);
+        static_assert(!UsesGiCheckpointHistory(RestirPt));
         static_assert(IsValidPathTracingSettings(RestirPt));
 
         constexpr PathTracingSettings RestirGi =
             ApplyPathTracingSolverPreset(PathTracingSolver::RestirGi);
         static_assert(RestirGi.solver == PathTracingSolver::RestirGi);
-        static_assert(RestirGi.neeMode == PathTracingNeeMode::Power);
+        static_assert(RestirGi.neeMode == PathTracingNeeMode::Uniform);
         static_assert(RestirGi.neeCandidateCount == 1u);
         static_assert(!RestirGi.useRtxdi);
-        static_assert(RestirGi.reuseDirectReservoirs);
-        static_assert(!RestirGi.reusePathReservoirs);
-        static_assert(RestirGi.reuseIndirectGiReservoirs);
+        static_assert(RestirGi.temporalReuse);
+        static_assert(RestirGi.spatialNeighborCount == 0u);
+        static_assert(!UsesDirectReservoirHistory(RestirGi));
+        static_assert(!UsesPathSeedHistory(RestirGi));
+        static_assert(UsesGiCheckpointHistory(RestirGi));
         static_assert(RestirGi.stablePlaneCount == 2u);
         static_assert(IsValidPathTracingSettings(RestirGi));
 
@@ -218,12 +226,12 @@ namespace
         Invalid.solver = static_cast<PathTracingSolver>(255u);
         Invalid.neeMode = static_cast<PathTracingNeeMode>(255u);
         Invalid.maxBounces = 0u;
-        Invalid.russianRouletteStart = std::numeric_limits<uint32_t>::max();
         Invalid.neeCandidateCount = 0u;
+        Invalid.samplesPerPixel = 0u;
         Invalid.useRtxdi = false;
-        Invalid.reuseDirectReservoirs = true;
-        Invalid.reusePathReservoirs = true;
-        Invalid.reuseIndirectGiReservoirs = true;
+        Invalid.temporalReuse = true;
+        Invalid.spatialNeighborCount =
+            std::numeric_limits<uint32_t>::max();
         Invalid.stablePlaneCount = 4u;
         Invalid.spatialResolveStrength =
             std::numeric_limits<float>::quiet_NaN();
@@ -239,15 +247,17 @@ namespace
         assert(Sanitized.solver == PathTracingSolver::RtxPt);
         assert(Sanitized.neeMode == PathTracingNeeMode::Uniform);
         assert(Sanitized.maxBounces == PathTracingMinBounceCount);
-        assert(Sanitized.russianRouletteStart ==
-            PathTracingMinBounceCount);
+        assert(GetAutomaticRussianRouletteStart(Sanitized) ==
+            Sanitized.maxBounces + 1u);
         assert(Sanitized.neeCandidateCount ==
             PathTracingMinNeeCandidateCount);
-        // Sanitization preserves temporarily gated RTXDI sub-options so
-        // toggling the parent feature off and back on does not lose intent.
-        assert(Sanitized.reuseDirectReservoirs);
-        assert(Sanitized.reusePathReservoirs);
-        assert(Sanitized.reuseIndirectGiReservoirs);
+        assert(Sanitized.samplesPerPixel ==
+            PathTracingMinSamplesPerPixel);
+        // Sanitization preserves temporarily gated reuse preferences so a
+        // parent solver or RTXDI toggle does not lose authored intent.
+        assert(Sanitized.temporalReuse);
+        assert(Sanitized.spatialNeighborCount ==
+            PathTracingMaxSpatialNeighborCount);
         assert(Sanitized.stablePlaneCount ==
             PathTracingMaxStablePlaneCount);
         assert(Sanitized.spatialResolveStrength ==
@@ -259,16 +269,18 @@ namespace
 
         Invalid = {};
         Invalid.maxBounces = std::numeric_limits<uint32_t>::max();
-        Invalid.russianRouletteStart = std::numeric_limits<uint32_t>::max();
         Invalid.neeCandidateCount = std::numeric_limits<uint32_t>::max();
+        Invalid.samplesPerPixel = std::numeric_limits<uint32_t>::max();
         Invalid.fireflyThreshold =
             std::numeric_limits<float>::infinity();
         const PathTracingSettings Maximum =
             SanitizePathTracingSettings(Invalid);
         assert(Maximum.maxBounces == PathTracingMaxBounceCount);
-        assert(Maximum.russianRouletteStart == PathTracingMaxBounceCount);
+        assert(GetAutomaticRussianRouletteStart(Maximum) == 3u);
         assert(Maximum.neeCandidateCount ==
             PathTracingMaxNeeCandidateCount);
+        assert(Maximum.samplesPerPixel ==
+            PathTracingMaxSamplesPerPixel);
         assert(Maximum.fireflyThreshold ==
             PathTracingDefaultFireflyThreshold);
 
@@ -284,11 +296,26 @@ namespace
         {
             PathTracingSettings settings;
             settings.maxBounces = 200u;
-            settings.russianRouletteStart = 200u;
             return SanitizePathTracingSettings(settings);
         }();
         static_assert(CompileTimeSanitized.maxBounces == 96u);
-        static_assert(CompileTimeSanitized.russianRouletteStart == 96u);
+
+        constexpr PathTracingSettings ThreeBounceRoulette = []
+        {
+            PathTracingSettings settings;
+            settings.maxBounces = 3u;
+            return settings;
+        }();
+        static_assert(GetAutomaticRussianRouletteStart(ThreeBounceRoulette) ==
+            4u);
+        constexpr PathTracingSettings DisabledRoulette = []
+        {
+            PathTracingSettings settings;
+            settings.useRussianRoulette = false;
+            return settings;
+        }();
+        static_assert(GetAutomaticRussianRouletteStart(DisabledRoulette) ==
+            DisabledRoulette.maxBounces + 1u);
     }
 
     void TestEquality()
@@ -308,8 +335,20 @@ namespace
         Different.spatialResolveStrength = 0.5f;
         assert(Different != Left);
         Different = Left;
-        Different.reuseDirectReservoirs = true;
+        Different.temporalReuse = true;
         Different.useRtxdi = true;
+        assert(Different != Left);
+        Different = Left;
+        Different.samplesPerPixel = 3u;
+        assert(Different != Left);
+        Different = Left;
+        Different.useRussianRoulette = false;
+        assert(Different != Left);
+        Different = Left;
+        Different.sharedPrimarySurface = false;
+        assert(Different != Left);
+        Different = Left;
+        Different.spatialNeighborCount = 1u;
         assert(Different != Left);
     }
 
@@ -351,12 +390,12 @@ namespace
                 PathTracingAllPipelineVariantsMask);
         static_assert(Exact.executable);
         static_assert(!Exact.fallbackApplied);
-        static_assert(Exact.requestedVariant == 7u);
-        static_assert(Exact.effectiveVariant == 7u);
+        static_assert(Exact.requestedVariant == 6u);
+        static_assert(Exact.effectiveVariant == 6u);
         static_assert(
             Exact.effectiveSettings.solver == PathTracingSolver::RestirPt);
-        static_assert(Exact.effectiveSettings.reusePathReservoirs);
-        static_assert(!Exact.effectiveSettings.reuseDirectReservoirs);
+        static_assert(UsesPathSeedHistory(Exact.effectiveSettings));
+        static_assert(!UsesDirectReservoirHistory(Exact.effectiveSettings));
 
         constexpr PathTracingPipelineResolution SameNeeWithoutRtxdi = []
         {
@@ -364,31 +403,38 @@ namespace
                 PathTracingSolver::RestirPt);
             settings.useRtxdi = true;
             settings.debugView = PathTracingDebugView::DirectReservoir;
-            return ResolvePathTracingPipeline(settings, 1u << 7u);
+            return ResolvePathTracingPipeline(settings, 1u << 6u);
         }();
         static_assert(SameNeeWithoutRtxdi.executable);
         static_assert(SameNeeWithoutRtxdi.fallbackApplied);
-        static_assert(SameNeeWithoutRtxdi.requestedVariant == 10u);
-        static_assert(SameNeeWithoutRtxdi.effectiveVariant == 7u);
+        static_assert(SameNeeWithoutRtxdi.requestedVariant == 9u);
+        static_assert(SameNeeWithoutRtxdi.effectiveVariant == 6u);
         static_assert(!SameNeeWithoutRtxdi.effectiveSettings.useRtxdi);
         static_assert(
             SameNeeWithoutRtxdi.effectiveSettings.solver ==
                 PathTracingSolver::RestirPt);
-        static_assert(
-            !SameNeeWithoutRtxdi.effectiveSettings.reuseDirectReservoirs);
-        static_assert(
-            SameNeeWithoutRtxdi.effectiveSettings.reusePathReservoirs);
-        static_assert(
-            !SameNeeWithoutRtxdi.effectiveSettings.reuseIndirectGiReservoirs);
+        static_assert(!UsesDirectReservoirHistory(
+            SameNeeWithoutRtxdi.effectiveSettings));
+        static_assert(UsesPathSeedHistory(
+            SameNeeWithoutRtxdi.effectiveSettings));
+        static_assert(!UsesGiCheckpointHistory(
+            SameNeeWithoutRtxdi.effectiveSettings));
         static_assert(
             SameNeeWithoutRtxdi.effectiveSettings.neeMode ==
-                PathTracingNeeMode::Power);
+                PathTracingNeeMode::Uniform);
         static_assert(
             SameNeeWithoutRtxdi.effectiveSettings.debugView ==
                 PathTracingDebugView::FinalImage);
 
+        constexpr PathTracingSettings RestirPtPower = []
+        {
+            PathTracingSettings settings = ApplyPathTracingSolverPreset(
+                PathTracingSolver::RestirPt);
+            settings.neeMode = PathTracingNeeMode::Power;
+            return settings;
+        }();
         constexpr PathTracingPipelineResolution SameSolverUniform =
-            ResolvePathTracingPipeline(RestirPt, 1u << 6u);
+            ResolvePathTracingPipeline(RestirPtPower, 1u << 6u);
         static_assert(SameSolverUniform.executable);
         static_assert(SameSolverUniform.fallbackApplied);
         static_assert(SameSolverUniform.effectiveVariant == 6u);
@@ -400,14 +446,15 @@ namespace
                 PathTracingNeeMode::Uniform);
 
         constexpr PathTracingPipelineResolution RtxPtSameNee =
-            ResolvePathTracingPipeline(RestirPt, 1u << 1u);
+            ResolvePathTracingPipeline(RestirPtPower, 1u << 1u);
         static_assert(RtxPtSameNee.executable);
         static_assert(RtxPtSameNee.fallbackApplied);
         static_assert(RtxPtSameNee.effectiveVariant == 1u);
         static_assert(
             RtxPtSameNee.effectiveSettings.solver ==
                 PathTracingSolver::RtxPt);
-        static_assert(!RtxPtSameNee.effectiveSettings.reusePathReservoirs);
+        static_assert(!UsesPathSeedHistory(
+            RtxPtSameNee.effectiveSettings));
 
         constexpr PathTracingPipelineResolution Baseline =
             ResolvePathTracingPipeline(RestirPt, 0x01u);
@@ -420,9 +467,11 @@ namespace
             Baseline.effectiveSettings.neeMode ==
                 PathTracingNeeMode::Uniform);
         static_assert(!Baseline.effectiveSettings.useRtxdi);
-        static_assert(!Baseline.effectiveSettings.reuseDirectReservoirs);
-        static_assert(!Baseline.effectiveSettings.reusePathReservoirs);
-        static_assert(!Baseline.effectiveSettings.reuseIndirectGiReservoirs);
+        static_assert(!UsesDirectReservoirHistory(
+            Baseline.effectiveSettings));
+        static_assert(!UsesPathSeedHistory(Baseline.effectiveSettings));
+        static_assert(!UsesGiCheckpointHistory(
+            Baseline.effectiveSettings));
 
         constexpr PathTracingPipelineResolution Unsupported =
             ResolvePathTracingPipeline(RestirPt, 0u);
@@ -455,6 +504,7 @@ namespace
     void TestSpatialPathResolveCapability()
     {
         PathTracingSettings settings;
+        settings.denoiser = PathTracingDenoiser::SpatialPathResolve;
         assert(IsSpatialPathResolveRequested(settings));
         assert(CanUseSpatialPathResolve(settings, true));
         assert(!CanUseSpatialPathResolve(settings, false));
@@ -482,6 +532,7 @@ namespace
         assert(!CanUseSpatialPathResolve(raw, true));
 
         settings = {};
+        settings.denoiser = PathTracingDenoiser::SpatialPathResolve;
         settings.stablePlaneCount = 0u;
         const PathTracingSettings restored =
             SanitizePathTracingSettings(settings);

@@ -392,6 +392,7 @@ int main(int argc, char** argv)
         "geometryBuffer==other.geometryBuffer&&"
             "materialBuffer==other.materialBuffer&&"
             "geometryIndexMap==other.geometryIndexMap&&"
+            "instanceBuffer==other.instanceBuffer&&"
             "descriptorTable==other.descriptorTable;",
         "all material visibility resources participate in cache identity");
     RequireContains(

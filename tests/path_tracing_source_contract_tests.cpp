@@ -134,6 +134,8 @@ int main(int argc, char** argv)
         root / "src/sample_accumulation.hlsli"));
     const std::string shader = Canonicalize(ReadSource(
         root / "src/path_tracing_cs.hlsl"));
+    const std::string primaryShader = Canonicalize(ReadSource(
+        root / "src/path_tracing_primary_surface_cs.hlsl"));
     const std::string resolveHeader = Canonicalize(ReadSource(
         root / "src/path_tracing_stable_plane_resolve_pass.h"));
     const std::string resolvePass = Canonicalize(ReadSource(
@@ -142,6 +144,133 @@ int main(int argc, char** argv)
         root / "src/path_tracing_stable_plane_resolve_cs.hlsl"));
     const std::string shaderConfig = Canonicalize(ReadSource(
         root / "src/shaders.cfg"));
+
+    {
+        using Vector = std::array<double, 3>;
+        const auto subtract = [](Vector left, Vector right)
+        {
+            return Vector{
+                left[0] - right[0],
+                left[1] - right[1],
+                left[2] - right[2]
+            };
+        };
+        const auto dot = [](Vector left, Vector right)
+        {
+            return left[0] * right[0] + left[1] * right[1] +
+                left[2] * right[2];
+        };
+        const auto giJacobian = [&](Vector receiver, Vector donorReceiver,
+                                    Vector secondary, Vector normal)
+        {
+            const Vector receiverVector = subtract(receiver, secondary);
+            const Vector donorVector = subtract(donorReceiver, secondary);
+            const double receiverDistanceSquared =
+                dot(receiverVector, receiverVector);
+            const double donorDistanceSquared =
+                dot(donorVector, donorVector);
+            if (!(receiverDistanceSquared > 1.e-8) ||
+                !(donorDistanceSquared > 1.e-8))
+            {
+                return 0.0;
+            }
+            const double receiverDistance =
+                std::sqrt(receiverDistanceSquared);
+            const double donorDistance = std::sqrt(donorDistanceSquared);
+            const double receiverCosine = dot(normal, receiverVector) /
+                receiverDistance;
+            const double donorCosine = dot(normal, donorVector) /
+                donorDistance;
+            if (!(receiverCosine > 1.e-4) || !(donorCosine > 1.e-4))
+                return 0.0;
+            const double directionDot = dot(receiverVector, donorVector) /
+                (receiverDistance * donorDistance);
+            const double cosineRatio = receiverCosine / donorCosine;
+            if (directionDot < 0.8660254 || cosineRatio < 0.5 ||
+                cosineRatio > 2.0)
+            {
+                return 0.0;
+            }
+            const double value = receiverCosine * donorDistanceSquared /
+                (donorCosine * receiverDistanceSquared);
+            return std::isfinite(value) && value >= 0.05 && value <= 20.0
+                ? value
+                : 0.0;
+        };
+        RequireNear(
+            giJacobian(
+                { 0.0, 0.0, 1.0 },
+                { 0.0, 0.0, 1.0 },
+                { 0.0, 0.0, 0.0 },
+                { 0.0, 0.0, 1.0 }),
+            1.0,
+            1.e-12,
+            "identity GI reconnection must have unit Jacobian");
+        RequireNear(
+            giJacobian(
+                { 0.0, 0.0, 2.0 },
+                { 0.0, 0.0, 1.0 },
+                { 0.0, 0.0, 0.0 },
+                { 0.0, 0.0, 1.0 }),
+            0.25,
+            1.e-12,
+            "GI reconnection must apply inverse-square distance shifting");
+        RequireNear(
+            giJacobian(
+                { 0.0, 0.0, -1.0 },
+                { 0.0, 0.0, 1.0 },
+                { 0.0, 0.0, 0.0 },
+                { 0.0, 0.0, 1.0 }),
+            0.0,
+            0.0,
+            "opposite-hemisphere GI reconnection must be rejected");
+
+        const double localSuffix = 7.0;
+        const double invalidLocalContribution = 0.0;
+        RequireNear(
+            std::max(localSuffix - invalidLocalContribution, 0.0),
+            localSuffix,
+            0.0,
+            "an invalid current GI proposal must retain the complete local suffix");
+        const double representedBeforeOcclusion = 1.0;
+        const double occludedDonorRepresentedCount = 1.0;
+        const double representedAfterOcclusion = std::min(
+            representedBeforeOcclusion + occludedDonorRepresentedCount,
+            32.0);
+        RequireNear(
+            representedAfterOcclusion,
+            2.0,
+            0.0,
+            "an occluded compatible GI donor must retain M as a zero trial");
+
+        const std::array<double, 2> fixedDonors{ 2.0, 0.0 };
+        const std::array<double, 8> freshSamples{
+            1.0, 3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0
+        };
+        for (const size_t sampleCount : { size_t(1), size_t(2), size_t(8) })
+        {
+            double legacyMean = 0.0;
+            double cachedMean = 0.0;
+            const double donorSum = fixedDonors[0] + fixedDonors[1];
+            for (size_t sample = 0u; sample < sampleCount; ++sample)
+            {
+                const double legacy =
+                    (freshSamples[sample] + fixedDonors[0] +
+                        fixedDonors[1]) / 3.0;
+                const double cached =
+                    (freshSamples[sample] + donorSum) / 3.0;
+                legacyMean += legacy;
+                cachedMean += cached;
+            }
+            legacyMean /= double(sampleCount);
+            cachedMean /= double(sampleCount);
+            RequireNear(
+                cachedMean,
+                legacyMean,
+                1.e-12,
+                "once-per-frame PT donor replay must preserve fixed-donor batch means");
+        }
+    }
 
     {
         constexpr double Pi = 3.14159265358979323846;
@@ -340,10 +469,11 @@ int main(int argc, char** argv)
     for (std::string_view capability : {
             "boolsersupported=false;",
             "boolspatialgicheckpointreusesupported=false;",
-            "boolfullsamplereconnectionsupported=false;" })
+            "boolfullsamplereconnectionsupported=false;",
+            "boolsharedprimarysurfacesupported=false;" })
     {
         RequireContains(passHeader, capability,
-            "the public result must report unsupported advanced capabilities honestly");
+            "the public capability surface must begin from conservative defaults");
     }
     RequireContains(
         passHeader,
@@ -364,8 +494,12 @@ int main(int argc, char** argv)
     RequireContains(
         passHeader,
         "nvrhi::itexture*rawmean=nullptr;"
+            "nvrhi::itexture*directmean=nullptr;"
+            "nvrhi::itexture*indirectmean=nullptr;"
+            "nvrhi::itexture*temporaldepth=nullptr;"
+            "nvrhi::itexture*motionvectors=nullptr;"
             "nvrhi::itexture*successfulsamplecount=nullptr;",
-        "raw unbiased mean and exact per-pixel sample count must be public outputs");
+        "split direct/indirect means, ray depth/motion, and exact indirect sample count must be public outputs");
     RequireContains(
         passHeader,
         "nvrhi::itexture*residualmean=nullptr;"
@@ -409,6 +543,94 @@ int main(int argc, char** argv)
         "the production shader manifest must compile each selectable NEE algorithm separately");
     RequireContains(
         shaderConfig,
+        "path_tracing_primary_surface_cs.hlsl-tcs-emain"
+            "-duvsr_pt_rtxdi={0,1}"
+            "-duvsr_pt_nee_mode={0,1,2}",
+        "the production shader manifest must compile the shared primary/direct matrix");
+    RequireOrdered(
+        primaryShader,
+        {
+            "texture2d<uint2>t_previousprimarysignature:register(t24);",
+            "rwtexture2d<float4>u_rawmean:register(u0);",
+            "rwtexture2d<uint2>u_sharedgeometrymaterial:register(u17);",
+            "rwtexture2d<float4>u_directmean:register(u21);",
+            "rwtexture2d<float4>u_pathmotion:register(u23);"
+        },
+        "shared primary must own explicit previous-signature, split-signal, and motion resources");
+    RequireOrdered(
+        material,
+        {
+            "uintpathtracingpackunitvectorhalf(float3direction)",
+            "f32tof16(encoded.x)",
+            "float3pathtracingunpackunitvectorhalf(uintpacked)",
+            "pathtracingdecodeunitvector(float2("
+        },
+        "primary signatures must pack and recover geometric normals through a stable uint ABI");
+    RequireOrdered(
+        pass,
+        {
+            "std::array<nvrhi::texturehandle,2>sharedgeometrymaterial=",
+            "nvrhi::format::rg32_uint,",
+            "m_sharedgeometrymaterial=sharedgeometrymaterial;",
+            "constuint32_tbindingindex=historyindex*2u+primarysurfaceindex;",
+            "24,m_sharedgeometrymaterial[previousprimarysurfaceindex]",
+            "17,m_sharedgeometrymaterial[primarysurfaceindex]"
+        },
+        "CPU bindings must independently select estimator and immediate primary history");
+    RequireContains(
+        passHeader,
+        "std::array<nvrhi::bindingsethandle,4>m_bindingsets;"
+            "std::array<nvrhi::shaderhandle,"
+            "pathtracingprimarypipelinevariantcount>m_primaryshaders;"
+            "std::array<nvrhi::computepipelinehandle,"
+            "pathtracingprimarypipelinevariantcount>m_primarypipelines;"
+            "std::array<nvrhi::bindingsethandle,4>m_primarybindingsets;",
+        "estimator and immediate primary ping-pong indices must have four cached binding combinations");
+    RequireOrdered(
+        pass,
+        {
+            "constboolpreviousprimarysurfacehistoryvalid="
+                "m_primarysurfacehistoryvalid;",
+            "m_primarysurfacehistoryvalid=false;",
+            "if(!m_capabilities.rayquerysupported||!commandlist)",
+            "constboolprimarysurfacehistoryavailable="
+                "sharedprimaryrequired&&"
+                "previousprimarysurfacehistoryvalid&&"
+                "constants.previousviewvalid!=0u;",
+            "uvsr_path_tracing_flag_primary_signature_history",
+            "m_primarysurfaceindex^=1u;",
+            "m_primarysurfacehistoryvalid=true;"
+        },
+        "primary history must break on render gaps yet advance every successful full-resolution primary frame");
+    RequireAbsent(
+        pass,
+        "cleartextureuint(m_sharedgeometrymaterial",
+        "transport history resets must not erase immediate primary signatures during motion");
+    RequireOrdered(
+        primaryShader,
+        {
+            "uvsr_path_tracing_flag_primary_signature_history",
+            "any(previouslocal<0.0f)",
+            "any(previouslocal>=g_pathtracing.previousview.viewportsize)",
+            "t_previousprimarysignature[previouspixel]",
+            "previoussignature.y!=currentmaterial",
+            "dot(currentgeometricnormal,previousnormal)<0.8f",
+            "returnall(isfinite(motion))?float4(motion,1.0f):0.0f;"
+        },
+        "path motion must reject out-of-bounds, material, and normal discontinuities before TAA");
+    RequireOrdered(
+        primaryShader,
+        {
+            "if(!all(isfinite(value)))return0.0f;",
+            "if(oldcount>0u&&!all(isfinite(oldmean)))",
+            "oldcount=0u;",
+            "if(!all(isfinite(indirectmean)))indirectmean=0.0f;",
+            "u_rawmean[pixel]=float4(rawmean,1.0f);",
+            "u_residualmean[pixel]=float4(directmean,1.0f);"
+        },
+        "shared-primary direct and split means must repair non-finite history and publish full-resolution resolve inputs");
+    RequireContains(
+        shaderConfig,
         "path_tracing_stable_plane_resolve_cs.hlsl-tcs-emain",
         "the production manifest must compile the spatial resolve singleton");
     RequireContains(
@@ -439,7 +661,8 @@ int main(int argc, char** argv)
             "constuint32_tpipelinevariant=pipelineresolution.effectivevariant;",
             "if(!pipelineresolution.executable||",
             "!m_pipelines[pipelinevariant])",
-            "constbooldirectreuserequired=inputs.settings.usertxdi&&",
+            "constbooldirectreuserequired="
+                "usesdirectreservoirhistory(inputs.settings)&&",
             "constboolgireuserequired=",
             "constboolpathreuserequired=",
             "constboolstablesignalsrequested=",
@@ -489,12 +712,20 @@ int main(int argc, char** argv)
         "one optional pipeline failure must not erase valid baseline hardware support");
     Require(
         CountOccurrences(pass, "bindinglayoutitem::texture_uav(slot)") == 1u &&
-            CountOccurrences(shader, "register(u") == 15u,
-        "the CPU layout and shader must expose the stable solver history/output ABI");
+            CountOccurrences(shader, "register(u") == 18u,
+        "the CPU layout and shader must expose split indirect and GI payload outputs");
     RequireContains(
         pass,
-        "for(uint32_tslot=0u;slot<=14u;++slot)",
-        "every transport specialization must share the complete u0-u14 binding layout");
+        "for(uint32_tslot=0u;slot<=15u;++slot)",
+        "every transport specialization must share the complete u0-u15 binding layout");
+    for (std::string_view giUav : {
+            "bindinglayoutitem::texture_uav(25)",
+            "bindinglayoutitem::texture_uav(26)",
+            "bindinglayoutitem::texture_uav(27)" })
+    {
+        RequireContains(pass, giUav,
+            "the reconnectable GI payload must have explicit non-aliasing UAV slots");
+    }
     RequireContains(
         shader,
         "rwtexture2d<float4>u_residualmean:register(u9);"
@@ -529,7 +760,7 @@ int main(int argc, char** argv)
         pass,
         {
             "bindinglayoutitem::texture_srv(9)",
-            "for(uint32_tslot=0u;slot<=14u;++slot)",
+            "for(uint32_tslot=0u;slot<=15u;++slot)",
             "bindingsetitem::texture_srv("
                 "9,m_directsampleseeds[previousindex])",
             "bindingsetitem::texture_uav("
@@ -585,6 +816,9 @@ int main(int argc, char** argv)
             "directsampleseeds[index]=createpathtexture(",
             "gicheckpointreservoirs[index]=createpathtexture(",
             "gicheckpointcounts[index]=createpathtexture(",
+            "gilo[index]=createpathtexture(",
+            "ginormal[index]=createpathtexture(",
+            "gireceiver[index]=createpathtexture(",
             "pathseedreservoirs[index]=createpathtexture(",
             "pathseedstatistics[index]=createpathtexture("
         },
@@ -647,20 +881,21 @@ int main(int argc, char** argv)
             "capabilities.continuationseedreservoirsupported=",
             "capabilities.replayablepathseedsupported=",
             "capabilities.temporalgicheckpointreusesupported=",
-            "capabilities.spatialgicheckpointreusesupported=false;",
-            "capabilities.fullsamplereconnectionsupported=false;"
+            "capabilities.spatialgicheckpointreusesupported=",
+            "capabilities.fullsamplereconnectionsupported=",
+            "capabilities.sharedprimarysurfacesupported="
         },
-        "capabilities must report executable local replay without claiming spatial GI or geometric reconnection");
+        "capabilities must report executable local replay, geometric GI reconnection, and shared primary support");
     RequireContains(
         pass,
         "capabilities.fullsamplereconnectionsupported=false;",
-        "the implementation must not claim full-sample reconnection");
+        "bounded diffuse-tail reconnection must not claim arbitrary full-path shifting");
     RequireContains(
         pass,
         "result.pathreuserequestedbutunavailable="
-            "requestedsettings.reusepathreservoirs&&!pathreuserequired;"
+            "usespathseedhistory(requestedsettings)&&!pathreuserequired;"
             "result.gireuserequestedbutunavailable="
-            "requestedsettings.reuseindirectgireservoirs&&!gireuserequired;",
+            "usesgicheckpointhistory(requestedsettings)&&!gireuserequired;",
         "reuse diagnostics must report the effective stage that actually executed");
     RequireContains(
         pass,
@@ -1070,13 +1305,16 @@ int main(int argc, char** argv)
         shader,
         {
             "uintoldcount=u_successfulsamplecount[pixel];",
-            "float3oldmean=u_rawmean[pixel].rgb;",
+            "float3oldmean=sharedprimary?"
+                "u_indirectmean[pixel].rgb:u_rawmean[pixel].rgb;",
             "constfloat4oldvariancestate=u_colorvariance[pixel];",
             "float3oldvariance=oldvariancestate.rgb;",
             "if(oldcount>0u&&(!all(isfinite(oldmean))||"
                 "!all(isfinite(oldvariance))))",
-            "oldcount=0u;oldmean=0.0f;oldvariance=0.0f;",
-            "constfloat3newmean=oldcount==0u||!accumulate"
+            "oldcount=0u;oldmean=0.0f;oldvariance=0.0f;"
+                "failedattemptsalt=0u;",
+            "uintrunningcount=accumulate?oldcount:0u;",
+            "constfloat3newmean=previouscount==0u?"
         },
         "nonfinite per-pixel path history must recover locally before "
         "scheduling and accumulation");
@@ -1085,13 +1323,17 @@ int main(int argc, char** argv)
         {
             "uintfailedattemptsalt=",
             "isfinite(oldvariancestate.a)&&oldvariancestate.a>=0.0f",
-            "accumulate?failedattemptsalt:0u,",
+            "uintnextfailedattemptsalt=failedattemptsalt;",
+            "accumulate?nextfailedattemptsalt:0u,",
             "if(sample.valid==0u)",
-            "constuintnextfailedattemptsalt=accumulate?",
-            "failedattemptsalt+1u",
+            "nextfailedattemptsalt=accumulate?",
+            "nextfailedattemptsalt+1u",
+            "continue;",
+            "nextfailedattemptsalt=0u;",
             "u_colorvariance[pixel]=float4("
                 "oldvariance,float(nextfailedattemptsalt));",
-            "u_colorvariance[pixel]=float4(newvariance,0.0f);"
+            "u_colorvariance[pixel]=float4("
+                "runningvariance,float(nextfailedattemptsalt));"
         },
         "invalid stationary path samples must change their retry seed while "
         "adaptive skips preserve the salt and successes clear it");
@@ -1124,12 +1366,15 @@ int main(int argc, char** argv)
         {
             "constants.previousview=constants.view;",
             "constants.previousviewvalid=0u;",
-            "if(inputs.previousview&&inputs.historyresetbyviewonly)",
+            "if(inputs.previousview)",
             "inputs.previousview->fillplanarviewconstants("
                 "constants.previousview);",
-            "constants.previousviewvalid=1u;"
+            "constants.previousviewvalid=1u;",
+            "constants.proposalreprojectionvalid=",
+            "constants.previousviewvalid!=0u&&"
+                "preserverevalidatedproposals"
         },
-        "the CPU must initialize deterministic fallback matrices and explicitly enable only camera-motion reprojection");
+        "the CPU must provide motion metadata every frame while separately authorizing estimator reprojection");
     RequireContains(
         pass,
         "static_assert(static_cast<uint32_t>(uvsr::"
@@ -1152,42 +1397,80 @@ int main(int argc, char** argv)
     RequireOrdered(
         pass,
         {
-            "if(historyreset&&dispatchschedule.phasecount>1u)",
+            "if(!sharedprimaryrequired&&historyreset&&"
+                "dispatchschedule.phasecount>1u)",
             "textureuavbarrier(commandlist,m_display);",
             "commandlist->commitbarriers();",
-            "uvsr_path_tracing_flag_replicate_preview",
+            "uvsr_path_tracing_flag_reconstruct_preview",
             "div_ceil(inputs.width,8u)",
             "div_ceil(inputs.height,8u)"
         },
-        "history invalidation must initialize presentation for every sparse lattice without retaining radiance history");
+        "legacy sparse history invalidation must reconstruct presentation only when no full-resolution shared baseline exists");
     RequireOrdered(
         shader,
         {
-            "uvsr_path_tracing_flag_replicate_preview",
+            "uvsr_path_tracing_flag_reconstruct_preview",
             "if(any(dispatchpixel>=g_pathtracing.dispatchextent))return;",
-            "constuint2source=(dispatchpixel/"
-                "g_pathtracing.schedulinggrid)*"
-                "g_pathtracing.schedulinggrid;",
-            "u_display[dispatchpixel]=u_display[source];",
+            "constuint2source00=min((dispatchpixel/grid)*grid,"
+                "maximumsource);",
+            "if(all(dispatchpixel==source00))return;",
+            "constfloat4row0=lerp(",
+            "constfloat4row1=lerp(",
+            "u_display[dispatchpixel]=lerp(row0,row1,blend.y);",
             "return;"
         },
-        "the reset preview must copy a freshly traced representative to every display pixel only");
+        "the reset preview must smoothly reconstruct freshly traced representatives without fabricating estimator history");
     RequireOrdered(
         pass,
         {
             "maxpathtracingworkunitsperdispatch",
-            "estimatepathtracingworkunitsperpixel(",
+            "estimatepathtracingtransportworkunitsperpixel(",
+            "constuint64_treplaypathwork=",
+            "if(pathseedhistoryavailable&&"
+                "usespathseedhistory(settings))",
+            "uint64_tdirectdonorwork=0u;",
+            "if(!settings.sharedprimarysurface&&directhistoryavailable&&"
+                "usesdirectreservoirhistory(settings))",
+            "directdonorwork=saturatingadd("
+                "settings.temporalreuse?1u:0u,"
+                "settings.spatialneighborcount);",
+            "constuint64_trtxdiresolvework=settings.usertxdi&&"
+                "lightcount>0u&&!settings.sharedprimarysurface?1u:0u;",
+            "constuint64_treplaydonorbatch=saturatingmultiply("
+                "replaycount,replaypathwork);",
+            "saturatingmultiply("
+                "workperfreshsample,settings.samplesperpixel),",
+            "stablesignalsrequired?1u:0u",
             "buildpathtracingdispatchschedule(",
             "constuint64_tworkperpixel="
-                "estimatepathtracingworkunitsperpixel(",
+                "estimatepathtracingtransportworkunitsperpixel(",
             "if(workperpixel>maxpathtracingworkunitsperdispatch)",
-            "if(!dispatchschedule.valid)",
+            "constuint64_tsharedprimaryframework=saturatingmultiply(",
+            "if(!dispatchschedule.valid||"
+                "sharedprimaryframework>"
+                "maxpathtracingworkunitsperdispatch)",
             "constants.schedulinggrid=dispatchschedule.grid;",
             "constants.schedulingphase=dispatchschedule.phase;",
             "div_ceil(dispatchschedule.workextent.x,8u)",
             "div_ceil(dispatchschedule.workextent.y,8u)"
         },
         "the CPU pass must bound each dispatch while preserving a complete progressive lattice");
+    RequireContains(
+        pass,
+        "maximumdirectdonorbatch,1u,true,false,false,false)==56u",
+        "the frame estimate must charge one shared-primary RTXDI visibility resolve and all five direct donors once per pixel batch");
+    RequireContains(
+        pass,
+        "maximumdirectdonorbatch,1u,true,false,false,true)==57u",
+        "stable guide traversal must be charged once after the fresh-sample batch");
+    RequireContains(
+        pass,
+        "nonsharedrestirpt,1u,false,true,false,false)==30u",
+        "all-ray RESTIR PT must charge two fresh paths plus each replay donor once per pixel batch");
+    RequireContains(
+        pass,
+        "nonsharedrestirpt,0u,false,true,false,false)==16u",
+        "all-ray zero-light RESTIR PT must retain a bounded donor-aware work estimate");
     RequireContains(
         pass,
         "1024ull*1024ull*1024ull",
@@ -1227,12 +1510,17 @@ int main(int argc, char** argv)
         shader,
         "#ifuvsr_pt_rtxdi",
         "RTXDI reservoir transport must be absent from the plain compiled variant");
-    RequireContains(
+    RequireOrdered(
         shader,
-        "#ifuvsr_pt_solver==2"
-            "texture2d<float4>t_previousgicheckpointreservoir:register(t5);"
-            "texture2d<uint>t_previousgicheckpointcount:register(t6);",
-        "the RESTIR GI body must own a distinct local-checkpoint payload");
+        {
+            "#ifuvsr_pt_solver==2",
+            "texture2d<float4>"
+                "t_previousgicheckpointreservoir:register(t5);",
+            "texture2d<float4>t_previousgilo:register(t21);",
+            "texture2d<float4>t_previousginormal:register(t22);",
+            "texture2d<float4>t_previousgireceiver:register(t23);"
+        },
+        "the RESTIR GI body must own distinct x2/W, Lo, packed-normal, and receiver/M payloads");
     RequireContains(
         shader,
         "#ifuvsr_pt_solver==1"
@@ -1268,6 +1556,7 @@ int main(int argc, char** argv)
             "if(bounce==0u)result.primarybase+=contribution;",
             "elseresult.indirectsuffix+=contribution;",
             "constfloat3solverradiance=max("
+                "sharedprimary?solvedindirectsuffix:"
                 "sample.primarybase+solvedindirectsuffix,0.0f);",
             "constfloatfireflyscale="
                 "pathtracingfireflyscale(solverradiance);"
@@ -1277,53 +1566,96 @@ int main(int argc, char** argv)
         shader,
         "sample.primarybase+sample.indirectsuffix+solvedindirectsuffix",
         "the local indirect suffix must not be added beside its reservoir estimate");
+    RequireContains(
+        shader,
+        "structpathtracinggireservoir{"
+            "float3secondaryposition;float3secondarynormal;"
+            "float3tailradiance;floatselectedtarget;floatweightsum;"
+            "floatrepresentedcount;floatfinalizedweight;uintvalid;};",
+        "RESTIR GI must preserve reconstructable x2, n2, Lo, W, and M state");
+    RequireOrdered(
+        shader,
+        {
+            "float3pathtracingevaluategitarget(",
+            "pathtracingtraceocclusion(",
+            "pathtracingevaluatebsdfpreparedexact(",
+            "max(bsdf.diffuse,0.0f)*cosine"
+        },
+        "GI target evaluation must reconnect at the current receiver with visibility, BSDF, and cosine");
+    RequireOrdered(
+        shader,
+        {
+            "floatpathtracinggireconnectionjacobian(",
+            "dot(receiverdirection,donordirection)<0.8660254f",
+            "cosineratio<0.5f||cosineratio>2.0f",
+            "constfloatdenominator=donorcosine*receiverdistancesquared;",
+            "constfloatjacobian=receivercosine*donordistancesquared/denominator;",
+            "jacobian>=0.05f&&jacobian<=20.0f"
+        },
+        "spatial GI must apply a finite bounded solid-angle reconnection Jacobian");
     RequireOrdered(
         shader,
         {
             "float3pathtracingresolvegicheckpoint(",
-            "pathtracingcontributionreservoirupdate("
-                "reservoir,currentindirectsuffix,",
-            "constuintpreviouscount="
-                "t_previousgicheckpointcount[int2(pixel)];",
-            "if(previouscount==1u&&all(isfinite(previouslocal)))",
-            "previouslocal.rgb,",
-            "returnpathtracingcontributionreservoirestimate(reservoir);"
-        },
-        "GI must combine only current and previous same-pixel local checkpoints");
-    RequireAbsent(
-        shader,
-        "pathtracingresolvepreviousdonorpixel("
-            "pixel,currentindirectsuffix",
-        "RESTIR GI radiance checkpoints must never enter camera reprojection");
-    RequireOrdered(
-        shader,
-        {
-            "u_gicheckpointreservoir[pixel]=float4("
-                "sample.indirectsuffix,localtarget);",
-            "u_gicheckpointcount[pixel]=1u;"
-        },
-        "GI persistence must store the current local checkpoint rather than the combined estimate");
-    RequireOrdered(
-        shader,
-        {
             "pathtracingresolvepreviousdonorpixel(",
-            "constint2neighbor=pathtracingpreviousneighbor("
-                "uint2(previouscenter),currentseed,0x50544e42u);",
-            "pathtracingcontributionreservoirupdate("
-                "reservoir,currentindirectsuffix,",
-            "t_previouspathseed[previouscenter]",
-            "t_previouspathseed[neighbor]",
-            "returnpathtracingcontributionreservoirestimate(reservoir);"
+            "uvsr_path_tracing_flag_temporal_reuse",
+            "pathtracingcombinegidonor(",
+            "neighborindex<g_pathtracing.spatialneighborcount;",
+            "pathtracingpreviousneighbor(",
+            "pathtracingcombinegidonor(",
+            "pathtracinggireservoirfinalize(reservoir);"
         },
-        "PT must center temporal and spatial seed donors on the validated previous pixel before replay");
+        "RESTIR GI must reconnect temporal and bounded previous-frame spatial donors");
     RequireOrdered(
         shader,
         {
-            "u_pathseed[pixel]=continuationseed;",
+            "pathtracingresolvegicheckpoint(",
+            "successfulbatchcount==0u",
+            "if(!gihistorysamplevalid)",
+            "u_gicheckpointreservoir[pixel]=float4(",
+            "u_gilo[pixel]=float4(",
+            "u_ginormal[pixel]=float4(",
+            "u_gireceiver[pixel]=float4(",
+            "anonzeroreceivermaterialistheexactm=1marker."
+        },
+        "GI donor work must run once per pixel batch and persist only one fresh local candidate");
+    RequireOrdered(
+        shader,
+        {
+            "pathtracingbuildseedreplaydonors(",
+            "pathtracingresolvepreviousdonorpixel(",
+            "pathtracingflagisset("
+                "uvsr_path_tracing_flag_temporal_reuse)",
+            "t_previouspathseed[previouscenter]",
+            "neighborindex<g_pathtracing.spatialneighborcount;",
+            "constint2neighbor=pathtracingpreviousneighbor("
+                "uint2(previouscenter),currentseed,"
+                "0x50544e42u,neighborindex);",
+            "t_previouspathseed[neighbor]",
+            "float3pathtracingresolveseedreplay(",
+            "pathtracingcontributionreservoircombined=replaydonors;",
+            "pathtracingcontributionreservoirupdate("
+                "combined,currentindirectsuffix,",
+            "returnpathtracingcontributionreservoirestimate(combined);",
+            "if(!replaydonorsprepared)",
+            "replaydonors=pathtracingbuildseedreplaydonors(",
+            "replaydonorsprepared=true;",
+            "solvedindirectsuffix=pathtracingresolveseedreplay("
+        },
+        "PT must trace one validated temporal/spatial donor set per pixel batch and combine it with every fresh sample");
+    Require(
+        CountOccurrences(
+            shader,
+            "replaydonors=pathtracingbuildseedreplaydonors(") == 1u,
+        "RESTIR PT donor paths must be built only once outside repeated fresh-sample combination");
+    RequireOrdered(
+        shader,
+        {
+            "u_pathseed[pixel]=lastcontinuationseed;",
             "u_pathseedstatistics[pixel]=float4("
                 "localtarget,localtarget,1.0f,1.0f);"
         },
-        "PT persistence must retain only the current local seed, target, and M=1 statistics");
+        "PT persistence must retain only the final fresh local seed, target, and M=1 statistics from the frame batch");
     RequireContains(
         shader,
         "pathtracingsurfacesignaturesarecompatible("
@@ -1365,7 +1697,7 @@ int main(int argc, char** argv)
         shader,
         {
             "boolpathtracingresolvepreviousdonorpixel(",
-            "reprojected=g_pathtracing.previousviewvalid!=0u;",
+            "reprojected=g_pathtracing.proposalreprojectionvalid!=0u;",
             "if(!reprojected)returntrue;",
             "constfloat4previousclip=mul("
                 "float4(currentworldposition,1.0f),"
@@ -1407,7 +1739,7 @@ int main(int argc, char** argv)
         shader,
         {
             "if(!pathtracingresolvepreviousdonorpixel(",
-            "returncurrentindirectsuffix;",
+            "returndonors;",
             "t_previouspathseed[previouscenter]",
             "pathtracingreplayseedcandidate("
         },
@@ -1416,7 +1748,7 @@ int main(int argc, char** argv)
         shader,
         {
             "voidpathtracingcarrydirectproposal(uint2pixel)",
-            "if(g_pathtracing.previousviewvalid!=0u)",
+            "if(g_pathtracing.proposalreprojectionvalid!=0u)",
             "u_directreservoir[pixel]=0.0f;",
             "u_surface[pixel]=0.0f;",
             "u_directsampleseed[pixel]=0u;",
@@ -1428,7 +1760,7 @@ int main(int argc, char** argv)
         shader,
         {
             "voidpathtracingcarryreplayseed(uint2pixel)",
-            "if(g_pathtracing.previousviewvalid!=0u)",
+            "if(g_pathtracing.proposalreprojectionvalid!=0u)",
             "u_pathseed[pixel]=0u;",
             "u_pathseedstatistics[pixel]=0.0f;",
             "return;",
@@ -1442,7 +1774,7 @@ int main(int argc, char** argv)
     RequireContains(
         shader,
         "u_directsampleseed[pixel]="
-            "sample.directreservoir.selectedsampleseed;",
+            "lastsample.directreservoir.selectedsampleseed;",
         "successful direct reuse must persist the selected sample seed beside its RGBA32 payload");
     RequireContains(
         shader,
@@ -1477,8 +1809,9 @@ int main(int argc, char** argv)
     RequireContains(
         shader,
         "constuintsamplesequencephase=accumulate&&!animatehistoryreset?"
-            "oldcount:g_pathtracing.samplesequencephase;",
-        "accumulation must index stochastic samples by each pixel's successful count");
+            "runningcount:g_pathtracing.samplesequencephase*"
+            "g_pathtracing.samplesperpixel+sampleindex;",
+        "accumulation must index each stochastic path by its successful count while frame batches receive distinct phases");
     RequireContains(
         shader,
         "uvsr_path_tracing_flag_animate_history_reset",
@@ -1526,16 +1859,17 @@ int main(int argc, char** argv)
         {
             "constfloatfireflyscale=pathtracingfireflyscale(solverradiance);",
             "constfloat3accumulatedsample=solverradiance*fireflyscale;",
-            "constfloat3newmean=oldcount==0u||!accumulate?"
+            "constfloat3newmean=previouscount==0u?"
                 "accumulatedsample:"
-                "lerp(oldmean,accumulatedsample,meanweight);",
-            "u_rawmean[pixel]=float4(newmean,1.0f);",
+                "lerp(runningmean,accumulatedsample,meanweight);",
             "constfloat3residualsample="
                 "max(sample.primarybase,0.0f)*fireflyscale;",
             "constfloat3diffusesuffixsample=",
             "max(solvedindirectsuffix,0.0f)*fireflyscale",
-            "u_residualmean[pixel]=float4(residualmean,1.0f);",
-            "u_diffusesuffixmean[pixel]=float4(diffusemean,1.0f);"
+            "u_indirectmean[pixel]=float4(runningmean,1.0f);",
+            "u_rawmean[pixel]=float4(rawmean,1.0f);",
+            "u_residualmean[pixel]=float4(runningresidual,1.0f);",
+            "u_diffusesuffixmean[pixel]=float4(runningdiffuse,1.0f);"
         },
         "one firefly scalar must be applied before raw and signal online means");
     RequireContains(
@@ -1566,19 +1900,20 @@ int main(int argc, char** argv)
     RequireContains(
         pass,
         "result.geometricreconnectionunavailable="
-            "requestedsettings.solver!=pathtracingsolver::rtxpt&&"
-            "!m_capabilities.fullsamplereconnectionsupported;",
-        "executable subsets must separately disclose the absence of geometric reconnection");
+            "requestedsettings.solver==pathtracingsolver::restirgi&&"
+            "requestedsettings.spatialneighborcount>0u&&"
+            "!m_capabilities.spatialgicheckpointreusesupported;",
+        "RESTIR GI must disclose unavailable requested geometric reconnection precisely");
     RequireContains(
         shader,
-        "constuintnewcount=accumulate?"
-            "(oldcount==0xffffffffu?oldcount:oldcount+1u):1u;",
-        "every finite black, hit, or miss sample must advance the successful count");
+        "constuintnewcount=previouscount==0xffffffffu?"
+            "previouscount:previouscount+1u;",
+        "every finite black, hit, or miss path in the frame batch must advance the successful count");
     RequireOrdered(
         shader,
         {
-            "if(sample.valid==0u)",
-            "if(pathtracingflagisset("
+            "if(successfulbatchcount==0u)",
+            "if(!sharedprimary&&pathtracingflagisset("
                 "uvsr_path_tracing_flag_reuse_direct))",
             "pathtracingcarrydirectproposal(pixel);",
             "return;"
@@ -1587,14 +1922,20 @@ int main(int argc, char** argv)
     RequireOrdered(
         shader,
         {
-            "if(sample.valid==0u)",
-            "uvsr_path_tracing_flag_reuse_gi_checkpoint",
+            "voidpathtracingcarrygiproposal(uint2pixel)",
+            "if(g_pathtracing.proposalreprojectionvalid!=0u)",
+            "u_gicheckpointreservoir[pixel]=0.0f;",
+            "u_gilo[pixel]=0.0f;",
+            "u_ginormal[pixel]=0.0f;",
+            "u_gireceiver[pixel]=0.0f;",
+            "return;",
             "u_gicheckpointreservoir[pixel]="
                 "t_previousgicheckpointreservoir[int2(pixel)];",
-            "u_gicheckpointcount[pixel]="
-                "t_previousgicheckpointcount[int2(pixel)];"
+            "if(successfulbatchcount==0u)",
+            "uvsr_path_tracing_flag_reuse_gi_checkpoint",
+            "pathtracingcarrygiproposal(pixel);"
         },
-        "a rejected attempt must preserve the previous local GI checkpoint");
+        "a rejected attempt must carry stationary GI payloads and invalidate camera-motion payloads without a current receiver");
     RequireOrdered(
         shader,
         {
@@ -1633,10 +1974,26 @@ int main(int argc, char** argv)
             "if(!resourcesready&&validinputs&&stablesignalsrequired)",
             "stablesignalsrequired=false;",
             "resourcesready=ensureresources(",
-            "false);",
+            "false,sharedprimaryrequired);",
+            "if(!resourcesready&&validinputs&&sharedprimaryrequired)",
+            "sharedprimaryrequired=false;",
+            "inputs.settings.sharedprimarysurface=false;",
+            "m_capabilities.sharedprimarysurfacesupported=false;",
+            "resourcesready=ensureresources(",
+            "stablesignalsrequired,false);",
             "if(!resourcesready)"
         },
-        "failed full-resolution signal allocation must retry raw transport with inactive 1x1 signals");
+        "optional full-resolution allocation failures must retain raw all-ray path transport");
+    RequireContains(
+        passHeader,
+        "boolsharedprimarysurfacerequestedbutunavailable=false;",
+        "resource fallback must remain visible through the path result contract");
+    RequireContains(
+        pass,
+        "result.sharedprimarysurfacerequestedbutunavailable="
+            "requestedsettings.sharedprimarysurface&&"
+            "!sharedprimaryrequired;",
+        "runtime results must disclose an authored Shared Primary fallback");
     RequireContains(
         pass,
         "constuint32_tsignalwidth=stablesignalsrequired?width:1u;"
@@ -1723,8 +2080,11 @@ int main(int argc, char** argv)
         shader,
         "if(g_pathtracing.debugview=="
             "uvsr_path_debug_primary_transport)"
-            "returnmax(sample.primarybase,0.0f)*fireflyscale;",
-        "Primary Transport must expose the current primary component with the common firefly scale");
+            "returnpathtracingflagisset("
+                "uvsr_path_tracing_flag_shared_primary_surface)?"
+            "max(sharedprimarymean,0.0f):"
+            "max(sample.primarybase,0.0f)*fireflyscale;",
+        "Primary Transport must expose the shared or integrated primary component exactly once");
     RequireContains(
         shader,
         "if(g_pathtracing.debugview=="
@@ -1734,18 +2094,25 @@ int main(int argc, char** argv)
     RequireOrdered(
         pass,
         {
-            "constboolpreserverevalidatedproposals=historyreset&&",
+            "constboolmotionproposalhistoryeligible=historyreset&&",
             "inputs.historyresetbyviewonly&&",
             "inputs.previousview!=nullptr&&",
             "inputs.settings.reuserevalidatedproposalsduringmotion&&",
-            "dispatchschedule.phasecount==1u&&",
             "m_directreservoirhistoryvalid||",
-            "m_pathseedhistoryvalid",
+            "m_pathseedhistoryvalid||",
+            "m_gicheckpointhistoryvalid",
+            "pathtracingdispatchscheduledispatchschedule=",
+            "if(motionproposalhistoryeligible&&",
+            "dispatchschedule.phasecount==1u)",
+            "constpathtracingdispatchschedulereuseschedule=",
+            "if(reuseschedule.valid&&reuseschedule.phasecount==1u)",
+            "preserverevalidatedproposals=true;",
             "constboolpreviousgihistoryavailable=",
-            "m_gicheckpointhistoryvalid&&!historyreset;",
+            "m_gicheckpointhistoryvalid&&"
+                "(!historyreset||preserverevalidatedproposals);",
             "clearhistory(commandlist,preserverevalidatedproposals);"
         },
-        "camera-only motion may preserve validated direct and PT proposals only after complete-frame dispatches while GI radiance always resets");
+        "camera-only motion may preserve validated direct, PT, and GI proposals only after complete-frame dispatches while radiance always resets");
     RequireOrdered(
         pass,
         {
@@ -1753,14 +2120,17 @@ int main(int argc, char** argv)
             "m_rawmean",
             "m_successfulsamplecount",
             "m_colorvariance",
+            "m_directmean",
+            "m_indirectmean",
             "if(!preserverevalidatedproposals)",
             "m_directreservoirs[index]",
+            "if(!preserverevalidatedproposals)",
             "m_gicheckpointreservoirs[index]",
             "if(!preserverevalidatedproposals)",
             "m_pathseedreservoirs[index]",
-            "m_gicheckpointhistoryvalid=false;"
+            "if(!preserverevalidatedproposals)"
         },
-        "selective motion reset must always clear radiance and GI while conditionally retaining proposal stores");
+        "selective motion reset must always clear radiance while conditionally retaining every proposal family");
 
     RequireContains(
         resolveShader,

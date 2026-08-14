@@ -171,6 +171,9 @@ float3 PathTracingSampleGgxHalfVector(
 PbrPreparedMaterial PathTracingPrepareMaterial(
     PathTracingSurface surface)
 {
+    if (surface.preparedMaterialValid != 0u)
+        return surface.preparedMaterial;
+
     // Reconstruct the exact UVSR metallic-roughness inputs used by the raster
     // G-buffer. Donut's diffuseAlbedo is already Fresnel-attenuated and cannot
     // be fed back into EvaluateBsdfPrepared without attenuating dielectrics a
@@ -1176,6 +1179,7 @@ float3 PathTracingProbeIncomingRadiance(
             direction,
             g_PathTracing.rayBias,
             g_PathTracing.maximumRayDistance,
+            false,
             probe))
     {
         return PathTracingSampleEnvironment(direction);

@@ -952,6 +952,7 @@ set(UVSR_APP_SHADERS
     lighting_accumulation_prepare_cs
     msaa_visibility_resolve_cs
     path_tracing_cs
+    path_tracing_primary_surface_cs
     path_tracing_stable_plane_resolve_cs
     pbr_deferred_lighting_cs
     pbr_deferred_lighting_msaa_cs

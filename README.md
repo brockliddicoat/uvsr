@@ -13,11 +13,11 @@ production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 120,079 non-blank source lines.
+**First-Party Lines of Code:** 123,231 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,466 non-blank source lines.
 
-**Total Lines of Code:** 507,545 non-blank source lines.
+**Total Lines of Code:** 510,697 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -33,14 +33,17 @@ with `tools/update_readme_line_counts.cmd --write`.
 - **Shared DXR Transport:** Material-aware inline ray queries drive selective
   sun, sky, and flashlight visibility plus zero-raster complete path transport
   through the same alpha-tested world representation.
-- **Configurable Path Tracing:** Executable RTX PT plus first-party clean-room
-  RESTIR PT seed-replay and RESTIR GI temporal-checkpoint subsets share one
-  Lambert/GGX transport core with NEE, emissive and environment paths,
-  progressive accumulation, an optional direct reservoir, a clean-room
-  confidence-aware spatial path resolve for every solver, and transport debug
-  views. RTX PT additionally exposes a diffuse/specular continuation split. The
-  subsets do not claim NVIDIA parity, geometric reconnection, or a spatial GI
-  transform.
+- **Configurable Path Tracing:** A Realtime Path Tracer plus first-party
+  clean-room Reservoir Path Tracer seed replay and bounded Reservoir Indirect
+  Lighting rough diffuse-tail reconnection
+  share one Lambert/GGX transport core with NEE, emissive and environment
+  paths, one-to-eight fresh samples per pixel, independently controlled
+  temporal and previous-frame spatial reuse, progressive accumulation, an
+  optional direct reservoir, and transport debug views. A full-resolution
+  Shared Primary Surface can split the direct baseline from indirect transport
+  and provide validated ray-traced depth and motion to TAA, avoiding coarse
+  disocclusion blocks. The ReSTIR subsets do not claim complete NVIDIA
+  namesake or arbitrary full-path reconnection parity.
 - **Ratio Estimators:** Correlated visible and unshadowed RGB responses reduce
   current-frame ray-traced sun-shadow variance; sky visibility separately uses
   a 1-64-sample cosine-hemisphere visible-ray ratio for environment lighting.
@@ -67,8 +70,8 @@ with `tools/update_readme_line_counts.cmd --write`.
   Material and Interface drawers, deferred dropdowns, exact-input sliders, and
   slash commands share one animated presentation; Ogg keeps stock ImGui
   behavior and immediate endpoints.
-- **Compact Runtime Surface:** The build retains 327 first-party shader
-  permutations in 50 staged shader binaries, fourteen Settings drawers, and
+- **Compact Runtime Surface:** The build retains 333 first-party shader
+  permutations in 51 staged shader binaries, fourteen Settings drawers, and
   209 commands without dormant experiments.
 - **Five Packaged Scenes:** Sponza Decorated, Sponza Plain, Bistro Interior,
   San Miguel, and Classroom Interior ship ready-to-run; Bistro and San Miguel

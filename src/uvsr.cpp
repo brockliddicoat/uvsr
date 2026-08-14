@@ -1327,11 +1327,14 @@ struct UIData
             ResolveAntiAliasingSettings(settings);
         if (Lighting == LightingSolution::PathTracing)
         {
-            // The path tracer produces a single scene-linear sample per pixel.
-            // Keep only presentation-space spatial AA from the retained Ray
-            // Marching settings; raster multisampling and temporal AA belong to
-            // the bypassed G-buffer path.
-            resolved.temporalEnabled = false;
+            // Shared Primary supplies full-resolution ray-traced depth/motion.
+            // Progressive accumulation remains the sole long-term history
+            // owner; otherwise UVSR's motion/depth-validating TAA reconstructs
+            // the composed direct + indirect path signal.
+            resolved.temporalEnabled = resolved.temporalEnabled &&
+                PathTracing.sharedPrimarySurface && !AccumulateSamples &&
+                PathTracing.debugView ==
+                    PathTracingDebugView::FinalImage;
             resolved.rasterSampleCount = 1u;
         }
         return resolved;
@@ -1346,6 +1349,20 @@ struct UIData
     [[nodiscard]] bool UsesLongTermTemporalAA() const
     {
         return GetResolvedAntiAliasingSettings().temporalEnabled;
+    }
+
+    [[nodiscard]] bool UsesPathTracingAccumulationJitter() const
+    {
+        // Progressive path accumulation owns radiance history and therefore
+        // suppresses TAA, but it must still advance the requested temporal
+        // camera sequence so the shared primary does not repeat one coverage
+        // sample forever.
+        return Lighting == LightingSolution::PathTracing &&
+            PathTracing.sharedPrimarySurface &&
+            AccumulateSamples &&
+            PathTracing.debugView ==
+                PathTracingDebugView::FinalImage &&
+            ResolveAntiAliasingSettings(AntiAliasing).temporalEnabled;
     }
 
     [[nodiscard]] bool UsesCmaa2() const
@@ -1529,6 +1546,10 @@ private:
     std::unique_ptr<NoiseTextureLibrary> m_NoiseTextureLibrary;
     std::unique_ptr<DenoisingPass>       m_DenoisingPass;
     std::unique_ptr<TemporalAAPass> m_TemporalAAPass;
+    std::unique_ptr<TemporalAAPass> m_PathTemporalAAPass;
+    nvrhi::ITexture* m_PathTemporalColor = nullptr;
+    nvrhi::ITexture* m_PathTemporalDepth = nullptr;
+    nvrhi::ITexture* m_PathTemporalMotion = nullptr;
     std::unique_ptr<FastApproximateAAPass>
                                         m_FastApproximateAAPass;
     std::unique_ptr<Cmaa2Pass>          m_Cmaa2Pass;
@@ -1878,6 +1899,8 @@ public:
     {
         if (m_TemporalAAPass)
             m_TemporalAAPass->ResetHistory();
+        if (m_PathTemporalAAPass)
+            m_PathTemporalAAPass->ResetHistory();
         if (m_DenoisingPass)
             m_DenoisingPass->RequestHistoryReset();
         m_AntiAliasingPhase = 0u;
@@ -3451,7 +3474,14 @@ public:
         TemporalAaJitterSample jitter{ 0.f, 0.f };
         const ResolvedAntiAliasingSettings antiAliasing =
             m_ui.GetResolvedAntiAliasingSettings();
-        if (antiAliasing.temporalEnabled)
+        const bool pathPrimaryJitterSupported =
+            m_ui.Lighting != LightingSolution::PathTracing ||
+            (m_PathTracingPass &&
+                m_PathTracingPass->GetCapabilities()
+                    .sharedPrimarySurfaceSupported);
+        if (pathPrimaryJitterSupported &&
+            (antiAliasing.temporalEnabled ||
+                m_ui.UsesPathTracingAccumulationJitter()))
         {
             jitter = GetTemporalAaJitter(
                 antiAliasing.temporalJitterSequence,
@@ -3525,7 +3555,15 @@ public:
     void CreateTemporalAAPass(bool deferPipelineCreation = false)
     {
         m_TemporalAAPass.reset();
-        if (!m_ui.UsesLongTermTemporalAA())
+        if (m_ui.Lighting != LightingSolution::PathTracing)
+        {
+            m_PathTemporalAAPass.reset();
+            m_PathTemporalColor = nullptr;
+            m_PathTemporalDepth = nullptr;
+            m_PathTemporalMotion = nullptr;
+        }
+        if (!m_ui.UsesLongTermTemporalAA() ||
+            m_ui.Lighting == LightingSolution::PathTracing)
             return;
 
         const bool multisampled =
@@ -3546,6 +3584,39 @@ public:
                     ? m_RenderTargets->VisibilityMotionVectors.Get()
                     : m_RenderTargets->MotionVectors.Get(),
                 deferPipelineCreation);
+    }
+
+    bool EnsurePathTemporalAAPass(const PathTracingResult& result)
+    {
+        if (!result.sharedPrimarySurfaceActive ||
+            !result.sceneLinearDisplay || !result.temporalDepth ||
+            !result.motionVectors)
+        {
+            m_PathTemporalAAPass.reset();
+            m_PathTemporalColor = nullptr;
+            m_PathTemporalDepth = nullptr;
+            m_PathTemporalMotion = nullptr;
+            return false;
+        }
+        if (m_PathTemporalAAPass &&
+            m_PathTemporalColor == result.sceneLinearDisplay &&
+            m_PathTemporalDepth == result.temporalDepth &&
+            m_PathTemporalMotion == result.motionVectors)
+        {
+            return true;
+        }
+
+        m_PathTemporalAAPass = std::make_unique<TemporalAAPass>(
+            GetDevice(),
+            m_ShaderFactory,
+            m_CommonPasses,
+            result.sceneLinearDisplay,
+            result.temporalDepth,
+            result.motionVectors);
+        m_PathTemporalColor = result.sceneLinearDisplay;
+        m_PathTemporalDepth = result.temporalDepth;
+        m_PathTemporalMotion = result.motionVectors;
+        return true;
     }
 
     void EnsureMsaaVisibilityResolvePass(
@@ -4258,6 +4329,8 @@ public:
                         m_ui.DiffuseIblStrength));
             const bool temporalAARequired =
                 m_ui.UsesLongTermTemporalAA();
+            const bool rasterTemporalAARequired = temporalAARequired &&
+                !pathTracingSelected;
             const bool denoisingMotionVectorsRequired =
                 !pathTracingSelected &&
                 m_DenoisingPass &&
@@ -4274,7 +4347,7 @@ public:
                 m_ui.UsesFastApproximateAA();
             const bool cmaa2Required = m_ui.UsesCmaa2();
             const bool motionVectorsRequired =
-                temporalAARequired ||
+                rasterTemporalAARequired ||
                 denoisingMotionVectorsRequired ||
                 (visibilityResourcesRequired && sampleCount > 1u);
 
@@ -4326,7 +4399,7 @@ public:
             }
 
             const bool refreshTemporalPass =
-                temporalAARequired != bool(m_TemporalAAPass);
+                rasterTemporalAARequired != bool(m_TemporalAAPass);
             if (SetupView())
             {
                 needNewPasses = true;
@@ -4345,6 +4418,10 @@ public:
                 m_MsaaVisibilityResolvePass.reset();
                 m_PathTracingStablePlaneResolvePass.reset();
                 m_PathTracingPass.reset();
+                m_PathTemporalAAPass.reset();
+                m_PathTemporalColor = nullptr;
+                m_PathTemporalDepth = nullptr;
+                m_PathTemporalMotion = nullptr;
                 m_LightingAccumulationPass.reset();
                 m_ShaderFactory->ClearCache();
                 m_PathTracingPass = std::make_unique<PathTracingPass>(
@@ -4497,6 +4574,8 @@ public:
                 m_Scene->GetMaterialBuffer();
             rayMaterialVisibility.geometryIndexMap =
                 m_WorldSpaceRepresentation->GetGeometryIndexMap();
+            rayMaterialVisibility.instanceBuffer =
+                m_Scene->GetInstanceBuffer();
             rayMaterialVisibility.descriptorTable =
                 m_Scene->GetDescriptorTable();
         }
@@ -4531,7 +4610,7 @@ public:
                 antiAliasing.cmaa2Enabled ||
                 antiAliasing.historyStorage ==
                     TemporalAaHistoryStorage::Compact);
-        const bool temporalAaWillRender =
+        bool temporalAaWillRender =
             !pathTracingSelected &&
             !rayMarchingAccumulationOwnsTemporalHistory &&
             m_ui.UsesLongTermTemporalAA() &&
@@ -4542,6 +4621,7 @@ public:
                     !deferTemporalSharpenToPresentation,
                 deferTemporalSharpenToPresentation,
                 m_ui.TemporalAaSharpness);
+        bool pathTemporalAaWillRender = false;
         bool temporalAaRenderedThisFrame = false;
         const bool heitzRatioEstimatorExpectedToContribute =
             heitzRatioEstimatorSelected &&
@@ -4847,10 +4927,7 @@ public:
         {
             PathTracingInputs pathInputs;
             pathInputs.view = m_View.get();
-            pathInputs.previousView =
-                m_LightingHistoryChangedByViewOnly && m_PreviousView
-                ? m_PreviousView.get()
-                : nullptr;
+            pathInputs.previousView = m_PreviousView.get();
             pathInputs.width = uint32_t(windowWidth);
             pathInputs.height = uint32_t(windowHeight);
             pathInputs.materialVisibility = rayMaterialVisibility;
@@ -4903,6 +4980,25 @@ public:
                 m_PathTracingSubmittedSamplePassCount =
                     pathTracingResult.submittedSamplePassCount;
             }
+        }
+        if (pathTracingResult && antiAliasing.temporalEnabled &&
+            !m_ui.AccumulateSamples &&
+            m_ui.PathTracing.debugView ==
+                PathTracingDebugView::FinalImage &&
+            EnsurePathTemporalAAPass(pathTracingResult))
+        {
+            pathTemporalAaWillRender =
+                m_PathTemporalAAPass->PrepareForRender(
+                    antiAliasing,
+                    temporalSharpenEnabled &&
+                        !deferTemporalSharpenToPresentation,
+                    deferTemporalSharpenToPresentation,
+                    m_ui.TemporalAaSharpness);
+            temporalAaWillRender = pathTemporalAaWillRender;
+        }
+        else if (pathTracingSelected)
+        {
+            EnsurePathTemporalAAPass({});
         }
         bool stablePlaneResolvedThisFrame = false;
         if (pathTracingResult &&
@@ -5909,7 +6005,10 @@ public:
         nvrhi::ITexture* antiAliasedTexture = accumulatedSceneColor;
         if (temporalAaWillRender)
         {
-            antiAliasedTexture = m_TemporalAAPass->Render(
+            TemporalAAPass* temporalPass = pathTemporalAaWillRender
+                ? m_PathTemporalAAPass.get()
+                : m_TemporalAAPass.get();
+            antiAliasedTexture = temporalPass->Render(
                 m_CommandList,
                 *m_View,
                 m_PreviousView.get(),
@@ -5920,7 +6019,7 @@ public:
                 deferTemporalSharpenToPresentation,
                 m_ui.TemporalAaSharpness);
             temporalAaRenderedThisFrame =
-                m_TemporalAAPass->DidRenderThisFrame();
+                temporalPass->DidRenderThisFrame();
 
             if (temporalAaRenderedThisFrame &&
                 deferTemporalSharpenToPresentation)
@@ -5928,11 +6027,9 @@ public:
                 // Keep the resolved sharpen separate from compact history,
                 // then let display mapping and spatial AA observe its final
                 // edges.
-                antiAliasedTexture =
-                    m_TemporalAAPass
-                        ->SharpenPresentation(
-                            m_CommandList,
-                            antiAliasedTexture);
+                antiAliasedTexture = temporalPass->SharpenPresentation(
+                    m_CommandList,
+                    antiAliasedTexture);
             }
 
         }
@@ -6026,7 +6123,10 @@ public:
         GetDevice()->executeCommandList(m_CommandList);
         if (m_RenderTargets->MotionVectorsEnabled || pathTracingSelected)
             CaptureCurrentViewForMotionVectors();
-        if (temporalAaRenderedThisFrame ||
+        const bool pathTracingJitterAdvanced = pathTracingResult &&
+            pathTracingResult.sharedPrimarySurfaceActive &&
+            m_ui.UsesPathTracingAccumulationJitter();
+        if (temporalAaRenderedThisFrame || pathTracingJitterAdvanced ||
             (lightingAccumulationResolvedThisFrame &&
                 antiAliasing.temporalEnabled))
         {
@@ -6487,19 +6587,33 @@ public:
             HashLightingHistoryValue(signature, pathing.solver);
             HashLightingHistoryValue(signature, pathing.neeMode);
             HashLightingHistoryValue(signature, pathing.maxBounces);
-            HashLightingHistoryValue(signature, pathing.russianRouletteStart);
+            HashLightingHistoryValue(signature, pathing.useRussianRoulette);
             HashLightingHistoryValue(signature, pathing.neeCandidateCount);
+            HashLightingHistoryValue(signature, pathing.samplesPerPixel);
+            HashLightingHistoryValue(
+                signature, pathing.sharedPrimarySurface);
             HashLightingHistoryValue(signature, pathing.useSer);
             HashLightingHistoryValue(signature, pathing.useRtxdi);
-            HashLightingHistoryValue(signature, pathing.reuseDirectReservoirs);
-            HashLightingHistoryValue(signature, pathing.reusePathReservoirs);
-            HashLightingHistoryValue(signature, pathing.reuseIndirectGiReservoirs);
+            HashLightingHistoryValue(signature, pathing.temporalReuse);
+            HashLightingHistoryValue(signature, pathing.spatialNeighborCount);
             HashLightingHistoryValue(
                 signature,
                 pathing.reuseRevalidatedProposalsDuringMotion);
             HashLightingHistoryValue(signature, pathing.enableFireflyFilter);
             HashLightingHistoryValue(signature, pathing.fireflyThreshold);
             HashLightingHistoryValue(signature, pathing.denoiser);
+            const bool accumulationPrimaryJitter =
+                m_ui.UsesPathTracingAccumulationJitter();
+            HashLightingHistoryValue(
+                signature,
+                accumulationPrimaryJitter);
+            if (accumulationPrimaryJitter)
+            {
+                HashLightingHistoryValue(
+                    signature,
+                    ResolveAntiAliasingSettings(
+                        m_ui.AntiAliasing).temporalJitterSequence);
+            }
         }
 
         const bool viewChanged =
@@ -6757,6 +6871,11 @@ public:
 
     const TemporalAATimings* GetTemporalAATimings() const
     {
+        if (m_ui.Lighting == LightingSolution::PathTracing &&
+            m_PathTemporalAAPass)
+        {
+            return &m_PathTemporalAAPass->GetTimings();
+        }
         return m_TemporalAAPass
             ? &m_TemporalAAPass->GetTimings()
             : nullptr;
@@ -12179,22 +12298,12 @@ private:
                 operation, arguments, path, candidate.maxBounces,
                 defaults.maxBounces, PathTracingMinBounceCount,
                 PathTracingMaxBounceCount, value, error);
-            if (handled && operation != CommandValueOperation::Get)
-            {
-                candidate.russianRouletteStart = std::min(
-                    candidate.russianRouletteStart,
-                    candidate.maxBounces);
-            }
         }
-        else if (path == "pathing.russian-roulette-start")
+        else if (path == "pathing.russian-roulette")
         {
-            handled = ApplyCommandUnsigned(
-                operation, arguments, path,
-                candidate.russianRouletteStart,
-                defaults.russianRouletteStart,
-                PathTracingMinBounceCount,
-                candidate.maxBounces,
-                value, error);
+            handled = ApplyCommandBool(
+                operation, arguments, path, candidate.useRussianRoulette,
+                defaults.useRussianRoulette, value, error);
         }
         else if (path == "pathing.nee-candidates")
         {
@@ -12205,6 +12314,34 @@ private:
                 PathTracingMinNeeCandidateCount,
                 PathTracingMaxNeeCandidateCount,
                 value, error);
+        }
+        else if (path == "pathing.samples-per-pixel")
+        {
+            handled = ApplyCommandUnsigned(
+                operation, arguments, path,
+                candidate.samplesPerPixel,
+                defaults.samplesPerPixel,
+                PathTracingMinSamplesPerPixel,
+                PathTracingMaxSamplesPerPixel,
+                value, error);
+        }
+        else if (path == "pathing.shared-primary-surface")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.sharedPrimarySurface,
+                defaults.sharedPrimarySurface,
+                value,
+                error);
+            if (handled && operation != CommandValueOperation::Get &&
+                candidate.sharedPrimarySurface &&
+                !capabilities.sharedPrimarySurfaceSupported)
+            {
+                error = "pathing.shared-primary-surface is unavailable because the full-resolution ray primary pipeline could not be created.";
+                return false;
+            }
         }
         else if (path == "pathing.ser")
         {
@@ -12231,6 +12368,44 @@ private:
                 return false;
             }
         }
+        else if (path == "pathing.temporal-reuse")
+        {
+            handled = ApplyCommandBool(
+                operation, arguments, path, candidate.temporalReuse,
+                defaults.temporalReuse, value, error);
+            const bool temporalReuseSupported =
+                candidate.useRtxdi ||
+                candidate.solver == PathTracingSolver::RestirPt ||
+                candidate.solver == PathTracingSolver::RestirGi;
+            if (handled && operation != CommandValueOperation::Get &&
+                candidate.temporalReuse && !temporalReuseSupported)
+            {
+                error = "pathing.temporal-reuse requires Light Reservoir, Reservoir Path Tracer, or Reservoir Indirect Lighting.";
+                return false;
+            }
+        }
+        else if (path == "pathing.spatial-neighbors")
+        {
+            handled = ApplyCommandUnsigned(
+                operation, arguments, path,
+                candidate.spatialNeighborCount,
+                defaults.spatialNeighborCount,
+                0u,
+                PathTracingMaxSpatialNeighborCount,
+                value, error);
+            const bool spatialReuseSupported =
+                candidate.useRtxdi ||
+                candidate.solver == PathTracingSolver::RestirPt ||
+                (candidate.solver == PathTracingSolver::RestirGi &&
+                    capabilities.spatialGiCheckpointReuseSupported);
+            if (handled && operation != CommandValueOperation::Get &&
+                candidate.spatialNeighborCount > 0u &&
+                !spatialReuseSupported)
+            {
+                error = "pathing.spatial-neighbors requires an executable direct, path-seed, or GI reconnection reservoir.";
+                return false;
+            }
+        }
         else if (path == "pathing.reuse-proposals-during-motion")
         {
             handled = ApplyCommandBool(
@@ -12241,6 +12416,15 @@ private:
                 defaults.reuseRevalidatedProposalsDuringMotion,
                 value,
                 error);
+            if (handled && operation != CommandValueOperation::Get &&
+                candidate.reuseRevalidatedProposalsDuringMotion &&
+                !UsesDirectReservoirHistory(candidate) &&
+                !UsesPathSeedHistory(candidate) &&
+                !UsesGiCheckpointHistory(candidate))
+            {
+                error = "pathing.reuse-proposals-during-motion requires active light, path, or indirect-light reservoir reuse.";
+                return false;
+            }
         }
         else
         {
@@ -13578,26 +13762,26 @@ private:
                     pipelineResolution.executable &&
                     ((effectiveSettings.solver ==
                             PathTracingSolver::RestirPt &&
-                        effectiveSettings.reusePathReservoirs &&
+                        UsesPathSeedHistory(effectiveSettings) &&
                         capabilities.continuationSeedReservoirSupported &&
                         capabilities.replayablePathSeedSupported) ||
                     (effectiveSettings.solver ==
                             PathTracingSolver::RestirGi &&
-                        effectiveSettings.reuseIndirectGiReservoirs &&
+                        UsesGiCheckpointHistory(effectiveSettings) &&
                         capabilities.temporalGiCheckpointReuseSupported));
                 if (candidate ==
                         PathTracingDebugView::DirectReservoir &&
                     (!capabilities.directReservoirSupported ||
                         !directReservoirExecutable))
                 {
-                    error = "debug.path-tracing.view=direct-reservoir is unavailable unless RTXDI Reservoir Stages is enabled and supported.";
+                    error = "debug.path-tracing.view=direct-reservoir is unavailable unless Light Reservoir is enabled and supported.";
                     return false;
                 }
                 if (candidate ==
                         PathTracingDebugView::IndirectReservoir &&
                     !indirectReservoirExecutable)
                 {
-                    error = "debug.path-tracing.view=indirect-reservoir requires an executable RESTIR PT seed-replay or RESTIR GI checkpoint estimator.";
+                    error = "debug.path-tracing.view=indirect-reservoir requires an executable Reservoir Path Tracer or Reservoir Indirect Lighting reuse stage.";
                     return false;
                 }
                 m_ui.PathTracing.debugView = candidate;
@@ -17840,7 +18024,8 @@ private:
         else if ((capabilities.pipelineAvailabilityMask & 1u) == 0u)
         {
             ImGui::TextDisabled(
-                "Path transport unavailable: the baseline RTX PT pipeline "
+                "Path transport unavailable: the baseline Realtime Path "
+                "Tracer pipeline "
                 "could not be initialized.");
         }
         else if (!capabilities.IsPipelineAvailable(settings))
@@ -17849,13 +18034,14 @@ private:
                 "Selected permutation unavailable; using executable %s / %s%s.",
                 GetPathTracingSolverLabel(effectiveSettings.solver),
                 GetPathTracingNeeModeLabel(effectiveSettings.neeMode),
-                effectiveSettings.useRtxdi ? " + RTXDI" : "");
+                effectiveSettings.useRtxdi ? " + Light Reservoir" : "");
         }
 
-        ImGui::TextUnformatted("Solver Preset");
-        ImGui::SetNextItemWidth(-FLT_MIN);
+        SetNextLabeledControlWidth(
+            "Solver Preset##PathTracingSolver",
+            settingsControlWidth);
         if (BeginRoundedCombo(
-                "##PathTracingSolver",
+                "Solver Preset##PathTracingSolver",
                 GetPathTracingSolverLabel(settings.solver)))
         {
             static constexpr std::array<PathTracingSolver, 3> Solvers = {
@@ -17881,47 +18067,38 @@ private:
             }
             ImGui::EndCombo();
         }
-        ImGui::SetItemTooltip(
-            "Start from a UVSR-owned RTX PT, RESTIR PT, or RESTIR GI "
-            "transport configuration. The controls remain editable after the "
-            "preset is applied.");
         const bool selectedSolverExecutable = pipelineResolution.executable &&
             effectiveSettings.solver == settings.solver;
         if (!selectedSolverExecutable)
         {
-            ImGui::TextDisabled(
-                "%s estimator unavailable in this build;",
-                GetPathTracingSolverLabel(settings.solver));
-            ImGui::TextDisabled(
-                "rendering uses the closest executable transport solver.");
             ImGui::SetItemTooltip(
-                "The preset remains selected so its editable preferences are "
-                "retained. The effective solver and NEE mode are reported above.");
+                "This preset is unavailable in this build. Settings remain "
+                "editable; UVSR uses the closest executable configuration.");
+        }
+        else if (settings.solver == PathTracingSolver::RtxPt)
+        {
+            ImGui::SetItemTooltip(
+                "Reference Monte Carlo preset without path-reservoir reuse; "
+                "all controls remain editable.");
         }
         else if (settings.solver == PathTracingSolver::RestirPt)
         {
-            ImGui::TextDisabled(
-                "Seed-space path replay; no geometric reconnection.");
             ImGui::SetItemTooltip(
-                "UVSR re-integrates deterministic continuation seeds from the "
-                "current pixel, its previous-frame sample, and one previous-frame "
-                "neighbor. This clean-room subset does not claim NVIDIA hybrid-"
-                "shift or RTXDI-Library parity.");
+                "Replays deterministic previous-frame path seeds. It does not "
+                "perform geometric reconnection.");
         }
         else if (settings.solver == PathTracingSolver::RestirGi)
         {
-            ImGui::TextDisabled(
-                "Temporal GI checkpoints; no spatial reconnection.");
             ImGui::SetItemTooltip(
-                "UVSR resamples the current and previous same-pixel complete "
-                "indirect checkpoints. This clean-room subset does not transform "
-                "secondary surfaces or claim NVIDIA RTXDI-Library parity.");
+                "Reconnects bounded rough diffuse tails with visibility and a "
+                "Jacobian. This is a controlled-bias estimator.");
         }
 
-        ImGui::TextUnformatted("Next-Event Estimation");
-        ImGui::SetNextItemWidth(-FLT_MIN);
+        SetNextLabeledControlWidth(
+            "Next Event Estimation##PathTracingNee",
+            settingsControlWidth);
         if (BeginRoundedCombo(
-                "##PathTracingNee",
+                "Next Event Estimation##PathTracingNee",
                 GetPathTracingNeeModeLabel(settings.neeMode)))
         {
             static constexpr std::array<PathTracingNeeMode, 3> Modes = {
@@ -17958,11 +18135,76 @@ private:
                 {
                     ImGui::SetItemTooltip(
                         "This path-tracing shader permutation is unavailable; "
-                        "choose another NEE mode or solver.");
+                        "choose another Next Event Estimation mode or solver.");
                 }
             }
             ImGui::EndCombo();
         }
+        ImGui::SetItemTooltip(
+            "Choose Uniform, Power, or Adaptively Temporally light sampling. "
+            "The adaptive mode rebuilds a tree at each path vertex.");
+
+        const uint32_t pathDispatchPhaseCount =
+            m_app->GetPathTracingDispatchPhaseCount();
+        const uint64_t pathEstimatedWorkUnitsPerPixel =
+            m_app->GetPathTracingEstimatedWorkUnitsPerPixel();
+        const bool directReuseFamilyAvailable = selectedSolverExecutable &&
+            settings.useRtxdi && capabilities.directReservoirSupported;
+        const bool pathReuseFamilyAvailable = selectedSolverExecutable &&
+            settings.solver == PathTracingSolver::RestirPt &&
+            capabilities.continuationSeedReservoirSupported &&
+            capabilities.replayablePathSeedSupported;
+        const bool giReuseFamilyAvailable = selectedSolverExecutable &&
+            settings.solver == PathTracingSolver::RestirGi &&
+            capabilities.temporalGiCheckpointReuseSupported;
+        const bool giSpatialReuseFamilyAvailable = selectedSolverExecutable &&
+            settings.solver == PathTracingSolver::RestirGi &&
+            capabilities.spatialGiCheckpointReuseSupported;
+        const bool temporalReuseAvailable = directReuseFamilyAvailable ||
+            pathReuseFamilyAvailable || giReuseFamilyAvailable;
+        const bool spatialReuseAvailable =
+            capabilities.previousFrameSpatialReuseSupported &&
+            (directReuseFamilyAvailable || pathReuseFamilyAvailable ||
+                giSpatialReuseFamilyAvailable);
+        const bool proposalReuseConfigured =
+            settings.temporalReuse || settings.spatialNeighborCount > 0u;
+        const bool motionReuseAvailable = pathDispatchPhaseCount <= 1u &&
+            proposalReuseConfigured &&
+            (directReuseFamilyAvailable || pathReuseFamilyAvailable ||
+                giReuseFamilyAvailable || giSpatialReuseFamilyAvailable);
+        PathTracingSettings toggledRtxdiSettings = settings;
+        toggledRtxdiSettings.useRtxdi = !settings.useRtxdi;
+        const bool canToggleRtxdi = settings.useRtxdi ||
+            capabilities.directReservoirSupported &&
+                capabilities.IsPipelineAvailable(toggledRtxdiSettings);
+
+        int candidateCount = int(settings.neeCandidateCount);
+        if (DrawSliderInt(
+                "Light Candidates",
+                &candidateCount,
+                int(PathTracingMinNeeCandidateCount),
+                16))
+        {
+            settings.neeCandidateCount = uint32_t(candidateCount);
+            m_app->ResetImageBasedLightingHistory();
+        }
+        ImGui::SetItemTooltip(
+            "Evaluate this many independent analytic-light proposals per "
+            "conventional direct estimate or local light reservoir.");
+
+        int samplesPerPixel = int(settings.samplesPerPixel);
+        if (DrawSliderInt(
+                "Samples",
+                &samplesPerPixel,
+                int(PathTracingMinSamplesPerPixel),
+                int(PathTracingMaxSamplesPerPixel)))
+        {
+            settings.samplesPerPixel = uint32_t(samplesPerPixel);
+            m_app->ResetImageBasedLightingHistory();
+        }
+        ImGui::SetItemTooltip(
+            "Trace this many fresh paths per updated pixel each frame. Cost "
+            "scales approximately linearly; reused candidates are additional.");
 
         int maxBounces = int(settings.maxBounces);
         if (DrawSliderInt(
@@ -17972,34 +18214,69 @@ private:
                 16))
         {
             settings.maxBounces = uint32_t(maxBounces);
-            settings.russianRouletteStart = std::min(
-                settings.russianRouletteStart,
-                settings.maxBounces);
             m_app->ResetImageBasedLightingHistory();
         }
 
-        int russianRouletteStart = int(settings.russianRouletteStart);
+        const bool spatialReusePresentation = BeginVisuallyDisabledUiScope(
+            "##PathTracingSpatialReuseUnavailable",
+            !spatialReuseAvailable);
+        int spatialNeighborCount = int(settings.spatialNeighborCount);
         if (DrawSliderInt(
-                "Russian Roulette Start",
-                &russianRouletteStart,
-                int(PathTracingMinBounceCount),
-                int(settings.maxBounces)))
+                "Spatial Neighbors",
+                &spatialNeighborCount,
+                0,
+                int(PathTracingMaxSpatialNeighborCount)))
         {
-            settings.russianRouletteStart =
-                uint32_t(russianRouletteStart);
+            settings.spatialNeighborCount = uint32_t(spatialNeighborCount);
             m_app->ResetImageBasedLightingHistory();
         }
+        ImGui::SetItemTooltip(
+            spatialReuseAvailable
+                ? giSpatialReuseFamilyAvailable
+                    ? "Reconnect this many validated previous-frame rough, "
+                      "diffuse-tail GI donors using receiver BSDF evaluation, "
+                      "segment visibility, and the solid-angle Jacobian. "
+                      "Glossy tails stay local. Cost grows linearly and is "
+                      "paid once per pixel, not per sample."
+                    : "Replay this many validated previous-frame cardinal "
+                      "neighbors. Each Reservoir Path Tracer neighbor traces "
+                      "another path."
+                : "Spatial neighbors require an executable light, path-seed, "
+                  "or indirect-light reconnection reservoir.");
+        EndVisuallyDisabledUiScope(spatialReusePresentation);
 
-        int candidateCount = int(settings.neeCandidateCount);
-        if (DrawSliderInt(
-                "NEE Candidates",
-                &candidateCount,
-                int(PathTracingMinNeeCandidateCount),
-                16))
+        if (ImGui::Checkbox(
+                "Russian Roulette",
+                &settings.useRussianRoulette))
         {
-            settings.neeCandidateCount = uint32_t(candidateCount);
             m_app->ResetImageBasedLightingHistory();
         }
+        ImGui::SetItemTooltip(
+            "Automatically starts after the third traced vertex when another "
+            "ray can still be avoided. Short paths skip roulette entirely.");
+
+        const bool sharedPrimaryPresentation = BeginVisuallyDisabledUiScope(
+            "##PathTracingSharedPrimaryUnavailable",
+            !capabilities.sharedPrimarySurfaceSupported &&
+                !settings.sharedPrimarySurface);
+        if (ImGui::Checkbox(
+                "Shared Primary Surface",
+                &settings.sharedPrimarySurface))
+        {
+            m_app->ResetImageBasedLightingHistory();
+        }
+        ImGui::SetItemTooltip(
+            capabilities.sharedPrimarySurfaceSupported
+                ? "Trace one full-resolution material-aware primary ray and "
+                  "direct-light baseline per pixel, then share that receiver "
+                  "across indirect samples. Supplies path depth and motion to "
+                  "temporal AA and avoids coarse black disocclusions."
+                : settings.sharedPrimarySurface
+                    ? "Unavailable in the active path pass. Turn this off to "
+                      "keep the all-ray integrator selected."
+                    : "Unavailable: the full-resolution shared-primary shader "
+                      "pipeline or resource topology could not be created.");
+        EndVisuallyDisabledUiScope(sharedPrimaryPresentation);
 
         const bool serPresentation = BeginVisuallyDisabledUiScope(
             "##PathTracingSerUnavailable",
@@ -18023,23 +18300,18 @@ private:
         }
         EndVisuallyDisabledUiScope(serPresentation);
 
-        PathTracingSettings toggledRtxdiSettings = settings;
-        toggledRtxdiSettings.useRtxdi = !settings.useRtxdi;
-        const bool canToggleRtxdi = settings.useRtxdi ||
-            capabilities.directReservoirSupported &&
-                capabilities.IsPipelineAvailable(toggledRtxdiSettings);
         const bool rtxdiPresentation = BeginVisuallyDisabledUiScope(
             "##PathTracingRtxdiUnavailable",
             !canToggleRtxdi);
-        if (ImGui::Checkbox("RTXDI Reservoir Stages", &settings.useRtxdi))
+        if (ImGui::Checkbox("Light Reservoir", &settings.useRtxdi))
         {
             m_app->ResetImageBasedLightingHistory();
         }
         if (canToggleRtxdi)
         {
             ImGui::SetItemTooltip(
-                "Enable UVSR's shared direct-light reservoir stages for any "
-                "solver. The RTX PT preset starts with resampling disabled.");
+                "Enable UVSR's shared direct-light reservoir for any solver. "
+                "Every solver preset starts with it disabled.");
         }
         else
         {
@@ -18049,17 +18321,37 @@ private:
         }
         EndVisuallyDisabledUiScope(rtxdiPresentation);
 
+        const bool temporalReusePresentation = BeginVisuallyDisabledUiScope(
+            "##PathTracingTemporalReuseUnavailable",
+            !temporalReuseAvailable);
+        if (ImGui::Checkbox("Temporal Reuse", &settings.temporalReuse))
+            m_app->ResetImageBasedLightingHistory();
+        ImGui::SetItemTooltip(
+            temporalReuseAvailable
+                ? "Reuse one validated previous-frame donor for each active "
+                  "light, path, or indirect-light reservoir family."
+                : "Enable Light Reservoir, Reservoir Path Tracer, or Reservoir "
+                  "Indirect Lighting to use temporal resampling.");
+        EndVisuallyDisabledUiScope(temporalReusePresentation);
+
+        const bool motionReusePresentation = BeginVisuallyDisabledUiScope(
+            "##PathTracingMotionReuseUnavailable",
+            !motionReuseAvailable);
         if (ImGui::Checkbox(
-                "Reuse Validated RESTIR Proposals During Motion",
+                "Motion Reuse",
                 &settings.reuseRevalidatedProposalsDuringMotion))
         {
             m_app->ResetImageBasedLightingHistory();
         }
-        static constexpr char ReuseRestirMotionTooltip[] =
-            "Keep validated direct-light proposals and replayable RESTIR PT "
-            "seeds during camera motion. Means and RESTIR GI reset.";
-        static_assert(sizeof(ReuseRestirMotionTooltip) - 1u <= 120u);
-        ImGui::SetItemTooltip("%s", ReuseRestirMotionTooltip);
+        ImGui::SetItemTooltip(
+            motionReuseAvailable
+                ? "During camera motion, reproject and revalidate light, "
+                  "path-seed, or geometric indirect-light proposals. Radiance "
+                  "means still reset."
+                : pathDispatchPhaseCount > 1u
+                    ? "Unavailable while the selected work requires a sparse "
+                      "dispatch lattice."
+                    : "Enable temporal or spatial reservoir reuse first.");
         if (DrawPresetResetIcon(
                 "PathTracingReuseProposalsDuringMotion",
                 settings.reuseRevalidatedProposalsDuringMotion !=
@@ -18071,13 +18363,19 @@ private:
                     .reuseRevalidatedProposalsDuringMotion;
             m_app->ResetImageBasedLightingHistory();
         }
+        EndVisuallyDisabledUiScope(motionReusePresentation);
 
+        const bool sharedPrimaryEffective =
+            settings.sharedPrimarySurface &&
+            capabilities.sharedPrimarySurfaceSupported;
         ImGui::TextDisabled(
-            "Temporal AA bypassed; path accumulation owns history.");
-        const uint32_t pathDispatchPhaseCount =
-            m_app->GetPathTracingDispatchPhaseCount();
-        const uint64_t pathEstimatedWorkUnitsPerPixel =
-            m_app->GetPathTracingEstimatedWorkUnitsPerPixel();
+            sharedPrimaryEffective
+                ? !m_ui.AccumulateSamples
+                    ? "Path TAA uses ray-traced depth and motion when enabled."
+                    : "Path accumulation owns history; temporal AA is bypassed."
+                : settings.sharedPrimarySurface
+                    ? "Shared Primary is unavailable; using all-ray transport."
+                    : "All-ray transport; path TAA requires Shared Primary.");
         if (pathDispatchPhaseCount <= 1u)
         {
             ImGui::TextDisabled(
@@ -19902,29 +20200,13 @@ protected:
             default:
                 break;
             }
-            if (representationStatus.state ==
-                WorldSpaceRepresentationState::Idle)
+            if (!representation.allowRayTraversal)
             {
-                if (m_ui.Lighting == LightingSolution::PathTracing &&
-                    !representation.allowRayTraversal)
-                {
-                    ImGui::TextDisabled(
-                        "Status: Path transport disabled by master traversal");
-                }
-                else
-                    ImGui::TextDisabled("Status: Inactive");
+                ImGui::TextDisabled("Status: Ray traversal disabled");
             }
             else
-                ImGui::Text("Status: %s", representationState);
-            if (representationStatus.totalBlasCount > 0u)
-            {
-                ImGui::TextDisabled(
-                    "BLAS %u/%u  |  TLAS Instances %u",
-                    representationStatus.builtBlasCount,
-                    representationStatus.totalBlasCount,
-                    representationStatus.instanceCount);
-            }
-            else if (!representationStatus.accelerationStructuresSupported ||
+                ImGui::TextDisabled("Status: %s", representationState);
+            if (!representationStatus.accelerationStructuresSupported ||
                 !representationStatus.rayQueriesSupported)
             {
                 ImGui::TextDisabled(
@@ -19998,7 +20280,7 @@ protected:
             }
 
             if (BeginAnimatedTreeNode(
-                    "Bottom-Level Acceleration Structures##Representation",
+                    "Bottom Level Acceleration Structures##Representation",
                     ImGuiTreeNodeFlags_DefaultOpen,
                     "Configure per-mesh triangle acceleration structures."))
             {
@@ -20063,7 +20345,7 @@ protected:
             }
 
             if (BeginAnimatedTreeNode(
-                    "Top-Level Acceleration Structure##Representation",
+                    "Top Level Acceleration Structure##Representation",
                     ImGuiTreeNodeFlags_DefaultOpen,
                     "Configure the instance hierarchy consumed by ray queries."))
             {
@@ -20343,27 +20625,6 @@ protected:
                             m_ui.SampleAccumulation = accumulationDefaults;
                             m_app->ResetImageBasedLightingHistory();
                         });
-                }
-
-                const char* averagingSummary =
-                    accumulation.averaging ==
-                            SampleAccumulationAveraging::Cumulative
-                        ? "cumulative mean"
-                        : "exponential mean";
-                if (accumulation.scheduling ==
-                    SampleAccumulationScheduling::EveryPixel)
-                {
-                    ImGui::TextDisabled(
-                        "Every pixel / %s", averagingSummary);
-                }
-                else
-                {
-                    ImGui::TextDisabled(
-                        "Warmup %u / %.2f%% error / >=%.2f%% updates / %s",
-                        accumulation.minimumSamples,
-                        accumulation.targetRelativeError * 100.f,
-                        accumulation.minimumUpdateRate * 100.f,
-                        averagingSummary);
                 }
 
                 static constexpr const char* AveragingLabels[] = {
@@ -21942,10 +22203,11 @@ protected:
                 const PathTracingCapabilities& capabilities =
                     m_app->GetPathTracingCapabilities();
 
-                ImGui::TextUnformatted("Method");
-                ImGui::SetNextItemWidth(-FLT_MIN);
+                SetNextLabeledControlWidth(
+                    "Method##PathTracingDenoiser",
+                    settingsControlWidth);
                 if (BeginRoundedCombo(
-                        "##PathTracingDenoiser",
+                        "Method##PathTracingDenoiser",
                         GetPathTracingDenoiserLabel(pathing.denoiser)))
                 {
                     static constexpr std::array<PathTracingDenoiser, 2>
@@ -22008,59 +22270,60 @@ protected:
                     PathTracingDenoiser::SpatialPathResolve;
                 const bool spatialResolveAvailable =
                     capabilities.CanUseSpatialPathResolve(pathing);
-                const bool spatialResolvePresentation =
-                    BeginVisuallyDisabledUiScope(
-                        "##PathTracingSignalGroupsUnavailable",
-                        !spatialResolveSelected || !spatialResolveAvailable);
-                int signalGroupCount = int(std::max(
-                    pathing.stablePlaneCount,
-                    1u));
-                if (DrawSliderInt(
-                        "Signal Groups",
-                        &signalGroupCount,
-                        1,
-                        pathing.solver == PathTracingSolver::RtxPt
-                            ? int(PathTracingMaxStablePlaneCount)
-                            : 2))
+                ImGui::SetItemTooltip(
+                    !spatialResolveSelected
+                        ? "Display the exact raw path-transport result without "
+                          "spatial reconstruction."
+                        : spatialResolveAvailable
+                            ? "Apply UVSR's confidence-aware spatial path "
+                              "resolve to the selected transport signal groups."
+                            : "Unavailable: the path signal formats or spatial "
+                              "resolve pipeline could not initialize.");
+                if (BeginAnimatedToggleRegion(
+                        "##PathTracingSpatialResolveControls",
+                        spatialResolveSelected))
                 {
-                    pathing.stablePlaneCount = uint32_t(signalGroupCount);
-                }
-                if (spatialResolveAvailable)
-                {
+                    const bool spatialResolvePresentation =
+                        BeginVisuallyDisabledUiScope(
+                            "##PathTracingSignalGroupsUnavailable",
+                            !spatialResolveAvailable);
+                    int signalGroupCount = int(std::max(
+                        pathing.stablePlaneCount,
+                        1u));
+                    if (DrawSliderInt(
+                            "Signal Groups",
+                            &signalGroupCount,
+                            1,
+                            pathing.solver == PathTracingSolver::RtxPt
+                                ? int(PathTracingMaxStablePlaneCount)
+                                : 2))
+                    {
+                        pathing.stablePlaneCount = uint32_t(signalGroupCount);
+                    }
                     ImGui::SetItemTooltip(
                         pathing.solver == PathTracingSolver::RtxPt
                             ? "Use merged, primary/indirect, or primary plus "
                               "diffuse/specular groups in the spatial resolve."
                             : "Use one merged group or separate primary and "
                               "indirect transport groups in the spatial resolve.");
-                }
-                else if (!spatialResolveSelected)
-                {
+                    float spatialResolvePercent =
+                        pathing.spatialResolveStrength * 100.f;
+                    if (DrawSliderFloat(
+                            "Resolve Strength",
+                            &spatialResolvePercent,
+                            0.f,
+                            100.f,
+                            "%.0f%%"))
+                    {
+                        pathing.spatialResolveStrength =
+                            spatialResolvePercent * 0.01f;
+                    }
                     ImGui::SetItemTooltip(
-                        "Select Spatial Path Resolve to configure signal groups.");
+                        "Blend from the raw accumulated mean toward the "
+                        "confidence-aware spatial result.");
+                    EndVisuallyDisabledUiScope(spatialResolvePresentation);
+                    EndAnimatedToggleRegion();
                 }
-                else
-                {
-                    ImGui::SetItemTooltip(
-                        "Unavailable: signal allocation or the resolve pipeline "
-                        "is unsupported; raw output is used.");
-                }
-                float spatialResolvePercent =
-                    pathing.spatialResolveStrength * 100.f;
-                if (DrawSliderFloat(
-                        "Resolve Strength",
-                        &spatialResolvePercent,
-                        0.f,
-                        100.f,
-                        "%.0f%%"))
-                {
-                    pathing.spatialResolveStrength =
-                        spatialResolvePercent * 0.01f;
-                }
-                ImGui::SetItemTooltip(
-                    "Blend from the raw accumulated mean toward the "
-                    "confidence-aware spatial result.");
-                EndVisuallyDisabledUiScope(spatialResolvePresentation);
 
                 if (ImGui::Checkbox(
                         "Firefly Clamp (Biased)",
@@ -23437,17 +23700,18 @@ protected:
                         pipelineResolution.executable &&
                         ((effectiveSettings.solver ==
                                 PathTracingSolver::RestirPt &&
-                            effectiveSettings.reusePathReservoirs &&
+                            UsesPathSeedHistory(effectiveSettings) &&
                             capabilities.continuationSeedReservoirSupported &&
                             capabilities.replayablePathSeedSupported) ||
                         (effectiveSettings.solver ==
                                 PathTracingSolver::RestirGi &&
-                            effectiveSettings.reuseIndirectGiReservoirs &&
+                            UsesGiCheckpointHistory(effectiveSettings) &&
                             capabilities.temporalGiCheckpointReuseSupported));
-                    ImGui::TextUnformatted("View");
-                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    SetNextLabeledControlWidth(
+                        "View##PathTracingDebugView",
+                        settingsControlWidth);
                     if (BeginRoundedCombo(
-                            "##PathTracingDebugView",
+                            "View##PathTracingDebugView",
                             GetPathTracingDebugViewLabel(
                                 pathing.debugView)))
                     {
@@ -23498,6 +23762,9 @@ protected:
                         }
                         ImGui::EndCombo();
                     }
+                    ImGui::SetItemTooltip(
+                        "Inspect the selected path-transport surface, history, "
+                        "or reservoir.");
                     EndAnimatedTreeNode();
                 }
                 EndAnimatedToggleRegion();
@@ -23514,14 +23781,15 @@ protected:
             BeginDrawerBody(
                 "##SkyBody",
                 settingsControlWidth);
-            ImGui::TextUnformatted("Environment");
             const ImageBasedLightingSourceInfo&
                 selectedEnvironmentInfo =
                     GetImageBasedLightingSourceInfo(
                         m_ui.EnvironmentSource);
-            ImGui::SetNextItemWidth(settingsControlWidth);
+            SetNextLabeledControlWidth(
+                "Environment##SkyEnvironment",
+                settingsControlWidth);
             if (BeginRoundedCombo(
-                    "##SkyEnvironment",
+                    "Environment##SkyEnvironment",
                     selectedEnvironmentInfo.displayName))
             {
                 for (uint32_t index = 0u;
@@ -23602,6 +23870,22 @@ protected:
             {
                 m_ui.EnvironmentExposureStops =
                     defaultEnvironmentExposure;
+                m_app->ResetImageBasedLightingHistory();
+            }
+
+            if (ImGui::Checkbox(
+                    "Show Environment Background",
+                    &m_ui.ShowEnvironmentBackground))
+            {
+                m_app->ResetImageBasedLightingHistory();
+            }
+            ImGui::SetItemTooltip(
+                "Show the same environment used for lighting.");
+            if (DrawPresetResetIcon(
+                    "Environment Background Enabled",
+                    !m_ui.ShowEnvironmentBackground))
+            {
+                m_ui.ShowEnvironmentBackground = true;
                 m_app->ResetImageBasedLightingHistory();
             }
 
@@ -23840,22 +24124,6 @@ protected:
             EndAnimatedToggleRegion();
             }
 
-            if (ImGui::Checkbox(
-                    "Show Environment Background",
-                    &m_ui.ShowEnvironmentBackground))
-            {
-                m_app->ResetImageBasedLightingHistory();
-            }
-            ImGui::SetItemTooltip(
-                "Show the same environment used for lighting.");
-            if (DrawPresetResetIcon(
-                    "Environment Background Enabled",
-                    !m_ui.ShowEnvironmentBackground))
-            {
-                m_ui.ShowEnvironmentBackground = true;
-                m_app->ResetImageBasedLightingHistory();
-            }
-
             if (BeginAnimatedToggleRegion(
                     "##RayMarchingSkyVisibility",
                     m_ui.Lighting == LightingSolution::RayMarching))
@@ -24070,7 +24338,9 @@ protected:
 
                 int maxDistance =
                     static_cast<int>(skyVisibility.maxDistance);
-                ImGui::SetNextItemWidth(settingsControlWidth);
+                SetNextLabeledControlWidth(
+                    "Max Distance##RayTracedSkyVisibility",
+                    settingsControlWidth);
                 if (ImGui::Combo(
                         "Max Distance##RayTracedSkyVisibility",
                         &maxDistance,

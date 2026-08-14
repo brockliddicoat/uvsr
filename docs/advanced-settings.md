@@ -40,6 +40,12 @@ button gaps, as well as the Settings-to-command-interface gap; 2x is 8 pixels
 for the Settings title-to-General inset and body padding; and 4x is 16 pixels
 for outer panel and command-interface margins.
 
+Standard drawer dropdowns use the same compact control width as a slider track
+plus its numeric input, with the setting title on the right side of the row.
+Only the intentionally cramped General, Material, and Interface drawers use
+wide dropdowns with a title above the control. Pathing, path Denoising, Debug
+Transport, and Sky therefore use the compact side-labeled form.
+
 The Settings panel contains thirteen persistent scrolling top-level drawers in
 this order. Path Tracing inserts the conditional **Pathing** drawer immediately
 after General and smoothly removes the Ray Marching-only Diffuse, Buffers,
@@ -221,59 +227,94 @@ running forever.
 Pathing follows General and appears only while Path Tracing is selected. The
 drawer configures policies around one shared transport core:
 
-- **Solver** applies an editable **RTX PT**, **RESTIR PT**, or **RESTIR GI**
-  recipe. RTX PT is the reference Monte Carlo solver. RESTIR PT executes
-  deterministic seed-space replay from the current path, a reprojected
-  prior-pixel seed, and one neighbor seed around that prior-view location.
-  RESTIR GI executes current plus
-  prior same-pixel indirect-checkpoint resampling. The UI identifies both as
-  first-party clean-room subsets and states that geometric reconnection,
-  spatial GI transformation, and NVIDIA namesake parity are unavailable.
-- **Next Event Estimation** selects Uniform, Power, or NEE-AT light sampling.
-  Every strategy returns the light-selection probability that normalizes its
-  direct estimate. NEE-AT is UVSR's current-vertex adaptive tree; it is not a
-  claim of one-to-one NVIDIA behavior.
+- **Solver Preset** applies an editable **Realtime Path Tracer**, **Reservoir
+  Path Tracer**, or **Reservoir Indirect Lighting** recipe. Realtime Path Tracer
+  is the reference Monte Carlo solver. Reservoir Path Tracer executes
+  deterministic seed-space replay from the current path plus independently
+  enabled temporal and zero-to-four spatial donors around the reprojected
+  prior-view location. Reservoir Indirect Lighting resamples a reconstructable
+  first-secondary-vertex rough diffuse-tail checkpoint from the current pixel
+  plus optional temporal and zero-to-four previous-frame spatial donors. It
+  re-evaluates the receiver diffuse BSDF, traces segment visibility, and applies
+  a bounded solid-angle Jacobian; glossy and ineligible tails stay local. The UI
+  identifies both reservoir modes as first-party clean-room subsets and does not claim
+  arbitrary full-path reconnection or NVIDIA namesake parity.
+- **Next Event Estimation** selects Uniform, Power, or **Adaptively Temporally**
+  light sampling. Every strategy returns the light-selection probability that
+  normalizes its direct estimate. Adaptively Temporally is UVSR's current-vertex
+  adaptive tree; it is not a
+  claim of one-to-one NVIDIA behavior. All three solver recipes default to
+  Uniform so ReSTIR does not silently add a full light-list scan at each path
+  vertex.
 - Zero-size analytic lights retain exact delta visibility. Positive-size
   directional, point, and spot lights sample their angular disk or visible
   sphere with a matching solid-angle PDF, and shadow rays stop at the sampled
   emitter point. Reusable direct reservoirs persist the complete 32-bit emitter
   sample seed and replay it at the receiving surface.
-- **Maximum Bounces**, **Russian Roulette Start**, and **NEE Candidates** bound
-  path length and direct-light work without selecting another material model.
-  Conventional RTX PT averages that many independent NEE estimates.
-- The **RTXDI Reservoir Stages** option selects UVSR's first-party RTXDI-like
+- **Max Bounces**, **Russian Roulette**, and **Light Candidates** bound path
+  length and direct-light work without selecting another material model. The
+  roulette toggle automatically begins at the third useful vertex only when a
+  later continuation ray can be avoided. Realtime Path Tracer averages the
+  selected light-candidate count. **Samples** traces one through eight fresh paths
+  at every updated pixel per frame; cost scales approximately linearly and
+  reused candidates are additional. Every solver recipe defaults to two samples
+  and four bounces.
+- **Shared Primary Surface** defaults on. It traces one material-aware primary
+  ray and direct baseline at full resolution, shares that receiver across the
+  indirect sample batch, and publishes ray-traced depth and validated motion to
+  TAA. Direct and indirect means remain separate and are composed exactly once.
+  This removes the sparse transport lattice from newly exposed presentation
+  pixels. The option adds a full-resolution pass and substantial persistent
+  storage; allocation failure retains the all-ray path integrator instead of
+  falling back to raster.
+- **Light Reservoir** selects UVSR's first-party RTXDI-like
   direct-light reservoir for any requested preset. It replaces conventional NEE
-  at the primary hit; later path vertices retain conventional NEE. Compatible
-  reprojected prior-pixel and one-neighbor direct reuse is active when the
-  selected recipe requests it. This stage is orthogonal to RESTIR PT path-seed
-  replay and RESTIR GI indirect-checkpoint reuse, and every solver preset starts
-  with it disabled.
-- The **Reuse Validated RESTIR Proposals During Motion** option defaults off.
-  When enabled, a camera-only change reprojects prior direct-light proposals
-  and replayable RESTIR PT seeds into the current pixel, then fully re-evaluates
-  them. Accumulated radiance, signal groups, and RESTIR GI checkpoints always
-  reset, and any scene, material, light, or transport change clears every
-  affected history.
+  at the primary hit; later path vertices retain conventional NEE. This stage is
+  orthogonal to Reservoir Path Tracer seed replay and Reservoir Indirect Lighting rough diffuse-tail
+  checkpoint reuse, and every solver preset starts with it disabled.
+- **Temporal Reuse** enables one validated prior-frame donor for each active
+  light, path, or indirect-light reservoir family. **Spatial Neighbors** adds
+  zero through four validated previous-frame cardinal donors. Direct reservoirs
+  re-evaluate their light samples, Reservoir Path Tracer replays continuation
+  seeds, and Reservoir Indirect Lighting performs the bounded secondary-surface reconnection described
+  above. Cost grows linearly with the donor count and PT/GI donor tracing runs
+  once per updated pixel batch rather than once per fresh sample.
+- **Motion Reuse** defaults off. When enabled, an eligible camera-only change
+  reprojects prior light, replayable path, and reconnectable indirect-light
+  proposals into the current pixel, then revalidates them. It is unavailable
+  without an enabled proposal family or while the selected work needs a sparse
+  dispatch lattice. Accumulated radiance and signal means always reset; an
+  invalid current receiver discards its proposal. It intentionally has no
+  stationary-camera effect.
 - **Shader Execution Reordering** is disabled with an availability explanation.
   The current Shader Model 6.5 RayQuery path has no native SER implementation
   and does not pretend to reorder execution.
 
+The two dropdowns come first, followed by the slider group: Light Candidates,
+Samples, Max Bounces, and Spatial Neighbors. Spatial Neighbors is the last
+slider. Russian Roulette, Shared Primary Surface, Shader Execution Reordering,
+Light Reservoir, Temporal Reuse, and Motion Reuse then form one toggle group.
+Solver details that formerly occupied gray lines now live in the Solver Preset
+tooltip.
+
 Each solver/RTXDI/NEE combination has an independent packaged shader pipeline:
 three solvers times two RTXDI modes times three NEE modes produce 18 path
-variants. The complete production catalog contains 327 shader tasks in 50
-staged binaries. If an optional combination cannot initialize, a stored or
+variants. Six Shared Primary variants bring the complete production catalog to
+333 shader tasks in 51 staged binaries. If an optional combination cannot
+initialize, a stored or
 preset request resolves through the same solver and NEE mode without RTXDI,
-the same solver with Uniform NEE, RTX PT with the requested NEE mode, and
-finally Uniform RTX PT. The selected recipe remains visible and the drawer
-reports the effective fallback. Only loss of the baseline Uniform RTX PT
+the same solver with Uniform NEE, Realtime Path Tracer with the requested NEE
+mode, and finally Uniform Realtime Path Tracer. The selected recipe remains
+visible and the drawer reports the effective fallback. Only loss of the baseline Realtime Path Tracer
 pipeline makes Path Tracing unavailable; preparation or recoverable failure
 presents the live Ray Marching fallback rather than freezing an old frame.
 
-The executable transport, direct reservoir, seed replay, and temporal GI
-checkpoints are independent first-party UVSR implementations, not copied,
-one-to-one, or certified NVIDIA SDK integrations. RESTIR PT has no hybrid or
-geometric reconnection, and RESTIR GI has no cross-pixel secondary-surface
-transform. See
+The executable transport, direct reservoir, seed replay, and temporal/spatial
+GI checkpoint stages are independent first-party UVSR implementations, not
+copied, one-to-one, or certified NVIDIA SDK integrations. RESTIR PT replays
+complete indirect paths rather than shifting them geometrically. RESTIR GI owns
+only a bounded rough diffuse-tail reconnection domain, not arbitrary glossy or
+full-path transformation. See
 [Path Tracing Transport](path-tracing-transport.md) for the exact supported
 domain, preset boundary, and extension contract.
 
@@ -286,12 +327,12 @@ other traversal consumer without clearing their individual settings. Turning it
 back on lets the selected effects resume from their stored configuration.
 
 **Bounding Volume Hierarchy** selects Fast Trace, Balanced, or Fast Build for
-acceleration structure construction. **Bottom-Level Acceleration Structures**
-selects Rebuild or Refit for changed dynamic geometry. **Top-Level Acceleration
-Structure** selects Rebuild or Refit for changed instance transforms. A status
-line reports unsupported, inactive, BLAS construction, TLAS construction,
-ready, or failed state and the current structure counts. Inactive is the
-subdued status itself rather than a second explanatory line.
+acceleration structure construction. **Bottom Level Acceleration Structures**
+selects Rebuild or Refit for changed dynamic geometry. **Top Level Acceleration
+Structure** selects Rebuild or Refit for changed instance transforms. A single
+subdued status line below Allow Ray Traversal reports the master-disabled,
+unsupported, inactive, building, ready, or failed state. Persistent BLAS and
+TLAS instance counts are not shown.
 
 Construction is lazy until a ray-query consumer is selected. Path Tracing is a
 continuous consumer and therefore keeps the representation ready. Initial
@@ -318,6 +359,8 @@ Guided**. Every averaging, scheduling, effective-history, warmup, target-error,
 and minimum-update-rate control remains exposed. Editing one retains the chosen
 profile as its origin and displays `<Profile> (Custom)`; reselecting the profile
 reapplies its complete vector.
+The controls themselves are the single source of truth; the old duplicated
+warmup/error/update-rate summary line is not shown.
 
 **History Preset** maps desired response to Effective History without hiding
 the slider: Quick Preview is 8 samples, Responsive is 32, Balanced is 64,
@@ -337,9 +380,8 @@ counts own their sample phases, so skipped frames consume no samples. During
 camera motion, reset samples instead use the live animated frame phase when
 **Animate Samples** is on, preventing the noise texture from appearing stuck to
 the camera. Camera motion still clears accumulated means, RGB variances, counts,
-stable signals, and RESTIR GI radiance history. The Pathing motion option may
-retain only reprojected, revalidated direct proposals and replayable RESTIR PT
-seeds.
+and stable signals. The Pathing motion option may retain only reprojected and
+revalidated direct, replayable RESTIR PT, and reconnectable RESTIR GI proposals.
 
 For Ray Marching, a prepare shader creates the attempt mask before stochastic
 screen-space visibility, Heitz shadow, ray-traced flashlight, and ray-traced
@@ -353,10 +395,10 @@ cannot be averaged again or preserve pre-motion signal history. A selected TAA
 jitter sequence may still diversify raw raster samples. Disabling accumulation
 bypasses the full-resolution Ray Marching history.
 
-With accumulation off, Path Tracing continuously replaces each pixel with a
-one-sample estimate. That is useful for immediate change feedback but can be
-very sparse in an environment-lit interior. Enable accumulation to converge a
-stationary view.
+With accumulation off, Path Tracing continuously replaces each pixel with the
+current **Samples** frame batch. That is useful for immediate change
+feedback but can remain very sparse in an environment-lit interior at low
+sample counts. Enable accumulation to converge a stationary view.
 
 **Spatial White**, **Spatial Blue**, and **Spatiotemporal Blue** are
 precomputed `R8_UNORM` textures available at **64x64**, **128x128**, **256x256**,
@@ -423,9 +465,13 @@ occlusion only profile, or separate contrast/power axis.
 
 The Denoising drawer remains visible in both lighting solutions. Ray Marching
 retains its AO, GI, Shadows, and Sky Visibility signal groups. Path Tracing
-replaces those groups with transport controls. **Spatial Path Resolve** is the
-factory path-denoising method for all three solvers. One signal group filters
-the combined path; two independently filter primary and indirect transport.
+replaces those groups with transport controls. **Raw (No Denoising)** is the
+factory default for all three solvers. Optional **Spatial Path Resolve** uses one
+signal group to filter the combined path; two independently filter primary and
+indirect transport.
+The path **Method** selector uses the standard compact side-labeled dropdown.
+Selecting Raw smoothly folds Signal Groups and Resolve Strength out of the
+drawer instead of leaving inactive controls visible.
 RTX PT additionally supports three groups—primary, diffuse continuation, and
 specular continuation—because only its unresampled path retains a trustworthy
 first-lobe identity. RESTIR PT and RESTIR GI therefore cap the control at two.
@@ -440,7 +486,13 @@ jittered samples. **Resolve Strength** blends from raw to filtered output;
 strength and signal-group edits preserve the accumulated transport. Missing
 guides, nonfinite data, unsupported formats,
 allocation failure, or resolve failure returns the raw mean. **Raw (No
-Denoising)** and the explicitly biased **Firefly Clamp** remain available.
+Denoising)** and the explicitly biased **Firefly Clamp (Biased)** remain available.
+
+With Shared Primary Surface active, the confidence variance and sample count
+describe indirect transport. Direct lighting has a separate mean and count but
+does not yet persist its own variance, so Spatial Path Resolve can under-filter
+a noisy direct-light signal. The default Raw output and Path TAA do not use this
+approximation.
 
 The old path NRD and Primary-Surface Replacement entries were removed because
 they had no executable adapters. A truthful path NRD integration requires
@@ -582,6 +634,9 @@ applying a second selective visibility technique to a complete path.
 **Show Environment Background** affects only a primary-ray miss in Path
 Tracing. Secondary misses retain environment radiance so hiding the visible
 background does not remove environment transport from reflected paths.
+The compact side-labeled **Environment** dropdown is followed by Exposure and
+**Show Environment Background**. The background toggle appears immediately
+above the Auto Exposure subsection.
 
 **Auto Exposure** is its own animated subsection. It starts expanded like the
 Aliasing technique sections, defaults off, and shows only **Enable** while off.
@@ -656,6 +711,8 @@ Reservoir displays the active RESTIR PT seed-replay or RESTIR GI checkpoint
 estimate and is disabled for RTX PT or when the selected subset's reuse policy
 is inactive. Direct Reservoir is meaningful only while its independent stage
 is active.
+The Transport **View** selector uses the same compact side-labeled width as
+ordinary sliders rather than a full-width dropdown with a title above it.
 
 Path Tracing does not expose a Sky Visibility scalar. Its environment misses
 are radiance contributions folded into primary or indirect transport, while
@@ -896,21 +953,31 @@ and confirm continuous sway returns. Hold a stationary trackpad touch
 while pressing V and confirm roll leveling completes; then confirm actual
 camera-look movement cancels it.
 
-Switch to Path Tracing and verify RTX PT over opaque and alpha-tested surfaces
-with Uniform, Power, and NEE-AT selection. Confirm NEE Candidates changes
-conventional direct-light work, RTXDI Reservoir Stages replaces primary NEE,
+Switch to Path Tracing and verify Realtime Path Tracer over opaque and
+alpha-tested surfaces with Uniform, Power, and Adaptively Temporally selection.
+Confirm Light Candidates changes conventional direct-light work, Light Reservoir replaces primary NEE,
 and compatible previous-frame direct reuse survives only unchanged surfaces.
-RESTIR PT must report seed-space replay, use the current path plus reprojected
-prior-pixel and neighbor seeds during camera-only reuse, and disclose that
-geometric reconnection is unavailable. RESTIR GI must report current plus prior
-same-pixel indirect checkpoints and disclose that spatial reconnection is
-unavailable. Confirm the Indirect Reservoir view follows the active subset and
-that combined estimates never become the next frame's persistent local record.
+Exercise Samples at one and a multi-sample value and confirm the sample
+count advances by every successful fresh path. Exercise Temporal Reuse on and
+off, then Spatial Neighbors at zero, one, and four. Reservoir Path Tracer must report
+seed-space replay, use only the enabled reprojected prior-pixel and spatial
+seeds, and disclose that geometric reconnection is unavailable. Reservoir Indirect Lighting must
+report its local rough diffuse-tail candidate plus enabled temporal and spatial
+donors, reject occluded or incompatible reconnections, and leave glossy tails
+local. Test Motion Reuse while the camera actually moves; while stationary it
+must not be presented as a quality toggle. Confirm the Indirect Reservoir view
+follows the active subset and that combined estimates never become the next
+frame's persistent local record. Toggle Shared Primary Surface and verify newly
+exposed pixels receive a full-resolution direct baseline, motion rejects
+same-depth material/normal discontinuities, and TAA is used only when path
+accumulation does not own history.
 Confirm Spatial Path Resolve executes with one and two groups for every solver,
-and with three groups for RTX PT only. Confirm SER remains disabled and no
+and with three groups for Realtime Path Tracer only. Confirm SER remains disabled and no
 nonfunctional path NRD or Primary-Surface Replacement option is presented.
-Exercise the biased Firefly Clamp separately from the unclamped reference and
-verify every estimator-affecting change resets accumulation.
+All presets must open at Raw, two samples, four bounces, automatic Russian
+Roulette on, and Firefly Clamp (Biased) on at 3. Exercise the biased clamp separately
+from the unclamped reference and verify every estimator-affecting change resets
+accumulation.
 
 Exercise Progressive Mean, Responsive Mean, Variance Guided, and at least one
 Custom combination in both lighting solutions. Progressive must advance each

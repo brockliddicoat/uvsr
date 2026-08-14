@@ -672,10 +672,10 @@ int main(int argc, char** argv)
     passed &= ExpectContains(
         viewer,
         "const bool motionVectorsRequired =\n"
-            "                temporalAARequired ||\n"
+            "                rasterTemporalAARequired ||\n"
             "                denoisingMotionVectorsRequired ||\n"
             "                (visibilityResourcesRequired && sampleCount > 1u);",
-        "runtime motion topology for temporal AA and denoising without private Heitz history");
+        "runtime raster motion topology excludes ray-traced path TAA inputs");
     const std::string_view renderTargetReplacement = ExtractSection(
         viewer,
         "const bool antiAliasingTopologyChanged =",
@@ -1584,7 +1584,7 @@ int main(int argc, char** argv)
             { "m_LightingAccumulationPass->PrepareAttempts(",
                 "m_ScreenSpaceVisibilityPass->Render(" },
             { "m_LightingAccumulationPass->Resolve(",
-                "antiAliasedTexture = m_TemporalAAPass->Render(" } })
+                "antiAliasedTexture = temporalPass->Render(" } })
     {
         passed &= ExpectOrdered(
             renderScene,
@@ -1809,11 +1809,14 @@ int main(int argc, char** argv)
         "unsupported scene domains cannot dispatch partial path transport");
     passed &= ExpectContains(
         renderScene,
-        "pathInputs.previousView =\n"
-            "                m_LightingHistoryChangedByViewOnly && m_PreviousView\n"
-            "                ? m_PreviousView.get()\n"
-            "                : nullptr;",
-        "camera-only path resets receive the exact previous nonjittered view");
+        "pathInputs.previousView = m_PreviousView.get();\n"
+            "            pathInputs.width = uint32_t(windowWidth);",
+        "path tracing always receives the previous view for ray motion and TAA");
+    passed &= ExpectContains(
+        renderScene,
+        "pathInputs.historyResetByViewOnly =\n"
+            "                m_LightingHistoryChangedByViewOnly;",
+        "proposal reprojection remains separately gated to camera-only resets");
     passed &= ExpectOrdered(
         renderScene,
         "pathInputs.previousView =",

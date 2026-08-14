@@ -136,6 +136,7 @@ namespace
             "lighting_accumulation_prepare_cs",
             "msaa_visibility_resolve_cs",
             "path_tracing_cs",
+            "path_tracing_primary_surface_cs",
             "path_tracing_stable_plane_resolve_cs",
             "pbr_deferred_lighting_cs",
             "pbr_deferred_lighting_msaa_cs",
@@ -292,8 +293,15 @@ int main(int argc, char** argv)
             std::string("retired shader axis must remain absent: ") + axis);
     }
     passed &= Check(
-        CountShaderPermutations(config) == 327u,
-        "the production shader catalog must contain exactly 327 permutations");
+        CountShaderPermutations(config) == 333u,
+        "the production shader catalog must contain exactly 333 permutations");
+    passed &= Check(
+        CountExactLines(
+            config,
+            "path_tracing_primary_surface_cs.hlsl -T cs -E main "
+                "-D UVSR_PT_RTXDI={0,1} "
+                "-D UVSR_PT_NEE_MODE={0,1,2}") == 1u,
+        "production must package the shared primary/direct RTXDI and NEE matrix");
     passed &= Check(
         CountExactLines(
             config,
@@ -471,8 +479,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 50u,
-        "production shader contract must enumerate exactly 50 files");
+        expectedFiles.size() == 51u,
+        "production shader contract must enumerate exactly 51 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

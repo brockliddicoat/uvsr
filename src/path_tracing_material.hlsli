@@ -11,6 +11,7 @@
 struct PathTracingSurface
 {
     float3 position;
+    float3 previousPosition;
     float3 geometricNormal;
     float3 shadingNormal;
     float3 tangent;
@@ -20,11 +21,13 @@ struct PathTracingSurface
     uint materialIndex;
     MaterialConstants materialConstants;
     MaterialSample material;
+    PbrPreparedMaterial preparedMaterial;
+    uint preparedMaterialValid;
 };
 
-bool PathTracingLoadPosition(
+bool PathTracingLoadPositionAtOffset(
     ByteAddressBuffer vertexBuffer,
-    GeometryData geometry,
+    uint positionOffset,
     uint vertexIndex,
     uint vertexBufferSize,
     out float3 position)
@@ -32,7 +35,7 @@ bool PathTracingLoadPosition(
     position = 0.0f;
     uint address = 0u;
     if (!RayMaterialTryElementAddress(
-            geometry.positionOffset,
+            positionOffset,
             vertexIndex,
             c_SizeOfPosition,
             c_SizeOfPosition,
@@ -43,6 +46,21 @@ bool PathTracingLoadPosition(
     }
     position = asfloat(vertexBuffer.Load3(address));
     return true;
+}
+
+bool PathTracingLoadPosition(
+    ByteAddressBuffer vertexBuffer,
+    GeometryData geometry,
+    uint vertexIndex,
+    uint vertexBufferSize,
+    out float3 position)
+{
+    return PathTracingLoadPositionAtOffset(
+        vertexBuffer,
+        geometry.positionOffset,
+        vertexIndex,
+        vertexBufferSize,
+        position);
 }
 
 float3 PathTracingLoadNormal(
@@ -182,6 +200,7 @@ bool PathTracingTraceSurface(
     float3 rayDirection,
     float rayMinimum,
     float rayMaximum,
+    bool loadPreviousPosition,
     out PathTracingSurface surface)
 {
     surface = (PathTracingSurface)0;
@@ -311,6 +330,46 @@ bool PathTracingTraceSurface(
         mul(objectToWorld, float4(objectPositions[1], 1.0f)),
         mul(objectToWorld, float4(objectPositions[2], 1.0f))
     };
+    float3 previousPosition = rayOrigin +
+        rayDirection * query.CommittedRayT();
+    const uint instanceIndex = query.CommittedInstanceID();
+    if (loadPreviousPosition &&
+        instanceIndex < g_PathTracing.instanceCount)
+    {
+        const uint previousOffset = geometry.prevPositionOffset != ~0u
+            ? geometry.prevPositionOffset
+            : geometry.positionOffset;
+        float3 previousObjectPositions[3];
+        if (PathTracingLoadPositionAtOffset(
+                vertexBuffer,
+                previousOffset,
+                indices.x,
+                vertexBufferSize,
+                previousObjectPositions[0]) &&
+            PathTracingLoadPositionAtOffset(
+                vertexBuffer,
+                previousOffset,
+                indices.y,
+                vertexBufferSize,
+                previousObjectPositions[1]) &&
+            PathTracingLoadPositionAtOffset(
+                vertexBuffer,
+                previousOffset,
+                indices.z,
+                vertexBufferSize,
+                previousObjectPositions[2]))
+        {
+            const float3 previousObjectPosition =
+                previousObjectPositions[0] * barycentrics.x +
+                previousObjectPositions[1] * barycentrics.y +
+                previousObjectPositions[2] * barycentrics.z;
+            const InstanceData instance =
+                t_PathTracingInstances[instanceIndex];
+            previousPosition = mul(
+                instance.prevTransform,
+                float4(previousObjectPosition, 1.0f));
+        }
+    }
     float3 geometricNormal = PbrSafeNormalize(
         cross(
             worldPositions[1] - worldPositions[0],
@@ -349,7 +408,26 @@ bool PathTracingTraceSurface(
     if (dot(material.shadingNormal, geometricNormal) < 0.0f)
         material.shadingNormal = -material.shadingNormal;
 
+    // Normal maps can leave a view-facing triangle with a shading normal just
+    // behind the outgoing hemisphere. Project that normal into the tangent
+    // plane and nudge it toward the view to prevent zero-BSDF black specks.
+    if (dot(geometricNormal, viewDirection) > 0.0f &&
+        dot(material.shadingNormal, viewDirection) <= 0.0f)
+    {
+        const float3 safeView = PbrSafeNormalize(
+            viewDirection,
+            geometricNormal);
+        const float3 tangentNormal = material.shadingNormal -
+            safeView * dot(material.shadingNormal, safeView);
+        material.shadingNormal = PbrSafeNormalize(
+            tangentNormal + safeView * 1.0e-4f,
+            geometricNormal);
+    }
+
     surface.position = rayOrigin + rayDirection * query.CommittedRayT();
+    surface.previousPosition = all(isfinite(previousPosition))
+        ? previousPosition
+        : surface.position;
     surface.geometricNormal = geometricNormal;
     surface.shadingNormal = PbrSafeNormalize(
         material.shadingNormal, geometricNormal);
@@ -360,6 +438,7 @@ bool PathTracingTraceSurface(
     surface.materialIndex = geometry.materialIndex;
     surface.materialConstants = materialConstants;
     surface.material = material;
+    surface.preparedMaterialValid = 0u;
     return all(isfinite(surface.position)) &&
         all(isfinite(surface.geometricNormal)) &&
         all(isfinite(surface.shadingNormal));
@@ -424,6 +503,34 @@ float2 PathTracingEncodeUnitVector(float3 direction)
                 encoded.y >= 0.0f ? 1.0f : -1.0f);
     }
     return encoded;
+}
+
+float3 PathTracingDecodeUnitVector(float2 encoded)
+{
+    float3 direction = float3(
+        encoded,
+        1.0f - abs(encoded.x) - abs(encoded.y));
+    if (direction.z < 0.0f)
+    {
+        direction.xy = (1.0f - abs(direction.yx)) *
+            float2(direction.x >= 0.0f ? 1.0f : -1.0f,
+                direction.y >= 0.0f ? 1.0f : -1.0f);
+    }
+    return PbrSafeNormalize(direction, float3(0.0f, 1.0f, 0.0f));
+}
+
+uint PathTracingPackUnitVectorHalf(float3 direction)
+{
+    const float2 encoded = PathTracingEncodeUnitVector(direction);
+    return (f32tof16(encoded.x) & 0xffffu) |
+        ((f32tof16(encoded.y) & 0xffffu) << 16u);
+}
+
+float3 PathTracingUnpackUnitVectorHalf(uint packed)
+{
+    return PathTracingDecodeUnitVector(float2(
+        f16tof32(packed & 0xffffu),
+        f16tof32(packed >> 16u)));
 }
 
 float3 PathTracingSurfaceSignature(PathTracingSurface surface)

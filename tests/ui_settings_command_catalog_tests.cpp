@@ -53,7 +53,7 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 220u);
+    static_assert(UiSettingsCommandCatalog.size() == 224u);
     static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 14u);
     static_assert(static_cast<std::uint8_t>(UiSettingsCommandKind::Float4) == 7u);
     static_assert(Action("test", Section::General, "test").supportedVerbs ==
@@ -62,7 +62,7 @@ int main()
     constexpr std::array<std::size_t, 14> ExpectedSectionCounts = {
         15u, // UI
         7u,  // General
-        8u,  // Pathing
+        12u, // Pathing
         4u,  // Representation
         13u, // Noise
         24u, // Visibility
@@ -119,9 +119,13 @@ int main()
         "pathing.nee-candidates",
         "pathing.rtxdi",
         "pathing.reuse-proposals-during-motion",
-        "pathing.russian-roulette-start",
+        "pathing.russian-roulette",
+        "pathing.samples-per-pixel",
+        "pathing.shared-primary-surface",
         "pathing.ser",
-        "pathing.solver"
+        "pathing.solver",
+        "pathing.spatial-neighbors",
+        "pathing.temporal-reuse"
     };
     const std::set<std::string> ExpectedNoise = {
         "noise.accumulate-samples",
@@ -272,8 +276,8 @@ int main()
         "section counts must match the current UI");
     Require(actionCount == 4u,
         "only open-folder, reset, capture, and restart actions remain");
-    Require(UiSettingsCommandCatalog.size() - actionCount == 216u,
-        "the compact catalog must contain 216 values");
+    Require(UiSettingsCommandCatalog.size() - actionCount == 220u,
+        "the compact catalog must contain 220 values");
     Require(dynamicCount == 50u,
         "runtime lights and materials must retain their 50 dynamic controls");
     Require(dynamicSelections == ExpectedDynamicSelections,
@@ -321,12 +325,14 @@ int main()
     requireDomain("pathing.solver", "rtx-pt|restir-pt|restir-gi");
     requireDomain("pathing.nee", "uniform|power|nee-at");
     requireDomain("pathing.max-bounces", "integer 1..96");
-    requireDomain(
-        "pathing.russian-roulette-start",
-        "integer 1..96 and no greater than max-bounces");
+    requireDomain("pathing.russian-roulette", "on|off");
     requireDomain("pathing.nee-candidates", "integer 1..63");
+    requireDomain("pathing.samples-per-pixel", "integer 1..8");
+    requireDomain("pathing.shared-primary-surface", "on|off");
     requireDomain("pathing.ser", "on|off");
     requireDomain("pathing.rtxdi", "on|off");
+    requireDomain("pathing.temporal-reuse", "on|off");
+    requireDomain("pathing.spatial-neighbors", "integer 0..4");
     requireDomain("pathing.reuse-proposals-during-motion", "on|off");
     requireDomain("noise.pattern",
         "spatial-white|spatial-blue|spatiotemporal-blue");
@@ -510,13 +516,21 @@ int main()
     requireKindAndSection(
         "pathing.max-bounces", Kind::Integer, Section::Pathing);
     requireKindAndSection(
-        "pathing.russian-roulette-start", Kind::Integer, Section::Pathing);
+        "pathing.russian-roulette", Kind::Boolean, Section::Pathing);
     requireKindAndSection(
         "pathing.nee-candidates", Kind::Integer, Section::Pathing);
+    requireKindAndSection(
+        "pathing.samples-per-pixel", Kind::Integer, Section::Pathing);
+    requireKindAndSection(
+        "pathing.shared-primary-surface", Kind::Boolean, Section::Pathing);
     requireKindAndSection(
         "pathing.ser", Kind::Boolean, Section::Pathing);
     requireKindAndSection(
         "pathing.rtxdi", Kind::Boolean, Section::Pathing);
+    requireKindAndSection(
+        "pathing.temporal-reuse", Kind::Boolean, Section::Pathing);
+    requireKindAndSection(
+        "pathing.spatial-neighbors", Kind::Integer, Section::Pathing);
     requireKindAndSection("ui.skin", Kind::Enum, Section::Ui);
     requireKindAndSection("ui.animations", Kind::Boolean, Section::Ui);
     requireKindAndSection(
