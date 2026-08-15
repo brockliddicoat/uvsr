@@ -20,9 +20,6 @@
 #ifndef RUNTIME_SAMPLE_PARITY
 #define RUNTIME_SAMPLE_PARITY 0
 #endif
-#ifndef OUTPUT_PACKED_EDGES
-#define OUTPUT_PACKED_EDGES 0
-#endif
 #ifndef OUTPUT_AO_HIT_DISTANCE
 #define OUTPUT_AO_HIT_DISTANCE 0
 #endif
@@ -64,9 +61,6 @@ VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 #endif
 #if OUTPUT_AO_HIT_DISTANCE
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientHitDistance : register(u2);
-#endif
-#if OUTPUT_PACKED_EDGES
-VK_IMAGE_FORMAT("r8ui") RWTexture2D<uint> u_PackedEdges : register(u3);
 #endif
 #if OUTPUT_GI_HIT_DISTANCE
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_IndirectHitDistance : register(u4);
@@ -230,89 +224,6 @@ bool ReconstructViewPositionSafe(float2 pixelPosition, float depth, out float3 p
     return IsFiniteFloat3(positionVS);
 }
 
-#if OUTPUT_PACKED_EDGES
-uint PackEdgeContinuity(float4 continuity)
-{
-    uint4 quantized = uint4(round(saturate(continuity) * 3.0f));
-    return ((quantized.x & 3u) << 6u) |
-        ((quantized.y & 3u) << 4u) |
-        ((quantized.z & 3u) << 2u) |
-        (quantized.w & 3u);
-}
-
-uint ComputePackedReceiverEdges(
-    uint2 samplingPixel,
-    uint2 receiverPixel,
-    float receiverDepth)
-{
-    if (!IsValidDepth(receiverDepth))
-        return 0u;
-
-    static const int2 offsets[4] = {
-        int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1)
-    };
-    uint2 samplingMaximum = uint2(g_Visibility.samplingResolution) - 1u;
-    float receiverLinearDepth;
-    float3 receiverPositionVS;
-    if (!ReconstructViewPositionSafe(
-            float2(receiverPixel) + 0.5f,
-            receiverDepth,
-            receiverPositionVS))
-    {
-        return 0u;
-    }
-    receiverLinearDepth = abs(receiverPositionVS.z);
-    float3 receiverNormal = SafeNormalize(
-        t_Normals[receiverPixel].xyz,
-        float3(0.0f, 1.0f, 0.0f));
-    float4 depthDiscontinuity = 1.0f;
-    float4 normalDiscontinuity = 0.0f;
-    [unroll]
-    for (uint edgeIndex = 0u; edgeIndex < 4u; ++edgeIndex)
-    {
-        uint2 neighborSamplingPixel = uint2(clamp(
-            int2(samplingPixel) + offsets[edgeIndex],
-            int2(0, 0), int2(samplingMaximum)));
-        uint2 neighborPixel = SamplingToFullPixel(neighborSamplingPixel);
-        float neighborDepth = t_Depth[neighborPixel];
-        float3 neighborPositionVS;
-        if (!IsValidDepth(neighborDepth) ||
-            !ReconstructViewPositionSafe(
-                float2(neighborPixel) + 0.5f,
-                neighborDepth,
-                neighborPositionVS))
-        {
-            depthDiscontinuity[edgeIndex] = 1.0f;
-            normalDiscontinuity[edgeIndex] = 1.0f;
-            continue;
-        }
-        float neighborLinearDepth = abs(neighborPositionVS.z);
-        depthDiscontinuity[edgeIndex] = saturate(
-            abs(neighborLinearDepth - receiverLinearDepth) /
-            max(receiverLinearDepth * 0.08f, 0.01f));
-        float3 neighborNormal = SafeNormalize(
-            t_Normals[neighborPixel].xyz, receiverNormal);
-        normalDiscontinuity[edgeIndex] = saturate(
-            (1.0f - dot(receiverNormal, neighborNormal)) * 4.0f);
-    }
-
-    if (g_Visibility.packedEdgeMode == 2u)
-    {
-        float horizontalSlope = min(
-            depthDiscontinuity.x, depthDiscontinuity.y);
-        float verticalSlope = min(
-            depthDiscontinuity.z, depthDiscontinuity.w);
-        depthDiscontinuity.xy = saturate(
-            depthDiscontinuity.xy - horizontalSlope.xx);
-        depthDiscontinuity.zw = saturate(
-            depthDiscontinuity.zw - verticalSlope.xx);
-    }
-    float4 continuity = 1.0f - max(
-        depthDiscontinuity, normalDiscontinuity);
-    return PackEdgeContinuity(continuity);
-}
-#endif
-
 bool ProjectClippedViewEndpoint(
     float4 receiverClipPosition,
     float3 endpointPositionVS,
@@ -395,11 +306,6 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     uint2 receiverPixel = SamplingToFullPixel(dispatchPixel);
     float receiverDepth = t_Depth[receiverPixel];
     float2 receiverPixelCenter = float2(receiverPixel) + 0.5f;
-
-#if OUTPUT_PACKED_EDGES
-    u_PackedEdges[dispatchPixel] = ComputePackedReceiverEdges(
-        dispatchPixel, receiverPixel, receiverDepth);
-#endif
 
 #if ENABLE_GI
     const bool giSourcePotential =
@@ -859,7 +765,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
 
     // A single uniformly selected slice is an unbiased outer Monte Carlo
     // estimate of the cosine integral. Its projected slice mass can exceed
-    // one for tilted normals, so retain that energy through reconstruction;
+    // one for tilted normals, so retain that energy through upsampling;
     // the physical [0,1] bound is applied only after averaging/composition.
     ambientVisibility = max(ambientVisibility, 0.0f);
     if (!isfinite(ambientVisibility))

@@ -17,6 +17,8 @@ namespace uvsr
     enum class DenoisingMethodChoice : uint8_t
     {
         None,
+        JointBilateral,
+        GaussianBilateral,
         Reblur,
         Relax,
         Sigma
@@ -45,6 +47,7 @@ namespace uvsr
         uint32_t historyLength = 16;
         float disocclusionThreshold = 0.01f;
         float antiLagStrength = 0.5f;
+        float spatialRadius = 4.f;
 
         [[nodiscard]] bool operator==(
             const DenoisingSignalSettings& other) const noexcept
@@ -54,7 +57,8 @@ namespace uvsr
                 resolution == other.resolution &&
                 historyLength == other.historyLength &&
                 disocclusionThreshold == other.disocclusionThreshold &&
-                antiLagStrength == other.antiLagStrength;
+                antiLagStrength == other.antiLagStrength &&
+                spatialRadius == other.spatialRadius;
         }
 
         [[nodiscard]] bool operator!=(
@@ -89,6 +93,11 @@ namespace uvsr
     {
         if (method == DenoisingMethodChoice::None)
             return true;
+        if (method == DenoisingMethodChoice::JointBilateral ||
+            method == DenoisingMethodChoice::GaussianBilateral)
+        {
+            return true;
+        }
 
         switch (effect)
         {
@@ -110,11 +119,30 @@ namespace uvsr
     {
         switch (method)
         {
+        case DenoisingMethodChoice::JointBilateral:
+            return "Joint Bilateral";
+        case DenoisingMethodChoice::GaussianBilateral:
+            return "Gaussian Bilateral";
         case DenoisingMethodChoice::Reblur: return "ReBLUR";
         case DenoisingMethodChoice::Relax: return "ReLAX";
         case DenoisingMethodChoice::Sigma: return "SIGMA";
-        default: return "None";
+        default: return "Raw";
         }
+    }
+
+    [[nodiscard]] constexpr bool IsSpatialDenoisingMethod(
+        DenoisingMethodChoice method) noexcept
+    {
+        return method == DenoisingMethodChoice::JointBilateral ||
+            method == DenoisingMethodChoice::GaussianBilateral;
+    }
+
+    [[nodiscard]] constexpr bool IsThirdPartyDenoisingMethod(
+        DenoisingMethodChoice method) noexcept
+    {
+        return method == DenoisingMethodChoice::Reblur ||
+            method == DenoisingMethodChoice::Relax ||
+            method == DenoisingMethodChoice::Sigma;
     }
 
     [[nodiscard]] constexpr const char* GetDenoisingQualityLabel(
@@ -158,6 +186,9 @@ namespace uvsr
         settings.antiLagStrength = std::isfinite(settings.antiLagStrength)
             ? std::clamp(settings.antiLagStrength, 0.f, 1.f)
             : 0.5f;
+        settings.spatialRadius = std::isfinite(settings.spatialRadius)
+            ? std::clamp(settings.spatialRadius, 1.f, 8.f)
+            : 4.f;
         return settings;
     }
 }

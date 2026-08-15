@@ -8,7 +8,8 @@ on every launch and are not persisted.
 - **Escape** or **~** opens and closes Settings.
 - **/** opens the command interface. Enter applies, Tab completes, Up and Down
   recall history, and Escape cancels the active edit.
-- **M** opens or closes the Material drawer for the surface at screen center.
+- **M** opens or refreshes the Material drawer for the surface at screen center;
+  the drawer header closes it.
 - **F** toggles the camera flashlight while the command interface is closed and
   text input is inactive.
 - **Z** or **Zoom** cycles Off, 2x, 3x, 4x, and 5x pixel inspection.
@@ -30,9 +31,17 @@ top-level drawers, retain independent fully rounded silhouettes, and keep smooth
 authored opening and closing motion. It reports a compact per-window frame
 summary and selected renderer timings.
 The compact summary remains visible below the title when Performance is fully
-collapsed; only its selector and table close. The summary is vertically centered
-with equal top and bottom breathing room, and only its retained body fades toward
-an opaque surface during collapse so scene detail cannot overpower the line.
+collapsed; only its selector and table close. The summary keeps the same
+top-padded text baseline in every state, and its one-line content surface stays
+fully opaque while the remaining expanded body retains its normal transparency.
+Settings retains its 32-character snapshot code in the same way. The code stays
+above the scrolling drawers while expanded, remains visible below the title
+while collapsed, uses the same fixed baseline and fully opaque one-line surface
+as Performance, and is visibly drawn exactly once throughout the transition.
+Clicking it copies the code and archives the exact represented setting values
+needed by the decoder. Performance continuously shortens its content outline as
+the root compacts. Settings morphs its scrolling-body outline into the hash-row
+outline instead of crossfading or swapping rectangles at either endpoint.
 
 The menu uses one scaled 1x/2x/4x spacing ladder. At 100 percent display scale,
 1x is 4 pixels for adjacent drawers, the Performance-to-Settings gap, and footer
@@ -42,25 +51,29 @@ for outer panel and command-interface margins.
 
 Standard drawer dropdowns use the same compact control width as a slider track
 plus its numeric input, with the setting title on the right side of the row.
-Only the intentionally cramped General, Material, and Interface drawers use
-wide dropdowns with a title above the control. Pathing, path Denoising, Debug
-Transport, and Sky therefore use the compact side-labeled form.
+Material Domain, Interface Skin, Interface colors, Pathing, path Denoising,
+Debug Transport, and Sky all use this side-labeled form. Material sliders also
+inherit the bounded control width; no Material slider expands across the full
+drawer. Only the intentionally cramped General selectors retain their wider
+presentation.
 
 The Settings panel contains thirteen persistent scrolling top-level drawers in
 this order. Path Tracing inserts the conditional **Pathing** drawer immediately
 after General and smoothly removes the Ray Marching-only Diffuse, Buffers,
-Aliasing, and Shadows drawers from the active layout:
+Aliasing, and Shadows drawers from the active layout. Switching from Ray
+Marching to Path Tracing opens Pathing once; a later manual collapse remains
+owned by the user until another away-and-back solution switch:
 
 1. **General** selects the graphics adapter, Adaptive Sync, camera, and scene.
 2. **Representation** controls whether ray traversal is allowed and configures
    the shared BVH, BLAS, and TLAS policies.
 3. **Noise** defines the shared precomputed noise pattern, resolution,
    animation policy, and progressive accumulation mode.
-4. **Diffuse** controls Occlusion, Illumination, sampling, and
-   reconstruction.
-5. **Denoising** selects Ray Marching NRD processing or the supported Path
-   Tracing raw/firefly controls and RTX PT spatial path-layer resolve, with
-   unavailable PT reconstruction choices capability-disabled.
+4. **Diffuse** controls Occlusion, Illumination, and sampling. Reduced-resolution
+   signals are upsampled automatically without a reconstruction menu.
+5. **Denoising** selects Raw, first-party spatial bilateral filtering,
+   optional Ray Marching NRD processing, or the supported Path Tracing
+   raw/firefly controls and RTX PT spatial path-layer resolve.
 6. **Buffers** owns the two retained Visibility precision choices.
 7. **Aliasing** independently enables the temporal, fast approximate,
    morphological, and multisample techniques.
@@ -87,14 +100,22 @@ available height until the slash command interface opens, then shrink smoothly
 above its bottom-centered two-axis entrance. Settings retain the same ordinary
 inset below the title as along the body sides and bottom. A late topmost-child
 opaque frame fills the complete rounded margin, including all four
-outer-to-inner corner wedges, while a shallow shadow remains above whichever
-ordinary drawer reaches the viewport edge. Performance uses the same filled
-frame and inner outline so its retained table lines terminate cleanly. The
+outer-to-inner corner wedges. Settings does not synthesize top or bottom
+viewport shadows.
+Performance uses the same filled frame and inner outline so its retained table
+lines terminate cleanly. Both retained text rows have a permanently opaque
+interior, while the Settings inner rectangle follows the animated root from the
+scrolling viewport to the compact hash perimeter. The
 scrolling child and scrollbar still begin at General. Amp uses one shared corner
 radius for the panel frame, drawer bodies, controls, and scrollbar; the
 scrollbar keeps a one-pixel inset against the outline. At 100 percent scale its
 12-pixel channel produces a 10-pixel visible grab, the minimum standard geometry
-that preserves the shared 4-pixel radius.
+that preserves the shared 4-pixel radius. The channel and grab remain present
+through every submitted opening and closing frame so drawer widths do not jump;
+the scrollbar disappears only after Settings reaches its fully collapsed
+endpoint and stops submitting the scrolling child. Logical collapse state owns
+that endpoint: a temporary auto-fit `Begin()` result must never submit the child
+or redirect compact chrome into an inactive descendant draw list.
 The fully visible command interface uses the same opaque body surface as the
 collapsed Performance summary; only its whole-window appearance transform
 changes opacity during entry and exit.
@@ -107,6 +128,36 @@ renderer settings, Adaptive Sync, Interface skin and colors, animation and
 visual-maximum preferences, and the default collapsed Complete Renderer
 Performance view. It
 preserves the camera, scene, active graphics adapter, and command history.
+
+The snapshot code is exactly 32 lowercase hexadecimal characters. Its first
+four characters are the registered settings schema version (currently `0003`);
+the remaining 28 characters fingerprint the complete sorted represented
+command-value snapshot.
+The root Settings collapsed state and Material drawer visibility are
+presentation only and are not represented.
+A code is resolved through the local catalog written when it is
+copied, because every floating-point, color, dynamic selection, and stored
+inactive value cannot fit reversibly into 112 payload bits. Decode it with:
+
+```powershell
+python tools/decode_settings_snapshot.py <32-character-code>
+```
+
+The default catalog is
+`%LOCALAPPDATA%\UVSR\settings-snapshots-v<version>.txt`, using the code's own
+registered prefix. Pass `--json` for JSON or
+`--catalog <path>` for an exported catalog. When a packaged launcher redirects
+Local AppData, the decoder also searches each package-local UVSR catalog under
+`%LOCALAPPDATA%\Packages`. Unknown versions, missing entries, fingerprint
+mismatches, and collisions fail explicitly.
+Schema allocation is fingerprint-owned rather than branch-owned; the complete
+concurrent and disconnected-branch procedure is documented in
+[`settings-snapshot-schema-versions.md`](settings-snapshot-schema-versions.md).
+
+Material Domain uses the ordinary side label, and the complete Material editor
+shares the standard bounded control width. Hover text explains glossiness,
+metalness, roughness, opacity, alpha cutoff, normal scale, occlusion, emissive,
+and transmission controls without adding explanatory rows to the drawer.
 
 ## Interface
 
@@ -131,12 +182,12 @@ to retain the accepted blue appearance over the light enabled track and drives
 success, positive state, Material status, and authored toggle-on knobs. Every
 editor includes alpha.
 
-**Font Color** for all authored copy and **Primary Background Color** for the
+**Font Color** for all authored copy and **Background Color** for the
 menu body and resting closed controls follow the three accent rows directly;
 there is no separate Advanced Accents submenu. Hover, active, and strengthened
 body opacity are derived from the resting background. Ultra-bright Primary
 Accent surfaces automatically use a transparent dark depth gradient. Slider
-tracks follow Primary Background Color so the Primary Accent knob remains
+tracks follow Background Color so the Primary Accent knob remains
 distinct.
 These interface choices, including Override Visual Maxes, are session-only and
 are restored by footer Reset or `/reset all`.
@@ -163,8 +214,11 @@ Every first-party Interface, Material, flashlight, and scene-light color editor
 uses one shared policy and the same authored popup. It has a hue wheel with a
 finely tessellated rounded saturation/value triangle and four equal vertical
 lanes aligned exactly to the fourth component column: hue, alpha, Current, and
-Original. RGB controls keep the alpha lane in the same position but render it
-as disabled neutral gray without reading or writing alpha. The RGB, HSV, and
+Original. A control whose alpha value is gated keeps the alpha lane in the same
+position and renders its base as the ordinary checker pattern without reading
+or writing alpha. Its fourth RGB/HSV numeric slot is visually empty and submits
+no input widget. One continuous carved outline surrounds both empty slots and
+their inter-row gap without drawing a separate frame around either row. The RGB, HSV, and
 hex rows omit their redundant preview squares and fill the available width;
 visible control labels are not repeated as popup headings. The bright interior
 begins at ordinary window padding, while controls add one Tight spacing token
@@ -352,8 +406,11 @@ queries.
 ## Noise
 
 The Noise drawer defaults to **Spatiotemporal Blue**, **128x128**, animated
-sampling, and **Accumulate Samples** off. Accumulate Samples is available in
-both lighting solutions. Enabling it reveals three starting profiles:
+sampling, and **Accumulate Samples** off. **Accumulate Samples** is the final
+Noise section and can be collapsed with its complete contents. Its only
+top-level control is **Enable**; no gray explanatory line appears beneath it.
+The section is available in both lighting solutions. Enabling it reveals three
+starting profiles:
 **Progressive Mean**, **Responsive Mean**, and factory-default **Variance
 Guided**. Every averaging, scheduling, effective-history, warmup, target-error,
 and minimum-update-rate control remains exposed. Editing one retains the chosen
@@ -437,17 +494,13 @@ The main controls are:
   Cosine Visibility** estimation;
 - an optional **Specify Noise** override for the shared AO/GI dispatch;
 - 1 through 64 samples, radius, thickness, and distribution from 0.25 through
-  8;
-- one direct-or-guide-aware reconstruction mode, labeled **Full Resolution** at
-  full sampling resolution and **Guide-Aware Upsampling** at reduced resolution,
-  plus **Packed Depth-Normal**, **Packed Slope-Aware**, or **Packed
-  Leak-Controlled**; and
-- optional spatial reconstruction.
+  8.
 
-Occlusion, Illumination, Sampling, and Reconstruction are animated
-collapsible groups. Reconstruction starts collapsed when tracing at full
-resolution and expanded when a reduced-resolution trace needs reconstruction;
-after the first interaction, the user's disclosure choice is preserved. Every
+Occlusion, Illumination, and Sampling are the three animated collapsible groups.
+There are no selectable Diffuse reconstruction or spatial-filter controls.
+Full-resolution signals pass through directly. Half- and quarter-resolution
+signals use one automatic four-tap depth- and normal-guided upsample unless a
+selected denoiser already returned a valid full-resolution result. Every
 retained setting has a concise hover explanation, and dropdown widths preserve
 both the value and its visible label.
 
@@ -457,15 +510,15 @@ physical distance texture only while requested. They do not trace extra
 samples, but they add a shader output, storage, and memory traffic. Selecting a
 denoiser does not silently enable either producer control.
 
-Diffuse has no private temporal accumulation, depth hierarchy, recursive
-diffuse bounces, resurrection history, benchmark planner, fused ambient
-occlusion only profile, or separate contrast/power axis.
+Diffuse has no selectable reconstruction stack, private temporal accumulation,
+depth hierarchy, recursive diffuse bounces, resurrection history, benchmark
+planner, fused ambient occlusion only profile, or separate contrast/power axis.
 
 ## Denoising
 
 The Denoising drawer remains visible in both lighting solutions. Ray Marching
 retains its AO, GI, Shadows, and Sky Visibility signal groups. Path Tracing
-replaces those groups with transport controls. **Raw (No Denoising)** is the
+replaces those groups with transport controls. **Raw** is the
 factory default for all three solvers. Optional **Spatial Path Resolve** uses one
 signal group to filter the combined path; two independently filter primary and
 indirect transport.
@@ -485,8 +538,8 @@ initialized from a deterministic center ray and remain stable across later
 jittered samples. **Resolve Strength** blends from raw to filtered output;
 strength and signal-group edits preserve the accumulated transport. Missing
 guides, nonfinite data, unsupported formats,
-allocation failure, or resolve failure returns the raw mean. **Raw (No
-Denoising)** and the explicitly biased **Firefly Clamp (Biased)** remain available.
+allocation failure, or resolve failure returns the raw mean. **Raw** and the
+explicitly biased **Firefly Clamp (Biased)** remain available.
 
 With Shared Primary Surface active, the confidence variance and sample count
 describe indirect transport. Direct lighting has a separate mean and count but
@@ -500,37 +553,43 @@ demodulated diffuse/specular radiance, matching in-lobe hit distances, and path
 motion guides that UVSR does not yet produce. The existing Ray Marching NRD
 backend cannot correctly consume an accumulated combined path mean.
 
-For Ray Marching, NRD processing is available only when UVSR is built with the
-optional NVIDIA NRD backend and the selected signal provides its complete
-contract. A build without NRD places its short availability note after the
-signal groups so it cannot push the controls away from the drawer header. Each
-signal starts with
-**Method: None**, while its stored controls start at **Balanced**, **Half**, and
-16 history frames. Method selection is independent for each signal:
+For Ray Marching, each signal starts at **Raw** and independently offers the
+first-party **Joint Bilateral** and **Gaussian Bilateral** methods. These
+spatial methods are available in the normal build, consume the raw signal plus
+full-resolution depth and normals, return a full-resolution result in the raw
+format, and expose only **Radius**. They do not allocate motion vectors, require
+hit distance, use history, or depend on NVIDIA NRD. The same two choices work
+for AO, GI, Shadows, and Sky Visibility; they no longer live in Diffuse.
 
-- AO supports None or ReBLUR.
-- GI supports None, ReBLUR, or ReLAX.
-- Shadows supports None or SIGMA.
-- Sky Visibility supports None, ReBLUR, or ReLAX.
+Optional third-party choices remain configurable by signal:
 
-Every active method exposes Performance, Balanced, Quality, and Ultra quality,
-plus Quarter, Half, and Full processing resolution. ReBLUR and ReLAX also expose
-history, disocclusion, and response controls. Shadows expose the SIGMA settings
-that NRD actually consumes: quality controls sun stabilization, disocclusion
-controls sun history rejection, and resolution controls both sources.
-Flashlight SIGMA is spatial only because reliable local light reprojection is
-not available; it keeps an independent signal state without exposing inactive
-history or response controls.
+- AO adds ReBLUR.
+- GI adds ReBLUR and ReLAX.
+- Shadows adds SIGMA.
+- Sky Visibility adds ReBLUR and ReLAX.
 
-NRD needs a noisy signal and physical hit distance data. AO, GI, sky
-visibility, sun shadows, and flashlight shadows therefore retain explicit
-**Output Hit Distance** switches with a default of off. Sky and sun also retain
-independent **Ratio Estimator** switches with a default of on. Sky ReBLUR or
-ReLAX and sun SIGMA consume the raw one ray producer route, so sky or sun
-denoising also requires its Ratio Estimator to be off. Changing a denoising
-choice never changes those producer switches. Missing data, an unsupported
-combination, or an unavailable backend leaves the raw signal in use and reports
-the reason.
+The third-party methods expose Performance, Balanced, Quality, and Ultra
+quality plus Quarter, Half, and Full processing resolution. ReBLUR and ReLAX
+also expose history, disocclusion, and response controls. Shadows expose the
+SIGMA settings that NRD actually consumes: quality controls sun stabilization,
+disocclusion controls sun history rejection, and resolution controls both
+sources. Flashlight SIGMA is spatial only because reliable local-light
+reprojection is unavailable; it keeps an independent signal state without
+exposing inactive history or response controls.
+
+Third-party NRD methods need a noisy signal and physical hit distance data. AO,
+GI, sky visibility, sun shadows, and flashlight shadows therefore retain
+explicit **Output Hit Distance** switches with a default of off. Sky and sun
+also retain independent **Ratio Estimator** switches with a default of on. Sky
+ReBLUR or ReLAX and sun SIGMA consume the raw one-ray producer route, so sky or
+sun third-party denoising also requires its Ratio Estimator to be off. Changing
+a denoising choice never changes those producer switches. Missing data, an
+unsupported combination, or an unavailable backend leaves the raw signal in
+use.
+
+The drawer has exactly one subdued status line, placed after all signal groups:
+`Third Party denoisers are configurable, but not installed in this build.` No
+per-signal readiness, missing-data, or backend status copy is rendered there.
 
 Performance keeps each denoising dispatch separate from its producer. The
 Complete Renderer table and relevant effect table therefore report **Ambient
@@ -636,7 +695,9 @@ Tracing. Secondary misses retain environment radiance so hiding the visible
 background does not remove environment transport from reflected paths.
 The compact side-labeled **Environment** dropdown is followed by Exposure and
 **Show Environment Background**. The background toggle appears immediately
-above the Auto Exposure subsection.
+above the Auto Exposure subsection. Its six visible choices contain only their
+time or sky condition: **Day**, **Bright Overcast**, **Soft Day**, **Night**,
+**Starry Night**, and **Cloudy**.
 
 **Auto Exposure** is its own animated subsection. It starts expanded like the
 Aliasing technique sections, defaults off, and shows only **Enable** while off.
@@ -829,9 +890,9 @@ time, and frame rate in one slash-separated line. Renderer identity remains in
 General. Path Tracing contributes an explicit Path Transport stage and
 solver/history resource rows while selected. Amp draws the same opaque rounded inset frame around Performance and
 Settings after their content, so every corner wedge is filled and Performance
-table lines terminate at the inner outline. Its collapsed summary is centered
-inside balanced vertical padding while the retained body alone fades toward
-opaque as collapse progresses. The selector uses the same inset and width as
+table lines terminate at the inner outline. Its summary keeps one fixed
+top-padded baseline and a permanently opaque one-line surface through expanded,
+animated, and compact states. The selector uses the same inset and width as
 ordinary long General controls and shows one selected view at a time in a
 labeled, striped two-column table. It contains **Complete Renderer**, **Scene
 Setup**, **Geometry**, **Direct Lighting**, **Screen Space

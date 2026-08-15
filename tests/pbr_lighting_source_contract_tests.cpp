@@ -628,7 +628,9 @@ int main(int argc, char** argv)
                 "directlightvisibilities.sun={"
                     "sunvisibility,"
                     "heitzshadowresult.light,"
-                    "sunvisibilitydenoised?"
+                    "sunvisibilitydenoised&&"
+                        "shadowdenoisingmethod=="
+                            "denoisingmethodchoice::sigma?"
                         "directlightvisibilityencoding::scalarr8unorm:"
                         "directlightvisibilityencoding::rgbrgba16float}") ==
                 1u,

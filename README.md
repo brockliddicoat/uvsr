@@ -13,11 +13,11 @@ production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 123,231 non-blank source lines.
+**First-Party Lines of Code:** 125,083 non-blank source lines.
 
-**Third-Party Lines of Code:** 387,466 non-blank source lines.
+**Third-Party Lines of Code:** 387,457 non-blank source lines.
 
-**Total Lines of Code:** 510,697 non-blank source lines.
+**Total Lines of Code:** 512,540 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,

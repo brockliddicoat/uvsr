@@ -197,6 +197,17 @@ decision or blocker, affected task/path, observed evidence, and requested action
 The coordinator steers or cancels duplicated work rather than allowing multiple
 agents to keep exploring the same path.
 
+## Settings Snapshot Schema Versions
+
+The four-character settings snapshot version belongs to the complete schema
+fingerprint, never to an agent or branch. Follow
+[`settings-snapshot-schema-versions.md`](settings-snapshot-schema-versions.md)
+whenever represented command metadata or serialization policy changes. The
+coordinator owns the authoritative append-only registry row. Branch-local rows
+remain provisional, including when agents cannot communicate; compose the live
+schema first and rerun the probe at integration. Never resolve a collision by
+keeping two fingerprints under one version or by reusing a historical gap.
+
 ## Build, Test, and Renderer Serialization
 
 Build trees, packaged shaders/assets, compiler processes, executables, GPU

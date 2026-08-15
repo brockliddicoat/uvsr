@@ -467,6 +467,9 @@ resets incompatible history.
 ## Progressive Accumulation
 
 **Accumulate Samples** is a UVSR feature shared by both lighting solutions.
+It is the final collapsible section in Noise; the section contains an
+**Enable** toggle and keeps every exposed accumulation option hidden when the
+section itself is collapsed. No gray status line is rendered beneath it.
 Factory-default **Variance Guided** first takes 16 successful samples per pixel,
 then maps the largest RGB-channel relative standard error to an integer revisit
 interval with a two-percent target and a guaranteed 1/16 minimum rate.
@@ -579,7 +582,7 @@ current path retains a trustworthy first-lobe identity. RESTIR PT and RESTIR GI
 produce a combined selected or replayed continuation suffix, so they correctly
 cap the control at two groups.
 
-**Raw (No Denoising)** is the factory default for every solver. Optional
+**Raw** is the factory default for every solver. Optional
 **Spatial Path Resolve** is UVSR's bounded spatial-only edge-aware resolve over
 those accumulated signals. One group filters the combined path signal; two
 split primary from indirect transport; three split RTX PT into primary, diffuse

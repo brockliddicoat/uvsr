@@ -4,7 +4,8 @@
 
 UVSR uses one current frame screen space pass for ambient occlusion and one
 bounce indirect diffuse. The two consumers share depth and normal traversal,
-sample scheduling, reconstruction, and composition, but retain independent
+sample scheduling, automatic reduced-resolution upsampling, and composition,
+but retain independent
 enable, intensity, and **Output Hit Distance** controls.
 
 Visibility does not enable, disable, or reconfigure PBR, sky, lights, shadows,
@@ -18,8 +19,8 @@ The retained pipeline has three measured stages:
 1. **First Trace** reads the closest visible surface and evaluates the selected
    estimator for the exact runtime sample count. Requested AO and GI physical
    hit distances are written by the same samples.
-2. **Reconstruction** copies full resolution results directly or performs the
-   selected guide aware reconstruction for reduced resolution input.
+2. **Upsample** bypasses full-resolution results or applies the one automatic
+   depth- and normal-guided four-tap upsample to reduced-resolution input.
 3. **Composition** applies AO and/or indirect diffuse to deferred lighting.
 
 There is no visibility-owned temporal stage, depth hierarchy, recursive bounce
@@ -34,12 +35,12 @@ All recipes enable AO and indirect diffuse and use a radius of 3, thickness of
 0.5, and distribution exponent of 2. Noise is configured independently and is
 neither changed by a recipe nor part of its **(Custom)** identity.
 
-| Recipe | Resolution | Estimator | Samples | Spatial Reconstruction | Precision |
+| Recipe | Resolution | Estimator | Samples | Automatic Upsample | Precision |
 | --- | --- | --- | ---: | --- | --- |
-| Low | Quarter | Projected Angle | 8 | Joint Bilateral | 16-bit |
-| Medium | Half | Solid Angle | 8 | Joint Bilateral | 16-bit |
-| High | Full | Solid Angle | 16 | Off | 16-bit |
-| Ultra | Full | Solid Angle | 48 | Off | 32-bit |
+| Low | Quarter | Projected Angle | 8 | Guide Aware | 16-bit |
+| Medium | Half | Solid Angle | 8 | Guide Aware | 16-bit |
+| High | Full | Solid Angle | 16 | Bypassed | 16-bit |
+| Ultra | Full | Solid Angle | 48 | Bypassed | 32-bit |
 
 Changing any recipe-owned control preserves its origin and appends
 **(Custom)** while the reset icon indicates the change. Each owned control can
@@ -89,29 +90,26 @@ Counts are not rounded to a fixed shader family.
 All supported combinations use the same guarded trace implementation with a
 small parity specialization where loop structure materially differs.
 
-## Reconstruction
+## Automatic Upsampling
 
-One direct-or-guide-aware mode composes full-resolution input directly and uses
-depth/normal guides for half- or quarter-resolution input. Its visible label is
-**Full Resolution** or **Guide-Aware Upsampling** according to the selected
-sampling resolution. Three packed alternatives remain: **Packed
-Depth-Normal**, **Packed Slope-Aware**, and **Packed Leak-Controlled**. The old
-Packed Depth mode was removed. The Reconstruction group starts collapsed for a
-full-resolution trace and expanded for reduced-resolution tracing, then
-preserves a user's manual disclosure choice.
+Diffuse exposes no reconstruction mode, packed metadata, spatial-filter toggle,
+filter selector, or filter-radius control. A full-resolution trace proceeds
+directly to composition. A half- or quarter-resolution trace uses the same
+four-tap depth- and normal-guided upsample automatically. A denoiser result that
+already has the valid full output extent bypasses this upsample independently
+for AO and GI.
 
-Joint Bilateral and Gaussian Bilateral are the two spatial filters. The
-old packed/fused AO-only profiles were removed; reconstruction always serves
-the active AO-plus-indirect route rather than maintaining a second planner.
+Joint Bilateral and Gaussian Bilateral now belong to each signal in the
+Denoising drawer. They are executable first-party spatial methods rather than
+Diffuse reconstruction choices.
 
 ## Buffers and Lifetime
 
-Resources are allocated only for active consumers and the selected resolution,
-precision, and reconstruction mode. The current pass owns raw/final AO and
-raw/final indirect textures, optional reconstruction metadata, its constant
-buffer, and the active binding/pipeline cache. The shared Noise texture belongs
-to the central library and is reported once rather than duplicated as pass
-working memory.
+Resources are allocated only for active consumers and the selected resolution
+and precision. The current pass owns raw/final AO and raw/final indirect
+textures, its constant buffer, and the active binding/pipeline cache. It owns no
+packed reconstruction metadata. The shared Noise texture belongs to the central
+library and is reported once rather than duplicated as pass working memory.
 
 It does not own motion vectors, previous-frame color/depth, temporal moments,
 bounce history, activity flags, indirect-dispatch arguments, or a depth
@@ -137,10 +135,12 @@ write and memory traffic. The feature therefore has a real but usually smaller
 cost than increasing samples; measure the complete frame before choosing it for
 anything other than a denoiser that needs the data.
 
-The Denoising drawer supports AO through ReBLUR and GI through ReBLUR or ReLAX.
-Each method starts at None. Selecting a method does not enable Output Hit
-Distance, change the Diffuse recipe, or alter sampling. Missing distance data or
-an unavailable optional NRD backend leaves the raw signal in use.
+The Denoising drawer starts AO and GI at Raw. Both also support the first-party
+Joint Bilateral and Gaussian Bilateral methods without hit distance or NRD. AO
+optionally adds ReBLUR; GI optionally adds ReBLUR or ReLAX. Selecting any method
+does not enable Output Hit Distance, change the Diffuse recipe, or alter
+sampling. Missing distance data or an unavailable optional NRD backend leaves a
+selected third-party route on the raw signal.
 
 ## Debug and Performance
 
@@ -151,7 +151,7 @@ executing but suppresses ordinary Visibility composition; an explicit
 Visibility view takes precedence when both selectors are active. No debug
 choice silently enables or disables material or lighting modes.
 
-Performance reports First Trace, Reconstruction, Composition, their exclusive
+Performance reports First Trace, Upsample, Composition, their exclusive
 sum as Complete Effect, logical texture payloads, and active resource/dispatch
 counts in a labeled table only after every submitted stage query for one
 latency slot has completed. The named values publish as one snapshot; a stage
@@ -183,8 +183,8 @@ frame.
 
 ## Restoration Boundary
 
-Do not restore private visibility history, a depth hierarchy, recursive diffuse
-bounces, packed/fused AO only profiles, or planner/benchmark infrastructure
+Do not restore selectable Diffuse reconstruction, private visibility history, a
+depth hierarchy, recursive diffuse bounces, packed/fused AO only profiles, or planner/benchmark infrastructure
 without a current product need and equal-quality complete-frame evidence.
 Restoration must include the full CPU/HLSL ABI, resources, packaging,
 validation, and memory cost rather than only a shader file.

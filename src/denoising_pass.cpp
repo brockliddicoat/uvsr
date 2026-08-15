@@ -22,6 +22,9 @@ using namespace donut::math;
 
 #include "denoising_cb.h"
 
+static_assert(sizeof(DenoisingConstants) % 16u == 0u,
+    "Denoising constants must preserve HLSL register alignment.");
+
 namespace
 {
     using namespace uvsr;
@@ -120,6 +123,20 @@ namespace
             desc.sampleCount == 1 &&
             desc.width == extent.x && desc.height == extent.y;
     }
+
+    [[nodiscard]] size_t GetSpatialFormatIndex(
+        nvrhi::Format format) noexcept
+    {
+        switch (format)
+        {
+        case nvrhi::Format::R8_UNORM: return 0;
+        case nvrhi::Format::R16_FLOAT: return 1;
+        case nvrhi::Format::R32_FLOAT: return 2;
+        case nvrhi::Format::RGBA16_FLOAT: return 3;
+        case nvrhi::Format::RGBA32_FLOAT: return 4;
+        default: return std::numeric_limits<size_t>::max();
+        }
+    }
 }
 
 namespace uvsr
@@ -132,12 +149,6 @@ namespace uvsr
         , m_Backend(CreateDenoiserBackend())
         , m_FramesInFlight(std::max(framesInFlight, 1u))
     {
-        for (SignalState& signal : m_Signals)
-        {
-            signal.bindingCache =
-                std::make_unique<BindingCache>(device);
-        }
-#if UVSR_WITH_NRD
         if (!device || !shaderFactory)
         {
             for (SignalState& signal : m_Signals)
@@ -149,6 +160,12 @@ namespace uvsr
             return;
         }
 
+        for (SignalState& signal : m_Signals)
+        {
+            signal.bindingCache =
+                std::make_unique<BindingCache>(device);
+        }
+
         nvrhi::BufferDesc constantDesc;
         constantDesc.byteSize = sizeof(DenoisingConstants);
         constantDesc.debugName = "DenoisingConstants";
@@ -158,6 +175,37 @@ namespace uvsr
             engine::c_MaxRenderPassConstantBufferVersions;
         m_ConstantBuffer = device->createBuffer(constantDesc);
 
+        for (uint32_t formatIndex = 0;
+            formatIndex < uint32_t(c_SpatialFormatCount); ++formatIndex)
+        {
+            std::vector<ShaderMacro> macros = {
+                ShaderMacro("DENOISING_OUTPUT_FORMAT",
+                    std::to_string(formatIndex)) };
+            Pipeline& spatial = m_SpatialPipelines[formatIndex];
+            spatial.bindingLayout = device->createBindingLayout(
+                nvrhi::BindingLayoutDesc()
+                    .setVisibility(nvrhi::ShaderType::Compute)
+                    .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+                    .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+                    .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+                    .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+                    .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0)));
+            spatial.shader = shaderFactory->CreateShader(
+                "uvsr/denoising_spatial_cs.hlsl", "main", &macros,
+                nvrhi::ShaderType::Compute);
+            if (spatial.shader && spatial.bindingLayout)
+            {
+                nvrhi::ComputePipelineDesc pipelineDesc;
+                pipelineDesc.CS = spatial.shader;
+                pipelineDesc.bindingLayouts = { spatial.bindingLayout };
+                spatial.pipeline = device->createComputePipeline(pipelineDesc);
+            }
+        }
+        m_SpatialAvailable = bool(m_ConstantBuffer);
+        for (const Pipeline& spatial : m_SpatialPipelines)
+            m_SpatialAvailable = m_SpatialAvailable && bool(spatial.pipeline);
+
+#if UVSR_WITH_NRD
         for (uint32_t classIndex = 0;
             classIndex < uint32_t(SignalClass::Count); ++classIndex)
         {
@@ -237,8 +285,6 @@ namespace uvsr
                     "denoising guide or resolve pipeline creation failed");
         }
 #else
-        (void)device;
-        (void)shaderFactory;
         for (SignalState& signal : m_Signals)
         {
             signal.lastStatus = DenoiserStatus::Error(
@@ -298,6 +344,126 @@ namespace uvsr
             commandList, settings, inputs);
     }
 
+    DenoisingResult DenoisingPass::ProcessSpatial(
+        DenoiserSignalType type,
+        nvrhi::ICommandList* commandList,
+        const DenoisingSignalSettings& settings,
+        const DenoisingInputs& inputs)
+    {
+        SignalState& state = m_Signals[SignalIndex(type)];
+        const dm::uint2 sourceSize =
+            inputs.sourceSize.x > 0 && inputs.sourceSize.y > 0
+            ? inputs.sourceSize : inputs.signalSize;
+        const size_t formatIndex = inputs.rawSignal
+            ? GetSpatialFormatIndex(inputs.rawSignal->getDesc().format)
+            : std::numeric_limits<size_t>::max();
+
+        if (!m_SpatialAvailable)
+        {
+            ReleaseSignal(state);
+            state.lastStatus = DenoiserStatus::Error(
+                DenoiserStatusCode::InitializationFailed,
+                "the built-in spatial denoising pipeline is unavailable");
+            return { inputs.rawSignal, false };
+        }
+        if (!commandList ||
+            inputs.signalSize.x == 0 || inputs.signalSize.y == 0 ||
+            formatIndex >= c_SpatialFormatCount ||
+            !IsSingleSampleTexture(inputs.rawSignal, sourceSize) ||
+            !IsSingleSampleTexture(inputs.depth, inputs.signalSize) ||
+            !IsSingleSampleTexture(
+                inputs.normalRoughness, inputs.signalSize) ||
+            !inputs.currentView)
+        {
+            ReleaseSignal(state);
+            state.lastStatus = DenoiserStatus::Error(
+                formatIndex >= c_SpatialFormatCount
+                    ? DenoiserStatusCode::Unsupported
+                    : DenoiserStatusCode::InvalidArgument,
+                formatIndex >= c_SpatialFormatCount
+                    ? "built-in spatial denoising received an unsupported signal format"
+                    : "built-in spatial denoising received incomplete signal inputs");
+            return { inputs.rawSignal, false };
+        }
+        if (!EnsureSpatialResources(state, settings.method,
+            inputs.rawSignal, inputs.signalSize, sourceSize))
+        {
+            state.lastStatus = DenoiserStatus::Error(
+                DenoiserStatusCode::InitializationFailed,
+                "built-in spatial denoising texture allocation failed");
+            return { inputs.rawSignal, false };
+        }
+
+        const std::array<nvrhi::ITexture*, 5> inputTextures = {
+            inputs.rawSignal,
+            nullptr,
+            inputs.depth,
+            inputs.normalRoughness,
+            nullptr };
+        if (state.inputTextures != inputTextures)
+        {
+            state.bindingCache->Clear();
+            state.inputTextures = inputTextures;
+        }
+
+        DenoisingConstants constants{};
+        inputs.currentView->FillPlanarViewConstants(constants.view);
+        constants.fullResolution = float2(inputs.signalSize);
+        constants.denoiserResolution = float2(sourceSize);
+        constants.sourceResolution = float2(sourceSize);
+        constants.fullResolutionInv = 1.f / constants.fullResolution;
+        constants.denoiserResolutionInv = 1.f /
+            constants.denoiserResolution;
+        constants.sourceResolutionInv = 1.f /
+            constants.sourceResolution;
+        constants.denoisingRange = 500000.f;
+        constants.reverseDepth =
+            inputs.currentView->IsReverseDepth() ? 1u : 0u;
+        constants.signalType = uint32_t(type);
+        constants.spatialRadius = settings.spatialRadius;
+        constants.spatialMethod =
+            settings.method == DenoisingMethodChoice::GaussianBilateral
+            ? 1u : 0u;
+        commandList->writeBuffer(m_ConstantBuffer,
+            &constants, sizeof(constants));
+
+        const Pipeline& spatial = m_SpatialPipelines[formatIndex];
+        nvrhi::BindingSetDesc bindingDescription;
+        bindingDescription.bindings = {
+            nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
+            nvrhi::BindingSetItem::Texture_SRV(0, inputs.rawSignal),
+            nvrhi::BindingSetItem::Texture_SRV(1, inputs.depth),
+            nvrhi::BindingSetItem::Texture_SRV(
+                2, inputs.normalRoughness),
+            nvrhi::BindingSetItem::Texture_UAV(0, state.spatialOutput) };
+        nvrhi::BindingSetHandle binding =
+            state.bindingCache->GetOrCreateBindingSet(
+                bindingDescription, spatial.bindingLayout);
+        if (!binding)
+        {
+            state.lastStatus = DenoiserStatus::Error(
+                DenoiserStatusCode::InitializationFailed,
+                "built-in spatial denoising binding creation failed");
+            return { inputs.rawSignal, false };
+        }
+
+        nvrhi::ComputeState computeState;
+        computeState.pipeline = spatial.pipeline;
+        computeState.bindings = { binding };
+        commandList->beginMarker(
+            settings.method == DenoisingMethodChoice::GaussianBilateral
+                ? "Gaussian Bilateral Denoising"
+                : "Joint Bilateral Denoising");
+        commandList->setComputeState(computeState);
+        commandList->dispatch(
+            (inputs.signalSize.x + 7u) / 8u,
+            (inputs.signalSize.y + 7u) / 8u, 1u);
+        commandList->endMarker();
+
+        state.lastStatus = DenoiserStatus::Ok();
+        return { state.spatialOutput.Get(), true };
+    }
+
     DenoisingResult DenoisingPass::Process(
         DenoiserSignalType type,
         nvrhi::ICommandList* commandList,
@@ -307,6 +473,11 @@ namespace uvsr
         SignalState& state = m_Signals[SignalIndex(type)];
         const DenoisingSignalSettings settings = SanitizeDenoisingSettings(
             ToEffect(type), requestedSettings);
+        if (IsSpatialDenoisingMethod(settings.method))
+            return ProcessSpatial(type, commandList, settings, inputs);
+
+        if (state.spatialOutput)
+            ReleaseSignal(state);
         DenoiserMethod method = DenoiserMethod::ReblurDiffuse;
         if (!ResolveMethod(type, settings.method, method))
         {
@@ -586,6 +757,58 @@ namespace uvsr
         return { state.resolved.Get(), true };
     }
 
+    bool DenoisingPass::EnsureSpatialResources(
+        SignalState& state,
+        DenoisingMethodChoice method,
+        nvrhi::ITexture* rawSignal,
+        dm::uint2 fullSize,
+        dm::uint2 sourceSize)
+    {
+        if (!rawSignal)
+            return false;
+        const nvrhi::Format format = rawSignal->getDesc().format;
+        if (GetSpatialFormatIndex(format) >= c_SpatialFormatCount)
+            return false;
+
+        const bool sameIdentity = state.spatialOutput &&
+            state.methodChoice == method &&
+            state.spatialFormat == format &&
+            state.fullSize.x == fullSize.x &&
+            state.fullSize.y == fullSize.y &&
+            state.sourceSize.x == sourceSize.x &&
+            state.sourceSize.y == sourceSize.y;
+        if (sameIdentity)
+            return true;
+
+        ReleaseSignal(state);
+        state.methodChoice = method;
+        state.spatialFormat = format;
+        state.fullSize = fullSize;
+        state.sourceSize = sourceSize;
+
+        nvrhi::TextureDesc description;
+        description.width = fullSize.x;
+        description.height = fullSize.y;
+        description.format = format;
+        description.dimension = nvrhi::TextureDimension::Texture2D;
+        description.mipLevels = 1;
+        description.sampleCount = 1;
+        description.isUAV = true;
+        description.initialState = nvrhi::ResourceStates::ShaderResource;
+        description.keepInitialState = true;
+        description.debugName =
+            method == DenoisingMethodChoice::GaussianBilateral
+            ? "Denoising/GaussianBilateral"
+            : "Denoising/JointBilateral";
+        state.spatialOutput = m_Device->createTexture(description);
+        if (!state.spatialOutput)
+        {
+            ReleaseSignal(state);
+            return false;
+        }
+        return true;
+    }
+
     bool DenoisingPass::EnsureResources(
         SignalState& state,
         DenoiserSignalType type,
@@ -703,6 +926,8 @@ namespace uvsr
     void DenoisingPass::ReleaseSignal(SignalState& state) noexcept
     {
         const bool hasAllocatedState = state.handle || state.configured ||
+            state.methodChoice != DenoisingMethodChoice::None ||
+            state.spatialFormat != nvrhi::Format::UNKNOWN ||
             std::any_of(
                 state.inputTextures.begin(),
                 state.inputTextures.end(),
@@ -710,20 +935,23 @@ namespace uvsr
             state.motionVectors || state.normalRoughness || state.viewZ ||
             state.noisyRadianceHitDistance ||
             state.denoisedRadianceHitDistance || state.penumbra || state.shadow ||
-            state.resolved;
+            state.resolved || state.spatialOutput;
         if (!hasAllocatedState)
             return;
 
-        // Cached prepare and resolve sets retain texture references. Clearing
-        // only this signal's cache releases its allocations without disturbing
-        // bindings already recorded for another active signal.
-        state.bindingCache->Clear();
+        // Cached spatial, prepare, and resolve sets retain texture references.
+        // Clearing only this signal's cache releases its allocations without
+        // disturbing bindings already recorded for another active signal.
+        if (state.bindingCache)
+            state.bindingCache->Clear();
         if (m_Backend && state.handle)
             (void)m_Backend->UnregisterSignal(state.handle);
         state.handle = {};
         state.description = {};
         state.backendSettings = {};
         state.configured = false;
+        state.methodChoice = DenoisingMethodChoice::None;
+        state.spatialFormat = nvrhi::Format::UNKNOWN;
         state.extent = {};
         state.fullSize = dm::uint2::zero();
         state.sourceSize = dm::uint2::zero();
@@ -736,6 +964,7 @@ namespace uvsr
         state.penumbra = nullptr;
         state.shadow = nullptr;
         state.resolved = nullptr;
+        state.spatialOutput = nullptr;
         state.resources = {};
     }
 
@@ -857,7 +1086,7 @@ namespace uvsr
         uint64_t result = 0;
         for (const SignalState& state : m_Signals)
         {
-            const std::array<nvrhi::TextureHandle, 8> textures = {
+            const std::array<nvrhi::TextureHandle, 9> textures = {
                 state.motionVectors,
                 state.normalRoughness,
                 state.viewZ,
@@ -865,7 +1094,8 @@ namespace uvsr
                 state.denoisedRadianceHitDistance,
                 state.penumbra,
                 state.shadow,
-                state.resolved };
+                state.resolved,
+                state.spatialOutput };
             for (const nvrhi::TextureHandle& texture : textures)
             {
                 const uint64_t bytes = GetTextureBytes(texture);
@@ -875,6 +1105,11 @@ namespace uvsr
             }
         }
         return result;
+    }
+
+    bool DenoisingPass::IsSpatialAvailable() const noexcept
+    {
+        return m_SpatialAvailable;
     }
 
     bool DenoisingPass::IsOperational() const noexcept

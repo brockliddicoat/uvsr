@@ -3,8 +3,9 @@
 
 #include <donut/shaders/view_cb.h>
 
-// Shared by the application side guide preparation and guided full resolution
-// resolve. NRD receives its camera matrices through native CommonSettings.
+// Shared by built-in spatial denoising, application-side NRD guide
+// preparation, and the guided full-resolution resolve. NRD receives its
+// camera matrices through native CommonSettings.
 struct DenoisingConstants
 {
     PlanarViewConstants view;
@@ -28,6 +29,10 @@ struct DenoisingConstants
     uint reverseDepth;
     uint method;
     uint signalType;
+
+    float spatialRadius;
+    uint spatialMethod;
+    uint2 spatialPadding;
 };
 
 #endif // UVSR_DENOISING_CB_H

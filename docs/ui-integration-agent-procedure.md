@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-08-12.4`.
+UI reference version: `2026-08-14.4`.
 
 ## Purpose
 
@@ -20,12 +20,25 @@ and fully detached from Settings. Separate it from Settings by the same vertical
 space used between adjacent top-level drawers. Both panels keep independent
 complete rounded silhouettes. Together they form one
 managed vertical stack that yields space to the command interface. Settings
-uses one title, one scrolling body, and one footer. Keep one ordinary
-`WindowPadding.y` inset between the title and first drawer, matching the side and
-bottom body margins. The root window owns that fixed leading inset. Begin the
-borderless scrolling child after it, with no duplicate gap inside the child, so
-General and the scrollbar share one top edge while scrolling cannot erase the
-margin or its carved depth line.
+uses one title, one fixed snapshot row, one scrolling body, and one footer. The
+root owns the fixed 32-character code above the borderless scrolling child.
+Keep the code visible below the title when Settings collapses, with the same
+tight horizontal inset, fixed top-padded baseline, and permanently opaque
+one-line content surface as the retained Performance line. Submit one invisible
+layout/click item and exactly one visible hash glyph run. General and the
+scrollbar share the scrolling viewport's top edge beneath that fixed row. Do
+not synthesize fixed top or bottom shadows over that viewport.
+Reserve and render the scrollbar channel through every submitted opening and
+closing frame; remove it only with the scrolling child at the fully collapsed
+endpoint. Gate child submission on both `Begin()` visibility and logical
+non-collapsed state: Dear ImGui may temporarily return visible for an auto-fit
+window that is already logically collapsed. Do not continuously submit a zero
+height through `SetNextWindowSize`; exact-X constraints own panel width while
+`AlwaysAutoResize` owns height. The compact Settings and Performance rows must
+call the same renderer for text placement, opaque retained fill, inset fill,
+outer outline, and inner outline so their settled bodies differ only in text
+and click behavior. The text baseline and retained fill must not depend on
+collapse amount.
 Its top-level drawers are:
 
 1. General
@@ -48,12 +61,35 @@ a distinct user goal and enough retained controls to justify it. Effect-specific
 rendering views and output diagnostics belong in Debug, grouped under the effect
 they explain.
 
+The fixed settings code is exactly 32 lowercase hexadecimal characters. The
+first four characters are its registered schema version (currently `0003`);
+the remaining 112 bits are a deterministic fingerprint of every sorted
+represented non-action command value,
+including stored inactive and runtime-dynamic selections. Root Settings
+collapse and Material drawer visibility are presentation state and are the two
+gettable values omitted. Clicking the code copies it and archives its full
+canonical snapshot in
+`%LOCALAPPDATA%\UVSR\settings-snapshots-v<version>.txt`. The companion
+`tools/decode_settings_snapshot.py` also searches writable package-local UVSR
+catalogs when Windows redirects a packaged launch. It must validate version,
+fingerprint, missing catalog entries, and collisions across every matching
+catalog before outputting settings. A complete menu state cannot be silently
+reduced to a reversible 112-bit subset.
+Version allocation follows
+[`settings-snapshot-schema-versions.md`](settings-snapshot-schema-versions.md):
+the collision-resistant full schema fingerprint owns the version, branch rows
+are provisional, and integration composes the live schema before assigning the
+next number after the append-only registry maximum.
+
 General begins with **Lighting Solution**. Pathing is submitted every frame but
 animates into view only for Path Tracing. Diffuse, Buffers, Aliasing, and
 Shadows are likewise always submitted and animate out for Path Tracing. Shared
 drawers keep their header and use stable independent body regions for
 solution-specific controls. Never erase inactive settings or force a disclosure
 closed merely because its lighting solution is not selected.
+An actual transition from Ray Marching to Path Tracing opens Pathing once. Later
+manual disclosure remains user-owned until another away-and-back transition;
+do not use a persistent default-open flag.
 
 Lighting Solution and solver changes use the ordinary deferred combo lifecycle.
 Renderer topology may change only after popup roll-up, the settle interval, and
@@ -108,9 +144,9 @@ it is unavailable under Ogg. Shared Secondary Accent defaults to
 `#4296FA4F` and drives error, negative, and toggle-off presentation. Shared
 Tertiary Accent defaults to the historically light-track-compensated
 `#1E3757FF` and drives success, positive, Material status, and toggle-on
-presentation. Font Color and Primary Background Color follow the three accent
+presentation. Font Color and Background Color follow the three accent
 rows directly; do not place them in a separate Advanced Accents submenu. Font
-Color owns all authored copy, while Primary Background Color owns the menu body,
+Color owns all authored copy, while Background Color owns the menu body,
 resting closed controls, and slider tracks. Role-state colors derive from these
 resting RGBA values, and ultra-bright Primary Accent surfaces select dark
 transparent depth automatically. Slider knobs remain raised. Footer Reset and
@@ -138,9 +174,13 @@ stock slider rendering, centered value text, and stock ColorEdit labels.
 All first-party color controls route through one UVSR-owned RGB/RGBA wrapper.
 The scoped Amp picker uses a hue wheel around a rounded saturation/value
 triangle and four equal vertical lanes aligned to the fourth
-component column: hue, alpha, Current, and Original. RGB renders the alpha lane
-as noninteractive neutral gray without accessing a fourth component. Popup RGB,
-HSV, and hex rows force `NoSmallPreview`, fill the available width, and never
+component column: hue, alpha, Current, and Original. RGB retains a
+noninteractive checkerboard alpha lane without accessing a fourth component;
+the aligned fourth RGB/HSV numeric slot remains visually empty and no input
+widget is submitted there. One continuous carved perimeter encloses both empty
+slots and their inter-row spacing, with no internal seam or per-row frames.
+Popup RGB, HSV, and hex rows force `NoSmallPreview`,
+fill the available width, and never
 repeat a visible control label as a heading. Exact hue, white, and black remain
 pointer reachable through forgiving snap zones. One midpoint hollow-circle
 radius feeds selector endpoints, the active selector, wheel cursor, hue bar,
@@ -205,10 +245,10 @@ Darkening defaults to 2 EV; both expose 0 through 16 EV. Exposure Compensation d
 0 EV and exposes -18 through +8 EV. Adjustment Period defaults to 0.20 seconds
 and exposes 0.05 through 5.00 seconds.
 
-Denoising signal defaults are Method None, Quality Balanced, Resolution Half,
-and History 16. The chosen method never changes a producer's Output Hit
-Distance or Ratio Estimator setting. Those independent switches default off and
-on respectively.
+Denoising signal defaults are Method Raw, Quality Balanced, Resolution Half,
+History 16, and spatial Radius 4. The chosen method never changes a producer's
+Output Hit Distance or Ratio Estimator setting. Those independent switches
+default off and on respectively.
 
 ## Control Composition
 
@@ -240,9 +280,9 @@ presentation must not change the closed combo trigger or own renderer mutation.
 Debug and its World, Visibility, and Physically Based Lighting groups start
 expanded, then preserve user owned disclosure state. Their
 ordinary rendering choices, including the initial World material choice, are
-labeled **Default**. Visibility Reconstruction starts collapsed for a full-
-resolution trace and expanded for a reduced-resolution trace; its stored manual
-state takes precedence after interaction.
+labeled **Default**. Diffuse has no Reconstruction group: full-resolution
+signals bypass upsampling, while reduced-resolution signals use the one
+automatic guide-aware upsample.
 
 Representation begins with **Allow Ray Traversal**, the single master permission
 for every ray traced effect. Switching it off preserves every effect's stored
@@ -256,6 +296,14 @@ Diffuse exposes independent **Output Hit Distance** controls inside Occlusion
 and Illumination. They preserve profile origin and do not become active merely
 because a denoising method is selected.
 
+Material Domain, Interface Skin, and every Interface color use the ordinary
+side-labeled bounded lane. Material sliders inherit that same bounded width;
+never restore a full-drawer slider. The Material hover contract explains the
+meaning of glossiness, metalness, roughness, opacity, alpha cutoff, normal
+scale, occlusion, emissive, and transmission. A gated alpha value keeps its
+picker lane visible with a checkerboard base instead of replacing the lane with
+solid gray.
+
 Noise owns Pattern, Resolution, and Animate Samples for every stochastic effect.
 Pattern choices are **Spatial White**, **Spatial Blue**, and **Spatiotemporal
 Blue**; Resolution choices are **64x64**, **128x128**, **256x256**, and
@@ -267,12 +315,18 @@ The hidden override values remain stored but inert. Its exact tooltip begins
 effect's sampling changes. AO and GI share one Diffuse override because they
 share one dispatch.
 
-Denoising contains AO, GI, Shadows, and Sky Visibility groups. AO offers None
-or ReBLUR; GI and Sky Visibility offer None, ReBLUR, or ReLAX; Shadows offers
-None or SIGMA. An active method exposes Quality, Resolution, and a default
-closed Advanced group for History, Disocclusion, and Anti Lag. Missing producer
-data and an unavailable optional NRD build receive direct status copy while the
-raw signal remains active.
+**Accumulate Samples** is the final Noise section. It is an independently
+collapsible tree containing a top-level **Enable** toggle and all enabled-only
+options. Do not render gray explanatory status text beneath the section.
+
+Denoising contains AO, GI, Shadows, and Sky Visibility groups. Every group
+offers Raw, Joint Bilateral, and Gaussian Bilateral. AO additionally offers
+ReBLUR; GI and Sky Visibility add ReBLUR and ReLAX; Shadows adds SIGMA. A
+first-party bilateral method exposes only Radius and works without NRD, motion,
+history, or hit distance. An active third-party method exposes Quality,
+Resolution, and the applicable default-closed Advanced controls. The only gray
+copy in the complete drawer is the final exact line `Third Party denoisers are
+configurable, but not installed in this build.`
 
 Sky's Ray Traced Sky Visibility group exposes **Ratio Estimator** and **Output
 Hit Distance** independently. Ratio Estimator off is the one ray route accepted
@@ -376,16 +430,16 @@ Keep Performance as an independent top-level panel immediately above Settings,
 with its own collapse state and the same smooth authored root-panel transition
 used by Settings in Amp. Ogg remains immediate. Keep resolution,
 submitted triangles, frame time, and frame rate on one slash-separated summary
-line inside Performance. Center that retained line vertically with equal top and
-bottom padding. As collapse progresses, composite only the Performance body
-toward an opaque version of its resting surface; do not change Settings or any
-ordinary drawer opacity.
+line inside Performance. Keep its glyph baseline fixed at the ordinary expanded
+row position and keep the one-line content surface fully opaque in every state;
+do not make the remainder of the expanded body opaque.
 The fully visible command interface uses that same opaque compact-body surface;
 its existing whole-window appearance transform alone owns entry and exit fade.
 In Amp, submit an opaque rounded inset frame after Performance content and after
 the Settings scrolling child. The frame must fill all four outer-to-inner
-corner wedges, leave the interactive center untouched, draw the fixed top
-shadow above content, and finish with outer and inner depth outlines.
+corner wedges, leave the interactive center untouched, paint the fixed retained
+row opaque, and finish with outer and inner depth outlines. Do not grade either
+retained row with a root inset shadow.
 Keep renderer identity in General. The compact unlabeled selector shows one
 retained renderer timing view at a time. Give it the same inset and fixed width
 as ordinary long General controls; do not reserve a same-row reset lane.
@@ -425,11 +479,16 @@ Settings scrollbar. Use a 12-pixel authored channel at 100 percent scale and kee
 both axes of its grab one pixel inside the frame, yielding the minimum 10-pixel
 visible grab that meets the inset outline while retaining the true 4-pixel outer
 radius and 3-pixel inset-outline radius.
-Submit the opaque ring, fixed shadow, and depth outlines on the last visible
+Every submitted transition frame keeps that channel and visible grab, including
+the first opening frame. The fully collapsed endpoint submits no scrolling child
+and therefore no scrollbar. Never toggle `NoScrollbar` during root motion,
+because removing its layout reservation changes every full-width drawer.
+Submit the opaque ring, retained-row fill, and depth outlines on the last visible
 Settings child draw list: nested child windows render after their parent, so a
-parent-only decoration is not a true foreground layer. Anchor the shadow mask
-to the root body, span the real Regular top margin, and retain one Tight cast
-over the first General pixels; drawer open state must not move that geometry.
+parent-only decoration is not a true foreground layer. Interpolate one Settings
+inner rectangle from the full scrolling viewport to the retained hash perimeter,
+clamp it to the animated root padding, and draw exactly one outline. Reversing
+the root motion must reverse that same geometry without crossfading outlines.
 General must use the same
 `DrawCollapsingHeader`, `BeginDrawerBody`, `EndDrawerBody`, and Tight spacing
 path as every ordinary drawer and must never own root chrome or clipping.
@@ -599,14 +658,24 @@ Use the exact candidate executable and a bundled scene. Exercise:
 
 - opening, closing, scrolling, and resetting Performance and Settings in Amp
   and Ogg, including all four independent collapse combinations,
-  intermediate authored-motion frames, and rapid direction reversal;
+  the first moving frame, midpoint, rapid direction reversal, endpoint, and
+  following settled frame. Verify the retained text baseline and full-opacity
+  surface never change, the Settings full-menu inner outline visibly compacts
+  into the hash-row outline, the root outline moves continuously, drawer widths
+  and scrollbar presence remain stable in both directions, the endpoint has no
+  scrollbar, and Settings has no viewport shadows;
+- copying the settings code expanded and collapsed, decoding it as text and
+  JSON, and rejecting an unknown code, unknown version, and mismatched catalog
+  entry;
 - editing and resetting every Interface color, switching skins to verify Amp
   Primary Accent and the directly visible Font/Background roles, confirming
   the Ogg unavailable state, verifying Secondary/Tertiary routing through CLI,
   toggles, and Material, and checking alpha at zero, half, and full opacity;
 - opening representative RGB and RGBA Settings and Material color pickers at
   ordinary and narrow viewport widths to confirm the shared four-lane layout,
-  disabled gray RGB alpha lane, absent sub-row preview squares and popup title,
+  checkerboard gated alpha lane, one continuous outline around both empty gated
+  fourth numeric slots with no middle seam, absent
+  sub-row preview squares and popup title,
   fourth-column bar alignment, shared intermediate marker size, opaque color
   assets, visible inner/outer hue-wheel gradients, four-sided bright control
   margins, translucent base/depth layers, and the full Settings-matched frame
@@ -630,13 +699,15 @@ Use the exact candidate executable and a bundled scene. Exercise:
 - all three Adaptive Sync choices, reset behavior, and capability/vendor
   unavailable states;
 - the Diffuse, Occlusion, Illumination, and three estimator labels in both
-  skins;
+  skins, with no Reconstruction group or selectable spatial filter;
 - the Diffuse sample default, Distribution and Occlusion endpoints, and both
   Output Hit Distance switches;
 - all global Noise patterns and resolutions, Animate Samples, inheritance, each
-  Specify Noise override, centered clipping, and override isolation;
-- all four Denoising groups, supported method lists, stored controls, missing
-  producer data, and optional backend unavailable state;
+  Specify Noise override, centered clipping, override isolation, and the final
+  collapsible Accumulate Samples section;
+- all four Denoising groups, Raw, both first-party bilateral methods and radius,
+  supported third-party lists, stored controls, and the single final backend
+  notice;
 - every changed control at both endpoints and its unavailable state;
 - disabling and re-enabling both sample-count gates while a nonminimum value is
   stored, confirming the disabled value and knob move to one sample, the stored
@@ -684,6 +755,32 @@ The UI handoff includes:
 - confirmation that this reference was updated when normative behavior changed.
 
 ## Reference Revision History
+
+- `2026-08-14.4`: Made the Performance summary and Settings hash use permanent
+  full-opacity retained surfaces and fixed text baselines, removed the root
+  inset shadow, eliminated the duplicate animated hash glyph run, and made one
+  Settings inner outline continuously morph into the compact hash perimeter.
+
+- `2026-08-14.3`: Preserved the Settings scrollbar channel through root motion,
+  strengthened the single settled Settings outline, enclosed both gated alpha
+  numeric slots with one perimeter, opened Pathing once on each Path Tracing
+  transition, and added fingerprint-owned concurrent schema allocation.
+
+- `2026-08-14.3`: Excluded Material drawer presentation from settings snapshot
+  schema `0003`, separated logical collapse from temporary ImGui visibility,
+  and made compact Performance and Settings bodies use one renderer.
+- `2026-08-14.2`: Excluded root collapse presentation from settings snapshot
+  schema `0002`, unified collapsed Settings chrome on animated root geometry,
+  removed the rejected fixed viewport shadows, hid gated alpha numeric widgets,
+  and completed the corrected Interface and Material copy.
+
+- `2026-08-14.1`: Added the retained versioned settings snapshot line and
+  decoder catalog, rebuilt fixed Settings viewport edge shadows, moved Material
+  and Interface to bounded side-labeled controls, retained checkerboard alpha
+  lanes while gated, removed selectable Diffuse reconstruction, added
+  first-party bilateral methods to every Ray Marching signal, simplified
+  Denoising status copy, and made Accumulate Samples the final collapsible Noise
+  section.
 
 - `2026-08-12.4`: Added Lighting Solution as the first General decision,
   inserted the Pathing drawer, defined Lighting Solution drawer/body gating and

@@ -83,7 +83,7 @@ namespace
         assert(IsValidPathTracingDenoiser(
             PathTracingDenoiser::SpatialPathResolve));
         assert(GetPathTracingDenoiserLabel(PathTracingDenoiser::Raw) ==
-            std::string_view("Raw (No Denoising)"));
+            std::string_view("Raw"));
         assert(GetPathTracingDenoiserLabel(
             PathTracingDenoiser::SpatialPathResolve) ==
             std::string_view("Spatial Path Resolve"));

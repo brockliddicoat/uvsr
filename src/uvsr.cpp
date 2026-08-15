@@ -54,6 +54,7 @@
 #include <utility>
 #include <Windows.h>
 #include <dwmapi.h>
+#include <ShlObj.h>
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
@@ -117,6 +118,7 @@
 #include "scene_loading.h"
 #include "scene_light_names.h"
 #include "screen_space_visibility.h"
+#include "settings_snapshot.h"
 #include "sponza_camera_preset.h"
 #include "temporal_aa.h"
 #include "ui_animation.h"
@@ -3351,7 +3353,7 @@ public:
         return m_Scene;
     }
 
-    void SetMaterialDrawerVisible(bool visible, bool refreshSelection = true)
+    void SetMaterialDrawerVisible(bool visible)
     {
         const bool centerPickPending =
             m_MaterialPickPurpose ==
@@ -3369,8 +3371,6 @@ public:
 
         m_ui.ShowUI = true;
         m_ui.ShowMaterialDrawer = true;
-        if (!refreshSelection)
-            return;
         if (!m_Scene || IsSceneBusy())
             return;
 
@@ -4335,14 +4335,14 @@ public:
                 !pathTracingSelected &&
                 m_DenoisingPass &&
                 m_DenoisingPass->IsOperational() &&
-                (m_ui.Denoising.ambientOcclusion.method !=
-                        DenoisingMethodChoice::None ||
-                    m_ui.Denoising.diffuseGi.method !=
-                        DenoisingMethodChoice::None ||
-                    m_ui.Denoising.shadows.method !=
-                        DenoisingMethodChoice::None ||
-                    m_ui.Denoising.skyVisibility.method !=
-                        DenoisingMethodChoice::None);
+                (IsThirdPartyDenoisingMethod(
+                        m_ui.Denoising.ambientOcclusion.method) ||
+                    IsThirdPartyDenoisingMethod(
+                        m_ui.Denoising.diffuseGi.method) ||
+                    IsThirdPartyDenoisingMethod(
+                        m_ui.Denoising.shadows.method) ||
+                    IsThirdPartyDenoisingMethod(
+                        m_ui.Denoising.skyVisibility.method));
             const bool fastApproximateAARequired =
                 m_ui.UsesFastApproximateAA();
             const bool cmaa2Required = m_ui.UsesCmaa2();
@@ -5306,18 +5306,22 @@ public:
                 rayMarchingDenoisingAllowed &&
                 runScreenSpaceVisibility &&
                 m_ui.ScreenSpaceVisibility.HasActiveAmbientOcclusion() &&
-                m_ui.ScreenSpaceVisibility.ambientOcclusion
-                    .outputHitDistance &&
                 m_ui.Denoising.ambientOcclusion.method !=
-                    DenoisingMethodChoice::None;
+                    DenoisingMethodChoice::None &&
+                (!IsThirdPartyDenoisingMethod(
+                        m_ui.Denoising.ambientOcclusion.method) ||
+                    m_ui.ScreenSpaceVisibility.ambientOcclusion
+                        .outputHitDistance);
             const bool diffuseGiDenoisingReady =
                 rayMarchingDenoisingAllowed &&
                 runScreenSpaceVisibility &&
                 m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
-                m_ui.ScreenSpaceVisibility.indirectDiffuse
-                    .outputHitDistance &&
                 m_ui.Denoising.diffuseGi.method !=
-                    DenoisingMethodChoice::None;
+                    DenoisingMethodChoice::None &&
+                (!IsThirdPartyDenoisingMethod(
+                        m_ui.Denoising.diffuseGi.method) ||
+                    m_ui.ScreenSpaceVisibility.indirectDiffuse
+                        .outputHitDistance);
             if (m_DenoisingPass)
             {
                 if (!ambientOcclusionDenoisingReady)
@@ -5417,13 +5421,29 @@ public:
 
             nvrhi::ITexture* flashlightVisibility =
                 flashlightShadowResult.visibility;
+            const DenoisingMethodChoice shadowDenoisingMethod =
+                m_ui.Denoising.shadows.method;
+            const bool shadowThirdPartyDenoising =
+                IsThirdPartyDenoisingMethod(shadowDenoisingMethod);
+            const bool flashlightDenoisingReady =
+                rayMarchingDenoisingAllowed &&
+                flashlightShadowResult &&
+                shadowDenoisingMethod != DenoisingMethodChoice::None &&
+                (!shadowThirdPartyDenoising ||
+                    m_ui.Flashlight.outputHitDistance);
+            const bool sunDenoisingReady =
+                rayMarchingDenoisingAllowed &&
+                heitzShadowResult &&
+                !m_ui.DirectionalShadows.ratioEstimator.hardShadows &&
+                shadowDenoisingMethod != DenoisingMethodChoice::None &&
+                (!shadowThirdPartyDenoising ||
+                    (!m_ui.DirectionalShadows.ratioEstimator
+                        .useRatioEstimator &&
+                     m_ui.DirectionalShadows.ratioEstimator
+                        .outputHitDistance));
             const bool shadowDenoisingExpected =
                 m_DenoisingPass &&
-                rayMarchingDenoisingAllowed &&
-                (flashlightShadowResult ||
-                    (heitzShadowResult &&
-                        !m_ui.DirectionalShadows.ratioEstimator
-                            .hardShadows));
+                (flashlightDenoisingReady || sunDenoisingReady);
             if (shadowDenoisingExpected)
             {
                 BeginRendererStage(
@@ -5431,8 +5451,7 @@ public:
             }
             if (m_DenoisingPass)
             {
-                if (rayMarchingDenoisingAllowed &&
-                    flashlightShadowResult)
+                if (flashlightDenoisingReady)
                 {
                     DenoisingInputs inputs = makeDenoisingInputs(
                         flashlightShadowResult.visibility,
@@ -5473,9 +5492,7 @@ public:
             bool sunVisibilityDenoised = false;
             if (m_DenoisingPass)
             {
-                if (rayMarchingDenoisingAllowed &&
-                    heitzShadowResult &&
-                    !m_ui.DirectionalShadows.ratioEstimator.hardShadows)
+                if (sunDenoisingReady)
                 {
                     DenoisingInputs inputs = makeDenoisingInputs(
                         heitzShadowResult.modulation,
@@ -5518,7 +5535,9 @@ public:
                 directLightVisibilities.sun = {
                     sunVisibility,
                     heitzShadowResult.light,
-                    sunVisibilityDenoised
+                    sunVisibilityDenoised &&
+                        shadowDenoisingMethod ==
+                            DenoisingMethodChoice::Sigma
                         ? DirectLightVisibilityEncoding::ScalarR8Unorm
                         : DirectLightVisibilityEncoding::RgbRgba16Float
                 };
@@ -5527,10 +5546,18 @@ public:
             skyVisibility = skyVisibilityResult
                 ? skyVisibilityResult.visibility
                 : nullptr;
+            const DenoisingMethodChoice skyDenoisingMethod =
+                m_ui.Denoising.skyVisibility.method;
+            const bool skyDenoisingReady =
+                rayMarchingDenoisingAllowed &&
+                skyVisibilityResult &&
+                skyDenoisingMethod != DenoisingMethodChoice::None &&
+                (!IsThirdPartyDenoisingMethod(skyDenoisingMethod) ||
+                    (!m_ui.RayTracedSkyVisibility.useRatioEstimator &&
+                     m_ui.RayTracedSkyVisibility.outputHitDistance));
             if (m_DenoisingPass)
             {
-                if (rayMarchingDenoisingAllowed &&
-                    skyVisibilityResult)
+                if (skyDenoisingReady)
                 {
                     DenoisingInputs inputs = makeDenoisingInputs(
                         skyVisibilityResult.visibility,
@@ -6449,14 +6476,6 @@ public:
             HashLightingHistoryValue(
                 signature, visibility.indirectDiffuse.intensity);
             HashLightingHistoryValue(
-                signature, visibility.reconstruction.mode);
-            HashLightingHistoryValue(
-                signature, visibility.reconstruction.spatialEnabled);
-            HashLightingHistoryValue(
-                signature, visibility.reconstruction.spatialFilter);
-            HashLightingHistoryValue(
-                signature, visibility.reconstruction.spatialRadius);
-            HashLightingHistoryValue(
                 signature, visibility.bufferPrecision.ambient);
             HashLightingHistoryValue(
                 signature, visibility.bufferPrecision.indirect);
@@ -6538,6 +6557,8 @@ public:
                         signature, settings.disocclusionThreshold);
                     HashLightingHistoryValue(
                         signature, settings.antiLagStrength);
+                    HashLightingHistoryValue(
+                        signature, settings.spatialRadius);
                 };
             hashDenoisingSignal(m_ui.Denoising.ambientOcclusion);
             hashDenoisingSignal(m_ui.Denoising.diffuseGi);
@@ -6546,6 +6567,10 @@ public:
             HashLightingHistoryValue(
                 signature,
                 m_DenoisingPass && m_DenoisingPass->IsOperational());
+            HashLightingHistoryValue(
+                signature,
+                m_DenoisingPass &&
+                    m_DenoisingPass->IsSpatialAvailable());
 
             HashLightingHistoryValue(signature, m_ui.EnableAmbientFill);
             HashLightingHistoryValue(signature, m_ui.EnableDiffuseIbl);
@@ -7949,7 +7974,6 @@ private:
         // success has one deliberate product color everywhere.
         ImVec4 successText;
         bool drawControlOutlines = true;
-        bool drawScrollEdgeFades = true;
         bool sceneTranslucentHeaders = false;
     };
 
@@ -8140,8 +8164,12 @@ private:
     std::optional<UiCommand> m_PendingCommand;
     CommandInterfaceLayout m_CommandLayout;
     bool m_SettingsCollapsed = false;
+    std::string m_SettingsSnapshotCode =
+        BuildSettingsSnapshotCode({});
+    std::string m_SettingsSnapshotCanonical;
     std::optional<bool> m_SettingsCollapsedRequest;
     std::optional<bool> m_PerformanceCollapsedRequest;
+    bool m_PathingDrawerOpenRequested = false;
     bool m_MaterialRevealRequested = false;
     int m_StatisticsEffect =
         static_cast<int>(StatisticsEffect::CompleteRenderer);
@@ -8530,7 +8558,6 @@ private:
             tokens.actionButtonText = colors[ImGuiCol_Text];
             tokens.drawerRounding = style.ChildRounding;
             tokens.drawControlOutlines = false;
-            tokens.drawScrollEdgeFades = false;
         }
         else
         {
@@ -8785,21 +8812,30 @@ private:
         return GetCommandInterfaceMinimumHeight();
     }
 
-    static float GetSettingsCollapsedWindowHeight(
+    static float GetPanelTitleHeight(
         const ImGuiStyle& style,
         float fontSize)
     {
         return fontSize + style.FramePadding.y * 2.f;
     }
 
+    static float GetSettingsCollapsedWindowHeight(
+        const ImGuiStyle& style,
+        float fontSize)
+    {
+        return GetPanelTitleHeight(style, fontSize) +
+            style.WindowPadding.y * 2.f +
+            fontSize +
+            g_UiSpacingTokens.tight;
+    }
+
     static float GetSettingsMinimumExpandedWindowHeight(
         const ImGuiStyle& style,
         float fontSize)
     {
-        const float frameHeight =
-            fontSize + style.FramePadding.y * 2.f;
-        return frameHeight * 2.f +
-            style.WindowPadding.y * 2.f;
+        return GetSettingsCollapsedWindowHeight(style, fontSize) +
+            fontSize +
+            g_UiSpacingTokens.tight;
     }
 
     static float AdvanceUiLayoutAnimation(
@@ -9621,159 +9657,140 @@ private:
         drawList->PopClipRect();
     }
 
-    static void DrawSettingsScrollEdgeFades()
-    {
-        if (!g_UiVisualTokens.drawScrollEdgeFades)
-            return;
-
-        const float scrollY = ImGui::GetScrollY();
-        const float scrollMaxY = ImGui::GetScrollMaxY();
-        if (scrollMaxY <= 0.5f)
-            return;
-
-        const ImGuiStyle& style = ImGui::GetStyle();
-        const ImVec2 windowMinimum = ImGui::GetWindowPos();
-        const ImVec2 windowSize = ImGui::GetWindowSize();
-        const ImVec2 windowMaximum(
-            windowMinimum.x +
-                std::max(0.f, windowSize.x - style.ScrollbarSize),
-            windowMinimum.y + windowSize.y);
-        const float fadeHeight = std::min(
-            ImGui::GetFrameHeight() * 1.15f,
-            windowSize.y * 0.18f);
-        if (fadeHeight <= 0.5f ||
-            windowMaximum.x <= windowMinimum.x)
-        {
-            return;
-        }
-
-        ImVec4 edgeColor = style.Colors[ImGuiCol_WindowBg];
-        ImVec4 clearColor = edgeColor;
-        clearColor.w = 0.f;
-        const ImU32 clear = ImGui::GetColorU32(clearColor);
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        const auto edgeForDistance =
-            [&](float distance)
-            {
-                ImVec4 color = edgeColor;
-                color.w *= std::clamp(
-                    distance / std::max(fadeHeight, 1.f),
-                    0.f,
-                    1.f);
-                return ImGui::GetColorU32(color);
-            };
-
-        if (scrollY > 0.5f)
-        {
-            const ImU32 edge = edgeForDistance(scrollY);
-            drawList->AddRectFilledMultiColor(
-                windowMinimum,
-                ImVec2(
-                    windowMaximum.x,
-                    windowMinimum.y + fadeHeight),
-                edge,
-                edge,
-                clear,
-                clear);
-        }
-        const float remainingScroll =
-            std::max(0.f, scrollMaxY - scrollY);
-        if (remainingScroll > 0.5f)
-        {
-            const ImU32 edge =
-                edgeForDistance(remainingScroll);
-            drawList->AddRectFilledMultiColor(
-                ImVec2(
-                    windowMinimum.x,
-                    windowMaximum.y - fadeHeight),
-                windowMaximum,
-                clear,
-                clear,
-                edge,
-                edge);
-        }
-    }
-
-    static void DrawSettingsFixedTopInsetShadow(
+    static void DrawOpaqueRootPanelRetainedContent(
         ImDrawList* drawList,
         const ImRect& bodyRect,
-        float insetHeight,
-        float rounding,
-        bool intersectClipRect)
+        const ImRect& retainedContentRect,
+        float rounding)
     {
         if (!drawList ||
-            !g_UiVisualTokens.drawControlOutlines ||
-            insetHeight <= 0.5f ||
             bodyRect.GetWidth() <= 1.f ||
-            bodyRect.GetHeight() <= 1.f)
+            bodyRect.GetHeight() <= 1.f ||
+            retainedContentRect.GetWidth() <= 1.f ||
+            retainedContentRect.GetHeight() <= 1.f)
         {
             return;
         }
 
-        const ImRect shadowRect(
-            bodyRect.Min,
+        const ImRect clippedContentRect(
             ImVec2(
-                bodyRect.Max.x,
-                std::min(
-                    bodyRect.Max.y,
-                    bodyRect.Min.y + insetHeight)));
-        if (shadowRect.GetHeight() <= 0.5f)
+                std::max(bodyRect.Min.x, retainedContentRect.Min.x),
+                std::max(bodyRect.Min.y, retainedContentRect.Min.y)),
+            ImVec2(
+                std::min(bodyRect.Max.x, retainedContentRect.Max.x),
+                std::min(bodyRect.Max.y, retainedContentRect.Max.y)));
+        if (clippedContentRect.GetWidth() <= 1.f ||
+            clippedContentRect.GetHeight() <= 1.f)
+        {
             return;
+        }
 
-        // Use the root body's effective corner radius for the shadow mask.
-        // A top-only rectangle as short as the inset would make ImDrawList
-        // clamp an 8 px root radius to 7 px and leave a dark corner wedge.
-        const float effectiveRounding = std::max(
-            0.f,
-            std::min({
-                rounding,
-                bodyRect.GetWidth() * 0.5f - 1.f,
-                bodyRect.GetHeight() * 0.5f - 1.f
-            }));
-        const ImRect shadowMaskRect(
-            bodyRect.Min,
-            ImVec2(
-                bodyRect.Max.x,
-                std::min(
-                    bodyRect.Max.y,
-                    bodyRect.Min.y + std::max(
-                        shadowRect.GetHeight(),
-                        effectiveRounding + 1.f))));
         drawList->PushClipRect(
-            shadowRect.Min,
-            shadowRect.Max,
-            intersectClipRect);
-        const int vertexStart = drawList->VtxBuffer.Size;
+            bodyRect.Min,
+            bodyRect.Max,
+            false);
         drawList->AddRectFilled(
-            shadowMaskRect.Min,
-            shadowMaskRect.Max,
-            IM_COL32_WHITE,
-            effectiveRounding,
-            ImDrawFlags_RoundCornersTop);
-        const int vertexEnd = drawList->VtxBuffer.Size;
-        const float shadowHeight =
-            std::max(1.f, shadowRect.GetHeight());
-        for (int vertexIndex = vertexStart;
-            vertexIndex < vertexEnd;
-            ++vertexIndex)
-        {
-            ImDrawVert& vertex = drawList->VtxBuffer[vertexIndex];
-            const float coverage =
-                float((vertex.col & IM_COL32_A_MASK) >>
-                    IM_COL32_A_SHIFT) / 255.f;
-            const float distance = std::clamp(
-                (vertex.pos.y - shadowRect.Min.y) / shadowHeight,
-                0.f,
-                1.f);
-            const float falloff = 1.f - distance;
-            ImVec4 shadowColor(
-                0.005f,
-                0.006f,
-                0.008f,
-                0.24f * falloff * falloff * coverage);
-            vertex.col = ImGui::GetColorU32(shadowColor);
-        }
+            clippedContentRect.Min,
+            clippedContentRect.Max,
+            ImGui::GetColorU32(GetOpaquePanelBodySurface()),
+            ResolveRoundedRectRadius(clippedContentRect, rounding),
+            ImDrawFlags_RoundCornersAll);
         drawList->PopClipRect();
+    }
+
+    static void DrawRootPanelBodySurface(
+        ImDrawList* drawList,
+        const ImRect& bodyRect,
+        const ImRect& contentRect,
+        const ImRect& retainedContentRect,
+        float rounding)
+    {
+        DrawFilledRoundedInsetFrame(
+            drawList,
+            bodyRect,
+            contentRect,
+            rounding);
+        DrawOpaqueRootPanelRetainedContent(
+            drawList,
+            bodyRect,
+            retainedContentRect,
+            rounding);
+    }
+
+    static void DrawRootPanelBodyOutlines(
+        ImDrawList* drawList,
+        const ImRect& bodyRect,
+        const ImRect& contentRect,
+        float rounding)
+    {
+        DrawDrawerBodyOutline(
+            drawList,
+            bodyRect.Min,
+            bodyRect.Max,
+            rounding,
+            0.f,
+            false);
+        DrawDrawerBodyOutline(
+            drawList,
+            contentRect.Min,
+            contentRect.Max,
+            rounding,
+            0.f,
+            false);
+    }
+
+    static void DrawRootPanelBodyChrome(
+        ImDrawList* drawList,
+        const ImRect& bodyRect,
+        const ImRect& contentRect,
+        const ImRect& retainedContentRect,
+        float rounding)
+    {
+        DrawRootPanelBodySurface(
+            drawList,
+            bodyRect,
+            contentRect,
+            retainedContentRect,
+            rounding);
+        DrawRootPanelBodyOutlines(
+            drawList,
+            bodyRect,
+            contentRect,
+            rounding);
+    }
+
+    static ImRect DrawCompactRootPanelBody(
+        ImDrawList* drawList,
+        const ImRect& bodyRect,
+        const ImRect& contentRect,
+        float rounding,
+        const char* text)
+    {
+        const ImVec2 textSize = ImGui::CalcTextSize(text);
+        const ImVec2 textMinimum(
+            contentRect.Min.x + g_UiSpacingTokens.tight,
+            contentRect.Min.y);
+        const ImRect textRect(
+            textMinimum,
+            ImVec2(
+                textMinimum.x + textSize.x,
+                textMinimum.y + textSize.y));
+        DrawRootPanelBodyChrome(
+            drawList,
+            bodyRect,
+            contentRect,
+            contentRect,
+            rounding);
+        drawList->PushClipRect(
+            textMinimum,
+            ImVec2(contentRect.Max.x, bodyRect.Max.y),
+            true);
+        drawList->AddText(
+            textMinimum,
+            ImGui::GetColorU32(ImGuiCol_Text),
+            text);
+        drawList->PopClipRect();
+        return textRect;
     }
 
     static void EndDrawerBody()
@@ -11058,6 +11075,7 @@ private:
     static_assert(
         UiSettingsCommandBindings.size() ==
         UiSettingsCommandCatalog.size());
+    inline static bool g_SettingsSnapshotPreciseFloatFormatting = false;
 
     static std::string NormalizeCommandAscii(
         std::string_view value,
@@ -11185,6 +11203,17 @@ private:
     static std::string FormatCommandFloat(float value)
     {
         char buffer[64];
+        if (g_SettingsSnapshotPreciseFloatFormatting)
+        {
+            const auto result = std::to_chars(
+                buffer,
+                buffer + std::size(buffer),
+                value,
+                std::chars_format::general,
+                std::numeric_limits<float>::max_digits10);
+            if (result.ec == std::errc{})
+                return std::string(buffer, result.ptr);
+        }
         snprintf(buffer, std::size(buffer), "%.3f", value);
         return buffer;
     }
@@ -11922,7 +11951,7 @@ private:
                 return false;
             }
             if (operation != CommandValueOperation::Get)
-                RequestMaterialDrawerVisible(candidate, candidate);
+                RequestMaterialDrawerVisible(candidate);
             return true;
         }
         error = "Internal UI command binding is missing for '" +
@@ -11930,11 +11959,9 @@ private:
         return false;
     }
 
-    void RequestMaterialDrawerVisible(
-        bool visible,
-        bool refreshSelection = true)
+    void RequestMaterialDrawerVisible(bool visible)
     {
-        m_app->SetMaterialDrawerVisible(visible, refreshSelection);
+        m_app->SetMaterialDrawerVisible(visible);
         m_MaterialRevealRequested = visible;
         if (visible)
         {
@@ -11983,6 +12010,18 @@ private:
             AdaptiveSyncRequestsPresentTearing(mode));
     }
 
+    void ApplyLightingSolution(LightingSolution solution)
+    {
+        const bool changed = m_ui.Lighting != solution;
+        m_ui.Lighting = solution;
+        if (changed)
+        {
+            m_PathingDrawerOpenRequested =
+                solution == LightingSolution::PathTracing;
+        }
+        m_app->ResetImageBasedLightingHistory();
+    }
+
     void ResetAllSettingsToFactoryDefaults()
     {
         // Renderer defaults own the rendering passes and Pixel Zoom. Restore
@@ -11998,6 +12037,7 @@ private:
         m_StatisticsEffect =
             static_cast<int>(StatisticsEffect::CompleteRenderer);
         m_PerformanceCollapsedRequest = true;
+        m_PathingDrawerOpenRequested = false;
         ImGui::CloseUvsrColorPickerPopup();
     }
 
@@ -12030,10 +12070,7 @@ private:
                 return false;
             }
             if (operation != CommandValueOperation::Get)
-            {
-                m_ui.Lighting = candidate;
-                m_app->ResetImageBasedLightingHistory();
-            }
+                ApplyLightingSolution(candidate);
             return true;
         }
         if (path == "gpu.adapter")
@@ -13121,54 +13158,6 @@ private:
                 candidate.bufferPrecision.indirect,
                 defaults.bufferPrecision.indirect,
                 Options, value, error);
-        }
-        else if (path == "visibility.reconstruction")
-        {
-            static constexpr std::array<
-                std::pair<std::string_view, VisibilityReconstructionMode>, 4>
-                Options = {{
-                    { "direct-or-guide-aware",
-                        VisibilityReconstructionMode::Standard },
-                    { "packed-depth-normal",
-                        VisibilityReconstructionMode::PackedDepthNormal },
-                    { "packed-slope-aware",
-                        VisibilityReconstructionMode::
-                            PackedSlopeAdjustedDepthNormal },
-                    { "packed-leak-controlled",
-                        VisibilityReconstructionMode::
-                            PackedControlledLeakage }
-                }};
-            handled = ApplyCommandEnum(operation, arguments, path,
-                candidate.reconstruction.mode,
-                defaults.reconstruction.mode, Options, value, error);
-        }
-        else if (path == "visibility.spatial.enabled")
-        {
-            handled = ApplyCommandBool(operation, arguments, path,
-                candidate.reconstruction.spatialEnabled,
-                defaults.reconstruction.spatialEnabled, value, error);
-        }
-        else if (path == "visibility.spatial.filter")
-        {
-            static constexpr std::array<
-                std::pair<std::string_view, VisibilitySpatialFilter>, 2>
-                Options = {{
-                    { "joint-bilateral",
-                        VisibilitySpatialFilter::JointBilateral },
-                    { "gaussian-bilateral",
-                        VisibilitySpatialFilter::GaussianJointBilateral }
-                }};
-            handled = ApplyCommandEnum(operation, arguments, path,
-                candidate.reconstruction.spatialFilter,
-                defaults.reconstruction.spatialFilter,
-                Options, value, error);
-        }
-        else if (path == "visibility.spatial.radius")
-        {
-            handled = ApplyCommandFloat(operation, arguments, path,
-                candidate.reconstruction.spatialRadius,
-                defaults.reconstruction.spatialRadius,
-                1.f, 8.f, value, error);
         }
         else
         {
@@ -14545,8 +14534,12 @@ private:
             if (effect == DenoisingEffect::AmbientOcclusion)
             {
                 static constexpr std::array<std::pair<std::string_view,
-                    DenoisingMethodChoice>, 2> Options = {{
-                    { "none", DenoisingMethodChoice::None },
+                    DenoisingMethodChoice>, 4> Options = {{
+                    { "raw", DenoisingMethodChoice::None },
+                    { "joint-bilateral",
+                        DenoisingMethodChoice::JointBilateral },
+                    { "gaussian-bilateral",
+                        DenoisingMethodChoice::GaussianBilateral },
                     { "reblur", DenoisingMethodChoice::Reblur }
                 }};
                 handled = ApplyCommandEnum(
@@ -14557,8 +14550,12 @@ private:
             else if (effect == DenoisingEffect::Shadows)
             {
                 static constexpr std::array<std::pair<std::string_view,
-                    DenoisingMethodChoice>, 2> Options = {{
-                    { "none", DenoisingMethodChoice::None },
+                    DenoisingMethodChoice>, 4> Options = {{
+                    { "raw", DenoisingMethodChoice::None },
+                    { "joint-bilateral",
+                        DenoisingMethodChoice::JointBilateral },
+                    { "gaussian-bilateral",
+                        DenoisingMethodChoice::GaussianBilateral },
                     { "sigma", DenoisingMethodChoice::Sigma }
                 }};
                 handled = ApplyCommandEnum(
@@ -14569,8 +14566,12 @@ private:
             else
             {
                 static constexpr std::array<std::pair<std::string_view,
-                    DenoisingMethodChoice>, 3> Options = {{
-                    { "none", DenoisingMethodChoice::None },
+                    DenoisingMethodChoice>, 5> Options = {{
+                    { "raw", DenoisingMethodChoice::None },
+                    { "joint-bilateral",
+                        DenoisingMethodChoice::JointBilateral },
+                    { "gaussian-bilateral",
+                        DenoisingMethodChoice::GaussianBilateral },
                     { "reblur", DenoisingMethodChoice::Reblur },
                     { "relax", DenoisingMethodChoice::Relax }
                 }};
@@ -14629,6 +14630,14 @@ private:
                 candidate.antiLagStrength,
                 defaults.antiLagStrength,
                 0.f, 1.f, value, error);
+        }
+        else if (property == "radius")
+        {
+            handled = ApplyCommandFloat(
+                operation, arguments, path,
+                candidate.spatialRadius,
+                defaults.spatialRadius,
+                1.f, 8.f, value, error);
         }
 
         if (!handled)
@@ -16156,6 +16165,177 @@ private:
         return false;
     }
 
+    [[nodiscard]] static std::string EscapeSettingsSnapshotValue(
+        std::string_view value)
+    {
+        std::string escaped;
+        escaped.reserve(value.size());
+        for (const char character : value)
+        {
+            switch (character)
+            {
+            case '\\': escaped += "\\\\"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default: escaped.push_back(character); break;
+            }
+        }
+        return escaped;
+    }
+
+    void RefreshSettingsSnapshot()
+    {
+        std::vector<std::pair<std::string, std::string>> settings;
+        settings.reserve(UiSettingsCommandCatalog.size());
+
+        const bool previousPreciseFormatting =
+            g_SettingsSnapshotPreciseFloatFormatting;
+        g_SettingsSnapshotPreciseFloatFormatting = true;
+        for (const UiSettingsCommandDefinition& definition :
+            UiSettingsCommandCatalog)
+        {
+            if (!IsSettingsSnapshotValue(definition))
+                continue;
+
+            std::string value;
+            std::string error;
+            if (!DispatchCommandValue(
+                    definition,
+                    CommandValueOperation::Get,
+                    {},
+                    value,
+                    error))
+            {
+                value = "<unavailable>";
+            }
+            settings.emplace_back(
+                std::string(definition.name),
+                EscapeSettingsSnapshotValue(value));
+        }
+        g_SettingsSnapshotPreciseFloatFormatting =
+            previousPreciseFormatting;
+
+        std::sort(settings.begin(), settings.end());
+        std::string canonical;
+        for (const auto& setting : settings)
+        {
+            canonical += setting.first;
+            canonical.push_back('=');
+            canonical += setting.second;
+            canonical.push_back('\n');
+        }
+        m_SettingsSnapshotCanonical = std::move(canonical);
+        m_SettingsSnapshotCode = BuildSettingsSnapshotCode(
+            m_SettingsSnapshotCanonical);
+    }
+
+    [[nodiscard]] static std::filesystem::path
+        GetSettingsSnapshotCatalogPath()
+    {
+        PWSTR localAppData = nullptr;
+        const HRESULT result = SHGetKnownFolderPath(
+            FOLDERID_LocalAppData,
+            KF_FLAG_DEFAULT,
+            nullptr,
+            &localAppData);
+        if (FAILED(result) || !localAppData || localAppData[0] == L'\0')
+        {
+            CoTaskMemFree(localAppData);
+            return {};
+        }
+        const std::string version(
+            SettingsSnapshotVersionText.data(),
+            4u);
+        const std::wstring wideVersion(version.begin(), version.end());
+        const std::filesystem::path path =
+            std::filesystem::path(localAppData) /
+            L"UVSR" /
+            (L"settings-snapshots-v" + wideVersion + L".txt");
+        CoTaskMemFree(localAppData);
+        return path;
+    }
+
+    bool PersistSettingsSnapshot() const
+    {
+        const std::filesystem::path path =
+            GetSettingsSnapshotCatalogPath();
+        if (path.empty())
+            return false;
+
+        std::error_code error;
+        std::filesystem::create_directories(
+            path.parent_path(),
+            error);
+        if (error)
+        {
+            log::warning(
+                "Could not create the settings snapshot directory: %s",
+                error.message().c_str());
+            return false;
+        }
+
+        std::string existing;
+        {
+            std::ifstream input(path, std::ios::binary);
+            if (input.is_open())
+            {
+                existing.assign(
+                    std::istreambuf_iterator<char>(input),
+                    std::istreambuf_iterator<char>());
+            }
+        }
+
+        const std::string section =
+            "[" + m_SettingsSnapshotCode + "]\n" +
+            m_SettingsSnapshotCanonical +
+            "[/" + m_SettingsSnapshotCode + "]\n";
+        if (existing.find(section) != std::string::npos)
+            return true;
+
+        const bool newCatalog = existing.empty();
+        std::ofstream output(
+            path,
+            std::ios::binary | std::ios::app);
+        if (!output.is_open())
+        {
+            log::warning(
+                "Could not open the settings snapshot catalog at %s",
+                path.generic_string().c_str());
+            return false;
+        }
+        if (newCatalog)
+        {
+            output << "# UVSR Settings Snapshot Catalog v"
+                   << std::string(
+                       SettingsSnapshotVersionText.data(),
+                       4u)
+                   << '\n';
+        }
+        output << section;
+        output.flush();
+        if (!output.good())
+        {
+            log::warning(
+                "Could not write the settings snapshot catalog at %s",
+                path.generic_string().c_str());
+            return false;
+        }
+        return true;
+    }
+
+    void CopySettingsSnapshot()
+    {
+        if (!PersistSettingsSnapshot())
+        {
+            log::warning(
+                "The settings snapshot code was not copied because its "
+                "local catalog entry could not be saved.");
+            return;
+        }
+        ImGui::SetClipboardText(m_SettingsSnapshotCode.c_str());
+    }
+
     bool DispatchCommandAction(
         const UiSettingsCommandDefinition& definition,
         const std::vector<std::string>& arguments,
@@ -17019,20 +17199,8 @@ private:
             const char* performanceTooltip =
                 "tris counts main-pass triangles after frustum culling; "
                 "occluded, back-facing, or alpha-discarded ones may remain.";
-            if (m_ComposedUiSkin == UiSkin::Og)
-            {
-                const std::array<std::string, 2> ogPerformanceLines =
-                    BuildOgPerformanceLines(m_PerformanceStatValues);
-                ImGui::TextUnformatted(ogPerformanceLines[0].c_str());
-                ImGui::SetItemTooltip("%s", performanceTooltip);
-                ImGui::TextUnformatted(ogPerformanceLines[1].c_str());
-                ImGui::SetItemTooltip("%s", performanceTooltip);
-            }
-            else
-            {
-                ImGui::TextUnformatted(performanceLine.c_str());
-                ImGui::SetItemTooltip("%s", performanceTooltip);
-            }
+            ImGui::TextUnformatted(performanceLine.c_str());
+            ImGui::SetItemTooltip("%s", performanceTooltip);
             ImGui::SetCursorPosX(summaryCursorX);
 
             static constexpr const char* StatisticsEffectLabels[] = {
@@ -17324,7 +17492,7 @@ private:
                     drawMilliseconds(
                         "First Trace", visibility.firstTraceMs, available);
                     drawMilliseconds(
-                        "Reconstruction",
+                        "Upsample",
                         visibility.reconstructionMs,
                         available);
                     drawMilliseconds(
@@ -17647,8 +17815,7 @@ private:
                     {
                         if (m_ui.Lighting == solution)
                             return;
-                        m_ui.Lighting = solution;
-                        m_app->ResetImageBasedLightingHistory();
+                        ApplyLightingSolution(solution);
                     });
                 if (selected)
                     ImGui::SetItemDefaultFocus();
@@ -17953,6 +18120,12 @@ private:
 
     void DrawPathingDrawer(float settingsControlWidth)
     {
+        if (std::exchange(
+                m_PathingDrawerOpenRequested,
+                false))
+        {
+            ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+        }
         const bool pathingOpen = DrawCollapsingHeader(
             "Pathing",
             "Configure the shared path-transport solver.");
@@ -18420,9 +18593,7 @@ private:
             g_DrawerAnimationContext.openAmount;
         if (targetOpen != m_ui.ShowMaterialDrawer)
         {
-            RequestMaterialDrawerVisible(
-                targetOpen,
-                targetOpen);
+            RequestMaterialDrawerVisible(targetOpen);
         }
         if (m_MaterialRevealRequested && targetOpen)
         {
@@ -18477,10 +18648,11 @@ private:
                 int(material->domain),
                 0,
                 int(MaterialDomain::Count) - 1);
-            ImGui::TextUnformatted("Material Domain");
-            ImGui::SetNextItemWidth(-FLT_MIN);
+            SetNextLabeledControlWidth(
+                "Material Domain",
+                settingsControlWidth);
             if (BeginRoundedCombo(
-                    "##MaterialDomain",
+                    "Material Domain##MaterialDomain",
                     MaterialDomainLabels[materialDomainIndex]))
             {
                 for (int index = 0;
@@ -18504,7 +18676,7 @@ private:
             ImGui::SetItemTooltip(
                 "Choose how the selected surface is rendered.");
 
-            ImGui::PushItemWidth(-FLT_MIN);
+            ImGui::PushItemWidth(settingsControlWidth);
             const donut::app::MaterialEditorCallbacks materialCallbacks = {
                 &BeginMaterialEditorConditionalRegion,
                 &EndMaterialEditorConditionalRegion,
@@ -18531,17 +18703,8 @@ private:
         {
             ImGui::TextWrapped(
                 "Aim the center crosshair at an editable surface, then press "
-                "M or refresh the selection.");
+                "M.");
         }
-
-        if (ImGui::Button(
-                "Refresh Center Material",
-                ImVec2(-FLT_MIN, 0.f)))
-        {
-            RequestMaterialDrawerVisible(true, true);
-        }
-        ImGui::SetItemTooltip(
-            "Select the editable material under the center crosshair.");
         EndDrawerBody();
         ImGui::Spacing();
     }
@@ -18578,20 +18741,11 @@ private:
             "Allow numeric entry beyond a slider's visible track, up to "
             "the setting's safe supported limits.");
 
-        ImGui::TextUnformatted("Interface Skin");
-        if (DrawPresetResetIcon(
-                "Interface Skin",
-                m_ui.Skin != DefaultUiSkin))
-        {
-            QueueDeferredControlUiAction(
-                [this]()
-                {
-                    m_ui.Skin = DefaultUiSkin;
-                });
-        }
-        ImGui::SetNextItemWidth(-FLT_MIN);
+        SetNextLabeledControlWidth(
+            "Interface Skin",
+            settingsControlWidth);
         if (BeginRoundedCombo(
-                "##UiSkin",
+                "Interface Skin##UiSkin",
                 UiSkinLabel(m_ui.Skin).data()))
         {
             for (const UiSkin candidate : UiSkinValues)
@@ -18613,6 +18767,16 @@ private:
         ImGui::SetItemTooltip(
             "Choose the interface appearance. Ogg uses standard controls and "
             "disables interface motion for automated experiments.");
+        if (DrawPresetResetIcon(
+                "Interface Skin",
+                m_ui.Skin != DefaultUiSkin))
+        {
+            QueueDeferredControlUiAction(
+                [this]()
+                {
+                    m_ui.Skin = DefaultUiSkin;
+                });
+        }
 
         const auto drawInterfaceColor =
             [&](const char* label,
@@ -18624,22 +18788,19 @@ private:
             {
                 if (!enabled)
                     ImGui::BeginDisabled();
-                ImGui::TextUnformatted(label);
-                if (DrawPresetResetIcon(
-                        label,
-                        color != defaultColor))
-                {
-                    color = defaultColor;
-                }
                 float values[4] = {
                     color.red,
                     color.green,
                     color.blue,
                     color.alpha
                 };
-                ImGui::SetNextItemWidth(-FLT_MIN);
+                const std::string controlLabel =
+                    std::string(label) + id;
+                SetNextLabeledControlWidth(
+                    label,
+                    settingsControlWidth);
                 if (DrawUvsrColorEdit(
-                        id,
+                        controlLabel.c_str(),
                         values,
                         UvsrColorEditChannels::Rgba))
                 {
@@ -18651,6 +18812,12 @@ private:
                     };
                 }
                 ImGui::SetItemTooltip("%s", tooltip);
+                if (DrawPresetResetIcon(
+                        label,
+                        color != defaultColor))
+                {
+                    color = defaultColor;
+                }
                 if (!enabled)
                     ImGui::EndDisabled();
             };
@@ -18709,7 +18876,7 @@ private:
                 : StockColorTooltip,
             authoredPaletteAvailable);
         drawInterfaceColor(
-            "Primary Background Color",
+            "Background Color",
             "##UiPrimaryBackgroundColor",
             editablePalette.primaryBackground,
             resetPalette.primaryBackground,
@@ -18730,17 +18897,6 @@ private:
             values[3] + " / " +
             values[1] + " / " +
             values[2];
-    }
-
-    static std::array<std::string, 2> BuildOgPerformanceLines(
-        const std::array<std::string, 4>& values)
-    {
-        return {{
-            values[0] + " / " +
-                values[3],
-            values[1] + " / " +
-                values[2]
-        }};
     }
 
     template <typename... Arguments>
@@ -19387,7 +19543,7 @@ protected:
             plainMaterialEditorShortcut &&
             !ImGui::GetIO().WantTextInput)
         {
-            RequestMaterialDrawerVisible(true, true);
+            RequestMaterialDrawerVisible(true);
             return true;
         }
 
@@ -19456,7 +19612,7 @@ protected:
         const float minimumCommandWidth =
             ImGui::GetStyle().WindowMinSize.x;
         const float panelTitleMinimumHeight =
-            GetSettingsCollapsedWindowHeight(
+            GetPanelTitleHeight(
                 ImGui::GetStyle(),
                 ImGui::GetFontSize());
         const float performanceCollapsedHeight =
@@ -19656,6 +19812,7 @@ protected:
             ImGui::CalcTextSize(
                 "Bitmask Directional Visibility").x +
             style.FramePadding.x * 2.f;
+        RefreshSettingsSnapshot();
 
         QueueStatSnapshot(width, height);
         ApplyQueuedStatSnapshot();
@@ -19766,9 +19923,11 @@ protected:
                 workRectangle.minX + settingsPanelMarginPixels,
                 performanceWindowTop),
             ImGuiCond_Always);
-        ImGui::SetNextWindowSize(
-            ImVec2(settingsWindowWidth, 0.f),
-            ImGuiCond_Always);
+        // Exact-X constraints own the fixed panel width while
+        // AlwaysAutoResize measures Y. Reapplying a zero Y size every frame
+        // would keep AutoFitFramesY armed after the window is logically
+        // collapsed, causing Begin() to report visible and submit compact-body
+        // children at the settled endpoint.
         ImGui::SetNextWindowSizeConstraints(
             ImVec2(settingsWindowWidth, performanceCollapsedHeight),
             ImVec2(
@@ -19820,10 +19979,13 @@ protected:
             ImGui::PushFont(GetActiveUiHeaderFont());
             ApplyActiveUiHeaderWordSpacing();
         }
-        const bool performanceExpanded = ImGui::Begin(
+        const bool performanceBeginVisible = ImGui::Begin(
             "Performance",
             nullptr,
             performanceWindowFlags);
+        const bool performanceCollapsed = ImGui::IsWindowCollapsed();
+        const bool performanceBodySubmitted =
+            performanceBeginVisible && !performanceCollapsed;
         if (useAuthoredHeaderFont)
         {
             RestoreActiveUiHeaderWordSpacing();
@@ -19836,123 +19998,59 @@ protected:
             ImGui::GetCurrentWindow();
         const ImRect performanceBodyRect(
             ImVec2(
-                performanceWindow->Pos.x + 0.5f,
+                performanceWindow->Pos.x,
                 performanceWindow->Pos.y +
                     performanceWindow->TitleBarHeight),
             ImVec2(
                 performanceWindow->Pos.x +
-                    performanceWindow->Size.x - 0.5f,
+                    performanceWindow->Size.x,
                 performanceWindow->Pos.y +
-                    performanceWindow->Size.y - 0.5f));
+                    performanceWindow->Size.y));
         const ImRect performanceContentRect(
             ImVec2(
-                performanceWindow->Pos.x + style.WindowPadding.x,
-                performanceWindow->Pos.y +
-                    performanceWindow->TitleBarHeight +
-                    style.WindowPadding.y),
+                performanceBodyRect.Min.x + style.WindowPadding.x,
+                performanceBodyRect.Min.y + style.WindowPadding.y),
             ImVec2(
-                performanceWindow->Pos.x +
-                    performanceWindow->Size.x -
-                    style.WindowPadding.x,
-                performanceWindow->Pos.y +
-                    performanceWindow->Size.y -
-                    style.WindowPadding.y));
-        const float performanceCollapseRange =
-            performanceWindow->SizeFull.y -
-                performanceCollapsedHeight;
-        const bool performanceExpandedRangeKnown =
-            performanceCollapseRange > 0.5f;
-        const float performanceCollapseAmount =
-            performanceExpandedRangeKnown
-                ? std::clamp(
-                    (performanceWindow->SizeFull.y -
-                        performanceWindow->Size.y) /
-                        performanceCollapseRange,
-                    0.f,
-                    1.f)
-                // On the first default-collapsed frame ImGui has not measured
-                // the expanded auto-fit contents yet, so SizeFull equals the
-                // retained compact height. Treat that degenerate endpoint as
-                // fully collapsed instead of flashing the translucent body.
-                : performanceWindow->Size.y <=
-                    performanceCollapsedHeight + 0.5f
-                    ? 1.f
-                    : 0.f;
-        if (performanceCollapseAmount > 0.f)
+                performanceBodyRect.Max.x - style.WindowPadding.x,
+                performanceBodyRect.Max.y - style.WindowPadding.y));
+        const ImRect performanceRetainedContentRect(
+            performanceContentRect.Min,
+            ImVec2(
+                performanceContentRect.Max.x,
+                std::min(
+                    performanceContentRect.Max.y,
+                    performanceContentRect.Min.y + fontSize +
+                        g_UiSpacingTokens.tight)));
+        if (performanceBodySubmitted)
         {
-            // A compact Performance panel carries denser information than a
-            // title-only Settings panel. Fade only this retained body toward
-            // an opaque surface as it collapses so the stat line remains
-            // legible over bright scenes without changing any other panel.
-            ImVec4 compactBodyOverlay = GetOpaquePanelBodySurface();
-            compactBodyOverlay.w = performanceCollapseAmount;
-            performanceWindowDrawList->AddRectFilled(
-                performanceBodyRect.Min,
-                performanceBodyRect.Max,
-                ImGui::GetColorU32(compactBodyOverlay),
-                style.WindowRounding,
-                ImDrawFlags_RoundCornersAll);
-        }
-        if (performanceExpanded)
-        {
+            DrawOpaqueRootPanelRetainedContent(
+                performanceWindowDrawList,
+                performanceBodyRect,
+                performanceRetainedContentRect,
+                style.WindowRounding);
             DrawPerformancePanelContents(
                 settingsControlWidth,
                 performanceLine);
+            DrawFilledRoundedInsetFrame(
+                performanceWindowDrawList,
+                performanceBodyRect,
+                performanceContentRect,
+                style.WindowRounding);
+            DrawRootPanelBodyOutlines(
+                performanceWindowDrawList,
+                performanceBodyRect,
+                performanceContentRect,
+                style.WindowRounding);
         }
-        else
+        else if (performanceCollapsed)
         {
-            const ImVec2 summaryTextSize = ImGui::CalcTextSize(
+            DrawCompactRootPanelBody(
+                performanceWindowDrawList,
+                performanceBodyRect,
+                performanceRetainedContentRect,
+                style.WindowRounding,
                 performanceLine.c_str());
-            const ImVec2 summaryMinimum(
-                performanceContentRect.Min.x +
-                    g_UiSpacingTokens.tight,
-                performanceBodyRect.Min.y +
-                    std::max(
-                        0.f,
-                        (performanceBodyRect.GetHeight() -
-                            summaryTextSize.y) * 0.5f));
-            const ImVec2 summaryMaximum(
-                performanceContentRect.Max.x,
-                performanceBodyRect.Max.y);
-            performanceWindowDrawList->PushClipRect(
-                summaryMinimum,
-                summaryMaximum,
-                true);
-            performanceWindowDrawList->AddText(
-                summaryMinimum,
-                ImGui::GetColorU32(ImGuiCol_Text),
-                performanceLine.c_str());
-            performanceWindowDrawList->PopClipRect();
         }
-        DrawFilledRoundedInsetFrame(
-            performanceWindowDrawList,
-            performanceBodyRect,
-            performanceContentRect,
-            style.WindowRounding);
-        DrawSettingsFixedTopInsetShadow(
-            performanceWindowDrawList,
-            performanceBodyRect,
-            std::max(
-                0.f,
-                performanceContentRect.Min.y -
-                    performanceBodyRect.Min.y +
-                    g_UiSpacingTokens.tight),
-            style.WindowRounding,
-            false);
-        DrawDrawerBodyOutline(
-            performanceWindowDrawList,
-            performanceBodyRect.Min,
-            performanceBodyRect.Max,
-            style.WindowRounding,
-            0.f,
-            false);
-        DrawDrawerBodyOutline(
-            performanceWindowDrawList,
-            performanceContentRect.Min,
-            performanceContentRect.Max,
-            style.WindowRounding,
-            0.f,
-            false);
         const bool performanceScrollIdle =
             performanceWindow->ScrollTarget.y >= FLT_MAX;
         const ImVec2 performanceWindowPosition =
@@ -19977,9 +20075,9 @@ protected:
                 workRectangle.minX + settingsPanelMarginPixels,
                 settingsWindowTop),
             ImGuiCond_Always);
-        ImGui::SetNextWindowSize(
-            ImVec2(settingsWindowWidth, 0.f),
-            ImGuiCond_Always);
+        // Width is fixed by the exact-X constraints below; Y remains owned by
+        // AlwaysAutoResize so a settled collapse cannot be kept artificially
+        // visible by a perpetually rearmed zero-height auto-fit request.
         ImGui::SetNextWindowSizeConstraints(
             ImVec2(settingsWindowWidth, 0.f),
             ImVec2(
@@ -20036,10 +20134,13 @@ protected:
             ImGui::PushFont(GetActiveUiHeaderFont());
             ApplyActiveUiHeaderWordSpacing();
         }
-        const bool settingsExpanded = ImGui::Begin(
+        const bool settingsBeginVisible = ImGui::Begin(
             "Settings",
             nullptr,
             settingsWindowFlags);
+        const bool settingsCollapsed = ImGui::IsWindowCollapsed();
+        const bool settingsBodySubmitted =
+            settingsBeginVisible && !settingsCollapsed;
         if (useAuthoredHeaderFont)
         {
             RestoreActiveUiHeaderWordSpacing();
@@ -20048,16 +20149,83 @@ protected:
         ImGui::PopStyleColor();
         ImDrawList* settingsWindowDrawList =
             ImGui::GetWindowDrawList();
+        ImGuiWindow* settingsHeaderWindow =
+            ImGui::GetCurrentWindow();
+        const ImRect settingsHeaderBodyRect(
+            ImVec2(
+                settingsHeaderWindow->Pos.x,
+                settingsHeaderWindow->Pos.y +
+                    settingsHeaderWindow->TitleBarHeight),
+            ImVec2(
+                settingsHeaderWindow->Pos.x +
+                    settingsHeaderWindow->Size.x,
+                settingsHeaderWindow->Pos.y +
+                    settingsHeaderWindow->Size.y));
+        const float settingsCollapseRange =
+            settingsHeaderWindow->SizeFull.y -
+                settingsCollapsedHeight;
+        const bool settingsExpandedRangeKnown =
+            settingsCollapseRange > 0.5f;
+        const float settingsCollapseAmount =
+            settingsExpandedRangeKnown
+                ? std::clamp(
+                    (settingsHeaderWindow->SizeFull.y -
+                        settingsHeaderWindow->Size.y) /
+                        settingsCollapseRange,
+                    0.f,
+                    1.f)
+                : settingsHeaderWindow->Size.y <=
+                    settingsCollapsedHeight + 0.5f
+                    ? 1.f
+                    : 0.f;
+        const ImRect settingsRetainedContentRect(
+            ImVec2(
+                settingsHeaderBodyRect.Min.x +
+                    style.WindowPadding.x,
+                settingsHeaderBodyRect.Min.y +
+                    style.WindowPadding.y),
+            ImVec2(
+                settingsHeaderBodyRect.Max.x -
+                    style.WindowPadding.x,
+                std::min(
+                    settingsHeaderBodyRect.Max.y -
+                        style.WindowPadding.y,
+                    settingsHeaderBodyRect.Min.y +
+                        style.WindowPadding.y + fontSize +
+                        g_UiSpacingTokens.tight)));
         bool settingsScrollIdle = true;
         bool settingsLayoutIdle = true;
         g_SettingsScrollStabilityContext
             .translucentHeaderSupportRects.clear();
 
-        if (settingsExpanded)
+        ImVec2 expandedSettingsSnapshotMinimum{};
+        bool expandedSettingsSnapshotSubmitted = false;
+        if (settingsBodySubmitted)
         {
-        // Let the root own the regular title-to-content inset. Keeping that
-        // space outside the scrolling child makes it persistent and starts the
-        // scrollbar at the same fixed top edge as General.
+            const float snapshotCursorX = ImGui::GetCursorPosX();
+            ImGui::SetCursorPosX(
+                snapshotCursorX + g_UiSpacingTokens.tight);
+            ImVec4 hiddenSnapshotText =
+                ImGui::GetStyleColorVec4(ImGuiCol_Text);
+            hiddenSnapshotText.w = 0.f;
+            ImGui::PushStyleColor(
+                ImGuiCol_Text,
+                hiddenSnapshotText);
+            ImGui::TextUnformatted(m_SettingsSnapshotCode.c_str());
+            ImGui::PopStyleColor();
+            expandedSettingsSnapshotMinimum = ImGui::GetItemRectMin();
+            expandedSettingsSnapshotSubmitted = true;
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+                CopySettingsSnapshot();
+            ImGui::SetItemTooltip(
+                "Click to copy this versioned settings snapshot code. The "
+                "decoder resolves every represented setting from the local "
+                "UVSR snapshot catalog.");
+            ImGui::SetCursorPosX(snapshotCursorX);
+
+        // The root owns the fixed snapshot line and title-to-content inset.
+        // Keeping them outside the scrolling child leaves the code visible
+        // above every drawer.
         const float settingsBodyMaxHeight = std::max(
             1.f,
             panelStackMaximumBottom -
@@ -20069,11 +20237,20 @@ protected:
         ImGui::SetNextWindowSizeConstraints(
             ImVec2(0.f, settingsBodyMinimumHeight),
             ImVec2(FLT_MAX, settingsBodyMaxHeight));
+        // A submitted Settings body always owns its scrollbar channel. Toggling
+        // NoScrollbar during root motion changes the child work width and makes
+        // every full-width drawer header jump. The fully collapsed frame skips
+        // this child entirely, so no scrollbar is emitted at that endpoint.
+        const ImGuiWindowFlags settingsBodyFlags =
+            ImGuiWindowFlags_AlwaysVerticalScrollbar |
+            (settingsCollapseAmount > 0.f
+                ? ImGuiWindowFlags_NoScrollWithMouse
+                : ImGuiWindowFlags_None);
         ImGui::BeginChild(
             "##SettingsBody",
             ImVec2(0.f, 0.f),
             ImGuiChildFlags_AutoResizeY,
-            ImGuiWindowFlags_AlwaysVerticalScrollbar);
+            settingsBodyFlags);
         ImGuiWindow* settingsBodyWindow =
             ImGui::GetCurrentWindow();
         const SettingsScrollStabilityContext& previousScrollContext =
@@ -20536,8 +20713,10 @@ protected:
         if (noiseOpen)
         {
             BeginDrawerBody("##NoiseBody", settingsControlWidth);
+            const auto drawSampleAccumulationControls = [&]()
+            {
             if (ImGui::Checkbox(
-                    "Accumulate Samples",
+                    "Enable##SampleAccumulation",
                     &m_ui.AccumulateSamples))
             {
                 m_app->ResetImageBasedLightingHistory();
@@ -21044,12 +21223,7 @@ protected:
                 }
                 EndAnimatedToggleRegion();
             }
-            if (m_ui.Lighting == LightingSolution::PathTracing &&
-                !m_ui.AccumulateSamples)
-            {
-                ImGui::TextDisabled(
-                    "One-sample refresh: enable accumulation to converge.");
-            }
+            };
 
             const NoiseSettings defaults;
             if (drawNoiseSettingsControls(
@@ -21068,6 +21242,15 @@ protected:
                 "Resident texture memory: %.2f MiB",
                 double(m_app->GetNoiseTextureResidentBytes()) /
                     (1024.0 * 1024.0));
+            if (BeginAnimatedTreeNode(
+                    "Accumulate Samples##Noise",
+                    ImGuiTreeNodeFlags_None,
+                    "Average finite scene-linear samples while the camera, "
+                    "scene, and lighting remain still."))
+            {
+                drawSampleAccumulationControls();
+                EndAnimatedTreeNode();
+            }
             EndDrawerBody();
         }
         ImGui::Spacing();
@@ -21353,7 +21536,7 @@ protected:
         const bool diffuseOpen = DrawCollapsingHeader(
             "Diffuse",
             "Configure occlusion, illumination, sampling, "
-            "reconstruction, and buffer precision.");
+            "automatic upsampling, and buffer precision.");
         if (diffuseOpen)
         {
             BeginDrawerBody("##DiffuseBody", settingsControlWidth);
@@ -21409,8 +21592,8 @@ protected:
                     profilePreview.c_str()))
             {
                 static constexpr const char* ProfileTooltips[] = {
-                    "Quarter-resolution Bitmask Approximation: 8 samples, shared Noise, joint bilateral reconstruction, 16-bit buffers.",
-                    "Half-resolution Bitmask Directional Visibility: 8 samples, shared Noise, joint bilateral reconstruction, 16-bit buffers.",
+                    "Quarter-resolution Bitmask Approximation: 8 samples, shared Noise, automatic guide-aware upsampling, 16-bit buffers.",
+                    "Half-resolution Bitmask Directional Visibility: 8 samples, shared Noise, automatic guide-aware upsampling, 16-bit buffers.",
                     "Full resolution Bitmask Directional Visibility with sixteen samples, the shared Noise configuration, and 16 bit buffers.",
                     "Full-resolution Bitmask Directional Visibility, 48 samples, shared Noise, and 32-bit buffers."
                 };
@@ -21770,129 +21953,6 @@ protected:
             EndAnimatedTreeNode();
             }
 
-            const ImGuiTreeNodeFlags reconstructionDisclosureFlags =
-                visibility.resolution == VisibilityResolution::Full
-                ? ImGuiTreeNodeFlags_None
-                : ImGuiTreeNodeFlags_DefaultOpen;
-            if (BeginAnimatedTreeNode(
-                    "Reconstruction##Visibility",
-                    reconstructionDisclosureFlags,
-                    "Configure full-resolution reconstruction and optional smoothing."))
-            {
-            const char* directReconstructionLabel =
-                visibility.resolution == VisibilityResolution::Full
-                ? "Full Resolution"
-                : "Guide-Aware Upsampling";
-            const char* ReconstructionLabels[] = {
-                directReconstructionLabel,
-                "Packed Depth-Normal",
-                "Packed Slope-Aware",
-                "Packed Leak-Controlled"
-            };
-            int reconstruction =
-                static_cast<int>(visibility.reconstruction.mode);
-            SetNextLabeledControlWidth(
-                "Method", settingsControlWidth);
-            if (ImGui::Combo(
-                    "Method", &reconstruction, ReconstructionLabels,
-                    static_cast<int>(std::size(ReconstructionLabels))))
-            {
-                visibility.reconstruction.mode =
-                    static_cast<VisibilityReconstructionMode>(
-                        reconstruction);
-                finishVisibilityEdit(visibility);
-            }
-            ImGui::SetItemTooltip(
-                visibility.resolution == VisibilityResolution::Full
-                ? "Use the already full-resolution trace directly. Packed "
-                    "modes add edge-aware reconstruction metadata."
-                : "Upsample reduced-resolution traces with depth and normal "
-                    "guides. Packed modes use compact edge metadata.");
-            if (DrawNestedDropdownResetIcon(
-                    "VisibilityReconstruction",
-                    visibility.reconstruction.mode !=
-                        profileDefaults.reconstruction.mode))
-            {
-                visibility.reconstruction.mode =
-                    profileDefaults.reconstruction.mode;
-                finishVisibilityEdit(visibility);
-            }
-
-            const bool packedReconstruction =
-                IsPackedVisibilityReconstruction(
-                    visibility.reconstruction.mode);
-            if (BeginAnimatedToggleRegion(
-                    "##VisibilitySpatialFilterAvailability",
-                    !packedReconstruction))
-            {
-            if (ImGui::Checkbox(
-                    "Spatial Filter",
-                    &visibility.reconstruction.spatialEnabled))
-                finishVisibilityEdit(visibility);
-            ImGui::SetItemTooltip(
-                "Smooth direct or upsampled visibility while respecting "
-                "surface depth and orientation.");
-            if (DrawPresetResetIcon(
-                    "VisibilitySpatialEnabled",
-                    visibility.reconstruction.spatialEnabled !=
-                        profileDefaults.reconstruction.spatialEnabled))
-            {
-                visibility.reconstruction.spatialEnabled =
-                    profileDefaults.reconstruction.spatialEnabled;
-                finishVisibilityEdit(visibility);
-            }
-            if (BeginAnimatedToggleRegion(
-                    "##VisibilitySpatialFilterControls",
-                    visibility.reconstruction.spatialEnabled))
-            {
-                static constexpr const char* FilterLabels[] = {
-                    "Joint Bilateral", "Gaussian Bilateral"
-                };
-                int filter = static_cast<int>(
-                    visibility.reconstruction.spatialFilter);
-                SetNextLabeledControlWidth(
-                    "Filter", settingsControlWidth);
-                if (ImGui::Combo(
-                        "Filter", &filter, FilterLabels,
-                        static_cast<int>(std::size(FilterLabels))))
-                {
-                    visibility.reconstruction.spatialFilter =
-                        static_cast<VisibilitySpatialFilter>(filter);
-                    finishVisibilityEdit(visibility);
-                }
-                ImGui::SetItemTooltip(
-                    "Choose the edge-aware weighting used by the spatial filter.");
-                if (DrawPresetResetIcon(
-                        "VisibilitySpatialFilter",
-                        visibility.reconstruction.spatialFilter !=
-                            profileDefaults.reconstruction.spatialFilter))
-                {
-                    visibility.reconstruction.spatialFilter =
-                        profileDefaults.reconstruction.spatialFilter;
-                    finishVisibilityEdit(visibility);
-                }
-                if (DrawSliderFloat(
-                        "Radius##VisibilitySpatial",
-                        &visibility.reconstruction.spatialRadius,
-                        1.f, 8.f, "%.1f"))
-                    finishVisibilityEdit(visibility);
-                ImGui::SetItemTooltip(
-                    "Set the sampling radius used by the spatial filter.");
-                if (DrawPresetResetIcon(
-                        "VisibilitySpatialRadius",
-                        visibility.reconstruction.spatialRadius !=
-                            profileDefaults.reconstruction.spatialRadius))
-                {
-                    visibility.reconstruction.spatialRadius =
-                        profileDefaults.reconstruction.spatialRadius;
-                    finishVisibilityEdit(visibility);
-                }
-                EndAnimatedToggleRegion();
-            }
-            EndAnimatedToggleRegion();
-            }
-            EndAnimatedTreeNode();
-            }
 
             EndAnimatedToggleRegion();
             }
@@ -21906,8 +21966,8 @@ protected:
             m_ui.Lighting == LightingSolution::PathTracing
                 ? "Choose raw transport or confidence-aware Spatial Path "
                   "Resolve for the active path solver."
-                : "Choose NVIDIA NRD denoisers independently for occlusion, "
-                  "illumination, shadows, and sky visibility.");
+                : "Choose raw output, a built-in bilateral filter, or a "
+                  "configured third-party denoiser for each effect.");
         if (denoisingOpen)
         {
             BeginDrawerBody("##DenoisingBody", settingsControlWidth);
@@ -21915,23 +21975,13 @@ protected:
                     "##RayMarchingDenoisingBody",
                     m_ui.Lighting == LightingSolution::RayMarching))
             {
-#if UVSR_WITH_NRD
-            ImGui::TextWrapped(
-                "NVIDIA NRD is available in this build. Each signal keeps "
-                "an independent history and falls back to its raw result if "
-                "its required inputs are unavailable.");
-#endif
-
             const auto drawDenoisingSignal =
                 [this, settingsControlWidth](
                     const char* treeLabel,
                     const char* identifier,
                     const char* description,
                     DenoisingEffect effect,
-                    DenoisingSignalSettings& signal,
-                    bool inputsReady,
-                    const char* readyMessage,
-                    const char* waitingMessage)
+                    DenoisingSignalSettings& signal)
             {
                 if (!BeginAnimatedTreeNode(
                         treeLabel,
@@ -21950,9 +22000,11 @@ protected:
                         methodLabel.c_str(),
                         GetDenoisingMethodLabel(signal.method)))
                 {
-                    static constexpr std::array<DenoisingMethodChoice, 4>
+                    static constexpr std::array<DenoisingMethodChoice, 6>
                         Methods = {
                             DenoisingMethodChoice::None,
+                            DenoisingMethodChoice::JointBilateral,
+                            DenoisingMethodChoice::GaussianBilateral,
                             DenoisingMethodChoice::Reblur,
                             DenoisingMethodChoice::Relax,
                             DenoisingMethodChoice::Sigma
@@ -21975,8 +22027,9 @@ protected:
                     ImGui::EndCombo();
                 }
                 ImGui::SetItemTooltip(
-                    "None keeps the raw signal. ReBLUR and ReLAX denoise "
-                    "diffuse signals; SIGMA denoises ray traced shadows.");
+                    "Raw preserves the effect output. Joint Bilateral and "
+                    "Gaussian Bilateral are built in; configured third-party "
+                    "methods expose their additional controls.");
                 const std::string resetIdentifier =
                     std::string("DenoisingSignal") + identifier;
                 if (DrawPresetResetIcon(
@@ -21993,6 +22046,32 @@ protected:
                             .c_str(),
                         signal.method != DenoisingMethodChoice::None))
                 {
+                    if (IsSpatialDenoisingMethod(signal.method))
+                    {
+                        const std::string radiusLabel =
+                            std::string("Radius##Denoising") + identifier;
+                        if (DrawSliderFloat(
+                                radiusLabel.c_str(),
+                                &signal.spatialRadius,
+                                1.f,
+                                8.f,
+                                "%.1f"))
+                        {
+                            m_app->ResetImageBasedLightingHistory();
+                        }
+                        ImGui::SetItemTooltip(
+                            "Set the built-in spatial filter radius in pixels.");
+                        if (DrawPresetResetIcon(
+                                (std::string("DenoisingSpatialRadius") +
+                                    identifier).c_str(),
+                                signal.spatialRadius != defaults.spatialRadius))
+                        {
+                            signal.spatialRadius = defaults.spatialRadius;
+                            m_app->ResetImageBasedLightingHistory();
+                        }
+                    }
+                    if (IsThirdPartyDenoisingMethod(signal.method))
+                    {
                     const std::string qualityLabel =
                         std::string("Quality##Denoising") + identifier;
                     SetNextLabeledControlWidth(
@@ -22129,17 +22208,7 @@ protected:
                             "changes; lower values favor stability.");
                     }
 
-                    if (effect == DenoisingEffect::Shadows)
-                    {
-                        ImGui::TextDisabled(
-                            "Sun SIGMA uses temporal stabilization. Flashlight "
-                            "SIGMA is spatial only.");
                     }
-
-                    if (inputsReady)
-                        ImGui::TextDisabled("%s", readyMessage);
-                    else
-                        ImGui::TextDisabled("%s", waitingMessage);
                     EndAnimatedToggleRegion();
                 }
                 EndAnimatedTreeNode();
@@ -22148,50 +22217,31 @@ protected:
             drawDenoisingSignal(
                 "Occlusion###Ambient Occlusion##Denoising",
                 "AmbientOcclusion",
-                "Denoise the ambient occlusion signal with ReBLUR.",
+                "Filter ambient occlusion with a built-in bilateral method "
+                "or optional ReBLUR.",
                 DenoisingEffect::AmbientOcclusion,
-                m_ui.Denoising.ambientOcclusion,
-                m_ui.ScreenSpaceVisibility.ambientOcclusion.outputHitDistance,
-                "Physical hit distance is ready.",
-                "Enable Output Hit Distance in Diffuse > Occlusion.");
+                m_ui.Denoising.ambientOcclusion);
             drawDenoisingSignal(
                 "Illumination###Diffuse GI##Denoising",
                 "DiffuseGi",
-                "Denoise indirect diffuse illumination with ReBLUR or ReLAX.",
+                "Filter indirect illumination with a built-in bilateral "
+                "method or optional ReBLUR or ReLAX.",
                 DenoisingEffect::DiffuseGi,
-                m_ui.Denoising.diffuseGi,
-                m_ui.ScreenSpaceVisibility.indirectDiffuse.outputHitDistance,
-                "Physical hit distance is ready.",
-                "Enable Output Hit Distance in Diffuse > Illumination.");
+                m_ui.Denoising.diffuseGi);
             drawDenoisingSignal(
                 "Shadows##Denoising",
                 "Shadows",
-                "Denoise sun and flashlight visibility with independent SIGMA histories.",
+                "Filter sun and flashlight visibility with a built-in "
+                "bilateral method or optional SIGMA.",
                 DenoisingEffect::Shadows,
-                m_ui.Denoising.shadows,
-                (!m_ui.DirectionalShadows.ratioEstimator.useRatioEstimator &&
-                    !m_ui.DirectionalShadows.ratioEstimator.hardShadows &&
-                    m_ui.DirectionalShadows.ratioEstimator.outputHitDistance) ||
-                    m_ui.Flashlight.outputHitDistance,
-                "At least one shadow source has matched hit distance data.",
-                "For the sun, turn Hard Shadows and Ratio Estimator off, then "
-                "enable Output Hit Distance. For the flashlight, enable "
-                "Output Hit Distance.");
+                m_ui.Denoising.shadows);
             drawDenoisingSignal(
                 "Sky Visibility##Denoising",
                 "SkyVisibility",
-                "Denoise ray traced sky visibility with ReBLUR or ReLAX.",
+                "Filter sky visibility with a built-in bilateral method or "
+                "optional ReBLUR or ReLAX.",
                 DenoisingEffect::SkyVisibility,
-                m_ui.Denoising.skyVisibility,
-                !m_ui.RayTracedSkyVisibility.useRatioEstimator &&
-                    m_ui.RayTracedSkyVisibility.outputHitDistance,
-                "Matched sky visibility and hit distance are ready.",
-                "Disable Ratio Estimator and enable Output Hit Distance in Sky.");
-
-#if !UVSR_WITH_NRD
-            ImGui::TextDisabled(
-                "NRD is not actually included in this build");
-#endif
+                m_ui.Denoising.skyVisibility);
             EndAnimatedToggleRegion();
             }
 
@@ -22353,6 +22403,13 @@ protected:
                 EndAnimatedToggleRegion();
             }
 
+#if !UVSR_WITH_NRD
+            ImGui::PushTextWrapPos(0.f);
+            ImGui::TextDisabled(
+                "Third Party denoisers are configurable, but not installed "
+                "in this build.");
+            ImGui::PopTextWrapPos();
+#endif
             EndDrawerBody();
         }
         ImGui::Spacing();
@@ -25338,10 +25395,6 @@ protected:
         settingsLayoutIdle =
             !g_SettingsScrollStabilityContext
                 .layoutAnimatingLastFrame;
-        // Wheel motion is eased by the UI layer; this viewport fade keeps
-        // partially clipped rows from popping into full contrast at either
-        // edge while the settings list travels.
-        DrawSettingsScrollEdgeFades();
         const ImRect settingsBodyViewportRect(
             settingsBodyWindow->Pos,
             ImVec2(
@@ -25349,58 +25402,69 @@ protected:
                     settingsBodyWindow->Size.x,
                 settingsBodyWindow->Pos.y +
                     settingsBodyWindow->Size.y));
-        const ImGuiWindow* settingsRootWindow =
+        ImGuiWindow* settingsRootWindow =
             settingsBodyWindow->ParentWindow;
         const ImRect settingsRootBodyRect(
             ImVec2(
-                settingsRootWindow->Pos.x + 0.5f,
+                settingsRootWindow->Pos.x,
                 settingsRootWindow->Pos.y +
                     settingsRootWindow->TitleBarHeight),
             ImVec2(
                 settingsRootWindow->Pos.x +
-                    settingsRootWindow->Size.x - 0.5f,
+                    settingsRootWindow->Size.x,
                 settingsRootWindow->Pos.y +
-                    settingsRootWindow->Size.y - 0.5f));
+                    settingsRootWindow->Size.y));
+        ImRect settingsAnimatedContentRect(
+            ImLerp(
+                settingsBodyViewportRect.Min,
+                settingsRetainedContentRect.Min,
+                settingsCollapseAmount),
+            ImLerp(
+                settingsBodyViewportRect.Max,
+                settingsRetainedContentRect.Max,
+                settingsCollapseAmount));
+        settingsAnimatedContentRect.Min.x = std::max(
+            settingsAnimatedContentRect.Min.x,
+            settingsRootBodyRect.Min.x + style.WindowPadding.x);
+        settingsAnimatedContentRect.Min.y = std::max(
+            settingsAnimatedContentRect.Min.y,
+            settingsRootBodyRect.Min.y + style.WindowPadding.y);
+        settingsAnimatedContentRect.Max.x = std::min(
+            settingsAnimatedContentRect.Max.x,
+            settingsRootBodyRect.Max.x - style.WindowPadding.x);
+        settingsAnimatedContentRect.Max.y = std::min(
+            settingsAnimatedContentRect.Max.y,
+            settingsRootBodyRect.Max.y - style.WindowPadding.y);
         ImDrawList* settingsDecorationDrawList =
-            ResolveFinalSettingsDecorationDrawList(settingsBodyWindow);
+            ResolveFinalSettingsDecorationDrawList(settingsRootWindow);
         if (settingsDecorationDrawList &&
             settingsDecorationDrawList->_Splitter._Count > 1)
         {
             settingsDecorationDrawList->ChannelsMerge();
         }
         // Dear ImGui submits a parent before its recursively ordered visible
-        // descendants. Append shared chrome to that completed final draw list
-        // so hidden measurement children and drawer submission order cannot
-        // move the fixed inset shadow behind General or another drawer.
-        DrawFilledRoundedInsetFrame(
+        // descendants. Append one continuously morphing Settings surface and
+        // outline to that completed final list. The same rectangle starts at
+        // the scrolling viewport, follows the animated root, and reaches the
+        // retained hash perimeter without an opacity or geometry swap.
+        DrawRootPanelBodyChrome(
             settingsDecorationDrawList,
             settingsRootBodyRect,
-            settingsBodyViewportRect,
+            settingsAnimatedContentRect,
+            settingsRetainedContentRect,
             style.WindowRounding);
-        DrawSettingsFixedTopInsetShadow(
-            settingsDecorationDrawList,
-            settingsRootBodyRect,
-            std::max(
-                0.f,
-                settingsBodyViewportRect.Min.y -
-                    settingsRootBodyRect.Min.y +
-                    g_UiSpacingTokens.tight),
-            style.WindowRounding,
-            false);
-        DrawDrawerBodyOutline(
-            settingsDecorationDrawList,
-            settingsRootBodyRect.Min,
-            settingsRootBodyRect.Max,
-            style.WindowRounding,
-            0.f,
-            false);
-        DrawDrawerBodyOutline(
-            settingsDecorationDrawList,
-            settingsBodyViewportRect.Min,
-            settingsBodyViewportRect.Max,
-            style.WindowRounding,
-            0.f,
-            false);
+        if (expandedSettingsSnapshotSubmitted)
+        {
+            settingsDecorationDrawList->PushClipRect(
+                settingsRootBodyRect.Min,
+                settingsRootBodyRect.Max,
+                false);
+            settingsDecorationDrawList->AddText(
+                expandedSettingsSnapshotMinimum,
+                ImGui::GetColorU32(ImGuiCol_Text),
+                m_SettingsSnapshotCode.c_str());
+            settingsDecorationDrawList->PopClipRect();
+        }
         ImGui::PopUvsrColorPickerPopupContentRight();
         ImGui::EndChild();
         }
@@ -25409,19 +25473,11 @@ protected:
         const ImVec2 settingsWindowSize =
             ImGui::GetWindowSize();
         const float settingsTitleHeight =
-            fontSize + style.FramePadding.y * 2.f;
+            settingsHeaderWindow->TitleBarHeight;
         const float rootBodyRounding =
             style.WindowRounding;
-        const ImRect settingsBodyRect(
-            ImVec2(
-                settingsWindowPosition.x + 0.5f,
-                settingsWindowPosition.y + settingsTitleHeight),
-            ImVec2(
-                settingsWindowPosition.x +
-                    settingsWindowSize.x - 0.5f,
-                settingsWindowPosition.y +
-                    settingsWindowSize.y - 0.5f));
-        if (settingsExpanded &&
+        const ImRect settingsBodyRect = settingsHeaderBodyRect;
+        if (settingsBodySubmitted &&
             g_UiVisualTokens.sceneTranslucentHeaders)
         {
             DrawTranslucentHeaderPanelBodySurface(
@@ -25429,56 +25485,30 @@ protected:
                 settingsBodyRect,
                 rootBodyRounding);
         }
-        if (!settingsExpanded &&
+        if (settingsCollapsed &&
             settingsBodyRect.GetHeight() >
                 style.WindowPadding.y * 2.f + 2.f)
         {
-            const ImRect retainedSettingsContentRect(
-                ImVec2(
-                    settingsWindowPosition.x +
-                        style.WindowPadding.x,
-                    settingsWindowPosition.y +
-                        settingsTitleHeight +
-                        style.WindowPadding.y),
-                ImVec2(
-                    settingsWindowPosition.x +
-                        settingsWindowSize.x -
-                        style.WindowPadding.x,
-                    settingsWindowPosition.y +
-                        settingsWindowSize.y -
-                        style.WindowPadding.y));
-            DrawFilledRoundedInsetFrame(
+            const ImRect snapshotHitRect = DrawCompactRootPanelBody(
                 settingsWindowDrawList,
                 settingsBodyRect,
-                retainedSettingsContentRect,
-                rootBodyRounding);
-            DrawSettingsFixedTopInsetShadow(
-                settingsWindowDrawList,
-                settingsBodyRect,
-                std::max(
-                    0.f,
-                    retainedSettingsContentRect.Min.y -
-                        settingsBodyRect.Min.y +
-                        g_UiSpacingTokens.tight),
+                settingsRetainedContentRect,
                 rootBodyRounding,
-                false);
-            DrawDrawerBodyOutline(
-                settingsWindowDrawList,
-                settingsBodyRect.Min,
-                settingsBodyRect.Max,
-                rootBodyRounding,
-                0.f,
-                false);
-            DrawDrawerBodyOutline(
-                settingsWindowDrawList,
-                retainedSettingsContentRect.Min,
-                retainedSettingsContentRect.Max,
-                rootBodyRounding,
-                0.f,
-                false);
+                m_SettingsSnapshotCode.c_str());
+            const bool snapshotHovered =
+                (settingsWindowFlags & ImGuiWindowFlags_NoInputs) == 0 &&
+                snapshotHitRect.Contains(ImGui::GetIO().MousePos);
+            if (snapshotHovered)
+            {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                ImGui::SetTooltip(
+                    "Click to copy this versioned settings snapshot code. "
+                    "The decoder resolves every represented setting from "
+                    "the local UVSR snapshot catalog.");
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                    CopySettingsSnapshot();
+            }
         }
-        const bool settingsCollapsed =
-            ImGui::IsWindowCollapsed();
         const bool settingsCollapseTransitionActive =
             ImGui::IsCurrentUvsrWindowCollapseTransitionActive();
         settingsLayoutIdle =
@@ -25491,7 +25521,7 @@ protected:
                 m_ui.ShowMaterialDrawer ||
                 m_MaterialDrawerAppearance > 0.f;
             if (m_ui.ShowMaterialDrawer)
-                RequestMaterialDrawerVisible(false, false);
+                RequestMaterialDrawerVisible(false);
             m_MaterialDrawerAppearance = 0.f;
             m_MaterialDrawerPresentationForceClosed =
                 m_MaterialDrawerPresentationForceClosed ||

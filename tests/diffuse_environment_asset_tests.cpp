@@ -13,6 +13,7 @@
 #include <iostream>
 #include <set>
 #include <string>
+#include <string_view>
 
 #ifndef UVSR_TEST_ENVIRONMENT_DIRECTORY
 #error UVSR_TEST_ENVIRONMENT_DIRECTORY must name the environment asset root.
@@ -44,7 +45,7 @@ namespace
 
     constexpr std::array<EnvironmentGolden, 6> Environments = {{
         {
-            "Kloppenheim 03 Day",
+            "Day",
             uvsr::ImageBasedLightingSource::Kloppenheim03Day,
             2048,
             1024,
@@ -60,7 +61,7 @@ namespace
             }
         },
         {
-            "Snow Field 2 Bright Overcast",
+            "Bright Overcast",
             uvsr::ImageBasedLightingSource::SnowField2BrightOvercast,
             2048,
             1024,
@@ -76,7 +77,7 @@ namespace
             }
         },
         {
-            "Farm Field Soft Day",
+            "Soft Day",
             uvsr::ImageBasedLightingSource::FarmFieldSoftDay,
             2048,
             1024,
@@ -92,7 +93,7 @@ namespace
             }
         },
         {
-            "Kloppenheim 07 Night",
+            "Night",
             uvsr::ImageBasedLightingSource::Kloppenheim07Night,
             2048,
             1024,
@@ -108,7 +109,7 @@ namespace
             }
         },
         {
-            "Qwantani Starry Night",
+            "Starry Night",
             uvsr::ImageBasedLightingSource::QwantaniStarryNight,
             2048,
             1024,
@@ -124,7 +125,7 @@ namespace
             }
         },
         {
-            "Quadrangle Cloudy Legacy",
+            "Cloudy",
             uvsr::ImageBasedLightingSource::QuadrangleCloudyLegacy,
             1024,
             512,
@@ -216,6 +217,9 @@ int main()
     {
         const uvsr::ImageBasedLightingSourceInfo& sourceInfo =
             uvsr::GetImageBasedLightingSourceInfo(environment.source);
+        Require(
+            std::string_view(sourceInfo.displayName) == environment.label,
+            "every catalog source keeps its exact time-of-day choice label");
         Require(
             std::abs(
                 sourceInfo.defaultExposureStops -

@@ -19,14 +19,14 @@ using namespace donut::math;
 #include "screen_space_visibility_cb.h"
 
 static_assert(
-    offsetof(ScreenSpaceVisibilityConstants, packedEdgeMode) ==
-        offsetof(ScreenSpaceVisibilityConstants, visibilityDebugView) +
-            4u);
+    offsetof(ScreenSpaceVisibilityConstants, sourceRadianceAvailable) ==
+        offsetof(ScreenSpaceVisibilityConstants, ambientStrength) + 16u);
 static_assert(
-    offsetof(ScreenSpaceVisibilityConstants, specularEnvironmentEnabled) ==
-        offsetof(ScreenSpaceVisibilityConstants, packedEdgeMode) + 16u);
+    offsetof(ScreenSpaceVisibilityConstants, diffuseEnvironmentEnabled) ==
+        offsetof(ScreenSpaceVisibilityConstants, orthographicProjection) +
+            16u);
 static_assert(
-    offsetof(ScreenSpaceVisibilityConstants, specularEnvironmentArrayIndex) +
+    offsetof(ScreenSpaceVisibilityConstants, skyVisibilityApplication) +
             16u ==
         sizeof(ScreenSpaceVisibilityConstants));
 static_assert(
@@ -40,11 +40,6 @@ static_assert(static_cast<uint32_t>(
     uvsr::NoisePattern::SpatialBlue) == 1u);
 static_assert(static_cast<uint32_t>(
     uvsr::NoisePattern::SpatiotemporalBlue) == 2u);
-static_assert(static_cast<uint32_t>(
-    uvsr::VisibilityReconstructionMode::PackedDepthNormal) == 1u);
-static_assert(static_cast<uint32_t>(
-    uvsr::VisibilityReconstructionMode::PackedControlledLeakage) == 3u);
-
 namespace
 {
     constexpr uint32_t kThreadGroupSize = 8u;
@@ -75,10 +70,9 @@ namespace
     uint32_t GetRuntimeSampleParity(
         const uvsr::ScreenSpaceVisibilitySettings& settings,
         bool ambientEnabled,
-        bool indirectEnabled,
-        bool packedEdgesEnabled)
+        bool indirectEnabled)
     {
-        if (packedEdgesEnabled || !ambientEnabled || !indirectEnabled ||
+        if (!ambientEnabled || !indirectEnabled ||
             settings.estimator !=
                 uvsr::VisibilityEstimator::UniformSolidAngle)
         {
@@ -95,7 +89,6 @@ namespace
         uint32_t estimator,
         uint32_t consumer,
         uint32_t runtimeSampleParity,
-        bool packedEdgesEnabled,
         bool ambientHitDistanceEnabled,
         bool indirectHitDistanceEnabled)
     {
@@ -103,14 +96,8 @@ namespace
             uint64_t(estimator) |
             (uint64_t(consumer) << 2u) |
             (uint64_t(runtimeSampleParity) << 4u) |
-            (uint64_t(packedEdgesEnabled) << 6u) |
-            (uint64_t(ambientHitDistanceEnabled) << 7u) |
-            (uint64_t(indirectHitDistanceEnabled) << 8u);
-    }
-
-    uint64_t PackedFilterPipelineKey(uint32_t consumer)
-    {
-        return 0x2000000000000000ull | uint64_t(consumer);
+            (uint64_t(ambientHitDistanceEnabled) << 6u) |
+            (uint64_t(indirectHitDistanceEnabled) << 7u);
     }
 
     bool IsSkyVisibilityTextureCompatible(
@@ -213,7 +200,6 @@ namespace uvsr
         settings.indirectDiffuse = {};
         settings.indirectDiffuse.outputHitDistance =
             outputIndirectHitDistance;
-        settings.reconstruction = {};
         const bool use16BitBuffers =
             quality != ScreenSpaceVisibilityQuality::Ultra;
         ApplyVisibilityBufferPrecisionPreset(
@@ -227,16 +213,10 @@ namespace uvsr
             settings.resolution = VisibilityResolution::Quarter;
             settings.estimator = VisibilityEstimator::UniformProjectedAngle;
             settings.sampling.maximumSampleCount = 8u;
-            settings.reconstruction.spatialEnabled = true;
-            settings.reconstruction.spatialFilter =
-                VisibilitySpatialFilter::JointBilateral;
             break;
         case ScreenSpaceVisibilityQuality::Medium:
             settings.resolution = VisibilityResolution::Half;
             settings.sampling.maximumSampleCount = 8u;
-            settings.reconstruction.spatialEnabled = true;
-            settings.reconstruction.spatialFilter =
-                VisibilitySpatialFilter::JointBilateral;
             break;
         case ScreenSpaceVisibilityQuality::High:
             break;
@@ -280,13 +260,6 @@ namespace uvsr
                 preset.indirectDiffuse.enabled &&
             settings.indirectDiffuse.intensity ==
                 preset.indirectDiffuse.intensity &&
-            settings.reconstruction.mode == preset.reconstruction.mode &&
-            settings.reconstruction.spatialEnabled ==
-                preset.reconstruction.spatialEnabled &&
-            settings.reconstruction.spatialFilter ==
-                preset.reconstruction.spatialFilter &&
-            settings.reconstruction.spatialRadius ==
-                preset.reconstruction.spatialRadius &&
             leftBuffers.ambient == rightBuffers.ambient &&
             leftBuffers.indirect == rightBuffers.indirect;
     }
@@ -477,8 +450,7 @@ namespace uvsr
         uint32_t resolutionScale,
         bool ambientEnabled,
         bool indirectDiffuseEnabled,
-        bool postProcessEnabled,
-        bool packedEdgesEnabled,
+        bool upsampleEnabled,
         bool ambientHitDistanceEnabled,
         bool indirectHitDistanceEnabled,
         const VisibilityBufferPrecisionSettings& bufferPrecision)
@@ -496,8 +468,7 @@ namespace uvsr
             m_ResolutionScale == resolutionScale &&
             m_AmbientResourcesEnabled == ambientEnabled &&
             m_IndirectDiffuseResourcesEnabled == indirectDiffuseEnabled &&
-            m_PostProcessResourcesEnabled == postProcessEnabled &&
-            m_PackedEdgeResourcesEnabled == packedEdgesEnabled &&
+            m_UpsampleResourcesEnabled == upsampleEnabled &&
             m_AmbientHitDistanceResourcesEnabled ==
                 ambientHitDistanceEnabled &&
             m_IndirectHitDistanceResourcesEnabled ==
@@ -507,9 +478,9 @@ namespace uvsr
             (!indirectDiffuseEnabled || m_RawIndirectDiffuse) &&
             (!ambientHitDistanceEnabled || m_RawAmbientHitDistance) &&
             (!indirectHitDistanceEnabled || m_RawIndirectHitDistance) &&
-            (!postProcessEnabled || !ambientEnabled ||
+            (!upsampleEnabled || !ambientEnabled ||
                 m_FinalAmbientVisibility) &&
-            (!postProcessEnabled || !indirectDiffuseEnabled ||
+            (!upsampleEnabled || !indirectDiffuseEnabled ||
                 m_FinalIndirectDiffuse))
         {
             return;
@@ -521,8 +492,7 @@ namespace uvsr
         m_ResolutionScale = resolutionScale;
         m_AmbientResourcesEnabled = ambientEnabled;
         m_IndirectDiffuseResourcesEnabled = indirectDiffuseEnabled;
-        m_PostProcessResourcesEnabled = postProcessEnabled;
-        m_PackedEdgeResourcesEnabled = packedEdgesEnabled;
+        m_UpsampleResourcesEnabled = upsampleEnabled;
         m_AmbientHitDistanceResourcesEnabled =
             ambientHitDistanceEnabled;
         m_IndirectHitDistanceResourcesEnabled =
@@ -599,28 +569,20 @@ namespace uvsr
                 nvrhi::Format::R16_FLOAT,
                 "ScreenSpaceVisibility/IndirectDiffuseHitDistance");
         }
-        if (postProcessEnabled && ambientEnabled)
+        if (upsampleEnabled && ambientEnabled)
         {
             m_FinalAmbientVisibility = createTexture(
                 fullSize,
                 scalarFormat(bufferPrecision.ambient),
                 "ScreenSpaceVisibility/FinalAmbientVisibility");
         }
-        if (postProcessEnabled && indirectDiffuseEnabled)
+        if (upsampleEnabled && indirectDiffuseEnabled)
         {
             m_FinalIndirectDiffuse = createTexture(
                 fullSize,
                 vectorFormat(bufferPrecision.indirect),
                 "ScreenSpaceVisibility/FinalIndirectDiffuse");
         }
-        if (packedEdgesEnabled)
-        {
-            m_PackedEdgesTexture = createTexture(
-                samplingSize,
-                nvrhi::Format::R8_UINT,
-                "ScreenSpaceVisibility/PackedEdges");
-        }
-
         const uint64_t rawAmbientBytes = TextureBytes(
             samplingSize, scalarBytes(bufferPrecision.ambient));
         const uint64_t rawIndirectBytes = TextureBytes(
@@ -632,16 +594,15 @@ namespace uvsr
         m_Timings.outputTextureBytes =
             (ambientEnabled ? rawAmbientBytes : 0u) +
             (indirectDiffuseEnabled ? rawIndirectBytes : 0u) +
-            (postProcessEnabled && ambientEnabled
+            (upsampleEnabled && ambientEnabled
                 ? finalAmbientBytes : 0u) +
-            (postProcessEnabled && indirectDiffuseEnabled
+            (upsampleEnabled && indirectDiffuseEnabled
                 ? finalIndirectBytes : 0u) +
             (ambientHitDistanceEnabled
                 ? TextureBytes(samplingSize, 2u) : 0u) +
             (indirectHitDistanceEnabled
                 ? TextureBytes(samplingSize, 2u) : 0u);
-        m_Timings.workingTextureBytes =
-            packedEdgesEnabled ? TextureBytes(samplingSize, 1u) : 0u;
+        m_Timings.workingTextureBytes = 0u;
     }
 
     void ScreenSpaceVisibilityPass::ReleaseResources()
@@ -653,14 +614,12 @@ namespace uvsr
         m_RawIndirectHitDistance = nullptr;
         m_FinalAmbientVisibility = nullptr;
         m_FinalIndirectDiffuse = nullptr;
-        m_PackedEdgesTexture = nullptr;
         m_FullSize = uint2::zero();
         m_SamplingSize = uint2::zero();
         m_ResolutionScale = 1u;
         m_AmbientResourcesEnabled = false;
         m_IndirectDiffuseResourcesEnabled = false;
-        m_PostProcessResourcesEnabled = false;
-        m_PackedEdgeResourcesEnabled = false;
+        m_UpsampleResourcesEnabled = false;
         m_AmbientHitDistanceResourcesEnabled = false;
         m_IndirectHitDistanceResourcesEnabled = false;
         m_BufferPrecisionConfigurationKey = 0u;
@@ -738,7 +697,7 @@ namespace uvsr
         completedTimings.firstTraceMs = millisecondsOrZero(
             Stage::FirstTrace);
         completedTimings.reconstructionMs = millisecondsOrZero(
-            Stage::Reconstruction);
+            Stage::Upsample);
         completedTimings.compositionMs = millisecondsOrZero(
             Stage::Composition);
         completedTimings.effectEnvelopeMs = millisecondsOrZero(
@@ -821,20 +780,14 @@ namespace uvsr
             settings.ambientOcclusion.outputHitDistance;
         const bool indirectHitDistanceEnabled = indirectEnabled &&
             settings.indirectDiffuse.outputHitDistance;
-        const bool packedEdgesEnabled = IsPackedVisibilityReconstruction(
-            settings.reconstruction.mode);
-        const bool spatialFilterEnabled =
-            settings.reconstruction.spatialEnabled && !packedEdgesEnabled;
-        const bool postProcessEnabled = packedEdgesEnabled ||
-            spatialFilterEnabled || resolutionScale > 1u;
+        const bool upsampleEnabled = resolutionScale > 1u;
 
         EnsureResources(
             fullSize,
             resolutionScale,
             ambientEnabled,
             indirectEnabled,
-            postProcessEnabled,
-            packedEdgesEnabled,
+            upsampleEnabled,
             ambientHitDistanceEnabled,
             indirectHitDistanceEnabled,
             settings.bufferPrecision);
@@ -881,8 +834,7 @@ namespace uvsr
         const uint32_t runtimeSampleParity = GetRuntimeSampleParity(
             settings,
             ambientEnabled,
-            indirectEnabled,
-            packedEdgesEnabled);
+            indirectEnabled);
 
         ScreenSpaceVisibilityConstants constants{};
         view->FillPlanarViewConstants(constants.view);
@@ -901,8 +853,6 @@ namespace uvsr
             MaximumVisibilityAmbientOcclusionStrength);
         constants.indirectDiffuseIntensity = std::max(
             settings.indirectDiffuse.intensity, 0.f);
-        constants.spatialRadius = std::clamp(
-            settings.reconstruction.spatialRadius, 0.f, 16.f);
         constants.sampleSequencePhase = sampleSequencePhase;
         constants.maximumSampleCount = std::clamp(
             settings.sampling.maximumSampleCount, 1u, 64u);
@@ -923,18 +873,6 @@ namespace uvsr
                 noiseSettings.animate));
         constants.visibilityDebugView = std::min(
             static_cast<uint32_t>(settings.debugView), 3u);
-        constants.packedEdgeMode = packedEdgesEnabled
-            ? std::clamp(
-                static_cast<uint32_t>(settings.reconstruction.mode),
-                1u,
-                3u)
-            : 0u;
-        constants.spatialFilter = spatialFilterEnabled
-            ? std::min(
-                static_cast<uint32_t>(
-                    settings.reconstruction.spatialFilter),
-                1u)
-            : 0u;
         constants.lightingDebugView = inputs.lightingDebugView;
         constants.skyVisibilityApplication = activeSkyVisibility
             ? (inputs.applySkyVisibilityToDiffuseIbl
@@ -1022,8 +960,6 @@ namespace uvsr
                 std::to_string(runtimeSampleParity)
             });
         }
-        if (packedEdgesEnabled)
-            traceMacros.push_back({ "OUTPUT_PACKED_EDGES", "1" });
         if (ambientHitDistanceEnabled)
             traceMacros.push_back({ "OUTPUT_AO_HIT_DISTANCE", "1" });
         if (indirectHitDistanceEnabled)
@@ -1044,8 +980,6 @@ namespace uvsr
             traceLayout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(1));
         if (ambientHitDistanceEnabled)
             traceLayout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(2));
-        if (packedEdgesEnabled)
-            traceLayout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(3));
         if (indirectHitDistanceEnabled)
             traceLayout.push_back(nvrhi::BindingLayoutItem::Texture_UAV(4));
 
@@ -1053,7 +987,6 @@ namespace uvsr
             estimatorIndex,
             consumerVariant,
             runtimeSampleParity,
-            packedEdgesEnabled,
             ambientHitDistanceEnabled,
             indirectHitDistanceEnabled);
         Pipeline& tracePipeline = GetOrCreateAdvancedPipeline(
@@ -1097,12 +1030,6 @@ namespace uvsr
                 bindings.bindings.push_back(
                     nvrhi::BindingSetItem::Texture_UAV(
                         2, m_RawAmbientHitDistance));
-            }
-            if (packedEdgesEnabled)
-            {
-                bindings.bindings.push_back(
-                    nvrhi::BindingSetItem::Texture_UAV(
-                        3, m_PackedEdgesTexture));
             }
             if (indirectHitDistanceEnabled)
             {
@@ -1168,142 +1095,87 @@ namespace uvsr
             }
         }
 
-        const bool reconstructAmbient = ambientEnabled &&
-            postProcessEnabled && !ambientProcessed;
-        const bool reconstructIndirect = indirectEnabled &&
-            postProcessEnabled && !indirectProcessed;
-        const bool reconstructionEnabled =
-            reconstructAmbient || reconstructIndirect;
-        nvrhi::ITexture* reconstructedAmbient = processedAmbient;
-        nvrhi::ITexture* reconstructedIndirect = processedIndirect;
-        if (reconstructionEnabled)
+        const bool upsampleAmbient = ambientEnabled &&
+            upsampleEnabled && !ambientProcessed;
+        const bool upsampleIndirect = indirectEnabled &&
+            upsampleEnabled && !indirectProcessed;
+        const bool upsampleRequired = upsampleAmbient || upsampleIndirect;
+        nvrhi::ITexture* compositionAmbient = processedAmbient;
+        nvrhi::ITexture* compositionIndirect = processedIndirect;
+        if (upsampleRequired)
         {
-            const uint32_t reconstructionConsumerVariant =
+            const uint32_t upsampleConsumerVariant =
                 GetConsumerVariant(
-                    reconstructAmbient,
-                    reconstructIndirect);
-            Pipeline* reconstructionPipeline = nullptr;
-            nvrhi::BindingSetHandle* reconstructionBindingSet = nullptr;
-            if (packedEdgesEnabled)
-            {
-                std::vector<ShaderMacro> macros = {
-                    { "ENABLE_AO", reconstructAmbient ? "1" : "0" },
-                    { "ENABLE_GI", reconstructIndirect ? "1" : "0" },
-                    { "PACKED_EDGE_RECONSTRUCTION", "1" }
-                };
-                std::vector<nvrhi::BindingLayoutItem> layout = {
-                    nvrhi::BindingLayoutItem::VolatileConstantBuffer(0)
-                };
-                if (reconstructAmbient)
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(0));
-                if (reconstructIndirect)
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(1));
-                layout.push_back(nvrhi::BindingLayoutItem::Texture_SRV(4));
-                if (reconstructAmbient)
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_UAV(0));
-                if (reconstructIndirect)
-                    layout.push_back(
-                        nvrhi::BindingLayoutItem::Texture_UAV(1));
+                    upsampleAmbient,
+                    upsampleIndirect);
+            Pipeline& upsamplePipeline = m_Filter[upsampleConsumerVariant];
+            nvrhi::BindingSetHandle& upsampleBindingSet =
+                m_FilterBindingSets[upsampleConsumerVariant];
 
-                const uint64_t pipelineKey =
-                    PackedFilterPipelineKey(reconstructionConsumerVariant);
-                reconstructionPipeline = &GetOrCreateAdvancedPipeline(
-                    pipelineKey,
-                    "uvsr/screen_space_visibility_filter_cs.hlsl",
-                    layout,
-                    &macros);
-                reconstructionBindingSet =
-                    std::addressof(m_AdvancedBindingSets[pipelineKey]);
-            }
-            else
-            {
-                reconstructionPipeline =
-                    &m_Filter[reconstructionConsumerVariant];
-                reconstructionBindingSet =
-                    std::addressof(
-                        m_FilterBindingSets[reconstructionConsumerVariant]);
-            }
-
-            if (!*reconstructionBindingSet)
+            if (!upsampleBindingSet)
             {
                 nvrhi::BindingSetDesc bindings;
                 bindings.bindings = {
                     nvrhi::BindingSetItem::ConstantBuffer(
                         0, m_ConstantBuffer)
                 };
-                if (reconstructAmbient)
+                if (upsampleAmbient)
                 {
                     bindings.bindings.push_back(
                         nvrhi::BindingSetItem::Texture_SRV(
                             0, rawAmbient));
                 }
-                if (reconstructIndirect)
+                if (upsampleIndirect)
                 {
                     bindings.bindings.push_back(
                         nvrhi::BindingSetItem::Texture_SRV(
                             1, rawIndirect));
                 }
-                if (packedEdgesEnabled)
-                {
-                    bindings.bindings.push_back(
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            4, m_PackedEdgesTexture));
-                }
-                else
-                {
-                    bindings.bindings.push_back(
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            2, inputs.depth));
-                    bindings.bindings.push_back(
-                        nvrhi::BindingSetItem::Texture_SRV(
-                            3, inputs.normals));
-                }
-                if (reconstructAmbient)
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        2, inputs.depth));
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        3, inputs.normals));
+                if (upsampleAmbient)
                 {
                     bindings.bindings.push_back(
                         nvrhi::BindingSetItem::Texture_UAV(
                             0, m_FinalAmbientVisibility));
                 }
-                if (reconstructIndirect)
+                if (upsampleIndirect)
                 {
                     bindings.bindings.push_back(
                         nvrhi::BindingSetItem::Texture_UAV(
                             1, m_FinalIndirectDiffuse));
                 }
-                *reconstructionBindingSet = m_Device->createBindingSet(
-                    bindings, reconstructionPipeline->bindingLayout);
+                upsampleBindingSet = m_Device->createBindingSet(
+                    bindings, upsamplePipeline.bindingLayout);
             }
 
             nvrhi::ComputeState state;
-            state.pipeline = reconstructionPipeline->pipeline;
-            state.bindings = { *reconstructionBindingSet };
-            commandList->beginMarker(packedEdgesEnabled
-                ? "Visibility Packed Reconstruction"
-                : (spatialFilterEnabled
-                    ? "Visibility Spatial Reconstruction"
-                    : "Visibility Guide-Aware Upsample"));
-            BeginStage(commandList, Stage::Reconstruction);
+            state.pipeline = upsamplePipeline.pipeline;
+            state.bindings = { upsampleBindingSet };
+            commandList->beginMarker("Visibility Guide-Aware Upsample");
+            BeginStage(commandList, Stage::Upsample);
             commandList->setComputeState(state);
             commandList->dispatch(fullDispatchX, fullDispatchY, 1u);
-            EndStage(commandList, Stage::Reconstruction);
+            EndStage(commandList, Stage::Upsample);
             commandList->endMarker();
 
-            reconstructedAmbient = reconstructAmbient
+            compositionAmbient = upsampleAmbient
                 ? m_FinalAmbientVisibility.Get()
                 : processedAmbient;
-            reconstructedIndirect = reconstructIndirect
+            compositionIndirect = upsampleIndirect
                 ? m_FinalIndirectDiffuse.Get()
                 : processedIndirect;
         }
-        if (reconstructedAmbient != m_BoundCompositeAmbient ||
-            reconstructedIndirect != m_BoundCompositeIndirect)
+        if (compositionAmbient != m_BoundCompositeAmbient ||
+            compositionIndirect != m_BoundCompositeIndirect)
         {
             m_CompositeBindingSet = nullptr;
-            m_BoundCompositeAmbient = reconstructedAmbient;
-            m_BoundCompositeIndirect = reconstructedIndirect;
+            m_BoundCompositeAmbient = compositionAmbient;
+            m_BoundCompositeIndirect = compositionIndirect;
         }
         if (!m_CompositeBindingSet)
         {
@@ -1313,9 +1185,9 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_SRV(
                     0, inputs.baseLighting),
                 nvrhi::BindingSetItem::Texture_SRV(
-                    1, reconstructedAmbient),
+                    1, compositionAmbient),
                 nvrhi::BindingSetItem::Texture_SRV(
-                    2, reconstructedIndirect),
+                    2, compositionIndirect),
                 nvrhi::BindingSetItem::Texture_SRV(
                     3, inputs.gbufferDiffuse),
                 nvrhi::BindingSetItem::Texture_SRV(
@@ -1371,11 +1243,10 @@ namespace uvsr
         m_Timings.activeSrvCount = 3u + (indirectEnabled ? 1u : 0u);
         m_Timings.activeUavCount =
             uint32_t(ambientEnabled) + uint32_t(indirectEnabled) +
-            uint32_t(packedEdgesEnabled) +
             uint32_t(ambientHitDistanceEnabled) +
             uint32_t(indirectHitDistanceEnabled);
         m_Timings.activeDispatchCount = 2u +
-            uint32_t(reconstructionEnabled);
+            uint32_t(upsampleRequired);
         m_Timings.active = true;
 
         commandList->endMarker();

@@ -123,6 +123,7 @@ namespace
             "backdrop_blur_ps",
             "denoising_prepare_cs",
             "denoising_resolve_cs",
+            "denoising_spatial_cs",
             "heitz_ratio_estimator_shadows_cs_Generate",
             "ray_traced_flashlight_shadows_cs_GenerateVisibility",
             "ray_traced_flashlight_shadows_cs_GenerateVisibilityAndHitDistance",
@@ -293,8 +294,8 @@ int main(int argc, char** argv)
             std::string("retired shader axis must remain absent: ") + axis);
     }
     passed &= Check(
-        CountShaderPermutations(config) == 333u,
-        "the production shader catalog must contain exactly 333 permutations");
+        CountShaderPermutations(config) == 311u,
+        "the production shader catalog must contain exactly 311 permutations");
     passed &= Check(
         CountExactLines(
             config,
@@ -377,10 +378,15 @@ int main(int argc, char** argv)
             config.find(
                 "denoising_resolve_cs.hlsl -T cs -E main "
                 "-D DENOISING_SIGNAL_CLASS={0,1,2}") != std::string::npos &&
+            config.find(
+                "denoising_spatial_cs.hlsl -T cs -E main "
+                "-D DENOISING_OUTPUT_FORMAT={0,1,2,3,4}") !=
+                std::string::npos &&
             manifest.find("denoising_prepare_cs") != std::string::npos &&
-            manifest.find("denoising_resolve_cs") != std::string::npos,
-        "production must package all denoising prepare and resolve signal "
-        "classes");
+            manifest.find("denoising_resolve_cs") != std::string::npos &&
+            manifest.find("denoising_spatial_cs") != std::string::npos,
+        "production must package third-party preparation plus all five "
+        "built-in spatial output formats");
 
     constexpr const char* requiredVisibilityHitBundles[] = {
         "-D VISIBILITY_ESTIMATOR={0,1,2} -D ENABLE_AO=1 -D ENABLE_GI=0 "
@@ -399,17 +405,6 @@ int main(int argc, char** argv)
             "-D RUNTIME_SAMPLE_PARITY={1,2} -D OUTPUT_GI_HIT_DISTANCE=1",
         "-D VISIBILITY_ESTIMATOR=1 -D ENABLE_AO=1 -D ENABLE_GI=1 "
             "-D RUNTIME_SAMPLE_PARITY={1,2} -D OUTPUT_AO_HIT_DISTANCE=1 "
-            "-D OUTPUT_GI_HIT_DISTANCE=1",
-        "-D VISIBILITY_ESTIMATOR={0,1,2} -D ENABLE_AO=1 -D ENABLE_GI=0 "
-            "-D OUTPUT_PACKED_EDGES=1 -D OUTPUT_AO_HIT_DISTANCE=1",
-        "-D VISIBILITY_ESTIMATOR={0,1,2} -D ENABLE_AO=0 -D ENABLE_GI=1 "
-            "-D OUTPUT_PACKED_EDGES=1 -D OUTPUT_GI_HIT_DISTANCE=1",
-        "-D VISIBILITY_ESTIMATOR={0,1,2} -D ENABLE_AO=1 -D ENABLE_GI=1 "
-            "-D OUTPUT_PACKED_EDGES=1 -D OUTPUT_AO_HIT_DISTANCE=1",
-        "-D VISIBILITY_ESTIMATOR={0,1,2} -D ENABLE_AO=1 -D ENABLE_GI=1 "
-            "-D OUTPUT_PACKED_EDGES=1 -D OUTPUT_GI_HIT_DISTANCE=1",
-        "-D VISIBILITY_ESTIMATOR={0,1,2} -D ENABLE_AO=1 -D ENABLE_GI=1 "
-            "-D OUTPUT_PACKED_EDGES=1 -D OUTPUT_AO_HIT_DISTANCE=1 "
             "-D OUTPUT_GI_HIT_DISTANCE=1"
     };
     for (const char* bundle : requiredVisibilityHitBundles)
@@ -420,9 +415,16 @@ int main(int argc, char** argv)
                 bundle);
     }
     passed &= Check(
-        CountOccurrences(config, "OUTPUT_AO_HIT_DISTANCE=1") == 8u &&
-            CountOccurrences(config, "OUTPUT_GI_HIT_DISTANCE=1") == 8u,
+        CountOccurrences(config, "OUTPUT_AO_HIT_DISTANCE=1") == 5u &&
+            CountOccurrences(config, "OUTPUT_GI_HIT_DISTANCE=1") == 5u,
         "AO and GI hit distance outputs must cover every reachable topology");
+    passed &= Check(
+        config.find("OUTPUT_PACKED_EDGES") == std::string::npos &&
+            config.find("PACKED_EDGE_RECONSTRUCTION") ==
+                std::string::npos &&
+            visibilitySource.find("OUTPUT_PACKED_EDGES") ==
+                std::string::npos,
+        "retired packed Diffuse reconstruction permutations must stay absent");
     passed &= Check(
         CountOccurrences(
             config,
@@ -479,8 +481,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 51u,
-        "production shader contract must enumerate exactly 51 files");
+        expectedFiles.size() == 52u,
+        "production shader contract must enumerate exactly 52 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

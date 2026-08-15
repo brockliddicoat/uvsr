@@ -58,9 +58,9 @@ namespace uvsr
         bool denoised = false;
     };
 
-    // Owns one independent backend signal and history for AO, GI, sky, sun,
-    // and flashlight. Any disabled, unavailable, invalid, or failed path
-    // returns the raw signal supplied by the caller for that frame.
+    // Owns one independent spatial output or backend signal and history for
+    // AO, GI, sky, sun, and flashlight. Any disabled, unavailable, invalid,
+    // or failed path returns the caller's raw signal for that frame.
     class DenoisingPass final
     {
     public:
@@ -103,6 +103,7 @@ namespace uvsr
             DenoiserSignalType type) const noexcept;
         [[nodiscard]] DenoiserMemoryStats GetBackendMemoryStats() const noexcept;
         [[nodiscard]] uint64_t GetCallerOwnedBytes() const noexcept;
+        [[nodiscard]] bool IsSpatialAvailable() const noexcept;
         [[nodiscard]] bool IsOperational() const noexcept;
 
     private:
@@ -128,6 +129,8 @@ namespace uvsr
             DenoiserSettings backendSettings;
             DenoiserStatus lastStatus;
             DenoiserMethod method = DenoiserMethod::ReblurDiffuse;
+            DenoisingMethodChoice methodChoice = DenoisingMethodChoice::None;
+            nvrhi::Format spatialFormat = nvrhi::Format::UNKNOWN;
             DenoiserExtent extent;
             dm::uint2 fullSize = dm::uint2::zero();
             dm::uint2 sourceSize = dm::uint2::zero();
@@ -143,18 +146,22 @@ namespace uvsr
             nvrhi::TextureHandle penumbra;
             nvrhi::TextureHandle shadow;
             nvrhi::TextureHandle resolved;
+            nvrhi::TextureHandle spatialOutput;
             DenoiserSignalResources resources;
         };
 
         static constexpr size_t c_SignalCount = 5;
+        static constexpr size_t c_SpatialFormatCount = 5;
 
         nvrhi::DeviceHandle m_Device;
         std::unique_ptr<IDenoiserBackend> m_Backend;
         nvrhi::BufferHandle m_ConstantBuffer;
+        std::array<Pipeline, c_SpatialFormatCount> m_SpatialPipelines;
         std::array<Pipeline, size_t(SignalClass::Count)> m_PreparePipelines;
         std::array<Pipeline, size_t(SignalClass::Count)> m_ResolvePipelines;
         std::array<SignalState, c_SignalCount> m_Signals;
         uint32_t m_FramesInFlight = 3;
+        bool m_SpatialAvailable = false;
         bool m_FrontEndAvailable = false;
         bool m_BackendInitialized = false;
 
@@ -163,6 +170,17 @@ namespace uvsr
             nvrhi::ICommandList* commandList,
             const DenoisingSignalSettings& settings,
             const DenoisingInputs& inputs);
+        DenoisingResult ProcessSpatial(
+            DenoiserSignalType type,
+            nvrhi::ICommandList* commandList,
+            const DenoisingSignalSettings& settings,
+            const DenoisingInputs& inputs);
+        bool EnsureSpatialResources(
+            SignalState& state,
+            DenoisingMethodChoice method,
+            nvrhi::ITexture* rawSignal,
+            dm::uint2 fullSize,
+            dm::uint2 sourceSize);
         bool EnsureResources(
             SignalState& state,
             DenoiserSignalType type,

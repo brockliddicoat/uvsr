@@ -1478,13 +1478,13 @@ index 22f74c7..4abf6f5 100644
      const bool alpha = (flags & ImGuiColorEditFlags_NoAlpha) == 0;
      const bool hdr = (flags & ImGuiColorEditFlags_HDR) != 0;
      const int components = alpha ? 4 : 3;
-+    const bool authored_disabled_alpha_component =
++    const bool authored_hidden_alpha_column =
 +        authored_scoped_color_edit &&
 +        !alpha &&
 +        (flags & ImGuiColorEditFlags_NoPicker) != 0 &&
 +        (flags & ImGuiColorEditFlags_NoSmallPreview) != 0;
-+    const int displayed_components =
-+        authored_disabled_alpha_component ? 4 : components;
++    const int layout_components =
++        authored_hidden_alpha_column ? 4 : components;
      const float w_button = (flags & ImGuiColorEditFlags_NoSmallPreview) ? 0.0f : (square_sz + style.ItemInnerSpacing.x);
      const float w_inputs = ImMax(w_full - w_button, 1.0f);
      w_full = w_inputs + w_button;
@@ -1494,44 +1494,29 @@ index 22f74c7..4abf6f5 100644
          // RGB/HSV 0..255 Sliders
 -        const float w_items = w_inputs - style.ItemInnerSpacing.x * (components - 1);
 +        const float w_items = w_inputs -
-+            style.ItemInnerSpacing.x * (displayed_components - 1);
++            style.ItemInnerSpacing.x * (layout_components - 1);
  
          const bool hide_prefix = !g.UvsrStockWidgetRendering ||
 -            (IM_TRUNC(w_items / components) <= CalcTextSize((flags & ImGuiColorEditFlags_Float) ? "M:0.000" : "M:000").x);
-+            (IM_TRUNC(w_items / displayed_components) <= CalcTextSize((flags & ImGuiColorEditFlags_Float) ? "M:0.000" : "M:000").x);
++            (IM_TRUNC(w_items / layout_components) <= CalcTextSize((flags & ImGuiColorEditFlags_Float) ? "M:0.000" : "M:000").x);
          static const char* ids[4] = { "##X", "##Y", "##Z", "##W" };
          static const char* fmt_table_int[3][4] =
          {
-@@ -7337,14 +7923,30 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
+@@ -7337,14 +7923,15 @@ bool ImGui::ColorEdit4(const char* label, float col[4], ImGuiColorEditFlags flag
          const int fmt_idx = hide_prefix ? 0 : (flags & ImGuiColorEditFlags_DisplayHSV) ? 2 : 1;
  
          float prev_split = 0.0f;
 -        for (int n = 0; n < components; n++)
-+        float disabled_alpha_value = 0.0f;
-+        for (int n = 0; n < displayed_components; n++)
++        for (int n = 0; n < components; n++)
          {
              if (n > 0)
                  SameLine(0, style.ItemInnerSpacing.x);
 -            float next_split = IM_TRUNC(w_items * (n + 1) / components);
 +            float next_split = IM_TRUNC(
-+                w_items * (n + 1) / displayed_components);
++                w_items * (n + 1) / layout_components);
              SetNextItemWidth(ImMax(next_split - prev_split, 1.0f));
              prev_split = next_split;
  
-+            if (n == components)
-+            {
-+                BeginDisabled();
-+                DragFloat(
-+                    ids[n],
-+                    &disabled_alpha_value,
-+                    1.0f / 255.0f,
-+                    0.0f,
-+                    1.0f,
-+                    fmt_table_float[fmt_idx][n]);
-+                EndDisabled();
-+                continue;
-+            }
-+
              // FIXME: When ImGuiColorEditFlags_HDR flag is passed HS values snap in weird ways when SV values go below 0.
              if (flags & ImGuiColorEditFlags_Float)
              {
@@ -2218,7 +2203,7 @@ index 22f74c7..4abf6f5 100644
              }
          }
          if (!(flags & ImGuiColorEditFlags_NoOptions))
-@@ -8753,9 +9558,16 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+@@ -8753,9 +9558,22 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
      bool value_changed_fix_hue_wrap = false;
      if ((flags & ImGuiColorEditFlags_NoInputs) == 0)
      {
@@ -2234,9 +2219,56 @@ index 22f74c7..4abf6f5 100644
 +            (flags & sub_flags_to_forward) |
 +            ImGuiColorEditFlags_NoPicker |
 +            ImGuiColorEditFlags_NoSmallPreview;
++        const bool draw_hidden_alpha_value_outline =
++            render_uvsr_wheel_with_bars &&
++            (flags & ImGuiColorEditFlags_NoAlpha) != 0;
++        float hidden_alpha_value_top = 0.0f;
++        bool has_hidden_alpha_rgb_row = false;
          if (flags & ImGuiColorEditFlags_DisplayRGB || (flags & ImGuiColorEditFlags_DisplayMask_) == 0)
++        {
              if (ColorEdit4("##rgb", col, sub_flags | ImGuiColorEditFlags_DisplayRGB))
              {
+@@ -8762,11 +9580,39 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+                 // FIXME: Hackily differentiating using the DragInt (ActiveId != 0 && !ActiveIdAllowOverlap) vs. using the InputText or DropTarget.
+                 // For the later we don't want to run the hue-wrap canceling code. If you are well versed in HSV picker please provide your input! (See #2050)
+                 value_changed_fix_hue_wrap = (g.ActiveId != 0 && !g.ActiveIdAllowOverlap);
+                 value_changed = true;
+             }
++            if (draw_hidden_alpha_value_outline)
++            {
++                hidden_alpha_value_top =
++                    g.LastItemData.Rect.Min.y;
++                has_hidden_alpha_rgb_row = true;
++            }
++        }
+         if (flags & ImGuiColorEditFlags_DisplayHSV || (flags & ImGuiColorEditFlags_DisplayMask_) == 0)
+-            value_changed |= ColorEdit4("##hsv", col, sub_flags | ImGuiColorEditFlags_DisplayHSV);
++        {
++            value_changed |= ColorEdit4(
++                "##hsv",
++                col,
++                sub_flags | ImGuiColorEditFlags_DisplayHSV);
++            if (draw_hidden_alpha_value_outline &&
++                has_hidden_alpha_rgb_row)
++            {
++                const ImRect hidden_alpha_value_bounds(
++                    ImVec2(
++                        bar0_pos_x,
++                        hidden_alpha_value_top),
++                    ImVec2(
++                        final_bar_pos_x + bars_width,
++                        g.LastItemData.Rect.Max.y));
++                RenderFrameBorder(
++                    hidden_alpha_value_bounds.Min,
++                    hidden_alpha_value_bounds.Max,
++                    style.FrameRounding,
++                    false);
++            }
++        }
+         if (flags & ImGuiColorEditFlags_DisplayHex || (flags & ImGuiColorEditFlags_DisplayMask_) == 0)
+             value_changed |= ColorEdit4("##hex", col, sub_flags | ImGuiColorEditFlags_DisplayHex);
+         PopItemWidth();
+     }
 @@ -8821,6 +9633,14 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
      const bool render_uvsr_picker_cursors_last =
          g.UvsrColorPickerPopupScopeStack.Size > 0 &&
@@ -2303,7 +2335,7 @@ index 22f74c7..4abf6f5 100644
      if (!render_uvsr_picker_cursors_last)
      {
          draw_list->AddCircleFilled(sv_cursor_pos, sv_cursor_rad, user_col32_striped_of_alpha, sv_cursor_segments);
-@@ -8989,6 +9828,92 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
+@@ -8989,6 +9828,85 @@ bool ImGui::ColorPicker4(const char* label, float col[4], ImGuiColorEditFlags fl
              RenderArrowsForVerticalBar(draw_list, ImVec2(bar1_pos_x - 1, bar1_line_y), ImVec2(bars_triangles_half_sz + 1, bars_triangles_half_sz), bars_width + 2.0f, style.Alpha);
          }
      }
@@ -2314,18 +2346,11 @@ index 22f74c7..4abf6f5 100644
 +            ImVec2(
 +                bar1_pos_x + bars_width,
 +                picker_pos.y + sv_picker_size));
-+        const ImU32 disabled_alpha_color =
-+            IM_COL32(112, 112, 112, 255);
-+        const UvsrVerticalGradientStop disabled_alpha_stops[2] = {
-+            { 0.0f, disabled_alpha_color },
-+            { 1.0f, disabled_alpha_color }
-+        };
-+        AddUvsrRoundedVerticalGradient(
++        AddUvsrRoundedCheckerboard(
 +            draw_list,
 +            disabled_alpha_bounds,
-+            disabled_alpha_stops,
-+            IM_ARRAYSIZE(disabled_alpha_stops),
-+            uvsr_bar_rounding);
++            uvsr_bar_rounding,
++            color_control_alpha);
 +        RenderFrameBorder(
 +            disabled_alpha_bounds.Min,
 +            disabled_alpha_bounds.Max,

@@ -65,8 +65,8 @@ int main()
         12u, // Pathing
         4u,  // Representation
         13u, // Noise
-        24u, // Visibility
-        27u, // Denoising
+        20u, // Visibility
+        31u, // Denoising
         31u, // Aliasing
         4u,  // Debug
         25u, // Sky
@@ -98,13 +98,9 @@ int main()
         "visibility.noise-resolution",
         "visibility.quality",
         "visibility.radius",
-        "visibility.reconstruction",
         "visibility.resolution",
         "visibility.samples",
         "visibility.specify-noise",
-        "visibility.spatial.enabled",
-        "visibility.spatial.filter",
-        "visibility.spatial.radius",
         "visibility.thickness"
     };
     const std::set<std::string> ExpectedRepresentation = {
@@ -148,22 +144,26 @@ int main()
         "denoising.ao.history",
         "denoising.ao.method",
         "denoising.ao.quality",
+        "denoising.ao.radius",
         "denoising.ao.resolution",
         "denoising.gi.anti-lag",
         "denoising.gi.disocclusion",
         "denoising.gi.history",
         "denoising.gi.method",
         "denoising.gi.quality",
+        "denoising.gi.radius",
         "denoising.gi.resolution",
         "denoising.shadows.disocclusion",
         "denoising.shadows.method",
         "denoising.shadows.quality",
+        "denoising.shadows.radius",
         "denoising.shadows.resolution",
         "denoising.sky.anti-lag",
         "denoising.sky.disocclusion",
         "denoising.sky.history",
         "denoising.sky.method",
         "denoising.sky.quality",
+        "denoising.sky.radius",
         "denoising.sky.resolution",
         "denoising.path-tracing.firefly-filter",
         "denoising.path-tracing.firefly-threshold",
@@ -196,6 +196,7 @@ int main()
     std::array<std::size_t, 14> sectionCounts{};
     std::size_t actionCount = 0u;
     std::size_t dynamicCount = 0u;
+    std::size_t snapshotValueCount = 0u;
 
     for (const UiSettingsCommandDefinition& definition :
         UiSettingsCommandCatalog)
@@ -228,6 +229,9 @@ int main()
                     definition.Supports(UiSettingsCommandVerb::Set) &&
                     !definition.Supports(UiSettingsCommandVerb::Run),
                 "values must support get and set but not run");
+            if (definition.name != "ui.settings-collapsed" &&
+                definition.name != "material-editor.visible")
+                ++snapshotValueCount;
         }
 
         const bool boolean = definition.kind == UiSettingsCommandKind::Boolean;
@@ -278,6 +282,29 @@ int main()
         "only open-folder, reset, capture, and restart actions remain");
     Require(UiSettingsCommandCatalog.size() - actionCount == 220u,
         "the compact catalog must contain 220 values");
+    Require(snapshotValueCount == 218u,
+        "the current snapshot schema must represent 218 values after excluding "
+        "transient root and Material drawer presentation");
+    const UiSettingsCommandDefinition* settingsCollapsed =
+        Find("ui.settings-collapsed");
+    Require(settingsCollapsed &&
+            settingsCollapsed->kind == Kind::Boolean &&
+            settingsCollapsed->Supports(UiSettingsCommandVerb::Get) &&
+            settingsCollapsed->Supports(UiSettingsCommandVerb::Set) &&
+            settingsCollapsed->Supports(UiSettingsCommandVerb::Toggle) &&
+            settingsCollapsed->Supports(UiSettingsCommandVerb::Reset),
+        "Settings collapse must remain a complete CLI command even though it "
+        "is excluded from copied snapshots");
+    const UiSettingsCommandDefinition* materialEditorVisible =
+        Find("material-editor.visible");
+    Require(materialEditorVisible &&
+            materialEditorVisible->kind == Kind::Boolean &&
+            materialEditorVisible->Supports(UiSettingsCommandVerb::Get) &&
+            materialEditorVisible->Supports(UiSettingsCommandVerb::Set) &&
+            materialEditorVisible->Supports(UiSettingsCommandVerb::Toggle) &&
+            materialEditorVisible->Supports(UiSettingsCommandVerb::Reset),
+        "Material drawer visibility must remain a complete CLI command even "
+        "though it is excluded from copied snapshots");
     Require(dynamicCount == 50u,
         "runtime lights and materials must retain their 50 dynamic controls");
     Require(dynamicSelections == ExpectedDynamicSelections,
@@ -373,10 +400,6 @@ int main()
     requireDomain("visibility.noise-resolution",
         "64x64|128x128|256x256|512x512");
     requireDomain("visibility.animate-samples", "on|off");
-    requireDomain("visibility.reconstruction",
-        "direct-or-guide-aware|packed-depth-normal|packed-slope-aware|packed-leak-controlled");
-    requireDomain("visibility.spatial.filter",
-        "joint-bilateral|gaussian-bilateral");
     requireDomain("anti-aliasing.taa.temporal-cost",
         "full-quality|reduced|minimum");
     requireDomain("anti-aliasing.taa.jitter-sequence",
@@ -438,10 +461,24 @@ int main()
         "1|2|4|8|16|32|64");
     requireDomain("shadows.ray-traced.ray-bias",
         "world units 0..0.1");
-    requireDomain("denoising.ao.method", "none|reblur");
-    requireDomain("denoising.gi.method", "none|reblur|relax");
-    requireDomain("denoising.shadows.method", "none|sigma");
-    requireDomain("denoising.sky.method", "none|reblur|relax");
+    requireDomain("denoising.ao.method",
+        "raw|joint-bilateral|gaussian-bilateral|reblur");
+    requireDomain("denoising.gi.method",
+        "raw|joint-bilateral|gaussian-bilateral|reblur|relax");
+    requireDomain("denoising.shadows.method",
+        "raw|joint-bilateral|gaussian-bilateral|sigma");
+    requireDomain("denoising.sky.method",
+        "raw|joint-bilateral|gaussian-bilateral|reblur|relax");
+    for (const std::string_view name : {
+            std::string_view("denoising.ao.radius"),
+            std::string_view("denoising.gi.radius"),
+            std::string_view("denoising.shadows.radius"),
+            std::string_view("denoising.sky.radius") })
+    {
+        requireDomain(name, "float 1..8");
+    }
+    requireDomain("sky.environment",
+        "day|bright-overcast|soft-day|night|starry-night|cloudy");
     requireDomain(
         "denoising.path-tracing.method",
         "raw|spatial-path-resolve");

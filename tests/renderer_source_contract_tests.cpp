@@ -1630,14 +1630,17 @@ int main(int argc, char** argv)
                 "rayMarchingDenoisingAllowed &&\n"
                 "                runScreenSpaceVisibility"),
             std::string_view(
-                "rayMarchingDenoisingAllowed &&\n"
-                "                    flashlightShadowResult"),
+                "const bool flashlightDenoisingReady =\n"
+                "                rayMarchingDenoisingAllowed &&\n"
+                "                flashlightShadowResult &&"),
             std::string_view(
-                "rayMarchingDenoisingAllowed &&\n"
-                "                    heitzShadowResult"),
+                "const bool sunDenoisingReady =\n"
+                "                rayMarchingDenoisingAllowed &&\n"
+                "                heitzShadowResult &&"),
             std::string_view(
-                "rayMarchingDenoisingAllowed &&\n"
-                "                    skyVisibilityResult") })
+                "const bool skyDenoisingReady =\n"
+                "                rayMarchingDenoisingAllowed &&\n"
+                "                skyVisibilityResult &&") })
     {
         passed &= ExpectContains(
             renderScene,

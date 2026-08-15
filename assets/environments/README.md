@@ -17,12 +17,12 @@ light remains the only source of hard, shadowed sunlight.
 
 | UVSR Choice | Default Exposure | Source | File | Bytes | Published MD5 |
 |---|---:|---|---|---:|---|
-| Day - Kloppenheim 03 | `-2.75 EV` | [Kloppenheim 03 (Pure Sky)](https://polyhaven.com/a/kloppenheim_03_puresky) | `kloppenheim_03_puresky/kloppenheim_03_puresky_2k.hdr` | 5,324,445 | `06abf490739e537e9339d619a2a3c941` |
-| Bright Overcast - Snow Field 2 | `-2.50 EV` | [Snow Field 2 (Pure Sky)](https://polyhaven.com/a/snow_field_2_puresky) | `snow_field_2_puresky/snow_field_2_puresky_2k.hdr` | 4,045,437 | `b89ecaa1ac90078090531b5b8b1dec33` |
-| Soft Day - Farm Field | `-3.25 EV` | [Farm Field (Pure Sky)](https://polyhaven.com/a/farm_field_puresky) | `farm_field_puresky/farm_field_puresky_2k.hdr` | 5,033,248 | `bf9103944928c6ae1596e523ce658558` |
-| Night - Kloppenheim 07 | `-5.00 EV` | [Kloppenheim 07 (Pure Sky)](https://polyhaven.com/a/kloppenheim_07_puresky) | `kloppenheim_07_puresky/kloppenheim_07_puresky_2k.hdr` | 5,003,360 | `154e49aa2e8b0e62191beb216c88832e` |
-| Starry Night - Qwantani | `-6.50 EV` | [Qwantani Night (Pure Sky)](https://polyhaven.com/a/qwantani_night_puresky) | `qwantani_night_puresky/qwantani_night_puresky_2k.hdr` | 5,461,210 | `a2ef5b92f49f77b5bad15add5dad4feb` |
-| Legacy - Quadrangle Cloudy | `-3.00 EV` | [Quadrangle Cloudy](https://polyhaven.com/a/quadrangle_cloudy) | `quadrangle_cloudy/quadrangle_cloudy_1k.hdr` | 1,671,356 | `705339eebceee57b9f32e2d44a05f1c7` |
+| Day | `-2.75 EV` | [Kloppenheim 03 (Pure Sky)](https://polyhaven.com/a/kloppenheim_03_puresky) | `kloppenheim_03_puresky/kloppenheim_03_puresky_2k.hdr` | 5,324,445 | `06abf490739e537e9339d619a2a3c941` |
+| Bright Overcast | `-2.50 EV` | [Snow Field 2 (Pure Sky)](https://polyhaven.com/a/snow_field_2_puresky) | `snow_field_2_puresky/snow_field_2_puresky_2k.hdr` | 4,045,437 | `b89ecaa1ac90078090531b5b8b1dec33` |
+| Soft Day | `-3.25 EV` | [Farm Field (Pure Sky)](https://polyhaven.com/a/farm_field_puresky) | `farm_field_puresky/farm_field_puresky_2k.hdr` | 5,033,248 | `bf9103944928c6ae1596e523ce658558` |
+| Night | `-5.00 EV` | [Kloppenheim 07 (Pure Sky)](https://polyhaven.com/a/kloppenheim_07_puresky) | `kloppenheim_07_puresky/kloppenheim_07_puresky_2k.hdr` | 5,003,360 | `154e49aa2e8b0e62191beb216c88832e` |
+| Starry Night | `-6.50 EV` | [Qwantani Night (Pure Sky)](https://polyhaven.com/a/qwantani_night_puresky) | `qwantani_night_puresky/qwantani_night_puresky_2k.hdr` | 5,461,210 | `a2ef5b92f49f77b5bad15add5dad4feb` |
+| Cloudy | `-3.00 EV` | [Quadrangle Cloudy](https://polyhaven.com/a/quadrangle_cloudy) | `quadrangle_cloudy/quadrangle_cloudy_1k.hdr` | 1,671,356 | `705339eebceee57b9f32e2d44a05f1c7` |
 
 ## Source Roles
 

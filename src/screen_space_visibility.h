@@ -72,26 +72,6 @@ namespace uvsr
         AppliedIndirect
     };
 
-    enum class VisibilitySpatialFilter : uint32_t
-    {
-        JointBilateral,
-        GaussianJointBilateral
-    };
-
-    enum class VisibilityReconstructionMode : uint32_t
-    {
-        Standard,
-        PackedDepthNormal,
-        PackedSlopeAdjustedDepthNormal,
-        PackedControlledLeakage
-    };
-
-    [[nodiscard]] constexpr bool IsPackedVisibilityReconstruction(
-        VisibilityReconstructionMode mode)
-    {
-        return mode != VisibilityReconstructionMode::Standard;
-    }
-
     enum class VisibilityScalarBufferPrecision : uint32_t
     {
         Float16,
@@ -139,16 +119,6 @@ namespace uvsr
         float intensity = ScreenSpaceIndirectDiffuseReferenceIntensity;
     };
 
-    struct VisibilityReconstructionSettings
-    {
-        VisibilityReconstructionMode mode =
-            VisibilityReconstructionMode::Standard;
-        bool spatialEnabled = false;
-        VisibilitySpatialFilter spatialFilter =
-            VisibilitySpatialFilter::GaussianJointBilateral;
-        float spatialRadius = 4.0f;
-    };
-
     struct ScreenSpaceVisibilitySettings
     {
         ScreenSpaceVisibilitySettings();
@@ -165,7 +135,6 @@ namespace uvsr
         SharedSamplingSettings sampling;
         AmbientOcclusionSettings ambientOcclusion;
         IndirectDiffuseSettings indirectDiffuse;
-        VisibilityReconstructionSettings reconstruction;
         VisibilityBufferPrecisionSettings bufferPrecision;
         VisibilityDebugView debugView = VisibilityDebugView::FinalImage;
 
@@ -234,11 +203,11 @@ namespace uvsr
         SignalProcessor processIndirectDiffuse;
     };
 
-    // These are the sampling resolution producer outputs before reconstruction
-    // and composition. Hit distances are R16_FLOAT when their independent
-    // setting is enabled and null otherwise. Match flags are true only when
-    // the corresponding texture exists and represents the same population as
-    // its raw aggregate signal.
+    // These are the sampling-resolution producer outputs before required
+    // upsampling and composition. Hit distances are R16_FLOAT when their
+    // independent setting is enabled and null otherwise. Match flags are true
+    // only when the corresponding texture exists and represents the same
+    // population as its raw aggregate signal.
     struct ScreenSpaceVisibilityResult
     {
         nvrhi::ITexture* ambientVisibility = nullptr;
@@ -314,7 +283,7 @@ namespace uvsr
         enum class Stage : uint32_t
         {
             FirstTrace,
-            Reconstruction,
+            Upsample,
             Composition,
             EffectEnvelope,
             Count
@@ -355,8 +324,7 @@ namespace uvsr
         uint32_t m_ResolutionScale = 1u;
         bool m_AmbientResourcesEnabled = false;
         bool m_IndirectDiffuseResourcesEnabled = false;
-        bool m_PostProcessResourcesEnabled = false;
-        bool m_PackedEdgeResourcesEnabled = false;
+        bool m_UpsampleResourcesEnabled = false;
         bool m_AmbientHitDistanceResourcesEnabled = false;
         bool m_IndirectHitDistanceResourcesEnabled = false;
         uint64_t m_BufferPrecisionConfigurationKey = 0u;
@@ -367,7 +335,6 @@ namespace uvsr
         nvrhi::TextureHandle m_RawIndirectHitDistance;
         nvrhi::TextureHandle m_FinalAmbientVisibility;
         nvrhi::TextureHandle m_FinalIndirectDiffuse;
-        nvrhi::TextureHandle m_PackedEdgesTexture;
         nvrhi::TextureHandle m_DummyAmbientVisibility;
         nvrhi::TextureHandle m_DummyIndirectDiffuse;
         nvrhi::ITexture* m_BoundCompositeAmbient = nullptr;
@@ -394,8 +361,7 @@ namespace uvsr
             uint32_t resolutionScale,
             bool ambientEnabled,
             bool indirectDiffuseEnabled,
-            bool postProcessEnabled,
-            bool packedEdgesEnabled,
+            bool upsampleEnabled,
             bool ambientHitDistanceEnabled,
             bool indirectHitDistanceEnabled,
             const VisibilityBufferPrecisionSettings& bufferPrecision);

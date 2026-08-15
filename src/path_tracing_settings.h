@@ -386,7 +386,7 @@ namespace uvsr
     {
         switch (denoiser)
         {
-        case PathTracingDenoiser::Raw: return "Raw (No Denoising)";
+        case PathTracingDenoiser::Raw: return "Raw";
         case PathTracingDenoiser::SpatialPathResolve:
             return "Spatial Path Resolve";
         default: return "";

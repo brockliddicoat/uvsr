@@ -1,0 +1,7 @@
+// Append-only settings-snapshot schema registry.
+//
+// Version 0001 predates fingerprinted allocation and remains permanently
+// reserved. New rows are generated from the complete represented catalog and
+// serialization policy. Never reuse a version or fingerprint.
+UVSR_SETTINGS_SNAPSHOT_SCHEMA_VERSION(0x0002u, 0x7c3822a715e2fd95ull, 0x5d0a83ec6629e363ull)
+UVSR_SETTINGS_SNAPSHOT_SCHEMA_VERSION(0x0003u, 0x93b446de2e16385eull, 0xfdec6b0c50fb52feull)

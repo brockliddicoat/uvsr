@@ -435,7 +435,7 @@ index 58682ff..b99a243 100644
      }
  }
  
-@@ -6979,15 +7301,112 @@
+@@ -6979,15 +7301,113 @@
      const float window_border_size = window->WindowBorderSize;
      if (window->Collapsed)
      {
@@ -494,10 +494,11 @@ index 58682ff..b99a243 100644
 +        }
 +
 +        if (has_retained_status_surface &&
-+            !g.UvsrStockWidgetRendering)
++            !g.UvsrStockWidgetRendering &&
++            is_stacked_panel_title)
 +        {
 +            window->WindowBorderSize = 0.0f;
-+            // Draw the shrinking body outline before the raised title outline.
++            // Both authored roots share one body outline before the raised title.
 +            RenderGradientFrameOutline(
 +                window->DrawList,
 +                retained_status_rect,
@@ -551,7 +552,7 @@ index 58682ff..b99a243 100644
          // Window background
          if (!(flags & ImGuiWindowFlags_NoBackground))
          {
-@@ -7001,14 +7420,76 @@
+@@ -7001,14 +7420,77 @@
              }
              if (override_alpha)
                  bg_col = (bg_col & ~IM_COL32_A_MASK) | (IM_F32_TO_INT8_SAT(alpha) << IM_COL32_A_SHIFT);
@@ -617,9 +618,10 @@ index 58682ff..b99a243 100644
 +                    ImDrawFlags_RoundCornersTop);
 +            }
 +        }
-+        if (has_expanded_stacked_panel_body)
++        if (has_expanded_stacked_panel_body &&
++            is_stacked_panel_title)
 +        {
-+            // Draw the independent body's complete rounded depth outline.
++            // Both authored roots share one complete rounded body outline.
 +            RenderGradientFrameOutline(
 +                window->DrawList,
 +                expanded_stacked_panel_body_rect,

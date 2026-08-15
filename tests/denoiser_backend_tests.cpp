@@ -90,6 +90,8 @@ namespace
                 "default denoising resolution must be Half");
             Require(signal.historyLength == 16,
                 "default denoising history must be 16 frames");
+            Require(signal.spatialRadius == 4.f,
+                "default bilateral radius must be four pixels");
         }
         Require(GetDenoisingResolutionScale(DenoisingResolution::Quarter) ==
                 0.25f &&
@@ -105,8 +107,28 @@ namespace
             SupportsDenoisingMethod(DenoisingEffect::SkyVisibility,
                 DenoisingMethodChoice::Reblur) &&
             SupportsDenoisingMethod(DenoisingEffect::Shadows,
-                DenoisingMethodChoice::Sigma),
+                DenoisingMethodChoice::Sigma) &&
+            SupportsDenoisingMethod(DenoisingEffect::AmbientOcclusion,
+                DenoisingMethodChoice::JointBilateral) &&
+            SupportsDenoisingMethod(DenoisingEffect::DiffuseGi,
+                DenoisingMethodChoice::GaussianBilateral) &&
+            SupportsDenoisingMethod(DenoisingEffect::Shadows,
+                DenoisingMethodChoice::JointBilateral) &&
+            SupportsDenoisingMethod(DenoisingEffect::SkyVisibility,
+                DenoisingMethodChoice::GaussianBilateral),
             "drawer method compatibility changed");
+        Require(IsSpatialDenoisingMethod(
+                DenoisingMethodChoice::JointBilateral) &&
+            IsSpatialDenoisingMethod(
+                DenoisingMethodChoice::GaussianBilateral) &&
+            !IsSpatialDenoisingMethod(DenoisingMethodChoice::Reblur) &&
+            IsThirdPartyDenoisingMethod(DenoisingMethodChoice::Reblur) &&
+            !IsThirdPartyDenoisingMethod(
+                DenoisingMethodChoice::GaussianBilateral),
+            "built-in and third-party methods must remain distinguishable");
+        Require(std::string(GetDenoisingMethodLabel(
+                DenoisingMethodChoice::None)) == "Raw",
+            "the unfiltered ray-marching choice must be labeled Raw");
     }
 
     void TestResolutionAndFrameHelpers()

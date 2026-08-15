@@ -2,6 +2,7 @@
 #include "imgui_internal.h"
 #include "ui_performance_timing_rows.h"
 
+#include <algorithm>
 #include <array>
 #include <cfloat>
 #include <cmath>
@@ -129,7 +130,7 @@ namespace
         bool hueBarRoundedAndVisible = false;
         bool alphaBarRoundedAndVisible = false;
         bool alphaBarInteriorCovered = false;
-        bool disabledAlphaBarVisible = false;
+        bool gatedAlphaCheckerVisible = false;
         bool alphaCheckerEdgeCoverageContinuous = false;
         bool innerWheelGradientOutlineVisible = false;
         bool outerWheelGradientOutlineVisible = false;
@@ -145,6 +146,9 @@ namespace
         bool sourcePointerUsesCarvedFrame = false;
         bool authoredPopupUsesCarvedFrameOnly = false;
         bool contentFrameHalfPixelAligned = false;
+        bool hiddenAlphaCombinedOutlineVisible = false;
+        bool hiddenAlphaRgbRowOutlineVisible = false;
+        bool hiddenAlphaHsvRowOutlineVisible = false;
         bool selectorMarkerCursorClearance = false;
         bool selectorEndpointExclusionObserved = false;
         bool sourceSwatchShadowVisible = false;
@@ -183,11 +187,11 @@ namespace
             ImVec2(FLT_MAX, FLT_MAX),
             ImVec2(-FLT_MAX, -FLT_MAX)
         };
-        ImRect fourthRgbInputRect{
+        ImRect rightmostRgbInputRect{
             ImVec2(FLT_MAX, FLT_MAX),
             ImVec2(-FLT_MAX, -FLT_MAX)
         };
-        ImRect fourthHsvInputRect{
+        ImRect rightmostHsvInputRect{
             ImVec2(FLT_MAX, FLT_MAX),
             ImVec2(-FLT_MAX, -FLT_MAX)
         };
@@ -1066,6 +1070,38 @@ namespace
                 return false;
         }
         return true;
+    }
+
+    bool HasCarvedOutlinePerimeter(
+        const ImDrawList& drawList,
+        const ImRect& bounds,
+        float edgeTolerance = 2.0f)
+    {
+        std::array<bool, 4> edgeCovered = { false, false, false, false };
+        const ImRect expandedBounds(
+            Subtract(bounds.Min, ImVec2(edgeTolerance, edgeTolerance)),
+            Add(bounds.Max, ImVec2(edgeTolerance, edgeTolerance)));
+        for (const ImDrawVert& vertex : drawList.VtxBuffer)
+        {
+            const float alpha = Alpha(vertex.col);
+            if (alpha <= 0.0f || alpha > 0.145f ||
+                !expandedBounds.Contains(vertex.pos))
+            {
+                continue;
+            }
+            edgeCovered[0] |=
+                std::abs(vertex.pos.x - bounds.Min.x) <= edgeTolerance;
+            edgeCovered[1] |=
+                std::abs(vertex.pos.x - bounds.Max.x) <= edgeTolerance;
+            edgeCovered[2] |=
+                std::abs(vertex.pos.y - bounds.Min.y) <= edgeTolerance;
+            edgeCovered[3] |=
+                std::abs(vertex.pos.y - bounds.Max.y) <= edgeTolerance;
+        }
+        return std::all_of(
+            edgeCovered.begin(),
+            edgeCovered.end(),
+            [](bool covered) { return covered; });
     }
 
     bool HasVisibleWheelOutlineCoverage(
@@ -2737,10 +2773,11 @@ namespace
                 {
                     observation.observedOriginalBarRect.Add(vertex.pos);
                 }
-                observation.disabledAlphaBarVisible |=
+                observation.gatedAlphaCheckerVisible |=
                     !includeAlpha &&
                     observation.alphaBarRect.Contains(vertex.pos) &&
-                    vertex.col == IM_COL32(112, 112, 112, 255);
+                    IsCheckerVertex(vertex) &&
+                    Alpha(vertex.col) > 0.5f;
                 if (vertex.col == expectedOuterMargin)
                 {
                     observation.sourcePointerBaseTopDistance = ImMin(
@@ -2863,12 +2900,12 @@ namespace
                     observedLayerEdgeTolerance;
             const ImVector<ImRect> whitePixelComponents =
                 CollectWhitePixelTriangleComponents(*popupWindow->DrawList);
-            observation.fourthRgbInputRect = FindRightmostInputFrame(
+            observation.rightmostRgbInputRect = FindRightmostInputFrame(
                 whitePixelComponents,
                 rgbInputBand,
                 inputRowHeight,
                 inputRowHeight * 1.5f);
-            observation.fourthHsvInputRect = FindRightmostInputFrame(
+            observation.rightmostHsvInputRect = FindRightmostInputFrame(
                 whitePixelComponents,
                 hsvInputBand,
                 inputRowHeight,
@@ -2878,6 +2915,39 @@ namespace
                 hexInputBand,
                 inputRowHeight,
                 inputRowHeight * 1.5f);
+            if (!observation.rightmostRgbInputRect.IsInverted() &&
+                !observation.rightmostHsvInputRect.IsInverted())
+            {
+                const ImRect rgbAlphaSlot(
+                    ImVec2(
+                        observation.hueBarRect.Min.x,
+                        observation.rightmostRgbInputRect.Min.y),
+                    ImVec2(
+                        observation.originalBarRect.Max.x,
+                        observation.rightmostRgbInputRect.Max.y));
+                const ImRect hsvAlphaSlot(
+                    ImVec2(
+                        observation.hueBarRect.Min.x,
+                        observation.rightmostHsvInputRect.Min.y),
+                    ImVec2(
+                        observation.originalBarRect.Max.x,
+                        observation.rightmostHsvInputRect.Max.y));
+                const ImRect combinedAlphaSlots(
+                    rgbAlphaSlot.Min,
+                    hsvAlphaSlot.Max);
+                observation.hiddenAlphaCombinedOutlineVisible =
+                    HasCarvedOutlinePerimeter(
+                        *popupWindow->DrawList,
+                        combinedAlphaSlots);
+                observation.hiddenAlphaRgbRowOutlineVisible =
+                    HasCarvedOutlinePerimeter(
+                        *popupWindow->DrawList,
+                        rgbAlphaSlot);
+                observation.hiddenAlphaHsvRowOutlineVisible =
+                    HasCarvedOutlinePerimeter(
+                        *popupWindow->DrawList,
+                        hsvAlphaSlot);
+            }
             observation.subordinatePreviewSquareCount =
                 CountPreviewSizedFrames(
                     whitePixelComponents,
@@ -4032,6 +4102,12 @@ int main()
     passed &= Check(
         positionedPicker.alphaBarRoundedAndVisible,
         "the authored wheel renders the retained alpha bar with rounded coverage");
+    passed &= Check(
+        !positionedPicker.hiddenAlphaCombinedOutlineVisible ||
+            positionedPicker.hiddenAlphaRgbRowOutlineVisible ||
+            positionedPicker.hiddenAlphaHsvRowOutlineVisible,
+        "an editable RGBA picker does not replace its separate numeric input "
+        "frames with the gated-alpha combined enclosure");
     const bool wheelGradientOutlinesVisible =
         positionedPicker.innerWheelGradientOutlineVisible &&
             positionedPicker.outerWheelGradientOutlineVisible;
@@ -4478,29 +4554,33 @@ int main()
             NestedCallerAlpha);
     }
     const bool rgbInputRectsObserved =
-        !rgbPicker.fourthRgbInputRect.IsInverted() &&
-        !rgbPicker.fourthHsvInputRect.IsInverted() &&
+        !rgbPicker.rightmostRgbInputRect.IsInverted() &&
+        !rgbPicker.rightmostHsvInputRect.IsInverted() &&
         !rgbPicker.hexInputRect.IsInverted();
     constexpr float ObservedFrameEdgeTolerance = 1.5f;
-    const bool rgbObservedBarAlignment =
+    const ImRect hiddenRgbAlphaSlot(
+        ImVec2(
+            rgbPicker.hueBarRect.Min.x,
+            rgbPicker.rightmostRgbInputRect.Min.y),
+        ImVec2(
+            rgbPicker.originalBarRect.Max.x,
+            rgbPicker.rightmostRgbInputRect.Max.y));
+    const ImRect hiddenHsvAlphaSlot(
+        ImVec2(
+            rgbPicker.hueBarRect.Min.x,
+            rgbPicker.rightmostHsvInputRect.Min.y),
+        ImVec2(
+            rgbPicker.originalBarRect.Max.x,
+            rgbPicker.rightmostHsvInputRect.Max.y));
+    const bool rgbHiddenAlphaSlotsEmpty =
         !rgbPicker.observedHueBarRect.IsInverted() &&
         !rgbPicker.observedOriginalBarRect.IsInverted() &&
-        std::abs(
-            rgbPicker.fourthRgbInputRect.Min.x -
-                rgbPicker.observedHueBarRect.Min.x) <=
-            ObservedFrameEdgeTolerance &&
-        std::abs(
-            rgbPicker.fourthRgbInputRect.Max.x -
-                rgbPicker.observedOriginalBarRect.Max.x) <=
-            ObservedFrameEdgeTolerance &&
-        std::abs(
-            rgbPicker.fourthHsvInputRect.Min.x -
-                rgbPicker.observedHueBarRect.Min.x) <=
-            ObservedFrameEdgeTolerance &&
-        std::abs(
-            rgbPicker.fourthHsvInputRect.Max.x -
-                rgbPicker.observedOriginalBarRect.Max.x) <=
-            ObservedFrameEdgeTolerance &&
+        !hiddenRgbAlphaSlot.IsInverted() &&
+        !hiddenHsvAlphaSlot.IsInverted() &&
+        rgbPicker.rightmostRgbInputRect.Max.x <
+            hiddenRgbAlphaSlot.Min.x - ObservedFrameEdgeTolerance &&
+        rgbPicker.rightmostHsvInputRect.Max.x <
+            hiddenHsvAlphaSlot.Min.x - ObservedFrameEdgeTolerance &&
         std::abs(
             rgbPicker.hexInputRect.Max.x -
                 rgbPicker.observedOriginalBarRect.Max.x) <=
@@ -4528,7 +4608,7 @@ int main()
         rgbPicker.barCount == 4 &&
         rgbPicker.hueBarRoundedAndVisible &&
         rgbPicker.alphaBarRect.GetWidth() > 0.0f &&
-        rgbPicker.disabledAlphaBarVisible &&
+        rgbPicker.gatedAlphaCheckerVisible &&
         !rgbPicker.alphaBarRoundedAndVisible &&
         !rgbPicker.alphaHollowMarkerVisible &&
         rgbPicker.currentBarVisible &&
@@ -4536,7 +4616,10 @@ int main()
         rgbPicker.bottomControlsSpanAllBars &&
         rgbPicker.subordinatePreviewSquareCount == 0 &&
         rgbInputRectsObserved &&
-        rgbObservedBarAlignment &&
+        rgbHiddenAlphaSlotsEmpty &&
+        rgbPicker.hiddenAlphaCombinedOutlineVisible &&
+        !rgbPicker.hiddenAlphaRgbRowOutlineVisible &&
+        !rgbPicker.hiddenAlphaHsvRowOutlineVisible &&
         rgbVisibleNestedParity &&
         rgbPicker.requestedSurfaceApplied &&
         rgbPicker.requestedContentLayerApplied &&
@@ -4554,7 +4637,7 @@ int main()
             << rgbPicker.transitionInteractionReady << '/'
             << rgbPicker.barCount
             << " visual=" << rgbPicker.hueBarRoundedAndVisible << '/'
-            << rgbPicker.disabledAlphaBarVisible << '/'
+            << rgbPicker.gatedAlphaCheckerVisible << '/'
             << rgbPicker.alphaBarRoundedAndVisible << '/'
             << rgbPicker.alphaHollowMarkerVisible << '/'
             << rgbPicker.currentBarVisible << '/'
@@ -4562,7 +4645,10 @@ int main()
             << " previewSquares="
             << rgbPicker.subordinatePreviewSquareCount
             << " rows/alignment/parity=" << rgbInputRectsObserved << '/'
-            << rgbObservedBarAlignment << '/'
+            << rgbHiddenAlphaSlotsEmpty << '/'
+            << rgbPicker.hiddenAlphaCombinedOutlineVisible << '/'
+            << rgbPicker.hiddenAlphaRgbRowOutlineVisible << '/'
+            << rgbPicker.hiddenAlphaHsvRowOutlineVisible << '/'
             << rgbVisibleNestedParity
             << " layer/rim=" << rgbPicker.requestedPickerLayerApplied << '/'
             << rgbPicker.opaqueOuterRimComplete
@@ -4574,17 +4660,16 @@ int main()
             << rgbPicker.popupRect.GetHeight()
             << " rgba=" << positionedPicker.popupRect.GetWidth() << 'x'
             << positionedPicker.popupRect.GetHeight()
-            << " rgb4=(" << rgbPicker.fourthRgbInputRect.Min.x << ','
-            << rgbPicker.fourthRgbInputRect.Max.x << ") bars=("
+            << " rgb-right=(" << rgbPicker.rightmostRgbInputRect.Min.x << ','
+            << rgbPicker.rightmostRgbInputRect.Max.x << ") bars=("
             << rgbPicker.observedHueBarRect.Min.x << ','
             << rgbPicker.observedOriginalBarRect.Max.x << ")\n";
     }
     passed &= Check(
         rgbPickerContract,
         "nested visible-label ColorEdit3 matches the RGBA popup, removes row "
-        "previews, aligns the observed fourth input to the observed four-bar "
-        "group, and gives its full frame band and pointer the same inherited "
-        "alpha as the surrounding panel frame");
+        "previews, encloses both empty fourth numeric slots with one seamless "
+        "carved perimeter, and gives its frame and pointer the inherited alpha");
 
     QueueMouse(Center(rgbPicker.alphaBarRect), true);
     SubmitColorPickerFrame(
@@ -4620,48 +4705,65 @@ int main()
         MaterialColorLabel,
         true,
         NestedCallerAlpha);
-    QueueMouse(Center(rgbPicker.fourthRgbInputRect), true);
-    SubmitColorPickerFrame(
-        rgbPickerStorage.color,
-        false,
-        480.0f,
-        270.0f,
-        330.0f,
-        true,
-        false,
-        ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
-        ImVec4(0.17f, 0.29f, 0.41f, 1.0f),
-        ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
-        ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
-        false,
-        MaterialColorLabel,
-        true,
-        NestedCallerAlpha);
-    QueueMouse(Center(rgbPicker.fourthRgbInputRect), false);
-    SubmitColorPickerFrame(
-        rgbPickerStorage.color,
-        false,
-        480.0f,
-        270.0f,
-        330.0f,
-        true,
-        false,
-        ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
-        ImVec4(0.17f, 0.29f, 0.41f, 1.0f),
-        ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
-        ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
-        false,
-        MaterialColorLabel,
-        true,
-        NestedCallerAlpha);
+    const auto clickHiddenAlphaArea = [&](const ImVec2& point)
+    {
+        QueueMouse(point, true);
+        SubmitColorPickerFrame(
+            rgbPickerStorage.color,
+            false,
+            480.0f,
+            270.0f,
+            330.0f,
+            true,
+            false,
+            ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+            ImVec4(0.17f, 0.29f, 0.41f, 1.0f),
+            ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
+            ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
+            false,
+            MaterialColorLabel,
+            true,
+            NestedCallerAlpha);
+        QueueMouse(point, false);
+        return SubmitColorPickerFrame(
+            rgbPickerStorage.color,
+            false,
+            480.0f,
+            270.0f,
+            330.0f,
+            true,
+            false,
+            ImVec4(0.17f, 0.29f, 0.41f, 0.93f),
+            ImVec4(0.17f, 0.29f, 0.41f, 1.0f),
+            ImVec4(0.11f, 0.23f, 0.37f, 0.67f),
+            ImVec4(0.43f, 0.19f, 0.31f, 0.71f),
+            false,
+            MaterialColorLabel,
+            true,
+            NestedCallerAlpha);
+    };
+    const ColorPickerObservation afterHiddenRgbAlphaSlot =
+        clickHiddenAlphaArea(Center(hiddenRgbAlphaSlot));
+    const ColorPickerObservation afterHiddenHsvAlphaSlot =
+        clickHiddenAlphaArea(Center(hiddenHsvAlphaSlot));
+    const ImVec2 hiddenAlphaInterRowGap(
+        hiddenRgbAlphaSlot.GetCenter().x,
+        (hiddenRgbAlphaSlot.Max.y + hiddenHsvAlphaSlot.Min.y) * 0.5f);
+    const ColorPickerObservation afterHiddenAlphaInterRowGap =
+        clickHiddenAlphaArea(hiddenAlphaInterRowGap);
     passed &= Check(
-        Near(rgbPickerStorage.before, rgbBeforeCanary) &&
+        afterHiddenRgbAlphaSlot.popupOpen &&
+            afterHiddenHsvAlphaSlot.popupOpen &&
+            afterHiddenAlphaInterRowGap.popupOpen &&
+            hiddenHsvAlphaSlot.Min.y > hiddenRgbAlphaSlot.Max.y &&
+            Near(rgbPickerStorage.before, rgbBeforeCanary) &&
             Near(rgbPickerStorage.after, rgbAfterCanary) &&
             Near(rgbPickerStorage.color[0], rgbOriginal[0]) &&
             Near(rgbPickerStorage.color[1], rgbOriginal[1]) &&
             Near(rgbPickerStorage.color[2], rgbOriginal[2]),
-        "disabled RGB alpha lane and fourth component field never access or "
-        "mutate storage beyond the true three-float color");
+        "the gated checker lane, both visually empty alpha slots, and their "
+        "enclosed gap retain the popup without accessing storage beyond the "
+        "true three-float color");
     QueueMouse(outside, false);
     SubmitColorPickerFrame(
         rgbPickerStorage.color,
@@ -5731,20 +5833,32 @@ int main()
         "authored roots, drawers, popups, controls, grabs, scrollbars, and "
         "tabs share one four-pixel radius and a twelve-pixel scrollbar channel");
     constexpr float TightSpacing = 4.0f;
-    const float collapsedSettingsHeight = ImGui::GetFrameHeight();
-    const float collapsedPerformanceHeight =
-        collapsedSettingsHeight +
+    const float rootTitleHeight = ImGui::GetFrameHeight();
+    const float collapsedSettingsHeight =
+        rootTitleHeight +
         style.WindowPadding.y * 2.0f +
         GImGui->FontSize +
         TightSpacing;
+    const float collapsedPerformanceHeight = collapsedSettingsHeight;
     ImGui::SetUvsrUiBehavior(true, false, false);
     bool currentRootTransitionActive = false;
-    float lastPerformanceCollapseAmount = 0.0f;
     float lastPerformanceSummaryTopGap = -1.0f;
-    float lastPerformanceSummaryBottomGap = -1.0f;
-    ImVec4 lastPerformanceOverlayColor;
-    bool lastPerformanceOverlaySubmitted = false;
-    const auto resolvePerformanceCollapseAmount = [](
+    ImVec4 lastPerformanceRetainedSurfaceColor;
+    ImRect lastPerformanceRetainedSurfaceRect;
+    ImRect lastPerformanceBodyRect;
+    bool lastPerformanceRetainedSurfaceSubmitted = false;
+    ImRect settingsExpandedViewportRect;
+    ImRect lastSettingsAnimatedContentRect;
+    ImRect lastSettingsRetainedContentRect;
+    ImVec4 lastSettingsRetainedSurfaceColor;
+    float lastSettingsSnapshotTopGap = -1.0f;
+    bool lastSettingsRetainedSurfaceSubmitted = false;
+    bool lastSettingsRetainedSurfaceInDrawData = false;
+    bool lastSettingsSnapshotInDrawData = false;
+    bool hasSettingsExpandedViewport = false;
+    const ImU32 settingsSnapshotFixtureColor =
+        IM_COL32(61, 188, 247, 255);
+    const auto resolveRootCollapseAmount = [](
         float expandedHeight,
         float currentHeight,
         float collapsedHeight)
@@ -5761,15 +5875,6 @@ int main()
             ? 1.0f
             : 0.0f;
     };
-    passed &= Check(
-        Near(
-            resolvePerformanceCollapseAmount(
-                collapsedPerformanceHeight,
-                collapsedPerformanceHeight,
-                collapsedPerformanceHeight),
-            1.0f),
-        "the initial default-collapsed Performance endpoint is opaque before "
-        "ImGui has measured an expanded SizeFull range");
     const auto submitAuthoredRootFrame = [&] (
         const char* name,
         bool collapsedTarget,
@@ -5800,56 +5905,173 @@ int main()
             ImGuiWindow* performance = ImGui::GetCurrentWindow();
             const ImRect bodyRect(
                 ImVec2(
-                    performance->Pos.x + 0.5f,
+                    performance->Pos.x,
                     performance->Pos.y + performance->TitleBarHeight),
                 ImVec2(
-                    performance->Pos.x + performance->Size.x - 0.5f,
-                    performance->Pos.y + performance->Size.y - 0.5f));
-            lastPerformanceCollapseAmount =
-                resolvePerformanceCollapseAmount(
-                    performance->SizeFull.y,
-                    performance->Size.y,
-                    collapsedHeight);
-            lastPerformanceOverlaySubmitted =
-                lastPerformanceCollapseAmount > 0.0f;
-            lastPerformanceOverlayColor = collapsedSettingsBodyColor;
-            lastPerformanceOverlayColor.w =
-                lastPerformanceCollapseAmount;
-            if (lastPerformanceOverlaySubmitted)
+                    performance->Pos.x + performance->Size.x,
+                    performance->Pos.y + performance->Size.y));
+            const ImRect contentRect(
+                ImVec2(
+                    bodyRect.Min.x + style.WindowPadding.x,
+                    bodyRect.Min.y + style.WindowPadding.y),
+                ImVec2(
+                    bodyRect.Max.x - style.WindowPadding.x,
+                    bodyRect.Max.y - style.WindowPadding.y));
+            const ImRect retainedContentRect(
+                contentRect.Min,
+                ImVec2(
+                    contentRect.Max.x,
+                    ImMin(
+                        contentRect.Max.y,
+                        contentRect.Min.y + GImGui->FontSize +
+                            TightSpacing)));
+            lastPerformanceBodyRect = bodyRect;
+            lastPerformanceRetainedSurfaceRect = retainedContentRect;
+            lastPerformanceRetainedSurfaceSubmitted =
+                retainedContentRect.GetWidth() > 1.0f &&
+                retainedContentRect.GetHeight() > 1.0f;
+            lastPerformanceRetainedSurfaceColor =
+                collapsedSettingsBodyColor;
+            lastPerformanceRetainedSurfaceColor.w = 1.0f;
+            if (lastPerformanceRetainedSurfaceSubmitted)
             {
                 performance->DrawList->AddRectFilled(
-                    bodyRect.Min,
-                    bodyRect.Max,
-                    ImGui::GetColorU32(lastPerformanceOverlayColor),
+                    retainedContentRect.Min,
+                    retainedContentRect.Max,
+                    ImGui::GetColorU32(
+                        lastPerformanceRetainedSurfaceColor),
                     style.WindowRounding,
                     ImDrawFlags_RoundCornersAll);
             }
             lastPerformanceSummaryTopGap = -1.0f;
-            lastPerformanceSummaryBottomGap = -1.0f;
-            if (!expanded)
+            constexpr const char* Summary = "16.67 ms / 60 fps";
+            if (expanded)
             {
-                constexpr const char* Summary = "16.67 ms / 60 fps";
-                const ImVec2 summaryTextSize = ImGui::CalcTextSize(Summary);
+                ImGui::TextUnformatted(Summary);
+                lastPerformanceSummaryTopGap =
+                    ImGui::GetItemRectMin().y - bodyRect.Min.y;
+            }
+            else
+            {
                 const ImVec2 summaryMinimum(
                     performance->Pos.x + style.WindowPadding.x,
-                    bodyRect.Min.y + ImMax(
-                        0.0f,
-                        (bodyRect.GetHeight() - summaryTextSize.y) * 0.5f));
+                    contentRect.Min.y);
                 lastPerformanceSummaryTopGap =
                     summaryMinimum.y - bodyRect.Min.y;
-                lastPerformanceSummaryBottomGap =
-                    bodyRect.Max.y -
-                    (summaryMinimum.y + summaryTextSize.y);
                 performance->DrawList->AddText(
                     summaryMinimum,
                     ImGui::GetColorU32(ImGuiCol_Text),
                     Summary);
             }
         }
+        else if (std::strcmp(name, "Settings") == 0)
+        {
+            ImGuiWindow* settings = ImGui::GetCurrentWindow();
+            const ImRect bodyRect(
+                ImVec2(
+                    settings->Pos.x,
+                    settings->Pos.y + settings->TitleBarHeight),
+                ImVec2(
+                    settings->Pos.x + settings->Size.x,
+                    settings->Pos.y + settings->Size.y));
+            const ImRect retainedContentRect(
+                ImVec2(
+                    bodyRect.Min.x + style.WindowPadding.x,
+                    bodyRect.Min.y + style.WindowPadding.y),
+                ImVec2(
+                    bodyRect.Max.x - style.WindowPadding.x,
+                    ImMin(
+                        bodyRect.Max.y - style.WindowPadding.y,
+                        bodyRect.Min.y + style.WindowPadding.y +
+                            GImGui->FontSize + TightSpacing)));
+            const float collapseAmount = resolveRootCollapseAmount(
+                settings->SizeFull.y,
+                settings->Size.y,
+                collapsedHeight);
+            if (!hasSettingsExpandedViewport ||
+                collapseAmount <= 0.0f)
+            {
+                settingsExpandedViewportRect = ImRect(
+                    ImVec2(
+                        retainedContentRect.Min.x,
+                        retainedContentRect.Max.y),
+                    ImVec2(
+                        retainedContentRect.Max.x,
+                        bodyRect.Max.y - style.WindowPadding.y));
+                hasSettingsExpandedViewport = true;
+            }
+            lastSettingsRetainedContentRect = retainedContentRect;
+            lastSettingsRetainedSurfaceSubmitted =
+                retainedContentRect.GetWidth() > 1.0f &&
+                retainedContentRect.GetHeight() > 1.0f;
+            lastSettingsRetainedSurfaceColor = collapsedSettingsBodyColor;
+            lastSettingsRetainedSurfaceColor.w = 1.0f;
+            lastSettingsSnapshotTopGap =
+                retainedContentRect.Min.y - bodyRect.Min.y;
+            if (lastSettingsRetainedSurfaceSubmitted)
+            {
+                settings->DrawList->AddRectFilled(
+                    retainedContentRect.Min,
+                    retainedContentRect.Max,
+                    ImGui::GetColorU32(lastSettingsRetainedSurfaceColor),
+                    style.WindowRounding,
+                    ImDrawFlags_RoundCornersAll);
+                settings->DrawList->AddText(
+                    ImVec2(
+                        retainedContentRect.Min.x + TightSpacing,
+                        retainedContentRect.Min.y),
+                    settingsSnapshotFixtureColor,
+                    "0000settings-retained-row-test");
+            }
+            lastSettingsAnimatedContentRect = ImRect(
+                ImLerp(
+                    settingsExpandedViewportRect.Min,
+                    retainedContentRect.Min,
+                    collapseAmount),
+                ImLerp(
+                    settingsExpandedViewportRect.Max,
+                    retainedContentRect.Max,
+                    collapseAmount));
+            lastSettingsAnimatedContentRect.Min.x = ImMax(
+                lastSettingsAnimatedContentRect.Min.x,
+                bodyRect.Min.x + style.WindowPadding.x);
+            lastSettingsAnimatedContentRect.Min.y = ImMax(
+                lastSettingsAnimatedContentRect.Min.y,
+                bodyRect.Min.y + style.WindowPadding.y);
+            lastSettingsAnimatedContentRect.Max.x = ImMin(
+                lastSettingsAnimatedContentRect.Max.x,
+                bodyRect.Max.x - style.WindowPadding.x);
+            lastSettingsAnimatedContentRect.Max.y = ImMin(
+                lastSettingsAnimatedContentRect.Max.y,
+                bodyRect.Max.y - style.WindowPadding.y);
+        }
         currentRootTransitionActive =
             ImGui::IsCurrentUvsrWindowCollapseTransitionActive();
         ImGui::End();
         ImGui::Render();
+        if (std::strcmp(name, "Settings") == 0)
+        {
+            lastSettingsRetainedSurfaceInDrawData = false;
+            lastSettingsSnapshotInDrawData = false;
+            ImDrawData* drawData = ImGui::GetDrawData();
+            for (int listIndex = 0;
+                listIndex < drawData->CmdListsCount;
+                ++listIndex)
+            {
+                ImRect colorBounds;
+                lastSettingsRetainedSurfaceInDrawData |=
+                    FindExactColorBounds(
+                        *drawData->CmdLists[listIndex],
+                        ImGui::GetColorU32(
+                            lastSettingsRetainedSurfaceColor),
+                        colorBounds);
+                lastSettingsSnapshotInDrawData |=
+                    FindExactColorBounds(
+                        *drawData->CmdLists[listIndex],
+                        settingsSnapshotFixtureColor,
+                        colorBounds);
+            }
+        }
         return ImGui::FindWindowByName(name);
     };
 
@@ -5861,6 +6083,16 @@ int main()
     const float expandedSettingsHeight = settingsWindow
         ? settingsWindow->Size.y
         : 0.0f;
+    const ImRect expandedSettingsAnimatedContentRect =
+        lastSettingsAnimatedContentRect;
+    const ImRect expandedSettingsRetainedContentRect =
+        lastSettingsRetainedContentRect;
+    const float expandedSettingsSnapshotTopGap =
+        lastSettingsSnapshotTopGap;
+    const bool expandedSettingsRetainedSurfaceVisible =
+        lastSettingsRetainedSurfaceInDrawData;
+    const bool expandedSettingsSnapshotVisible =
+        lastSettingsSnapshotInDrawData;
     settingsWindow = submitAuthoredRootFrame(
         "Settings",
         true,
@@ -5869,6 +6101,16 @@ int main()
     const float largeDeltaCollapseHeight = settingsWindow
         ? settingsWindow->Size.y
         : 0.0f;
+    const ImRect collapsingSettingsAnimatedContentRect =
+        lastSettingsAnimatedContentRect;
+    const ImRect collapsingSettingsRetainedContentRect =
+        lastSettingsRetainedContentRect;
+    const float collapsingSettingsSnapshotTopGap =
+        lastSettingsSnapshotTopGap;
+    const bool collapsingSettingsRetainedSurfaceVisible =
+        lastSettingsRetainedSurfaceInDrawData;
+    const bool collapsingSettingsSnapshotVisible =
+        lastSettingsSnapshotInDrawData;
     const bool settingsIntermediateReportedActive =
         currentRootTransitionActive;
     settingsWindow = submitAuthoredRootFrame(
@@ -5879,14 +6121,49 @@ int main()
     const float reversedExpansionHeight = settingsWindow
         ? settingsWindow->Size.y
         : 0.0f;
+    const ImRect reversedSettingsAnimatedContentRect =
+        lastSettingsAnimatedContentRect;
     passed &= Check(
         largeDeltaCollapseHeight > collapsedSettingsHeight &&
             largeDeltaCollapseHeight < expandedSettingsHeight &&
             settingsIntermediateReportedActive &&
             reversedExpansionHeight > largeDeltaCollapseHeight &&
-            reversedExpansionHeight <= expandedSettingsHeight,
+            reversedExpansionHeight <= expandedSettingsHeight &&
+            collapsingSettingsAnimatedContentRect.Min.y <
+                expandedSettingsAnimatedContentRect.Min.y &&
+            collapsingSettingsAnimatedContentRect.Max.y <
+                expandedSettingsAnimatedContentRect.Max.y &&
+            reversedSettingsAnimatedContentRect.Min.y >
+                collapsingSettingsAnimatedContentRect.Min.y &&
+            reversedSettingsAnimatedContentRect.Max.y >
+                collapsingSettingsAnimatedContentRect.Max.y &&
+            lastSettingsRetainedSurfaceSubmitted &&
+            Near(lastSettingsRetainedSurfaceColor.w, 1.0f) &&
+            expandedSettingsRetainedSurfaceVisible &&
+            collapsingSettingsRetainedSurfaceVisible &&
+            expandedSettingsSnapshotVisible &&
+            collapsingSettingsSnapshotVisible &&
+            Near(
+                expandedSettingsSnapshotTopGap,
+                style.WindowPadding.y) &&
+            Near(
+                collapsingSettingsSnapshotTopGap,
+                style.WindowPadding.y) &&
+            Near(
+                expandedSettingsRetainedContentRect.Min.x,
+                collapsingSettingsRetainedContentRect.Min.x) &&
+            Near(
+                expandedSettingsRetainedContentRect.Min.y,
+                collapsingSettingsRetainedContentRect.Min.y) &&
+            Near(
+                expandedSettingsRetainedContentRect.Max.x,
+                collapsingSettingsRetainedContentRect.Max.x) &&
+            Near(
+                expandedSettingsRetainedContentRect.Max.y,
+                collapsingSettingsRetainedContentRect.Max.y),
         "authored Settings collapse clamps a large delta to an intermediate "
-        "frame and reverses continuously");
+        "frame while its reference inner rectangle compacts continuously and "
+        "its full-alpha hash row and fixed text baseline remain unchanged");
 
     int settingsCollapseFrames = 0;
     while (settingsWindow &&
@@ -5900,38 +6177,47 @@ int main()
             FixedDeltaSeconds);
         ++settingsCollapseFrames;
     }
+    passed &= Check(
+        settingsWindow != nullptr &&
+            settingsWindow->Collapsed &&
+            Near(
+                lastSettingsAnimatedContentRect.Min.x,
+                lastSettingsRetainedContentRect.Min.x) &&
+            Near(
+                lastSettingsAnimatedContentRect.Min.y,
+                lastSettingsRetainedContentRect.Min.y) &&
+            Near(
+                lastSettingsAnimatedContentRect.Max.x,
+                lastSettingsRetainedContentRect.Max.x) &&
+            Near(
+                lastSettingsAnimatedContentRect.Max.y,
+                lastSettingsRetainedContentRect.Max.y) &&
+            Near(
+                expandedSettingsRetainedContentRect.Min.x,
+                lastSettingsRetainedContentRect.Min.x) &&
+            Near(
+                expandedSettingsRetainedContentRect.Min.y,
+                lastSettingsRetainedContentRect.Min.y) &&
+            Near(
+                expandedSettingsRetainedContentRect.Max.x,
+                lastSettingsRetainedContentRect.Max.x) &&
+            Near(
+                expandedSettingsRetainedContentRect.Max.y,
+                lastSettingsRetainedContentRect.Max.y),
+        "the reference Settings inner rectangle reaches the retained hash "
+        "perimeter without a half-pixel endpoint geometry swap");
 
-    const ImU32 explicitCollapsedBodyColor =
-        ImGui::ColorConvertFloat4ToU32(
-            ImVec4(
-                collapsedSettingsBodyColor.x,
-                collapsedSettingsBodyColor.y,
-                collapsedSettingsBodyColor.z,
-                CollapsedSettingsOverrideAlpha));
-    const ImU32 staleCollapsedBodyColor =
-        ImGui::ColorConvertFloat4ToU32(collapsedSettingsBodyColor);
-    bool foundCollapsedBodySurface = false;
-    if (settingsWindow)
-    {
-        const float collapsedBodyMinY =
-            settingsWindow->Pos.y + settingsWindow->TitleBarHeight;
-        for (const ImDrawVert& vertex :
-            settingsWindow->DrawList->VtxBuffer)
-        {
-            if (vertex.pos.y <= collapsedBodyMinY)
-                continue;
-            foundCollapsedBodySurface |=
-                vertex.col == explicitCollapsedBodyColor ||
-                vertex.col == staleCollapsedBodyColor;
-        }
-    }
-    const bool collapsedSettingsIsTitleOnly =
+    const bool collapsedSettingsHasRetainedBody =
         settingsWindow != nullptr &&
         settingsWindow->Collapsed &&
-        Near(settingsWindow->Size.y, settingsWindow->TitleBarHeight) &&
         Near(settingsWindow->Size.y, collapsedSettingsHeight) &&
-        !foundCollapsedBodySurface;
-    if (!collapsedSettingsIsTitleOnly)
+        settingsWindow->Size.y > settingsWindow->TitleBarHeight &&
+        lastSettingsRetainedSurfaceSubmitted &&
+        lastSettingsRetainedSurfaceInDrawData &&
+        lastSettingsSnapshotInDrawData &&
+        Near(lastSettingsRetainedSurfaceColor.w, 1.0f) &&
+        Near(lastSettingsSnapshotTopGap, style.WindowPadding.y);
+    if (!collapsedSettingsHasRetainedBody)
     {
         std::cerr
             << "collapsed Settings state: window="
@@ -5943,13 +6229,175 @@ int main()
             << " title="
             << (settingsWindow ? settingsWindow->TitleBarHeight : 0.0f)
             << " body-surface="
-            << foundCollapsedBodySurface
+            << lastSettingsRetainedSurfaceInDrawData
+            << " snapshot="
+            << lastSettingsSnapshotInDrawData
+            << " alpha="
+            << lastSettingsRetainedSurfaceColor.w
+            << " top-gap="
+            << lastSettingsSnapshotTopGap
             << '\n';
     }
     passed &= Check(
-        collapsedSettingsIsTitleOnly,
-        "collapsed Settings ends at the exact title height without a retained "
-        "Settings-body seam");
+        collapsedSettingsHasRetainedBody,
+        "collapsed Settings retains the opaque copyable-code body below its "
+        "title at the exact configured endpoint height");
+
+    struct SettingsLogicalCollapseObservation
+    {
+        bool beginVisible = false;
+        bool logicalCollapsed = false;
+        bool bodySubmitted = false;
+        bool childActive = false;
+        bool scrollbarGrabInDrawData = false;
+        bool endpointOutlineInDrawData = false;
+        int autoFitFramesY = 0;
+        int rootChildCount = 0;
+    };
+    ImGuiWindow* logicalCollapseSettingsBody = nullptr;
+    const ImU32 endpointOutlineColor = IM_COL32(211, 29, 157, 255);
+    const auto submitSettingsLogicalCollapseFrame = [&] (
+        bool collapsedTarget,
+        bool applyCollapsedRequest,
+        float deltaTime)
+    {
+        io.DeltaTime = deltaTime;
+        QueueMouse(outside, false);
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(
+            ImVec2(30.0f, 30.0f),
+            ImGuiCond_Always);
+        // Deliberately reproduce the Dear ImGui auto-fit exception that caused
+        // the production failure: zero Y keeps AutoFitFramesY armed, so Begin()
+        // may return true even though the root is logically collapsed.
+        ImGui::SetNextWindowSize(
+            ImVec2(240.0f, 0.0f),
+            ImGuiCond_Always);
+        ImGui::SetNextWindowSizeConstraints(
+            ImVec2(240.0f, collapsedSettingsHeight),
+            ImVec2(240.0f, 120.0f));
+        ImGui::SetNextUvsrWindowCollapsedHeight(
+            collapsedSettingsHeight);
+        ImGui::SetNextUvsrWindowCollapseTarget(collapsedTarget);
+        if (applyCollapsedRequest)
+        {
+            ImGui::SetNextWindowCollapsed(
+                collapsedTarget,
+                ImGuiCond_Always);
+        }
+
+        SettingsLogicalCollapseObservation observation;
+        observation.beginVisible = ImGui::Begin(
+            "Settings",
+            nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize |
+                ImGuiWindowFlags_NoScrollbar |
+                ImGuiWindowFlags_NoScrollWithMouse);
+        ImGuiWindow* root = ImGui::GetCurrentWindow();
+        observation.logicalCollapsed = ImGui::IsWindowCollapsed();
+        observation.autoFitFramesY = root->AutoFitFramesY;
+        if (observation.beginVisible && !observation.logicalCollapsed)
+        {
+            ImGui::TextUnformatted("settings-endpoint-outline-fixture");
+            ImGui::BeginChild(
+                "##SettingsBody",
+                ImVec2(0.0f, 72.0f),
+                ImGuiChildFlags_None,
+                ImGuiWindowFlags_AlwaysVerticalScrollbar);
+            logicalCollapseSettingsBody = ImGui::GetCurrentWindow();
+            ImGui::Button("General", ImVec2(-FLT_MIN, 0.0f));
+            for (int row = 0; row < 16; ++row)
+                ImGui::Text("Logical collapse row %d", row);
+            ImGui::EndChild();
+            observation.bodySubmitted = true;
+        }
+        if (observation.logicalCollapsed)
+        {
+            const ImRect bodyRect(
+                ImVec2(
+                    root->Pos.x + style.WindowPadding.x,
+                    root->Pos.y + root->TitleBarHeight +
+                        style.WindowPadding.y),
+                ImVec2(
+                    root->Pos.x + root->Size.x -
+                        style.WindowPadding.x,
+                    root->Pos.y + root->Size.y -
+                        style.WindowPadding.y));
+            root->DrawList->PushClipRect(
+                ImVec2(bodyRect.Min.x - 2.0f, bodyRect.Min.y - 2.0f),
+                ImVec2(bodyRect.Max.x + 2.0f, bodyRect.Max.y + 2.0f),
+                false);
+            root->DrawList->AddRect(
+                bodyRect.Min,
+                bodyRect.Max,
+                endpointOutlineColor,
+                style.WindowRounding,
+                ImDrawFlags_RoundCornersAll,
+                2.0f);
+            root->DrawList->PopClipRect();
+        }
+        observation.rootChildCount = root->DC.ChildWindows.Size;
+        ImGui::End();
+        ImGui::Render();
+        observation.childActive =
+            logicalCollapseSettingsBody &&
+            logicalCollapseSettingsBody->Active;
+        ImDrawData* drawData = ImGui::GetDrawData();
+        for (int listIndex = 0;
+            listIndex < drawData->CmdListsCount;
+            ++listIndex)
+        {
+            ImRect colorBounds;
+            observation.scrollbarGrabInDrawData |= FindExactColorBounds(
+                *drawData->CmdLists[listIndex],
+                ImGui::GetColorU32(ImGuiCol_ScrollbarGrab),
+                colorBounds);
+            observation.endpointOutlineInDrawData |= FindExactColorBounds(
+                *drawData->CmdLists[listIndex],
+                endpointOutlineColor,
+                colorBounds);
+        }
+        return observation;
+    };
+
+    submitSettingsLogicalCollapseFrame(false, true, FixedDeltaSeconds);
+    SettingsLogicalCollapseObservation logicalCollapseEndpoint;
+    int logicalCollapseFrames = 0;
+    do
+    {
+        logicalCollapseEndpoint = submitSettingsLogicalCollapseFrame(
+            true,
+            logicalCollapseFrames == 0,
+            FixedDeltaSeconds);
+        ++logicalCollapseFrames;
+    }
+    while (!logicalCollapseEndpoint.logicalCollapsed &&
+        logicalCollapseFrames < MaximumAnimationFrames);
+    const SettingsLogicalCollapseObservation stableLogicalCollapseEndpoint =
+        submitSettingsLogicalCollapseFrame(
+            true,
+            false,
+            FixedDeltaSeconds);
+    passed &= Check(
+        logicalCollapseEndpoint.logicalCollapsed &&
+            logicalCollapseEndpoint.beginVisible &&
+            logicalCollapseEndpoint.autoFitFramesY > 0 &&
+            !logicalCollapseEndpoint.bodySubmitted &&
+            !logicalCollapseEndpoint.childActive &&
+            logicalCollapseEndpoint.rootChildCount == 0 &&
+            !logicalCollapseEndpoint.scrollbarGrabInDrawData &&
+            logicalCollapseEndpoint.endpointOutlineInDrawData &&
+            stableLogicalCollapseEndpoint.logicalCollapsed &&
+            stableLogicalCollapseEndpoint.beginVisible &&
+            stableLogicalCollapseEndpoint.autoFitFramesY > 0 &&
+            !stableLogicalCollapseEndpoint.bodySubmitted &&
+            !stableLogicalCollapseEndpoint.childActive &&
+            stableLogicalCollapseEndpoint.rootChildCount == 0 &&
+            !stableLogicalCollapseEndpoint.scrollbarGrabInDrawData &&
+            stableLogicalCollapseEndpoint.endpointOutlineInDrawData,
+        "logical Settings collapse overrides Begin's auto-fit visibility on "
+        "the endpoint and following frame, leaving no child scrollbar while "
+        "root-owned compact chrome remains in final draw data");
 
     ImGuiWindow* performanceWindow = submitAuthoredRootFrame(
         "Performance",
@@ -5959,34 +6407,55 @@ int main()
     const float expandedPerformanceHeight = performanceWindow
         ? performanceWindow->Size.y
         : 0.0f;
+    const ImRect expandedPerformanceRetainedSurfaceRect =
+        lastPerformanceRetainedSurfaceRect;
+    const ImRect expandedPerformanceBodyRect =
+        lastPerformanceBodyRect;
+    const float expandedPerformanceSummaryTopGap =
+        lastPerformanceSummaryTopGap;
     performanceWindow = submitAuthoredRootFrame(
         "Performance",
         true,
         collapsedPerformanceHeight,
         1.0f);
-    const float intermediatePerformanceCollapseAmount =
-        lastPerformanceCollapseAmount;
-    const ImVec4 intermediatePerformanceOverlayColor =
-        lastPerformanceOverlayColor;
+    const ImRect intermediatePerformanceRetainedSurfaceRect =
+        lastPerformanceRetainedSurfaceRect;
+    const ImVec4 intermediatePerformanceRetainedSurfaceColor =
+        lastPerformanceRetainedSurfaceColor;
     passed &= Check(
         performanceWindow != nullptr &&
             performanceWindow->Size.y > collapsedPerformanceHeight &&
             performanceWindow->Size.y < expandedPerformanceHeight &&
             currentRootTransitionActive &&
-            lastPerformanceOverlaySubmitted &&
-            intermediatePerformanceCollapseAmount > 0.0f &&
-            intermediatePerformanceCollapseAmount < 1.0f &&
+            lastPerformanceRetainedSurfaceSubmitted &&
             Near(
-                intermediatePerformanceOverlayColor.x,
+                intermediatePerformanceRetainedSurfaceColor.x,
                 collapsedSettingsBodyColor.x) &&
             Near(
-                intermediatePerformanceOverlayColor.y,
+                intermediatePerformanceRetainedSurfaceColor.y,
                 collapsedSettingsBodyColor.y) &&
             Near(
-                intermediatePerformanceOverlayColor.z,
-                collapsedSettingsBodyColor.z),
+                intermediatePerformanceRetainedSurfaceColor.z,
+                collapsedSettingsBodyColor.z) &&
+            Near(intermediatePerformanceRetainedSurfaceColor.w, 1.0f) &&
+            Near(
+                expandedPerformanceRetainedSurfaceRect.Min.y,
+                intermediatePerformanceRetainedSurfaceRect.Min.y) &&
+            Near(
+                expandedPerformanceRetainedSurfaceRect.Max.y,
+                intermediatePerformanceRetainedSurfaceRect.Max.y) &&
+            expandedPerformanceRetainedSurfaceRect.Max.y <
+                expandedPerformanceBodyRect.Max.y -
+                    style.WindowPadding.y &&
+            Near(
+                expandedPerformanceSummaryTopGap,
+                style.WindowPadding.y) &&
+            Near(
+                lastPerformanceSummaryTopGap,
+                style.WindowPadding.y),
         "Performance independently uses the generic clamped root-collapse "
-        "animation while only its same-RGB body overlay gains opacity");
+        "animation while its one-row backing stays fully opaque, fixed, and "
+        "does not cover the expanded body below it");
     ImGui::SetUvsrUiBehavior(false, false, false);
     performanceWindow = submitAuthoredRootFrame(
         "Performance",
@@ -6018,17 +6487,32 @@ int main()
             performanceWindow->Size.y >
                 performanceWindow->TitleBarHeight &&
             collapsedPerformanceHasDirectSummary &&
-            lastPerformanceOverlaySubmitted &&
-            Near(lastPerformanceCollapseAmount, 1.0f) &&
-            Near(lastPerformanceOverlayColor.w, 1.0f) &&
+            lastPerformanceRetainedSurfaceSubmitted &&
+            Near(lastPerformanceRetainedSurfaceColor.w, 1.0f) &&
             lastPerformanceSummaryTopGap >= 0.0f &&
             Near(
                 lastPerformanceSummaryTopGap,
-                lastPerformanceSummaryBottomGap) &&
+                style.WindowPadding.y) &&
+            Near(
+                lastPerformanceRetainedSurfaceRect.Max.y,
+                lastPerformanceBodyRect.Max.y -
+                    style.WindowPadding.y) &&
+            Near(
+                expandedPerformanceRetainedSurfaceRect.Min.x,
+                lastPerformanceRetainedSurfaceRect.Min.x) &&
+            Near(
+                expandedPerformanceRetainedSurfaceRect.Min.y,
+                lastPerformanceRetainedSurfaceRect.Min.y) &&
+            Near(
+                expandedPerformanceRetainedSurfaceRect.Max.x,
+                lastPerformanceRetainedSurfaceRect.Max.x) &&
+            Near(
+                expandedPerformanceRetainedSurfaceRect.Max.y,
+                lastPerformanceRetainedSurfaceRect.Max.y) &&
             !currentRootTransitionActive,
         "disabling animations mid-collapse snaps an authored root to its "
-        "distinct retained summary endpoint with centered text and an opaque "
-        "Performance-only body overlay");
+        "distinct retained summary endpoint without changing its fixed text "
+        "baseline, full-alpha one-row backing, or rectangle edges");
     ImGui::SetUvsrUiBehavior(true, false, false);
 
     const auto submitOggSettingsFrame = [&] (bool collapsed)
@@ -6042,6 +6526,8 @@ int main()
         ImGui::SetNextWindowSize(
             ImVec2(240.0f, 120.0f),
             ImGuiCond_Always);
+        ImGui::SetNextUvsrWindowCollapsedHeight(
+            collapsedSettingsHeight);
         ImGui::SetNextWindowCollapsed(collapsed, ImGuiCond_Always);
         ImGui::Begin(
             "Settings",
@@ -6066,8 +6552,11 @@ int main()
             oggSettingsWindow->Collapsed &&
             Near(
                 oggSettingsWindow->Size.y,
-                oggSettingsWindow->TitleBarHeight),
-        "Ogg Settings collapse remains immediate even for a very large delta");
+                collapsedSettingsHeight) &&
+            oggSettingsWindow->Size.y >
+                oggSettingsWindow->TitleBarHeight,
+        "Ogg Settings collapse remains immediate while retaining the same "
+        "copyable-code body endpoint");
 
     struct RootPanelObservation
     {

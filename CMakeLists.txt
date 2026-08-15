@@ -488,12 +488,12 @@ if (UVSR_BUILD_APPLICATION)
 endif()
 
 enable_testing()
+find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
 if (WIN32)
     set(UVSR_README_LINE_COUNT_COMMAND
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/update_readme_line_counts.cmd"
     )
 else()
-    find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
     set(UVSR_README_LINE_COUNT_COMMAND
         "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/update_readme_line_counts.py"
@@ -862,6 +862,36 @@ add_test(
     COMMAND uvsr_ui_settings_command_catalog_tests
 )
 
+add_executable(uvsr_settings_snapshot_tests
+    tests/settings_snapshot_tests.cpp
+)
+target_include_directories(
+    uvsr_settings_snapshot_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_settings_snapshot_reference
+    COMMAND uvsr_settings_snapshot_tests
+)
+add_executable(uvsr_settings_snapshot_schema_probe
+    tools/settings_snapshot_schema_probe.cpp
+)
+target_include_directories(
+    uvsr_settings_snapshot_schema_probe
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_settings_snapshot_schema_registry
+    COMMAND uvsr_settings_snapshot_schema_probe --check
+)
+add_test(
+    NAME uvsr_settings_snapshot_decoder_reference
+    COMMAND "${CMAKE_COMMAND}" -E env
+        "PYTHONDONTWRITEBYTECODE=1"
+        "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/settings_snapshot_decoder_tests.py"
+)
+
 add_executable(uvsr_imgui_dropdown_roll_tests
     tests/imgui_dropdown_roll_tests.cpp
 )
@@ -939,6 +969,7 @@ set(UVSR_APP_SHADERS
     backdrop_blur_ps
     denoising_prepare_cs
     denoising_resolve_cs
+    denoising_spatial_cs
     heitz_ratio_estimator_shadows_cs_Generate
     ray_traced_flashlight_shadows_cs_GenerateVisibility
     ray_traced_flashlight_shadows_cs_GenerateVisibilityAndHitDistance

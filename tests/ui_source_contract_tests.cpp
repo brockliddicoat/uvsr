@@ -633,7 +633,7 @@ namespace
                 "\"Override Visual Maxes\"",
                 "&m_ui.OverrideVisualMaxes",
                 "\"Interface Skin\"",
-                "\"##UiSkin\"",
+                "\"Interface Skin##UiSkin\"",
                 "for (const UiSkin candidate : UiSkinValues)",
                 "DrawDeferredDropdownOption(",
                 "UiSkinLabel(candidate).data(),",
@@ -646,7 +646,7 @@ namespace
                 "m_ui.Accents.tertiaryAccent",
                 "\"Font Color\"",
                 "editablePalette.fontColor",
-                "\"Primary Background Color\"",
+                "\"Background Color\"",
                 "editablePalette.primaryBackground"
             },
             "Interface starts with the inverse-bound animation checkbox, then "
@@ -659,7 +659,7 @@ namespace
             interfaceDrawer,
             "\"Set menu body, resting controls, and picker background; \"\n"
             "                    \"hover, active, body, and picker opacity derive from it.\"",
-            "Primary Background tooltip ownership of the derived picker surface");
+            "Background Color tooltip ownership of the derived picker surface");
         RequireAbsent(
             interfaceDrawer,
             "\"Enable Animations\"",
@@ -690,7 +690,7 @@ namespace
             CountOccurrences(
                 interfaceDrawer,
                 "authoredPaletteAvailable);") == 3u,
-            "Ogg must disable Primary Accent, Font Color, and Primary Background "
+            "Ogg must disable Primary Accent, Font Color, and Background Color "
             "while leaving shared Secondary and Tertiary semantic colors live.");
         for (const std::string_view retiredRole : {
                 std::string_view("primaryFont"),
@@ -838,7 +838,23 @@ namespace
         RequireOrdered(
             drawer,
             {
-                "\"Accumulate Samples\"",
+                "drawNoiseSettingsControls(",
+                "Resident texture memory:",
+                "BeginAnimatedTreeNode(",
+                "\"Accumulate Samples##Noise\"",
+                "drawSampleAccumulationControls();",
+                "EndDrawerBody();"
+            },
+            "sample accumulation is the final collapsible Noise section");
+        const std::string_view accumulationControls = ExtractSection(
+            drawer,
+            "const auto drawSampleAccumulationControls = [&]()",
+            "const NoiseSettings defaults;",
+            "sample accumulation controls");
+        RequireOrdered(
+            accumulationControls,
+            {
+                "\"Enable##SampleAccumulation\"",
                 "##SampleAccumulationControls",
                 "\"Accumulation Mode\"",
                 "\"Averaging\"",
@@ -850,7 +866,7 @@ namespace
                 "\"Target Error\"",
                 "\"Minimum Update Rate\""
             },
-            "sample accumulation preset and Custom control order");
+            "sample accumulation enable, preset, and Custom control order");
         RequireExactStrings(
             ExtractSection(
                 drawer,
@@ -863,11 +879,6 @@ namespace
                 "Variance Guided"
             },
             "sample accumulation preset labels");
-        const std::string_view accumulationControls = ExtractSection(
-            drawer,
-            "\"Accumulate Samples\"",
-            "if (m_ui.Lighting == LightingSolution::PathTracing",
-            "sample accumulation controls");
         Require(
             CountOccurrences(
                 accumulationControls,
@@ -890,6 +901,10 @@ namespace
                     "##SampleAccumulationControls") == 1u,
             "sample accumulation tuning must use one stable enabled-only "
             "animated region");
+        RequireAbsent(
+            accumulationControls,
+            "ImGui::TextDisabled(",
+            "gray Accumulate Samples explanatory text");
         Require(
             CountOccurrences(
                 accumulationControls,
@@ -1064,8 +1079,7 @@ namespace
             {
                 "\"Occlusion###Ambient Occlusion##Visibility\"",
                 "\"Illumination###Indirect Diffuse##Visibility\"",
-                "\"Sampling##Visibility\"",
-                "\"Reconstruction##Visibility\""
+                "\"Sampling##Visibility\""
             },
             "Diffuse effect grouping");
         RequireExactStrings(
@@ -1081,22 +1095,8 @@ namespace
             },
             "Diffuse estimator labels");
         Require(
-            CountOccurrences(visibility, "BeginAnimatedTreeNode(") == 4u,
-            "Visibility must retain four animated effect groups.");
-        RequireContains(
-            Compact(visibility),
-            "constImGuiTreeNodeFlagsreconstructionDisclosureFlags="
-            "visibility.resolution==VisibilityResolution::Full?"
-            "ImGuiTreeNodeFlags_None:ImGuiTreeNodeFlags_DefaultOpen;",
-            "resolution-aware Reconstruction disclosure default");
-        RequireOrdered(
-            visibility,
-            {
-                "const ImGuiTreeNodeFlags reconstructionDisclosureFlags =",
-                "\"Reconstruction##Visibility\"",
-                "reconstructionDisclosureFlags"
-            },
-            "Reconstruction disclosure flag use");
+            CountOccurrences(visibility, "BeginAnimatedTreeNode(") == 3u,
+            "Visibility must retain three animated effect groups.");
         Require(
             CountOccurrences(visibility, "ImGui::SetItemTooltip(") >= 12u,
             "Visibility controls must retain their hover guidance.");
@@ -1109,12 +1109,19 @@ namespace
                     "&visibility.indirectDiffuse.outputHitDistance"),
                 std::string_view(
                     "visibility.sampling.maximumSampleCount"),
-                std::string_view("&visibility.noise.specifyNoise"),
-                std::string_view("visibility.reconstruction.mode"),
-                std::string_view(
-                    "&visibility.reconstruction.spatialEnabled") })
+                std::string_view("&visibility.noise.specifyNoise") })
         {
             RequireContains(visibility, control, "Visibility core control");
+        }
+        for (const std::string_view retired : {
+                std::string_view("Reconstruction##Visibility"),
+                std::string_view("visibility.reconstruction"),
+                std::string_view("VisibilitySpatial") })
+        {
+            RequireAbsent(
+                visibility,
+                retired,
+                "retired selectable Diffuse reconstruction control");
         }
         RequireContains(
             Compact(catalog),
@@ -1136,18 +1143,6 @@ namespace
             "Value(\"visibility.ao.strength\",Kind::Float,"
             "Section::Visibility,\"float0..8\")",
             "ambient occlusion command range");
-        for (const std::string_view reconstructionLabel : {
-                std::string_view("Full Resolution"),
-                std::string_view("Guide-Aware Upsampling"),
-                std::string_view("Packed Depth-Normal"),
-                std::string_view("Packed Slope-Aware"),
-                std::string_view("Packed Leak-Controlled") })
-        {
-            RequireContains(
-                visibility,
-                reconstructionLabel,
-                "Visibility reconstruction label");
-        }
         RequireAbsent(
             visibility,
             "\"Packed Depth\"",
@@ -1198,65 +1193,34 @@ namespace
                     "GetDenoisingResolutionLabel(signal.resolution)"),
                 std::string_view("signal.historyLength"),
                 std::string_view("signal.disocclusionThreshold"),
-                std::string_view("signal.antiLagStrength") })
+                std::string_view("signal.antiLagStrength"),
+                std::string_view("signal.spatialRadius"),
+                std::string_view("IsSpatialDenoisingMethod(signal.method)"),
+                std::string_view("IsThirdPartyDenoisingMethod(signal.method)") })
         {
             RequireContains(denoising, contract, "Denoising signal controls");
         }
         RequireContains(
             denoising,
-            "m_ui.ScreenSpaceVisibility.ambientOcclusion.outputHitDistance",
-            "ambient occlusion hit distance readiness");
-        RequireContains(
-            denoising,
-            "m_ui.ScreenSpaceVisibility.indirectDiffuse.outputHitDistance",
-            "diffuse GI hit distance readiness");
-        RequireContains(
-            denoising,
-            "!m_ui.DirectionalShadows.ratioEstimator.useRatioEstimator",
-            "sun raw sample readiness");
-        RequireContains(
-            denoising,
-            "m_ui.Flashlight.outputHitDistance",
-            "flashlight hit distance readiness");
-        RequireContains(
-            denoising,
-            "!m_ui.RayTracedSkyVisibility.useRatioEstimator",
-            "sky raw sample readiness");
-        RequireContains(
-            denoising,
-            "#if UVSR_WITH_NRD",
-            "build-time NRD availability message");
-        RequireContains(
-            denoising,
             "effect != DenoisingEffect::Shadows",
             "unsupported SIGMA history and response control gate");
-        RequireContains(
-            denoising,
-            "Flashlight SIGMA is spatial only",
-            "flashlight SIGMA history disclosure");
-        const std::string_view nrdDisabledFooter = ExtractSection(
-            denoising,
-            "#if !UVSR_WITH_NRD",
-            "EndAnimatedToggleRegion();",
-            "NRD-disabled Denoising footer");
-        RequireExactStrings(
-            nrdDisabledFooter,
-            { "NRD is not actually included in this build" },
-            "NRD-disabled Denoising footer");
         RequireOrdered(
             denoising,
             {
                 "\"Sky Visibility##Denoising\"",
-                "#if !UVSR_WITH_NRD",
-                "ImGui::TextDisabled(",
-                "\"NRD is not actually included in this build\");",
-                "#endif",
-                "EndAnimatedToggleRegion();",
                 "\"##PathTracingDenoisingBody\"",
+                "ImGui::PushTextWrapPos(0.f);",
+                "ImGui::TextDisabled(",
+                "\"Third Party denoisers are configurable, but not installed \"",
+                "\"in this build.\");",
+                "ImGui::PopTextWrapPos();",
                 "EndDrawerBody();"
             },
-            "the exact NRD-disabled message remains the final Ray Marching "
-            "Denoising content before the Path Tracing body");
+            "the exact third-party availability message remains the final "
+            "Denoising drawer content");
+        Require(
+            CountOccurrences(denoising, "ImGui::TextDisabled(") == 1u,
+            "the Denoising drawer must contain only its required gray footer.");
         const std::string_view pathDenoising = ExtractSection(
             denoising,
             "\"##PathTracingDenoisingBody\"",
@@ -1399,13 +1363,17 @@ namespace
             "template <typename... Arguments>",
             "performance summary builders");
         Require(
-            CountOccurrences(performanceBuilders, "\" / \"") == 5u,
-            "the one-line authored and two-line Ogg panel summaries must "
-            "retain all five slash field separators.");
+            CountOccurrences(performanceBuilders, "\" / \"") == 3u,
+            "the one-line Performance summary must retain all three slash "
+            "field separators for every skin.");
         RequireAbsent(
             performanceBuilders,
             "\" - \"",
             "slash-separated performance summaries");
+        RequireAbsent(
+            viewer,
+            "BuildOgPerformanceLines",
+            "retired expanded-only two-line Ogg Performance summary");
         const std::string_view statistics = ExtractSection(
             viewer,
             "void DrawPerformancePanelContents(",
@@ -1418,17 +1386,7 @@ namespace
         RequireContains(
             statistics,
             "ImGui::TextUnformatted(performanceLine.c_str())",
-            "authored-skin Performance panel summary");
-        for (const std::string_view ogPanelContract : {
-                std::string_view("m_ComposedUiSkin == UiSkin::Og"),
-                std::string_view("ogPerformanceLines[0].c_str()"),
-                std::string_view("ogPerformanceLines[1].c_str()") })
-        {
-            RequireContains(
-                statistics,
-                ogPanelContract,
-                "Ogg two-line Performance panel summary");
-        }
+            "skin-independent one-line Performance panel summary");
         RequireContains(
             statistics,
             "ImGui::SetItemTooltip(\"%s\", performanceTooltip)",
@@ -1482,9 +1440,12 @@ namespace
                 "ImGuiCond_Always);",
                 "m_PerformanceCollapsedRequest.reset();",
                 "ImGui::SetNextWindowCollapsed(true, ImGuiCond_Once);",
-                "const bool performanceExpanded = ImGui::Begin(",
+                "const bool performanceBeginVisible = ImGui::Begin(",
                 "\"Performance\"",
-                "if (performanceExpanded)",
+                "const bool performanceCollapsed = ImGui::IsWindowCollapsed();",
+                "const bool performanceBodySubmitted =",
+                "performanceBeginVisible && !performanceCollapsed;",
+                "if (performanceBodySubmitted)",
                 "DrawPerformancePanelContents(",
                 "ImGui::IsCurrentUvsrWindowCollapseTransitionActive()",
                 "ImGui::End();"
@@ -1494,67 +1455,68 @@ namespace
             performanceRoot,
             "m_SettingsCollapsed",
             "Performance collapse state independent of Settings");
+        RequireAbsent(
+            performanceRoot,
+            "ImGui::SetNextWindowSize(",
+            "Performance must not rearm zero-height auto-fit after logical "
+            "collapse");
         RequireContains(
             performanceRoot,
             "const bool performanceScrollIdle =",
             "detached Performance scroll-stability state");
-        const std::string_view performanceCollapseSurface = ExtractSection(
+        const std::string_view performanceRetainedSurface = ExtractSection(
             performanceRoot,
-            "const float performanceCollapseRange =",
-            "if (performanceExpanded)",
-            "Performance collapse-only body opacity");
+            "const ImRect performanceRetainedContentRect(",
+            "const bool performanceScrollIdle =",
+            "Performance permanently opaque retained row");
         RequireOrdered(
-            performanceCollapseSurface,
+            performanceRetainedSurface,
             {
-                "performanceWindow->SizeFull.y -",
-                "performanceCollapsedHeight",
-                "const bool performanceExpandedRangeKnown =",
-                "performanceCollapseRange > 0.5f;",
-                "const float performanceCollapseAmount =",
-                "performanceExpandedRangeKnown",
-                "? std::clamp(",
-                "performanceWindow->SizeFull.y -",
-                "performanceWindow->Size.y",
-                "performanceWindow->Size.y <=",
-                "performanceCollapsedHeight + 0.5f",
-                "? 1.f",
-                ": 0.f;",
-                "if (performanceCollapseAmount > 0.f)",
-                "GetOpaquePanelBodySurface();",
-                "compactBodyOverlay.w = performanceCollapseAmount;",
-                "performanceWindowDrawList->AddRectFilled(",
-                "performanceBodyRect.Min,",
-                "performanceBodyRect.Max,",
-                "style.WindowRounding,",
-                "ImDrawFlags_RoundCornersAll);"
+                "performanceContentRect.Min,",
+                "performanceContentRect.Max.x,",
+                "std::min(",
+                "performanceContentRect.Max.y,",
+                "performanceContentRect.Min.y + fontSize +",
+                "g_UiSpacingTokens.tight",
+                "if (performanceBodySubmitted)",
+                "DrawOpaqueRootPanelRetainedContent(",
+                "performanceRetainedContentRect,",
+                "DrawPerformancePanelContents(",
+                "DrawFilledRoundedInsetFrame(",
+                "performanceContentRect,",
+                "DrawRootPanelBodyOutlines(",
+                "else if (performanceCollapsed)",
+                "DrawCompactRootPanelBody(",
+                "performanceRetainedContentRect,"
             },
-            "only Performance derives an opaque same-RGB body overlay from its "
-            "live collapse size, including the first default-collapsed frame "
-            "whose expanded range has not been measured yet");
-        Require(
-            CountOccurrences(viewer, "compactBodyOverlay.w = ") == 1u &&
-                CountOccurrences(viewer, "performanceCollapseAmount") == 3u,
-            "the collapse-specific opacity overlay must remain unique to the "
-            "Performance root.");
+            "Performance paints one fixed opaque retained row before its "
+            "contents and keeps full-body outlines independent of opacity");
+        RequireAbsent(
+            viewer,
+            "compactBodyOverlay",
+            "retired collapse-modulated retained-row opacity");
+        RequireAbsent(
+            viewer,
+            "performanceCollapseAmount",
+            "retired Performance opacity animation state");
         const std::string_view collapsedPerformance = ExtractSection(
             performanceRoot,
-            "else\n        {\n            const ImVec2 summaryTextSize =",
-            "DrawFilledRoundedInsetFrame(",
+            "else if (performanceCollapsed)\n        {\n"
+            "            DrawCompactRootPanelBody(",
+            "const bool performanceScrollIdle =",
             "collapsed Performance summary endpoint");
         RequireOrdered(
             collapsedPerformance,
             {
-                "const ImVec2 summaryTextSize = ImGui::CalcTextSize(",
-                "performanceBodyRect.Min.y +",
-                "(performanceBodyRect.GetHeight() -",
-                "summaryTextSize.y) * 0.5f",
-                "performanceWindowDrawList->PushClipRect(",
-                "performanceWindowDrawList->AddText(",
-                "performanceLine.c_str());",
-                "performanceWindowDrawList->PopClipRect();"
+                "DrawCompactRootPanelBody(",
+                "performanceWindowDrawList,",
+                "performanceBodyRect,",
+                "performanceRetainedContentRect,",
+                "style.WindowRounding,",
+                "performanceLine.c_str());"
             },
-            "collapsed Performance directly paints its one-line summary beneath "
-            "the title");
+            "collapsed Performance routes its one-line summary through the "
+            "shared compact-root renderer");
         for (const std::string_view expandedOnlyControl : {
                 std::string_view("DrawPerformancePanelContents("),
                 std::string_view("BeginRoundedCombo("),
@@ -1574,7 +1536,7 @@ namespace
             panelMinimumLayout,
             {
                 "const float panelTitleMinimumHeight =",
-                "GetSettingsCollapsedWindowHeight(",
+                "GetPanelTitleHeight(",
                 "const float performanceCollapsedHeight =",
                 "panelTitleMinimumHeight +",
                 "ImGui::GetStyle().WindowPadding.y * 2.f +",
@@ -1585,8 +1547,8 @@ namespace
                 "panelSeparation +",
                 "minimumSettingsHeight;"
             },
-            "Performance reserves a summary row while Settings retains its "
-            "independent title-only endpoint");
+            "Performance and Settings reserve their retained one-line bodies "
+            "from the shared title height");
         RequireContains(
             Compact(viewer),
             "settingsScrollIdle&&performanceScrollIdle",
@@ -1619,7 +1581,7 @@ namespace
         RequireOrdered(
             panelStack,
             {
-                "const bool performanceExpanded = ImGui::Begin(",
+                "const bool performanceBeginVisible = ImGui::Begin(",
                 "\"Performance\"",
                 "const float settingsWindowTop =",
                 "ImGui::Begin(\n            \"Settings\"",
@@ -1643,13 +1605,14 @@ namespace
             "ImGui::TextUnformatted(performanceLine.c_str())",
             "Performance summary detached from Settings");
         RequireAbsent(
-            settingsRoot,
-            "ogPerformanceLines[0].c_str()",
-            "Ogg Performance first row detached from Settings");
-        RequireAbsent(
-            settingsRoot,
-            "ogPerformanceLines[1].c_str()",
-            "Ogg Performance second row detached from Settings");
+            ExtractSection(
+                viewer,
+                "const float settingsWindowTop =",
+                "ImGuiWindowFlags settingsWindowFlags =",
+                "Settings root sizing policy"),
+            "ImGui::SetNextWindowSize(",
+            "Settings must not rearm zero-height auto-fit after logical "
+            "collapse");
         RequireAbsent(
             viewer,
             "\"Renderer: %s\"",
@@ -2017,7 +1980,7 @@ namespace
             "removed Multisample placeholder timing rows");
         for (const std::string_view retainedBreakdown : {
                 std::string_view("First Trace"),
-                std::string_view("Reconstruction"),
+                std::string_view("Upsample"),
                 std::string_view("Dispatches"),
                 std::string_view("Active History Memory"),
                 std::string_view("History Status"),
@@ -3702,6 +3665,7 @@ namespace
         for (const std::string_view section : {
                 std::string_view("Ui"),
                 std::string_view("General"),
+                std::string_view("Pathing"),
                 std::string_view("Representation"),
                 std::string_view("Noise"),
                 std::string_view("Visibility"),
@@ -3778,14 +3742,17 @@ namespace
                 std::string_view("\"Material\""),
                 std::string_view(
                     "BeginDrawerBody(\"##MaterialBody\", settingsControlWidth);"),
-                std::string_view("m_MaterialDrawerAppearance ="),
-                std::string_view("Refresh Center Material") })
+                std::string_view("m_MaterialDrawerAppearance =") })
         {
             RequireContains(
                 materialWindow,
                 drawerContract,
                 "embedded Material drawer contract");
         }
+        RequireAbsent(
+            materialWindow,
+            "Refresh Center Material",
+            "retired Material center-refresh button");
         RequireContains(
             materialWindow,
             "[app = m_app, material, candidate]()",
@@ -3794,6 +3761,20 @@ namespace
             materialWindow,
             "app->NotifyMaterialCommandChanged(material);",
             "Material Domain history invalidation");
+        RequireOrdered(
+            materialWindow,
+            {
+                "SetNextLabeledControlWidth(",
+                "\"Material Domain\"",
+                "settingsControlWidth);",
+                "\"Material Domain##MaterialDomain\"",
+                "ImGui::PushItemWidth(settingsControlWidth);"
+            },
+            "Material uses the standard side-labeled bounded control width");
+        RequireAbsent(
+            materialWindow,
+            "ImGui::PushItemWidth(-FLT_MIN)",
+            "full-width Material editor controls");
         RequireOrdered(
             materialWindow,
             {
@@ -3876,12 +3857,16 @@ namespace
         RequireOrdered(
             materialReveal,
             {
-                "m_app->SetMaterialDrawerVisible(visible, refreshSelection);",
+                "m_app->SetMaterialDrawerVisible(visible);",
                 "m_MaterialRevealRequested = visible;",
                 "m_SettingsCollapsedRequest = false;",
                 "m_SettingsCollapsed = false;"
             },
             "Material opening must expand Settings and request reveal");
+        RequireAbsent(
+            viewer,
+            "refreshSelection",
+            "retired optional Material refresh bypass");
         RequireOrdered(
             materialWindow,
             {
@@ -3918,7 +3903,7 @@ namespace
                 "m_ui.ShowMaterialDrawer ||",
                 "m_MaterialDrawerAppearance > 0.f;",
                 "if (m_ui.ShowMaterialDrawer)",
-                "RequestMaterialDrawerVisible(false, false);",
+                "RequestMaterialDrawerVisible(false);",
                 "m_MaterialDrawerAppearance = 0.f;",
                 "m_MaterialDrawerPresentationForceClosed =",
                 "m_MaterialDrawerPresentationForceClosed ||",
@@ -3962,6 +3947,7 @@ namespace
 
     void ValidateUiSafety(
         std::string_view viewer,
+        std::string_view settingsSnapshotSchema,
         std::string_view uiAnimation,
         std::string_view donutAppOverride,
         std::string_view donutAppUiPolishOverride,
@@ -4083,6 +4069,26 @@ namespace
                 "drawTextureFilename(material->") == 9u,
             "Every one of the nine blue Material texture-name paths must use "
             "the shared 25-character renderer.");
+        for (const std::string_view textureToggleLabel : {
+                std::string_view("\"Use Diffuse Texture:\""),
+                std::string_view("\"Use Specular Texture:\""),
+                std::string_view("\"Use Base Color Texture:\""),
+                std::string_view("\"Use Metal Rough Texture:\""),
+                std::string_view("\"Use Normal Texture:\""),
+                std::string_view("\"Use Occlusion Texture:\""),
+                std::string_view("\"Use Emissive Texture:\""),
+                std::string_view("\"Use Transmission Texture:\""),
+                std::string_view("\"Use Alpha Mask Texture:\"") })
+        {
+            RequireContains(
+                donutAppUiPolishAdded,
+                textureToggleLabel,
+                "filename-adjacent Material toggle label and colon");
+        }
+        RequireAbsent(
+            donutAppUiPolishAdded,
+            "Use Metal-Rough Texture",
+            "retired hyphenated Material texture label");
         Require(
             CountOccurrences(
                 donutAppUiPolishAdded,
@@ -4102,21 +4108,20 @@ namespace
             {
                 "##MaterialNormalScaleRegion",
                 "material->enableNormalTexture",
-                "const char* normalScaleLabel = \"Normal Scale\";",
-                "ImGui::CalcTextSize(normalScaleLabel).x +",
-                "ImGui::GetStyle().ItemInnerSpacing.x;",
-                "ImGui::GetContentRegionAvail().x - normalScaleLabelWidth;",
-                "ImGui::SetNextItemWidth(",
-                "normalScaleSliderWidth > 1.f ? normalScaleSliderWidth : 1.f);",
                 "update |= ImGui::SliderFloat(",
-                "normalScaleLabel,",
+                "\"Normal Scale\"",
                 "&material->normalTextureScale,",
                 "-2.f,",
-                "2.f);"
+                "2.f);",
+                "setMaterialTooltip(",
+                "Scale normal-map relief; negative values invert the mapped direction."
             },
-            "Normal Scale reserves its visible label width inside the Material "
-            "content lane and keeps the safe bounded slider in its conditional "
-            "region");
+            "Normal Scale inherits the bounded Material width and explains its "
+            "effect in the conditional region");
+        RequireAbsent(
+            donutAppUiPolishAdded,
+            "normalScaleSliderWidth",
+            "retired full-lane Normal Scale sizing");
         RequireAbsent(
             donutAppUiPolishAdded,
             "ImGui::Button(\"1.0\")",
@@ -4274,9 +4279,9 @@ namespace
                 "style.WindowRounding;",
                 "DrawTranslucentHeaderPanelBodySurface(",
                 "rootBodyRounding",
-                "DrawFilledRoundedInsetFrame(",
+                "DrawCompactRootPanelBody(",
                 "settingsBodyRect,",
-                "retainedSettingsContentRect,",
+                "settingsRetainedContentRect,",
                 "rootBodyRounding",
                 "CapturePanelSurfaceBackdrops(",
                 "style.FrameRounding,",
@@ -4287,44 +4292,14 @@ namespace
             },
             "root bodies and titles retain their semantic Window/Frame fields; "
             "the authored skin resolves both to its unified radius");
-        const std::string_view fixedTopInsetShadow = ExtractSection(
+        RequireAbsent(
             viewer,
-            "static void DrawSettingsFixedTopInsetShadow(",
-            "static bool DrawPresetResetIcon(",
-            "fixed Settings top-inset shadow");
-        RequireOrdered(
-            fixedTopInsetShadow,
-            {
-                "bool intersectClipRect)",
-                "const ImRect shadowRect(",
-                "bodyRect.Min,",
-                "bodyRect.Min.y + insetHeight",
-                "const float effectiveRounding = std::max(",
-                "rounding,",
-                "bodyRect.GetWidth() * 0.5f - 1.f,",
-                "bodyRect.GetHeight() * 0.5f - 1.f",
-                "const ImRect shadowMaskRect(",
-                "bodyRect.Min.y + std::max(",
-                "shadowRect.GetHeight(),",
-                "effectiveRounding + 1.f",
-                "drawList->PushClipRect(",
-                "shadowRect.Min,",
-                "shadowRect.Max,",
-                "intersectClipRect);",
-                "drawList->AddRectFilled(",
-                "shadowMaskRect.Min,",
-                "shadowMaskRect.Max,",
-                "effectiveRounding,",
-                "ImDrawFlags_RoundCornersTop",
-                "0.24f * falloff * falloff * coverage",
-                "drawList->PopClipRect();"
-            },
-            "root panels clip a radius-safe shadow mask to their caller-owned "
-            "fixed top inset without a corner wedge");
+            "DrawSettingsFixedTopInsetShadow",
+            "retired root-panel inset shadow that graded retained rows");
         const std::string_view filledRoundedInsetFrame = ExtractSection(
             viewer,
             "static void DrawFilledRoundedInsetFrame(",
-            "static void DrawSettingsScrollEdgeFades()",
+            "static void DrawOpaqueRootPanelRetainedContent(",
             "opaque rounded root-panel inset frame");
         RequireOrdered(
             filledRoundedInsetFrame,
@@ -4387,7 +4362,7 @@ namespace
         const std::string_view drawerBodyOutline = ExtractSection(
             viewer,
             "static void DrawDrawerBodyOutline(",
-            "static void DrawSettingsScrollEdgeFades()",
+            "static float ResolveRoundedRectRadius(",
             "drawer and Settings inner body outline");
         RequireOrdered(
             drawerBodyOutline,
@@ -4403,11 +4378,13 @@ namespace
                 "drawList->AddRect(",
                 "std::max(0.f, rounding - Inset),",
                 "ImDrawFlags_RoundCornersAll,",
-                "Thickness);"
+                "Thickness);",
+                "outlineColor.w *= coverage;",
+                "vertex.col = ImGui::GetColorU32(outlineColor);"
             },
             "drawer outlines retain all four rounded corners, preserve the "
-            "zero-gap top antialias fringe, and explicitly choose whether the "
-            "current child clip may trim them");
+            "zero-gap top antialias fringe, explicitly choose whether the "
+            "current child clip may trim them, and retain one stable stroke");
         const std::string_view performanceLateDecoration = ExtractSection(
             viewer,
             "ImDrawList* performanceWindowDrawList =",
@@ -4417,31 +4394,65 @@ namespace
             performanceLateDecoration,
             {
                 "const ImRect performanceBodyRect(",
+                "performanceWindow->Pos.x,",
+                "performanceWindow->Size.x,",
+                "performanceWindow->Size.y));",
                 "const ImRect performanceContentRect(",
-                "if (performanceExpanded)",
+                "const ImRect performanceRetainedContentRect(",
+                "if (performanceBodySubmitted)",
+                "DrawOpaqueRootPanelRetainedContent(",
                 "DrawPerformancePanelContents(",
-                "else",
-                "performanceWindowDrawList->AddText(",
                 "DrawFilledRoundedInsetFrame(",
-                "performanceBodyRect,",
-                "performanceContentRect,",
-                "DrawSettingsFixedTopInsetShadow(",
-                "performanceWindowDrawList,",
-                "performanceBodyRect,",
-                "std::max(",
-                "performanceContentRect.Min.y -",
-                "performanceBodyRect.Min.y +",
-                "g_UiSpacingTokens.tight),",
-                "DrawDrawerBodyOutline(",
-                "performanceBodyRect.Min,",
-                "performanceBodyRect.Max,",
-                "DrawDrawerBodyOutline(",
-                "performanceContentRect.Min,",
-                "performanceContentRect.Max,"
+                "DrawRootPanelBodyOutlines(",
+                "else if (performanceCollapsed)",
+                "DrawCompactRootPanelBody("
             },
-            "Performance submits its content first, then the opaque inset fill, "
-            "root-owned top-margin shadow with a shallow content cast, outer "
-            "outline, and inner outline");
+            "Performance paints only the permanent retained surface before "
+            "content, then appends its opaque frame and stable outlines");
+        RequireAbsent(
+            performanceLateDecoration,
+            "performanceWindow->Pos.x + 0.5f",
+            "retired half-pixel Performance content-boundary contraction");
+        const std::string_view compactRootPanelRenderer = ExtractSection(
+            viewer,
+            "static void DrawOpaqueRootPanelRetainedContent(",
+            "static void EndDrawerBody()",
+            "shared compact root-panel renderer");
+        RequireOrdered(
+            compactRootPanelRenderer,
+            {
+                "static void DrawOpaqueRootPanelRetainedContent(",
+                "const ImRect clippedContentRect(",
+                "ImGui::GetColorU32(GetOpaquePanelBodySurface()),",
+                "static void DrawRootPanelBodySurface(",
+                "DrawFilledRoundedInsetFrame(",
+                "DrawOpaqueRootPanelRetainedContent(",
+                "static void DrawRootPanelBodyOutlines(",
+                "DrawDrawerBodyOutline(",
+                "bodyRect.Min,",
+                "bodyRect.Max,",
+                "DrawDrawerBodyOutline(",
+                "contentRect.Min,",
+                "contentRect.Max,",
+                "static void DrawRootPanelBodyChrome(",
+                "DrawRootPanelBodySurface(",
+                "DrawRootPanelBodyOutlines(",
+                "static ImRect DrawCompactRootPanelBody(",
+                "const ImVec2 textSize = ImGui::CalcTextSize(text);",
+                "contentRect.Min.x + g_UiSpacingTokens.tight,",
+                "contentRect.Min.y);",
+                "DrawRootPanelBodyChrome(",
+                "drawList->PushClipRect(",
+                "drawList->AddText(",
+                "drawList->PopClipRect();",
+                "return textRect;"
+            },
+            "Performance and Settings share a full-alpha retained surface, "
+            "fixed text baseline, inset fill, and stable outer/inner outlines");
+        RequireAbsent(
+            compactRootPanelRenderer,
+            "(bodyRect.GetHeight() - textSize.y) * 0.5f",
+            "retired endpoint-only vertical text centering");
         const std::string_view settingsChildList = ExtractSection(
             viewer,
             "ImGui::BeginChild(\n            \"##SettingsBody\"",
@@ -4452,76 +4463,93 @@ namespace
             {
                 "ImDrawList* settingsBodyDrawList =",
                 "TrackSettingsAppearanceDrawList(settingsBodyDrawList);",
-                "DrawSettingsScrollEdgeFades();",
                 "const ImRect settingsBodyViewportRect(",
+                "ImGuiWindow* settingsRootWindow =",
                 "const ImRect settingsRootBodyRect(",
+                "ImRect settingsAnimatedContentRect(",
+                "ImLerp(",
+                "settingsBodyViewportRect.Min,",
+                "settingsRetainedContentRect.Min,",
+                "settingsCollapseAmount",
+                "ImLerp(",
+                "settingsBodyViewportRect.Max,",
+                "settingsRetainedContentRect.Max,",
+                "settingsCollapseAmount",
+                "settingsAnimatedContentRect.Min.x = std::max(",
+                "settingsRootBodyRect.Min.x + style.WindowPadding.x",
+                "settingsAnimatedContentRect.Max.y = std::min(",
+                "settingsRootBodyRect.Max.y - style.WindowPadding.y",
                 "ImDrawList* settingsDecorationDrawList =",
-                "ResolveFinalSettingsDecorationDrawList(settingsBodyWindow);",
+                "ResolveFinalSettingsDecorationDrawList(settingsRootWindow);",
                 "settingsDecorationDrawList->_Splitter._Count > 1",
                 "settingsDecorationDrawList->ChannelsMerge();",
-                "DrawFilledRoundedInsetFrame(",
+                "DrawRootPanelBodyChrome(",
                 "settingsDecorationDrawList,",
                 "settingsRootBodyRect,",
-                "settingsBodyViewportRect,",
-                "DrawSettingsFixedTopInsetShadow(",
-                "settingsDecorationDrawList,",
-                "settingsRootBodyRect,",
-                "std::max(",
-                "settingsBodyViewportRect.Min.y -",
-                "settingsRootBodyRect.Min.y +",
-                "g_UiSpacingTokens.tight),",
-                "style.WindowRounding,",
-                "false);",
-                "DrawDrawerBodyOutline(",
-                "settingsDecorationDrawList,",
+                "settingsAnimatedContentRect,",
+                "settingsRetainedContentRect,",
+                "style.WindowRounding);",
+                "if (expandedSettingsSnapshotSubmitted)",
+                "settingsDecorationDrawList->PushClipRect(",
                 "settingsRootBodyRect.Min,",
                 "settingsRootBodyRect.Max,",
-                "style.WindowRounding,",
-                "0.f,",
                 "false);",
-                "DrawDrawerBodyOutline(",
-                "settingsDecorationDrawList,",
-                "settingsBodyViewportRect.Min,",
-                "settingsBodyViewportRect.Max,",
-                "style.WindowRounding,",
-                "0.f,",
-                "false);",
+                "settingsDecorationDrawList->AddText(",
+                "expandedSettingsSnapshotMinimum,",
+                "m_SettingsSnapshotCode.c_str());",
+                "settingsDecorationDrawList->PopClipRect();",
                 "ImGui::PopUvsrColorPickerPopupContentRight();",
                 "ImGui::EndChild();"
             },
-            "the opaque inset fill, root-owned top-margin shadow with a shallow "
-            "General cast, outer outline, and complete four-corner inner "
-            "silhouette are appended after merging the final visible "
-            "descendant's channels, immediately before EndChild");
+            "one Settings content rectangle morphs from the scrolling viewport "
+            "to the retained hash and is appended on the final descendant");
+        Require(
+            CountOccurrences(
+                settingsChildList,
+                "DrawRootPanelBodyChrome(") == 1u &&
+                CountOccurrences(
+                    settingsChildList,
+                    "settingsDecorationDrawList->AddText(") == 1u &&
+                CountOccurrences(
+                    settingsChildList,
+                    "DrawDrawerBodyOutline(") == 0u,
+            "the submitted Settings child must route one animated chrome pair "
+            "and exactly one visible hash run through the final draw list");
+        RequireAbsent(
+            settingsChildList,
+            "if (settingsCollapseAmount <= 0.f)",
+            "retired binary Settings inner-outline geometry switch");
+        RequireContains(
+            settingsChildList,
+            "ImGui::EndChild();\n        }",
+            "Settings child closes before the settled collapsed endpoint path");
         const std::string_view retainedSettingsDecoration = ExtractSection(
             viewer,
-            "if (!settingsExpanded &&",
-            "const bool settingsCollapsed =",
+            "if (settingsCollapsed &&",
+            "const bool settingsCollapseTransitionActive =",
             "retained collapsing Settings root decoration");
         RequireOrdered(
             retainedSettingsDecoration,
             {
-                "const ImRect retainedSettingsContentRect(",
-                "DrawFilledRoundedInsetFrame(",
-                "settingsBodyRect,",
-                "retainedSettingsContentRect,",
-                "DrawSettingsFixedTopInsetShadow(",
+                "const ImRect snapshotHitRect = DrawCompactRootPanelBody(",
                 "settingsWindowDrawList,",
                 "settingsBodyRect,",
-                "std::max(",
-                "retainedSettingsContentRect.Min.y -",
-                "settingsBodyRect.Min.y +",
-                "g_UiSpacingTokens.tight),",
-                "DrawDrawerBodyOutline(",
-                "settingsBodyRect.Min,",
-                "settingsBodyRect.Max,",
-                "DrawDrawerBodyOutline(",
-                "retainedSettingsContentRect.Min,",
-                "retainedSettingsContentRect.Max,"
+                "settingsRetainedContentRect,",
+                "rootBodyRounding,",
+                "m_SettingsSnapshotCode.c_str());",
+                "snapshotHitRect.Contains(ImGui::GetIO().MousePos)"
             },
-            "the retained collapsing Settings body preserves the same fill, "
-            "root-margin shadow geometry, outer-outline, and inner-outline "
-            "order");
+            "settled Settings routes its text, hit rectangle, and body through "
+            "the same compact renderer as Performance");
+        Require(
+            CountOccurrences(
+                viewer,
+                "DrawCompactRootPanelBody(") == 3u &&
+                CountOccurrences(
+                    retainedSettingsDecoration,
+                    "DrawDrawerBodyOutline(") == 0u,
+            "the shared compact renderer definition plus Performance and "
+            "Settings calls must own all endpoint outlines");
         for (const std::string_view retiredBackdropContract : {
                 std::string_view("UiPanelStackBackdropIndex"),
                 std::string_view("UiPanelStackShadowBackdropIndex"),
@@ -4638,25 +4666,10 @@ namespace
             "return luminance >= 0.68f;",
             "structural scene-translucency remains active for an authored "
             "ultra-bright Primary Accent RGB even at transparent alpha");
-        const std::string_view scrollEdgeFade = ExtractSection(
-            viewer,
-            "static void DrawSettingsScrollEdgeFades()",
-            "static void EndDrawerBody()",
-            "Settings scroll-edge alpha routing");
-        RequireOrdered(
-            scrollEdgeFade,
-            {
-                "ImVec4 edgeColor = style.Colors[ImGuiCol_WindowBg];",
-                "ImVec4 clearColor = edgeColor;",
-                "clearColor.w = 0.f;",
-                "color.w *= std::clamp("
-            },
-            "scroll-edge fades derive from actual panel alpha down to a "
-            "transparent endpoint");
         RequireAbsent(
-            scrollEdgeFade,
-            "std::max(edgeColor.w",
-            "retired scroll-fade alpha floor");
+            viewer,
+            "DrawSettingsViewportEdgeShadows",
+            "rejected hardcoded Settings viewport shadows");
         for (const std::string_view paletteContract : {
                 std::string_view("const UiSkinPalette* storedPalette ="),
                 std::string_view(
@@ -4876,7 +4889,7 @@ namespace
         const std::string_view translucentSettingsWindow = ExtractSection(
             viewer,
             "ImGuiWindowFlags settingsWindowFlags =",
-            "const bool settingsCollapsed =",
+            "const bool settingsCollapseTransitionActive =",
             "ultra-bright authored Settings root surface routing");
         RequireOrdered(
             translucentSettingsWindow,
@@ -4884,7 +4897,7 @@ namespace
                 "if (g_UiVisualTokens.sceneTranslucentHeaders)",
                 "settingsWindowFlags |= ImGuiWindowFlags_NoBackground;",
                 ".translucentHeaderSupportRects.clear();",
-                "if (settingsExpanded &&",
+                "if (settingsBodySubmitted &&",
                 "g_UiVisualTokens.sceneTranslucentHeaders)",
                 "DrawTranslucentHeaderPanelBodySurface("
             },
@@ -5342,12 +5355,10 @@ namespace
                     "UiToggleRegionVisualMode::ClipDuringCollapse",
                 std::string(drawerId) + " ray-marching clip gate");
         }
-        RequireContains(
-            Compact(settingsDrawers),
-            "if(m_ui.Lighting==LightingSolution::PathTracing&&"
-                "!m_ui.AccumulateSamples){ImGui::TextDisabled("
-                "\"One-samplerefresh:enableaccumulationtoconverge.\");}",
-            "Path Tracing explains the intentionally noisy non-accumulating mode");
+        RequireAbsent(
+            settingsDrawers,
+            "One-sample refresh: enable accumulation to converge.",
+            "retired gray Accumulate Samples status text");
         RequireContains(
             Compact(toggleRegion),
             "constbooltransitionActive=targetChangedThisFrame||"
@@ -7505,25 +7516,85 @@ namespace
         RequireOrdered(
             imguiTooltipPickerAdded,
             {
-                "const bool authored_disabled_alpha_component =",
+                "const bool authored_hidden_alpha_column =",
                 "(flags & ImGuiColorEditFlags_NoPicker) != 0 &&",
                 "(flags & ImGuiColorEditFlags_NoSmallPreview) != 0;",
-                "authored_disabled_alpha_component ? 4 : components;",
-                "if (n == components)",
-                "BeginDisabled();",
-                "disabled_alpha_value,",
-                "EndDisabled();",
+                "const int layout_components =",
+                "authored_hidden_alpha_column ? 4 : components;",
+                "for (int n = 0; n < components; n++)",
+                "w_items * (n + 1) / layout_components);",
                 "const int authored_bar_count = authored_bar_popup ? 4 : 0;",
                 "ImGuiColorEditFlags_NoPicker |",
                 "ImGuiColorEditFlags_NoSmallPreview;",
                 "else if (render_uvsr_wheel_with_bars)",
-                "IM_COL32(112, 112, 112, 255);",
-                "disabled_alpha_stops",
+                "AddUvsrRoundedCheckerboard(",
+                "disabled_alpha_bounds,",
+                "uvsr_bar_rounding,",
+                "color_control_alpha);",
                 "RenderFrameBorder("
             },
             "authored subordinate RGB/HSV rows remove their preview squares, "
-            "reserve a disabled fourth value, and render a noninteractive gray "
-            "alpha lane without accessing a fourth caller component");
+            "leave their aligned alpha slot empty, and retain a noninteractive "
+            "checkerboard alpha lane without accessing caller alpha");
+        RequireAbsent(
+            imguiTooltipPickerAdded,
+            "disabled_alpha_value",
+            "retired gated alpha dummy numeric value");
+        RequireAbsent(
+            imguiTooltipPickerAdded,
+            "if (n == components)",
+            "retired gated alpha dummy numeric widget branch");
+        RequireAbsent(
+            imguiTooltipPickerAdded,
+            "IM_COL32(112, 112, 112, 255)",
+            "retired solid-gray gated alpha lane");
+        const std::string_view hiddenAlphaValueOutline = ExtractSection(
+            imguiTooltipPickerOverride,
+            "const bool draw_hidden_alpha_value_outline =",
+            "PopItemWidth();",
+            "continuous hidden-alpha numeric enclosure");
+        RequireOrdered(
+            hiddenAlphaValueOutline,
+            {
+                "const bool draw_hidden_alpha_value_outline =",
+                "render_uvsr_wheel_with_bars &&",
+                "ImGuiColorEditFlags_NoAlpha",
+                "ColorEdit4(\"##rgb\"",
+                "g.LastItemData.Rect.Min.y;",
+                "has_hidden_alpha_rgb_row = true;",
+                "ColorEdit4(",
+                "\"##hsv\"",
+                "if (draw_hidden_alpha_value_outline &&",
+                "has_hidden_alpha_rgb_row)",
+                "const ImRect hidden_alpha_value_bounds(",
+                "bar0_pos_x,",
+                "hidden_alpha_value_top",
+                "final_bar_pos_x + bars_width,",
+                "g.LastItemData.Rect.Max.y",
+                "RenderFrameBorder(",
+                "hidden_alpha_value_bounds.Min,",
+                "hidden_alpha_value_bounds.Max,",
+                "style.FrameRounding,",
+                "false);",
+                "ColorEdit4(\"##hex\""
+            },
+            "one carved perimeter surrounds both blank alpha-value slots");
+        Require(
+            CountOccurrences(
+                hiddenAlphaValueOutline,
+                "RenderFrameBorder(") == 1u,
+            "the gated RGB and HSV alpha slots must share exactly one outline");
+        for (const std::string_view forbiddenHiddenAlphaItem : {
+                std::string_view("InvisibleButton("),
+                std::string_view("ItemAdd("),
+                std::string_view("disabled_alpha_value"),
+                std::string_view("if (n == components)") })
+        {
+            RequireAbsent(
+                hiddenAlphaValueOutline,
+                forbiddenHiddenAlphaItem,
+                "noninteractive continuous hidden-alpha enclosure");
+        }
         RequireOrdered(
             imguiTooltipPickerAdded,
             {
@@ -7759,6 +7830,56 @@ namespace
             "General must keep Lighting Solution, adapter, Adaptive Sync, "
             "camera, location, and scene selection on the deferred dropdown "
             "path.");
+        const std::string_view lightingSolutionApplication = ExtractSection(
+            viewer,
+            "void ApplyLightingSolution(LightingSolution solution)",
+            "void ResetAllSettingsToFactoryDefaults()",
+            "Lighting Solution transition application");
+        RequireOrdered(
+            lightingSolutionApplication,
+            {
+                "const bool changed = m_ui.Lighting != solution;",
+                "m_ui.Lighting = solution;",
+                "if (changed)",
+                "m_PathingDrawerOpenRequested =",
+                "solution == LightingSolution::PathTracing;",
+                "m_app->ResetImageBasedLightingHistory();"
+            },
+            "only an actual Path Tracing transition arms the Pathing drawer");
+        Require(
+            CountOccurrences(viewer, "ApplyLightingSolution(") == 3u,
+            "the CLI and deferred General selector must share the one Lighting "
+            "Solution transition helper");
+        const std::string_view pathingDrawer = ExtractSection(
+            viewer,
+            "void DrawPathingDrawer(float settingsControlWidth)",
+            "void DrawMaterialDrawer(float settingsControlWidth)",
+            "Pathing drawer transition request");
+        RequireOrdered(
+            pathingDrawer,
+            {
+                "std::exchange(",
+                "m_PathingDrawerOpenRequested,",
+                "false)",
+                "ImGui::SetNextItemOpen(true, ImGuiCond_Always);",
+                "DrawCollapsingHeader(",
+                "\"Pathing\""
+            },
+            "the Pathing drawer consumes its transition request once before "
+            "submitting the header");
+        RequireAbsent(
+            pathingDrawer,
+            "ImGuiTreeNodeFlags_DefaultOpen",
+            "persistent default-open Pathing drawer state");
+        const std::string_view factoryReset = ExtractSection(
+            viewer,
+            "void ResetAllSettingsToFactoryDefaults()",
+            "bool DispatchGeneralCommandValue(",
+            "Pathing drawer factory-reset state");
+        RequireContains(
+            factoryReset,
+            "m_PathingDrawerOpenRequested = false;",
+            "factory reset clears the one-shot Pathing drawer request");
         RequireOrdered(
             generalDrawer,
             {
@@ -8310,7 +8431,7 @@ namespace
                 "ImDrawFlags_RoundCornersAll",
                 "both anti-aliased side arcs inside the window clip",
                 "ImDrawFlags_RoundCornersAll",
-                "independent body's complete rounded depth outline",
+                "Both authored roots share one complete rounded body outline.",
                 "ImDrawFlags_RoundCornersAll"
             },
             "Performance and Settings keep fully rounded independent surfaces");
@@ -8349,7 +8470,8 @@ namespace
             stackedPanelCorners,
             {
                 "if (has_retained_status_surface &&",
-                "!g.UvsrStockWidgetRendering)",
+                "!g.UvsrStockWidgetRendering &&",
+                "is_stacked_panel_title)",
                 "window->WindowBorderSize = 0.0f;",
                 "RenderGradientFrameOutline(",
                 "retained_status_rect,",
@@ -8357,9 +8479,13 @@ namespace
                 "g.UvsrStockWidgetRendering)",
                 "RenderWindowOuterBorders(window);"
             },
-            "authored compact Performance uses separate carved-body and raised-title "
-            "depth outlines while Ogg retains one stock outer border around its "
-            "title and summary");
+            "authored compact Performance and Settings share the same native "
+            "body and raised-title depth outlines while Ogg retains one stock "
+            "outer border around its title and summary");
+        RequireAbsent(
+            stackedPanelCorners,
+            "strcmp(window->Name, \"Settings\") != 0",
+            "retired native-outline divergence between Performance and Settings");
         RequireAbsent(
             stackedPanelCorners,
             "? ImDrawFlags_RoundCornersTop",
@@ -8481,16 +8607,16 @@ namespace
             viewer,
             "static float GetSettingsCollapsedWindowHeight(",
             "static float GetSettingsMinimumExpandedWindowHeight(",
-            "title-only collapsed Settings height");
+            "retained-code collapsed Settings height");
         RequireContains(
             Compact(collapsedSettingsHeight),
-            "returnfontSize+style.FramePadding.y*2.f;",
-            "title-only collapsed Settings height");
+            "returnGetPanelTitleHeight(style,fontSize)+"
+            "style.WindowPadding.y*2.f+fontSize+g_UiSpacingTokens.tight;",
+            "collapsed Settings title plus retained snapshot line");
         for (const std::string_view retiredStatusHeight : {
                 std::string_view("SettingsStatusLineSpacing"),
                 std::string_view("hasPerformanceStatus"),
                 std::string_view("splitOgPerformanceStatus"),
-                std::string_view("style.WindowPadding.y"),
                 std::string_view("style.ItemSpacing.y") })
         {
             RequireAbsent(
@@ -8505,10 +8631,9 @@ namespace
             "expanded Settings minimum height");
         RequireContains(
             Compact(expandedSettingsHeight),
-            "constfloatframeHeight=fontSize+style.FramePadding.y*2.f;"
-            "returnframeHeight*2.f+style.WindowPadding.y*2.f;",
-            "expanded Settings title, one usable body row, and both root "
-            "padding edges");
+            "returnGetSettingsCollapsedWindowHeight(style,fontSize)+"
+            "fontSize+g_UiSpacingTokens.tight;",
+            "expanded Settings retains the snapshot and one usable body row");
         const std::string_view settingsLayoutMinimum = ExtractSection(
             viewer,
             "const float minimumSettingsHeight =",
@@ -8548,31 +8673,76 @@ namespace
             viewer,
             "const float settingsCollapsedHeight =",
             "if (m_SettingsCollapsedRequest)",
-            "title-only Settings collapse routing");
+            "retained-code Settings collapse routing");
         RequireOrdered(
             settingsCollapsedUse,
             {
                 "GetSettingsCollapsedWindowHeight(",
                 "ImGui::SetNextUvsrWindowCollapsedHeight("
             },
-            "title-only Settings collapse routing");
+            "retained-code Settings collapse routing");
         const std::string_view settingsRootBody = ExtractSection(
             viewer,
-            "const bool settingsExpanded = ImGui::Begin(",
+            "const bool settingsBeginVisible = ImGui::Begin(",
             "ImDrawList* settingsBodyDrawList =",
             "Settings root and scrolling-child padding");
         RequireOrdered(
             settingsRootBody,
             {
                 "\"Settings\"",
-                "if (settingsExpanded)",
+                "const bool settingsCollapsed = ImGui::IsWindowCollapsed();",
+                "const bool settingsBodySubmitted =",
+                "settingsBeginVisible && !settingsCollapsed;",
+                "const float settingsCollapseAmount =",
+                "const ImRect settingsRetainedContentRect(",
+                "settingsHeaderBodyRect.Min.y +",
+                "style.WindowPadding.y",
+                "std::min(",
+                "settingsHeaderBodyRect.Max.y -",
+                "style.WindowPadding.y,",
+                "fontSize +",
+                "g_UiSpacingTokens.tight",
+                "if (settingsBodySubmitted)",
+                "hiddenSnapshotText.w = 0.f;",
+                "ImGui::PushStyleColor(",
+                "ImGuiCol_Text,",
+                "hiddenSnapshotText);",
+                "ImGui::TextUnformatted(m_SettingsSnapshotCode.c_str());",
+                "ImGui::PopStyleColor();",
+                "expandedSettingsSnapshotMinimum = ImGui::GetItemRectMin();",
+                "CopySettingsSnapshot();",
                 "const float settingsBodyMaxHeight =",
                 "ImGui::GetCursorScreenPos().y - style.WindowPadding.y",
+                "const ImGuiWindowFlags settingsBodyFlags =",
+                "ImGuiWindowFlags_AlwaysVerticalScrollbar",
+                "settingsCollapseAmount > 0.f",
+                "ImGuiWindowFlags_NoScrollWithMouse",
                 "ImGui::BeginChild(",
-                "\"##SettingsBody\""
+                "\"##SettingsBody\"",
+                "settingsBodyFlags"
             },
-            "Settings preserves the root top margin, reserves the matching "
-            "bottom inset, and starts its scrolling child at General");
+            "Settings preserves one transparent layout/click owner for the "
+            "fixed snapshot row and reserves its scrollbar through motion; its "
+            "single visible late glyph run remains full strength");
+        Require(
+            CountOccurrences(
+                settingsRootBody,
+                "ImGui::TextUnformatted(m_SettingsSnapshotCode.c_str());") ==
+                1u,
+            "Settings must submit exactly one transparent hash layout item");
+        RequireAbsent(
+            settingsRootBody,
+            "settingsRetainedOutlineOpacityScale",
+            "Settings-only outline-strength discontinuity");
+        RequireAbsent(
+            settingsRootBody,
+            "ImGuiWindowFlags_NoScrollbar",
+            "submitted Settings child scrollbar reservation");
+        RequireContains(
+            viewer,
+            "const float settingsTitleHeight =\n"
+            "            settingsHeaderWindow->TitleBarHeight;",
+            "Settings late chrome reuses the actual animated title geometry");
         RequireAbsent(
             settingsRootBody,
             "ImGui::SetCursorPosY(",
@@ -8585,6 +8755,94 @@ namespace
             settingsRootBody,
             "ImGuiStyleVar_WindowPadding",
             "root Settings WindowPadding override");
+        const std::string_view snapshotMembership = ExtractSection(
+            settingsSnapshotSchema,
+            "[[nodiscard]] constexpr bool IsSettingsSnapshotValue(",
+            "class SettingsSnapshotSchemaFingerprintBuilder",
+            "settings snapshot membership policy");
+        RequireOrdered(
+            snapshotMembership,
+            {
+                "definition.kind != UiSettingsCommandKind::Action",
+                "definition.Supports(UiSettingsCommandVerb::Get)",
+                "definition.name != \"ui.settings-collapsed\" &&",
+                "definition.name != \"material-editor.visible\";"
+            },
+            "the snapshot includes every gettable value except transient root "
+            "and Material drawer presentation");
+        const std::string_view snapshotRefresh = ExtractSection(
+            viewer,
+            "void RefreshSettingsSnapshot()",
+            "GetSettingsSnapshotCatalogPath()",
+            "complete settings snapshot collection");
+        RequireOrdered(
+            snapshotRefresh,
+            {
+                "settings.reserve(UiSettingsCommandCatalog.size());",
+                "g_SettingsSnapshotPreciseFloatFormatting = true;",
+                "for (const UiSettingsCommandDefinition& definition :",
+                "UiSettingsCommandCatalog)",
+                "if (!IsSettingsSnapshotValue(definition))",
+                "continue;",
+                "DispatchCommandValue(",
+                "CommandValueOperation::Get",
+                "value = \"<unavailable>\";",
+                "settings.emplace_back(",
+                "std::sort(settings.begin(), settings.end());",
+                "canonical += setting.first;",
+                "canonical += setting.second;",
+                "BuildSettingsSnapshotCode("
+            },
+            "snapshot fingerprints every sorted represented command getter at "
+            "round-trip float precision");
+        const std::string_view snapshotCatalogPath = ExtractSection(
+            viewer,
+            "GetSettingsSnapshotCatalogPath()",
+            "bool PersistSettingsSnapshot() const",
+            "settings snapshot catalog path");
+        RequireOrdered(
+            snapshotCatalogPath,
+            {
+                "SHGetKnownFolderPath(",
+                "FOLDERID_LocalAppData",
+                "KF_FLAG_DEFAULT",
+                "SettingsSnapshotVersionText.data()",
+                "const std::wstring wideVersion(",
+                "L\"settings-snapshots-v\" + wideVersion + L\".txt\"",
+                "CoTaskMemFree(localAppData);",
+                "return path;"
+            },
+            "snapshot catalogs use Windows' writable Local AppData routing "
+            "instead of a launcher-inherited environment path");
+        RequireAbsent(
+            snapshotCatalogPath,
+            "_wgetenv",
+            "launcher-inherited snapshot catalog environment routing");
+        const std::string_view snapshotPersistence = ExtractSection(
+            viewer,
+            "bool PersistSettingsSnapshot() const",
+            "bool DispatchCommandAction(",
+            "settings snapshot persistence and copy");
+        RequireOrdered(
+            snapshotPersistence,
+            {
+                "GetSettingsSnapshotCatalogPath();",
+                "std::filesystem::create_directories(",
+                "\"[\" + m_SettingsSnapshotCode + \"]\\n\"",
+                "m_SettingsSnapshotCanonical",
+                "std::ios::binary | std::ios::app",
+                "# UVSR Settings Snapshot Catalog v",
+                "SettingsSnapshotVersionText.data()",
+                "void CopySettingsSnapshot()",
+                "PersistSettingsSnapshot()",
+                "ImGui::SetClipboardText(m_SettingsSnapshotCode.c_str());"
+            },
+            "copying archives the complete canonical snapshot before placing "
+            "its versioned code on the clipboard");
+        RequireAbsent(
+            viewer,
+            "settings-snapshots-v0002.txt",
+            "hardcoded settings snapshot catalog version");
         const std::string_view commandInterface = ExtractSection(
             viewer,
             "void DrawCommandInterface()",
@@ -8606,7 +8864,7 @@ namespace
                 "GetOpaquePanelBodySurface());"
             },
             "opaque compact-panel surface preserves body RGB while forcing "
-            "the resting endpoint opaque");
+            "every retained-row state opaque");
         RequireContains(
             commandInterface,
             "PushOpaquePanelBodySurface();",
@@ -8975,6 +9233,8 @@ int main(int argc, char** argv)
 
     const std::filesystem::path root = argv[1];
     const std::string viewer = ReadFile(root / "src" / "uvsr.cpp");
+    const std::string settingsSnapshotSchema = ReadFile(
+        root / "src" / "settings_snapshot_schema.h");
     const std::string catalog = ReadFile(
         root / "src" / "ui_settings_command_catalog.h");
     const std::string temporalOptions = ReadFile(
@@ -9004,7 +9264,8 @@ int main(int argc, char** argv)
     const std::string backdropBlurShader = ReadFile(
         root / "src" / "backdrop_blur_ps.hlsl");
     const std::string cmakeSource = ReadFile(root / "CMakeLists.txt");
-    if (viewer.empty() || catalog.empty() || temporalOptions.empty() ||
+    if (viewer.empty() || settingsSnapshotSchema.empty() ||
+        catalog.empty() || temporalOptions.empty() ||
         temporalPass.empty() || uiAnimation.empty() ||
         uiCommandLayout.empty() ||
         donutAppOverride.empty() || donutAppUiPolishOverride.empty() ||
@@ -9037,6 +9298,7 @@ int main(int argc, char** argv)
     ValidateMaterialHistoryInvalidation(viewer);
     ValidateUiSafety(
         viewer,
+        settingsSnapshotSchema,
         uiAnimation,
         donutAppOverride,
         donutAppUiPolishOverride,

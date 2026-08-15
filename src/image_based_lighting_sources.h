@@ -29,37 +29,37 @@ namespace uvsr
         uint32_t(ImageBasedLightingSource::Count)>
         ImageBasedLightingSourceCatalog = {{
         {
-            "Day - Kloppenheim 03",
+            "Day",
             "kloppenheim_03_puresky/kloppenheim_03_puresky_2k.hdr",
             -2.75f,
             false
         },
         {
-            "Bright Overcast - Snow Field 2",
+            "Bright Overcast",
             "snow_field_2_puresky/snow_field_2_puresky_2k.hdr",
             -2.5f,
             false
         },
         {
-            "Soft Day - Farm Field",
+            "Soft Day",
             "farm_field_puresky/farm_field_puresky_2k.hdr",
             -3.25f,
             false
         },
         {
-            "Night - Kloppenheim 07",
+            "Night",
             "kloppenheim_07_puresky/kloppenheim_07_puresky_2k.hdr",
             -5.f,
             true
         },
         {
-            "Starry Night - Qwantani",
+            "Starry Night",
             "qwantani_night_puresky/qwantani_night_puresky_2k.hdr",
             -6.5f,
             true
         },
         {
-            "Legacy - Quadrangle Cloudy",
+            "Cloudy",
             "quadrangle_cloudy/quadrangle_cloudy_1k.hdr",
             -3.f,
             false

@@ -45,7 +45,7 @@ index b690098..f0fb3dc 100644
  
      if (showMaterialDomain && allowMaterialDomainChanges)
      {
-@@ -207,129 +206,227 @@
+@@ -207,129 +206,242 @@
          positiveAccent.y,
          positiveAccent.z,
          positiveAccent.w);
@@ -100,6 +100,11 @@ index b690098..f0fb3dc 100644
 +                ImGuiColorEditFlags_Float |
 +                    ImGuiColorEditFlags_NoTooltip);
 +        };
++    const auto setMaterialTooltip =
++        [](const char* text)
++        {
++            ImGui::SetItemTooltip("%s", text);
++        };
  
      update |= ImGui::Checkbox("Double-Sided", &material->doubleSided);
      
@@ -110,7 +115,8 @@ index b690098..f0fb3dc 100644
      {
          if (material->baseOrDiffuseTexture)
          {
-             update |= ImGui::Checkbox("Use Diffuse Texture", &material->enableBaseOrDiffuseTexture);
+-            update |= ImGui::Checkbox("Use Diffuse Texture", &material->enableBaseOrDiffuseTexture);
++            update |= ImGui::Checkbox("Use Diffuse Texture:", &material->enableBaseOrDiffuseTexture);
              ImGui::SameLine();
 -            ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->baseOrDiffuseTexture->path).c_str());
 -        }
@@ -127,7 +133,8 @@ index b690098..f0fb3dc 100644
  
          if (material->metalRoughOrSpecularTexture)
          {
-             update |= ImGui::Checkbox("Use Specular Texture", &material->enableMetalRoughOrSpecularTexture);
+-            update |= ImGui::Checkbox("Use Specular Texture", &material->enableMetalRoughOrSpecularTexture);
++            update |= ImGui::Checkbox("Use Specular Texture:", &material->enableMetalRoughOrSpecularTexture);
              ImGui::SameLine();
 -            ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->metalRoughOrSpecularTexture->path).c_str());
 -        }
@@ -144,6 +151,8 @@ index b690098..f0fb3dc 100644
  
          float glossiness = 1.0f - material->roughness;
          update |= ImGui::SliderFloat(material->enableMetalRoughOrSpecularTexture ? "Glossiness Factor" : "Glossiness", &glossiness, 0.f, 1.f);
++        setMaterialTooltip(
++            "Control highlight sharpness: higher values make reflections clearer and tighter.");
          material->roughness = 1.0f - glossiness;
 -    }
 -    else
@@ -156,7 +165,8 @@ index b690098..f0fb3dc 100644
      {
          if (material->baseOrDiffuseTexture)
          {
-             update |= ImGui::Checkbox("Use Base Color Texture", &material->enableBaseOrDiffuseTexture);
+-            update |= ImGui::Checkbox("Use Base Color Texture", &material->enableBaseOrDiffuseTexture);
++            update |= ImGui::Checkbox("Use Base Color Texture:", &material->enableBaseOrDiffuseTexture);
              ImGui::SameLine();
 -            ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->baseOrDiffuseTexture->path).c_str());
 -        }
@@ -173,14 +183,19 @@ index b690098..f0fb3dc 100644
  
          if (material->metalRoughOrSpecularTexture)
          {
-             update |= ImGui::Checkbox("Use Metal-Rough Texture", &material->enableMetalRoughOrSpecularTexture);
+-            update |= ImGui::Checkbox("Use Metal-Rough Texture", &material->enableMetalRoughOrSpecularTexture);
++            update |= ImGui::Checkbox("Use Metal Rough Texture:", &material->enableMetalRoughOrSpecularTexture);
              ImGui::SameLine();
 -            ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->metalRoughOrSpecularTexture->path).c_str());
 +            drawTextureFilename(material->metalRoughOrSpecularTexture->path);
          }
  
          update |= ImGui::SliderFloat(material->enableMetalRoughOrSpecularTexture ? "Metalness Factor" : "Metalness", &material->metalness, 0.f, 1.f);
++        setMaterialTooltip(
++            "Blend from a nonmetal surface at 0 to a metallic surface at 1.");
          update |= ImGui::SliderFloat(material->enableMetalRoughOrSpecularTexture ? "Roughness Factor" : "Roughness", &material->roughness, 0.f, 1.f);
++        setMaterialTooltip(
++            "Control reflection blur: 0 is mirror-like and 1 is fully rough.");
 -    }
 -
 -    if (material->domain == MaterialDomain::AlphaBlended || material->domain == MaterialDomain::TransmissiveAlphaBlended)
@@ -196,6 +211,8 @@ index b690098..f0fb3dc 100644
              update |= ImGui::SliderFloat("Opacity Factor", &material->opacity, 0.f, 2.f);
          else
              update |= ImGui::SliderFloat("Opacity", &material->opacity, 0.f, 1.f);
++        setMaterialTooltip(
++            "Control how much of this alpha-blended surface remains visible.");
 -    }
 -    else if (material->domain == MaterialDomain::AlphaTested || material->domain == MaterialDomain::TransmissiveAlphaTested)
 -    {
@@ -213,12 +230,15 @@ index b690098..f0fb3dc 100644
 +            alphaTestedWithTexture))
 +    {
 +        update |= ImGui::SliderFloat("Alpha Cutoff", &material->alphaCutoff, 0.f, 1.f);
++        setMaterialTooltip(
++            "Discard texture pixels whose alpha is below this threshold.");
 +        endConditionalRegion();
      }
  
      if (material->normalTexture)
      {
-         update |= ImGui::Checkbox("Use Normal Texture", &material->enableNormalTexture);
+-        update |= ImGui::Checkbox("Use Normal Texture", &material->enableNormalTexture);
++        update |= ImGui::Checkbox("Use Normal Texture:", &material->enableNormalTexture);
          ImGui::SameLine();
 -        ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->normalTexture->path).c_str());
 -    }
@@ -243,25 +263,20 @@ index b690098..f0fb3dc 100644
 +            "##MaterialNormalScaleRegion",
 +            material->enableNormalTexture))
 +    {
-+        const char* normalScaleLabel = "Normal Scale";
-+        const float normalScaleLabelWidth =
-+            ImGui::CalcTextSize(normalScaleLabel).x +
-+            ImGui::GetStyle().ItemInnerSpacing.x;
-+        const float normalScaleSliderWidth =
-+            ImGui::GetContentRegionAvail().x - normalScaleLabelWidth;
-+        ImGui::SetNextItemWidth(
-+            normalScaleSliderWidth > 1.f ? normalScaleSliderWidth : 1.f);
 +        update |= ImGui::SliderFloat(
-+            normalScaleLabel,
++            "Normal Scale",
 +            &material->normalTextureScale,
 +            -2.f,
 +            2.f);
++        setMaterialTooltip(
++            "Scale normal-map relief; negative values invert the mapped direction.");
 +        endConditionalRegion();
      }
  
      if (material->occlusionTexture)
      {
-         update |= ImGui::Checkbox("Use Occlusion Texture", &material->enableOcclusionTexture);
+-        update |= ImGui::Checkbox("Use Occlusion Texture", &material->enableOcclusionTexture);
++        update |= ImGui::Checkbox("Use Occlusion Texture:", &material->enableOcclusionTexture);
          ImGui::SameLine();
 -        ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->occlusionTexture->path).c_str());
 +        drawTextureFilename(material->occlusionTexture->path);
@@ -273,12 +288,15 @@ index b690098..f0fb3dc 100644
 +            material->enableOcclusionTexture))
 +    {
          update |= ImGui::SliderFloat("Occlusion Strength", &material->occlusionStrength, 0.f, 1.f);
++        setMaterialTooltip(
++            "Scale the material's occlusion texture from ignored at 0 to full strength at 1.");
 +        endConditionalRegion();
 +    }
  
      if (material->emissiveTexture)
      {
-         update |= ImGui::Checkbox("Use Emissive Texture", &material->enableEmissiveTexture);
+-        update |= ImGui::Checkbox("Use Emissive Texture", &material->enableEmissiveTexture);
++        update |= ImGui::Checkbox("Use Emissive Texture:", &material->enableEmissiveTexture);
          ImGui::SameLine();
 -        ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->emissiveTexture->path).c_str());
 +        drawTextureFilename(material->emissiveTexture->path);
@@ -289,6 +307,8 @@ index b690098..f0fb3dc 100644
 +        "Emissive Color",
 +        material->emissiveColor.data());
      update |= ImGui::SliderFloat("Emissive Intensity", &material->emissiveIntensity, 0.f, 1000.f, "%.3f", ImGuiSliderFlags_Logarithmic);
++    setMaterialTooltip(
++        "Scale the light emitted by the material without changing its base color.");
  
 -    if (material->domain == MaterialDomain::Transmissive ||
 +    const bool transmissive =
@@ -302,19 +322,23 @@ index b690098..f0fb3dc 100644
      {
          if (material->transmissionTexture)
          {
-             update |= ImGui::Checkbox("Use Transmission Texture", &material->enableTransmissionTexture);
+-            update |= ImGui::Checkbox("Use Transmission Texture", &material->enableTransmissionTexture);
++            update |= ImGui::Checkbox("Use Transmission Texture:", &material->enableTransmissionTexture);
              ImGui::SameLine();
 -            ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->transmissionTexture->path).c_str());
 +            drawTextureFilename(material->transmissionTexture->path);
          }
  
          update |= ImGui::SliderFloat("Transmission Factor", &material->transmissionFactor, 0.f, 1.f);
++        setMaterialTooltip(
++            "Control how much light passes through this transmissive material.");
 +        endConditionalRegion();
      }
  
      if (material->opacityTexture)
      {
-         update |= ImGui::Checkbox("Use Alpha Mask Texture", &material->enableOpacityTexture);
+-        update |= ImGui::Checkbox("Use Alpha Mask Texture", &material->enableOpacityTexture);
++        update |= ImGui::Checkbox("Use Alpha Mask Texture:", &material->enableOpacityTexture);
          ImGui::SameLine();
 -        ImGui::TextColored(filenameColor, "%s", getShortTexturePath(material->opacityTexture->path).c_str());
 +        drawTextureFilename(material->opacityTexture->path);
