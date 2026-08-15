@@ -1660,8 +1660,24 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
             pixel.x ^ PathTracingHash(pixel.y + 0x9e3779b9u)) %
                 updateInterval
         : 0u;
+    const bool accumulationJitterActive = PathTracingFlagIsSet(
+        UVSR_PATH_TRACING_FLAG_ACCUMULATION_JITTER);
+    const uint coverageStep = accumulationJitterActive &&
+            updateInterval > 1u
+        ? ((updateInterval & 1u) == 0u ? 1u : 0u)
+        : 0u;
+    const uint successfulSamplesPerUpdate = max(
+        g_PathTracing.samplesPerPixel,
+        1u);
+    const uint successfulUpdatePhase = oldCount == 0u
+        ? 0u
+        : 1u + (oldCount - 1u) / successfulSamplesPerUpdate;
+    const uint successfulPhaseAdvance = updateInterval > 1u
+        ? (successfulUpdatePhase % updateInterval) * coverageStep
+        : 0u;
     const bool scheduledUpdate = updateInterval == 1u ||
-        (scheduleCycleModulo + updatePhase) % updateInterval == 0u;
+        (scheduleCycleModulo + updatePhase + successfulPhaseAdvance) %
+            updateInterval == 0u;
     const bool attempt = refreshDebug || !accumulate || oldCount == 0u ||
         scheduledUpdate;
 

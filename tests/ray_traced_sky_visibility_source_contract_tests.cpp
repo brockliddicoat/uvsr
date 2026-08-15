@@ -705,14 +705,17 @@ namespace
             "MSAA closest-surface resolve gate");
         RequireContains(
             multisampleGate,
-            "heitzratioestimatorselected||"
-                "raytracedflashlightshadowselected||"
+            "raytracedflashlightshadowselected||"
                 "raytracedskyvisibilityselected;",
-            "MSAA must resolve a single full resolution surface for every ray traced visibility producer");
+            "MSAA must resolve a single full resolution surface for the flashlight and sky producers");
+        RequireAbsent(
+            multisampleGate,
+            "heitzratioestimatorselected",
+            "the sample-frequency sun-shadow producer from the closest-surface resolve gate");
         RequireContains(
             multisampleGate,
-            "resolveclosestmsaasurface();",
-            "the enabled sky producer must execute the closest-surface resolve");
+            "if(closestsurfaceresolverequired&&!resolveclosestmsaasurface())",
+            "the shared single-surface gate must fail closed when the MSAA resolve fails");
 
         const std::string_view dispatch = ExtractSection(
             viewer,
@@ -724,6 +727,10 @@ namespace
             "if(raytracedskyvisibilityexpectedtocontribute&&",
             "constboolraytracedskyvisibilitycontributed=",
             "sky trace dispatch");
+        RequireContains(
+            skyTraceDispatch,
+            "singlesurfaceinputsavailable",
+            "the sky producer must require current single-surface inputs");
         RequireOrdered(
             dispatch,
             {
@@ -835,8 +842,10 @@ namespace
             deferredShader,
             {
                 "environmentdiffuse*=skyvisibility;",
+                "constfloat3sourcediffuse=usesourcesunvisibility?"
+                    "sourcedirectdiffuse:directdiffuse;",
                 "float3sourceradiance=max("
-                    "directdiffuse+environmentdiffuse,0.0f);",
+                    "sourcediffuse+environmentdiffuse,0.0f);",
                 "float3diffuse=directdiffuse+",
                 "float3finallinearhdr=max(diffuse+specular+"
                     "gbuffer.material.emissive,0.0f);"
@@ -859,8 +868,13 @@ namespace
             "diffuse GI source-radiance section");
         RequireContains(
             sourceRadianceSection,
-            "directdiffuse+environmentdiffuse",
+            "sourcediffuse+environmentdiffuse",
             "diffuse sky visibility must reach GI source radiance");
+        RequireContains(
+            deferredShader,
+            "constfloat3sourcediffuse=usesourcesunvisibility?"
+                "sourcedirectdiffuse:directdiffuse;",
+            "an absent source-only sun must preserve ordinary direct diffuse");
         RequireAbsent(
             sourceRadianceSection,
             "environmentspecular",

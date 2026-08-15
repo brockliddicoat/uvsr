@@ -130,11 +130,6 @@ int main(int argc, char** argv)
     const std::string buildSystem = ReadFile(root / "CMakeLists.txt");
     const std::string attributes = ReadFile(root / ".gitattributes");
     const std::string viewer = ReadFile(root / "src/uvsr.cpp");
-    const std::string cmaa = ReadFile(root / "src/cmaa2.cpp");
-    const std::string cmaaHeader = ReadFile(root / "src/cmaa2.h");
-    const std::string cmaaShader = ReadFile(root / "src/cmaa2.hlsl");
-    const std::string cmaaVendoredShader = ReadFile(
-        root / "legal/samples/intel-cmaa2/CMAA2.hlsl");
     const std::string fastApproximate = ReadFile(
         root / "src/fast_approximate_aa.cpp");
     const std::string fastApproximateHeader = ReadFile(
@@ -518,10 +513,10 @@ int main(int argc, char** argv)
         buildSystem,
         "licenses/IOLITE-AgX-MIT.txt",
         "packaged AgX implementation license");
-    passed &= ExpectContains(
+    passed &= ExpectAbsent(
         buildSystem,
         "legal/samples/*.hlsl",
-        "incorporated legal shader dependency tracking");
+        "retired incorporated legal shader dependency tracking");
 
     const std::string_view representationInvalidation = ExtractSection(
         worldRepresentation,
@@ -659,6 +654,90 @@ int main(int argc, char** argv)
             "            heitzShadowResult.stochastic &&\n"
             "            shadowNoiseSettings.animate)",
         "actual stochastic-dispatch phase commit");
+    passed &= ExpectContains(
+        viewer,
+        "(heitzRatioEstimatorSelected &&\n"
+            "                        m_HeitzRatioEstimatorShadowPass &&\n"
+            "                        shadowNoise)",
+        "Heitz timing expectation mirrors the actual dispatch dependencies");
+    const std::string_view singleSurfaceProducerSelection = ExtractSection(
+        viewer,
+        "const bool singleSurfaceVisibilityProducerEnabled =",
+        "const bool singleSurfaceInputsAvailable =");
+    passed &= ExpectAbsent(
+        singleSurfaceProducerSelection,
+        "heitzRatioEstimatorSelected",
+        "sample-frequency Heitz producer from the closest-surface resolve gate");
+    passed &= ExpectContains(
+        viewer,
+        "shadowInputs.depth = m_RenderTargets->Depth;\n"
+            "                shadowInputs.diffuse = "
+                "m_RenderTargets->GBufferDiffuse;\n"
+            "                shadowInputs.material = "
+                "m_RenderTargets->GBufferSpecular;\n"
+            "                shadowInputs.normals = "
+                "m_RenderTargets->GBufferNormals;\n"
+            "                shadowInputs.emissive = "
+                "m_RenderTargets->GBufferEmissive;",
+        "Heitz dispatch from the original sample-frequency G-buffer");
+    passed &= ExpectContains(
+        viewer,
+        "m_ui.DirectionalShadows.ratioEstimator,\n"
+            "                        m_ui.AntiAliasing.msaa\n"
+            "                            .perSampleRayTracedShadows,\n"
+            "                        *m_View,",
+        "Multisample Adaptive receiver-frequency policy at Heitz dispatch");
+    passed &= ExpectContains(
+        viewer,
+        "applied.msaa.perSampleRayTracedShadows !=\n"
+            "                requested.msaa.perSampleRayTracedShadows &&\n"
+            "            (appliedRasterSampleCount > 1u ||\n"
+            "                requestedRasterSampleCount > 1u);\n"
+            "        if (requiresShadowSamplingReset)\n"
+            "        {\n"
+            "            ResetImageBasedLightingHistory();",
+        "receiver-frequency mutation invalidates lighting history");
+    passed &= ExpectContains(
+        viewer,
+        "signature,\n"
+            "                ShouldUsePerSampleRayTracedShadows(\n"
+            "                    m_ui.AntiAliasing.msaa,\n"
+            "                    antiAliasing.rasterSampleCount));",
+        "receiver-frequency lighting-history identity");
+    passed &= ExpectContains(
+        viewer,
+        "heitzShadowResult.receiverSampleCount == 1u &&\n"
+            "                shadowDenoisingMethod != DenoisingMethodChoice::None &&\n"
+            "                (!shadowThirdPartyDenoising ||\n"
+            "                    (!m_ui.DirectionalShadows.ratioEstimator.hardShadows &&\n"
+            "                     heitzShadowResult.hitDistance &&\n"
+            "                     heitzShadowResult.hitDistanceMatchesSignal))",
+        "single-sample sun denoising with method-specific third-party inputs");
+    passed &= ExpectAbsent(
+        viewer,
+        "visibilityDirectLightVisibilities.sun = {};",
+        "unshadowed MSAA GI source regression");
+    const std::string_view singleSampleSourceLighting = ExtractSection(
+        viewer,
+        "                DirectLightVisibility sourceSunVisibility;\n"
+            "                if (heitzShadowResult.receiverSampleCount == 1u &&",
+        "                EndRendererStage(RendererTimingStage::DirectLighting);");
+    passed &= ExpectOrdered(
+        singleSampleSourceLighting,
+        "heitzShadowResult.receiverSampleCount == 1u &&",
+        "sourceSunVisibility = {",
+        "1x ratio source selection before assignment");
+    passed &= ExpectOrdered(
+        singleSampleSourceLighting,
+        "sourceSunVisibility = {",
+        "sourceSunVisibility);",
+        "reachable diffuse-only sun modulation before the 1x GI source dispatch");
+    passed &= ExpectOrdered(
+        viewer,
+        "visibilityDirectLightVisibilities,",
+        "deferredMsaaInputs,\n"
+            "                directLightVisibilities,",
+        "closest-surface GI preparation before final resolved-sun consumption");
     passed &= ExpectAbsent(
         viewer,
         "m_HeitzRatioEstimatorShadowPass->ResetHistory();",
@@ -697,6 +776,30 @@ int main(int argc, char** argv)
         ensureHeitzResources,
         "if (!modulationSizeMatches)",
         "Heitz modulation output replacement gate");
+    passed &= ExpectContains(
+        ensureHeitzResources,
+        "const bool closestSourceRequired = outputSourceModulation;",
+        "ratio or multisample closest-source output requirement");
+    passed &= ExpectContains(
+        ensureHeitzResources,
+        "else if (!closestSourceRequired &&\n"
+            "            m_OutputClosestSourceModulation)",
+        "inactive closest-source output retirement");
+    passed &= ExpectContains(
+        ensureHeitzResources,
+        "const nvrhi::TextureDimension expectedDimension =\n"
+            "            receiverSampleCount == 1u\n"
+            "                ? nvrhi::TextureDimension::Texture2D\n"
+            "                : nvrhi::TextureDimension::Texture2DMS;",
+        "single-sample or multisampled Heitz input dimension validation");
+    passed &= ExpectContains(
+        ensureHeitzResources,
+        "texture->getDesc().sampleCount != receiverSampleCount",
+        "coherent Heitz receiver sample-count validation");
+    passed &= ExpectContains(
+        ensureHeitzResources,
+        "if (outputSourceModulation && outputHitDistance)",
+        "mutually exclusive diffuse-source and hit-distance outputs");
     passed &= ExpectContains(
         ensureHeitzResources,
         "if (outputHitDistance && !hitDistanceSizeMatches)",
@@ -982,6 +1085,138 @@ int main(int argc, char** argv)
         "bool MsaaVisibilityResolvePass::PreparePipelinesStep()",
         "one-step MSAA visibility-resolve pipeline preparation");
     passed &= ExpectContains(
+        msaaVisibilityResolvePass,
+        "bool HasExpectedTextureTopology(",
+        "shared MSAA resolve topology validation");
+    passed &= ExpectContains(
+        msaaVisibilityResolvePass,
+        "nvrhi::TextureDimension::Texture2DMS",
+        "MSAA resolve input dimension validation");
+    passed &= ExpectContains(
+        msaaVisibilityResolvePass,
+        "expectedInputFormats",
+        "MSAA resolve input format validation");
+    passed &= ExpectContains(
+        msaaVisibilityResolvePass,
+        "expectedOutputFormats",
+        "MSAA resolve output format validation");
+    passed &= ExpectContains(
+        msaaVisibilityResolvePassHeader,
+        "[[nodiscard]] bool Render(",
+        "MSAA resolve dispatch success API");
+    const std::string_view msaaResolveRender = ExtractBalancedScope(
+        msaaVisibilityResolvePass,
+        "bool MsaaVisibilityResolvePass::Render(");
+    passed &= ExpectContains(
+        msaaResolveRender,
+        "const std::array<nvrhi::ITexture*, 7> inputTextures = {\n"
+            "            inputs.depth,\n"
+            "            inputs.diffuse,\n"
+            "            inputs.material,\n"
+            "            inputs.normals,\n"
+            "            inputs.emissive,\n"
+            "            inputs.materialAmbientOcclusion,\n"
+            "            inputs.motionVectors\n"
+            "        };",
+        "MSAA resolve input descriptor order");
+    passed &= ExpectContains(
+        msaaResolveRender,
+        "const std::array<nvrhi::ITexture*, 7> outputTextures = {\n"
+            "            outputs.depth,\n"
+            "            outputs.diffuse,\n"
+            "            outputs.material,\n"
+            "            outputs.normals,\n"
+            "            outputs.emissive,\n"
+            "            outputs.materialAmbientOcclusion,\n"
+            "            outputs.motionVectors\n"
+            "        };",
+        "MSAA resolve output descriptor order");
+    passed &= ExpectContains(
+        msaaResolveRender,
+        "const std::array<nvrhi::Format, 6> expectedInputFormats = {\n"
+            "            nvrhi::Format::SRGBA8_UNORM,\n"
+            "            nvrhi::Format::RGBA8_UNORM,\n"
+            "            nvrhi::Format::RGBA16_SNORM,\n"
+            "            nvrhi::Format::RGBA16_FLOAT,\n"
+            "            nvrhi::Format::R8_UNORM,\n"
+            "            nvrhi::Format::RGBA16_FLOAT\n"
+            "        };",
+        "MSAA resolve exact input format order");
+    passed &= ExpectContains(
+        msaaResolveRender,
+        "const std::array<nvrhi::Format, 7> expectedOutputFormats = {\n"
+            "            nvrhi::Format::R32_FLOAT,\n"
+            "            nvrhi::Format::RGBA16_FLOAT,\n"
+            "            nvrhi::Format::RGBA16_FLOAT,\n"
+            "            nvrhi::Format::RGBA16_FLOAT,\n"
+            "            nvrhi::Format::RGBA16_FLOAT,\n"
+            "            nvrhi::Format::R16_FLOAT,\n"
+            "            nvrhi::Format::RGBA16_FLOAT\n"
+            "        };",
+        "MSAA resolve exact output format order");
+    passed &= ExpectContains(
+        msaaVisibilityResolvePass,
+        "description.depth == 1u &&\n"
+            "            description.arraySize == 1u &&\n"
+            "            description.mipLevels == 1u &&\n"
+            "            description.sampleCount == sampleCount &&\n"
+            "            description.dimension == dimension;",
+        "MSAA resolve exact texture topology predicate");
+    passed &= ExpectContains(
+        msaaResolveRender,
+        "if (!pipeline.bindingLayout || !pipeline.pso)",
+        "MSAA resolve prepared-pipeline rejection");
+    passed &= ExpectContains(
+        msaaResolveRender,
+        "if (!bindingSet)",
+        "MSAA resolve binding-set rejection");
+    passed &= ExpectContains(
+        msaaResolveRender,
+        "commandList->dispatch(\n"
+            "            (extent.width + 7u) / 8u,\n"
+            "            (extent.height + 7u) / 8u);\n"
+            "        commandList->endMarker();\n"
+            "        return true;",
+        "MSAA resolve success only after dispatch");
+    const std::string_view closestSurfaceResolve = ExtractBalancedScope(
+        viewer,
+        "const auto resolveClosestMsaaSurface = [&]()");
+    passed &= ExpectContains(
+        closestSurfaceResolve,
+        "closestSurfaceResolved =\n"
+            "                m_MsaaVisibilityResolvePass->Render(",
+        "MSAA resolve caller success propagation");
+    passed &= ExpectAbsent(
+        closestSurfaceResolve,
+        "closestSurfaceResolved = true;",
+        "MSAA resolve unconditional stale-output publication");
+    passed &= ExpectContains(
+        viewer,
+        "materialDesc.format = nvrhi::Format::RGBA8_UNORM;",
+        "MSAA material input allocation format");
+    passed &= ExpectContains(
+        viewer,
+        "materialAmbientOcclusionDesc.format = nvrhi::Format::R8_UNORM;",
+        "MSAA material-AO input allocation format");
+    passed &= ExpectContains(
+        viewer,
+        "motionDesc.format = nvrhi::Format::RGBA16_FLOAT;",
+        "MSAA motion input allocation format");
+    passed &= ExpectContains(
+        viewer,
+        "visibilityDesc.format =\n"
+            "                    nvrhi::Format::R32_FLOAT;\n"
+            "                visibilityDesc.debugName =\n"
+            "                    \"ScreenSpaceVisibility/ResolvedDepth\";",
+        "closest-surface depth output allocation format");
+    passed &= ExpectContains(
+        viewer,
+        "visibilityDesc.format =\n"
+            "                    nvrhi::Format::R16_FLOAT;\n"
+            "                visibilityDesc.debugName =\n"
+            "                    \"ScreenSpaceVisibility/ResolvedMaterialAO\";",
+        "closest-surface material-AO output allocation format");
+    passed &= ExpectContains(
         temporalAaPassHeader,
         "bool deferPipelineCreation = false",
         "standalone-compatible temporal-AA pipeline creation");
@@ -1037,16 +1272,6 @@ int main(int argc, char** argv)
         viewer,
         "CreateFastApproximateAAPass();",
         "lazy Fast Approximate pass creation");
-    const std::string_view fastApproximateLifetime = ExtractSection(
-        viewer,
-        "if (fastApproximateAARequired && !m_FastApproximateAAPass)",
-        "m_ui.ShaderReloadRequested = false;");
-    passed &= ExpectOrdered(
-        fastApproximateLifetime,
-        "m_Cmaa2Pass->UpdateSourceColor(",
-        "m_FastApproximateAAPass.reset();",
-        "retained CMAA2 source release before Fast Approximate teardown");
-
     const std::string_view prepareRadiance = ExtractSection(
         imageBasedLighting,
         "ImageBasedLightingEnvironment::PrepareRadiance(",
@@ -1190,10 +1415,6 @@ int main(int argc, char** argv)
         refresh,
         "m_FastApproximateAAPass->UpdateSourceColor(",
         "Fast Approximate resource retention");
-    passed &= ExpectContains(
-        refresh,
-        "m_Cmaa2Pass->UpdateSourceColor(",
-        "CMAA2 resource retention");
     passed &= ExpectAbsent(
         refresh,
         "std::make_unique<ScreenSpaceVisibilityPass>",
@@ -1555,6 +1776,14 @@ int main(int argc, char** argv)
         viewer,
         "bool SetupView()",
         "void CaptureCurrentViewForMotionVectors()");
+    const std::string_view resolvedAntiAliasing = ExtractBalancedScope(
+        viewer,
+        "GetResolvedAntiAliasingSettings(\n"
+            "            const AntiAliasingSettings& settings) const");
+    const std::string_view pathTracingAccumulationJitter =
+        ExtractBalancedScope(
+            viewer,
+            "bool UsesPathTracingAccumulationJitter() const");
     passed &= ExpectContains(
         setupView,
         "m_ui.GetResolvedAntiAliasingSettings()",
@@ -1568,6 +1797,43 @@ int main(int argc, char** argv)
         setupView,
         "planarView->SetPixelOffset(float2(jitter.x, jitter.y));",
         "selected subpixel camera offset");
+    passed &= ExpectContains(
+        setupView,
+        "antiAliasing.temporalEnabled ||\n"
+            "                m_ui.UsesPathTracingAccumulationJitter()",
+        "path accumulation retains its explicit shared-primary jitter exception");
+    passed &= ExpectContains(
+        resolvedAntiAliasing,
+        "resolved.temporalEnabled = ShouldUseRasterTemporalAa(\n"
+            "                resolved.temporalEnabled,\n"
+            "                AccumulateSamples);",
+        "Ray Marching accumulation resolves raster TAA and camera jitter inactive");
+    passed &= ExpectOrdered(
+        resolvedAntiAliasing,
+        "if (Lighting == LightingSolution::RayMarching)",
+        "resolved.temporalEnabled = ShouldUseRasterTemporalAa(",
+        "Ray Marching owns raster TAA suppression");
+    passed &= ExpectOrdered(
+        resolvedAntiAliasing,
+        "resolved.temporalEnabled = ShouldUseRasterTemporalAa(",
+        "else if (Lighting == LightingSolution::PathTracing)",
+        "Ray Marching suppression stays outside Path Tracing resolution");
+    for (const std::string_view pathJitterRequirement : {
+            std::string_view(
+                "Lighting == LightingSolution::PathTracing"),
+            std::string_view("PathTracing.sharedPrimarySurface"),
+            std::string_view("AccumulateSamples"),
+            std::string_view(
+                "PathTracing.debugView ==\n"
+                "                PathTracingDebugView::FinalImage"),
+            std::string_view(
+                "ResolveAntiAliasingSettings(AntiAliasing).temporalEnabled") })
+    {
+        passed &= ExpectContains(
+            pathTracingAccumulationJitter,
+            pathJitterRequirement,
+            "Path Tracing accumulation jitter eligibility");
+    }
     passed &= ExpectOrdered(
         renderScene,
         "m_AgxToneMappingPass->Render(",
@@ -1599,7 +1865,7 @@ int main(int argc, char** argv)
         "ray accumulation uses its owned 64-bit committed scheduling cycle");
     passed &= ExpectContains(
         renderScene,
-        "lightingAccumulationResolvedThisFrame = true;\n"
+        "accumulatedSceneColor = accumulationResult.sceneLinear;\n"
             "                ++m_LightingAccumulationSchedulingCycle;",
         "only a committed ray accumulation frame advances adaptive scheduling");
     passed &= ExpectOrdered(
@@ -1628,6 +1894,7 @@ int main(int argc, char** argv)
     for (const std::string_view guardedDenoisingPath : {
             std::string_view(
                 "rayMarchingDenoisingAllowed &&\n"
+                "                singleSurfaceInputsAvailable &&\n"
                 "                runScreenSpaceVisibility"),
             std::string_view(
                 "const bool flashlightDenoisingReady =\n"
@@ -1647,12 +1914,20 @@ int main(int argc, char** argv)
             guardedDenoisingPath,
             "accumulation-owned raw signal bypasses denoising");
     }
+    passed &= ExpectAbsent(
+        renderScene,
+        "lightingAccumulationResolvedThisFrame",
+        "raw accumulation cannot advance a bypassed TAA camera phase");
     passed &= ExpectContains(
         renderScene,
-        "lightingAccumulationResolvedThisFrame &&\n"
-            "                antiAliasing.temporalEnabled",
-        "successful raw accumulation advances selected TAA jitter without "
-        "retaining TAA history");
+        "const bool pathTracingJitterAdvanced = pathTracingResult &&\n"
+            "            pathTracingResult.sharedPrimarySurfaceActive &&\n"
+            "            m_ui.UsesPathTracingAccumulationJitter();",
+        "only a successful shared-primary path frame advances accumulation jitter");
+    passed &= ExpectContains(
+        renderScene,
+        "if (temporalAaRenderedThisFrame || pathTracingJitterAdvanced)",
+        "only an active raster TAA resolve or path accumulation advances camera jitter");
     passed &= ExpectContains(
         renderScene,
         "m_ui.ScreenSpaceVisibility.resolution !=\n"
@@ -1820,6 +2095,14 @@ int main(int argc, char** argv)
         "pathInputs.historyResetByViewOnly =\n"
             "                m_LightingHistoryChangedByViewOnly;",
         "proposal reprojection remains separately gated to camera-only resets");
+    passed &= ExpectContains(
+        renderScene,
+        "pathInputs.accumulationJitterActive =\n"
+            "                m_ui.UsesPathTracingAccumulationJitter() &&\n"
+            "                m_PathTracingPass->GetCapabilities()\n"
+            "                    .sharedPrimarySurfaceSupported;",
+        "path transport receives only executable Shared Primary accumulation "
+        "jitter ownership");
     passed &= ExpectOrdered(
         renderScene,
         "pathInputs.previousView =",
@@ -1969,10 +2252,14 @@ int main(int argc, char** argv)
         "m_ui.Lighting == LightingSolution::RayMarching &&\n"
             "            m_ui.AccumulateSamples",
         "ray-marching accumulation history compatibility scope");
-    passed &= ExpectContains(
+    passed &= ExpectAbsent(
         synchronizeLightingHistory,
         "antiAliasing.temporalJitterSequence",
-        "ray-marching accumulation tracks its raw raster jitter sequence");
+        "ray-marching accumulation ignores inactive raster TAA jitter");
+    passed &= ExpectAbsent(
+        synchronizeLightingHistory,
+        "signature, antiAliasing.temporalEnabled",
+        "ray-marching accumulation does not hash constant inactive TAA state");
     passed &= ExpectContains(
         synchronizeLightingHistory,
         "signature, antiAliasing.rasterSampleCount",
@@ -2013,8 +2300,8 @@ int main(int argc, char** argv)
     passed &= ExpectOrdered(
         renderScene,
         "m_FastApproximateAAPass->Render(",
-        "m_Cmaa2Pass->Render(",
-        "Fast Approximate before morphological AA");
+        "m_AgxToneMappingPass->RenderOutput(",
+        "Fast Approximate before final output transfer and dither");
     passed &= ExpectContains(
         renderScene,
         "BeginRendererStage(RendererTimingStage::FastApproximate);",
@@ -2336,6 +2623,38 @@ int main(int argc, char** argv)
         viewer,
         "void CreateTemporalAAPass(",
         "void EnsureMsaaVisibilityResolvePass(");
+    const std::string_view temporalAaRefreshTransition = ExtractSection(
+        viewer,
+        "const bool temporalAARequired =",
+        "m_ui.ShaderReloadRequested = false;");
+    const std::string_view antiAliasingTargetRefresh = ExtractBalancedScope(
+        viewer,
+        "void RefreshAntiAliasingTargetPasses()");
+    passed &= ExpectContains(
+        temporalAaPassCreation,
+        "if (!m_ui.UsesLongTermTemporalAA() ||\n"
+            "            m_ui.Lighting == LightingSolution::PathTracing)\n"
+            "            return;",
+        "inactive effective raster TAA cannot create a temporal pass");
+    passed &= ExpectContains(
+        temporalAaRefreshTransition,
+        "const bool temporalAARequired =\n"
+            "                m_ui.UsesLongTermTemporalAA();",
+        "effective TAA state drives temporal refresh topology");
+    passed &= ExpectContains(
+        temporalAaRefreshTransition,
+        "const bool refreshTemporalPass =\n"
+            "                rasterTemporalAARequired != bool(m_TemporalAAPass);",
+        "effective raster TAA transition detects temporal pass refresh");
+    passed &= ExpectOrdered(
+        temporalAaRefreshTransition,
+        "else if (refreshTemporalPass)",
+        "CreateTemporalAAPass();",
+        "effective raster TAA transition recreates or tears down its pass");
+    passed &= ExpectContains(
+        antiAliasingTargetRefresh,
+        "CreateTemporalAAPass();",
+        "AA target replacement recreates only the effective temporal pass");
     for (const std::string_view resolvedMsaaInput : {
             std::string_view("m_RenderTargets->DeferredMsaaColor.Get()"),
             std::string_view("m_RenderTargets->VisibilityDepth.Get()"),
@@ -2351,99 +2670,79 @@ int main(int argc, char** argv)
         "singleSurfaceVisibilityProducerEnabled ||\n"
             "                    m_ui.UsesLongTermTemporalAA()",
         "temporal MSAA closest-surface resolve gate");
+    const std::string_view rasterClosestSurfacePreparation = ExtractSection(
+        viewer,
+        "const bool singleSurfaceVisibilityProducerEnabled =",
+        "const bool shadowRayDispatchExpected =");
+    passed &= ExpectContains(
+        rasterClosestSurfacePreparation,
+        "const bool closestSurfaceResolveRequired =\n"
+            "                m_RenderTargets->GetSampleCount() > 1u &&",
+        "shared MSAA single-surface consumer gate");
+    passed &= ExpectContains(
+        rasterClosestSurfacePreparation,
+        "if (closestSurfaceResolveRequired &&\n"
+            "                !resolveClosestMsaaSurface())\n"
+            "            {\n"
+            "                // None of the single-sample consumers may read last frame's\n"
+            "                // resolved depth, attributes, or motion. Present the current\n"
+            "                // raw MSAA frame, and retire every temporal history that was\n"
+            "                // prepared against this unavailable topology.\n"
+            "                temporalAaWillRender = false;\n"
+            "                ResetAntiAliasingState();\n"
+            "            }",
+        "failed MSAA resolve temporal fail-closed path");
+    passed &= ExpectOrdered(
+        viewer,
+        "temporalAaWillRender = false;",
+        "if (temporalAaWillRender)\n"
+            "        {",
+        "failed MSAA resolve blocks TAA before presentation");
+    const std::string_view ambientOcclusionDenoisingReadiness =
+        ExtractSection(
+            viewer,
+            "const bool ambientOcclusionDenoisingReady =",
+            "const bool diffuseGiDenoisingReady =");
+    passed &= ExpectContains(
+        ambientOcclusionDenoisingReadiness,
+        "singleSurfaceInputsAvailable",
+        "AO denoising requires current single-surface inputs");
+    const std::string_view diffuseGiDenoisingReadiness = ExtractSection(
+        viewer,
+        "const bool diffuseGiDenoisingReady =",
+        "if (m_DenoisingPass)");
+    passed &= ExpectContains(
+        diffuseGiDenoisingReadiness,
+        "singleSurfaceInputsAvailable",
+        "GI denoising requires current single-surface inputs");
+    const std::string_view antiAliasingReset = ExtractBalancedScope(
+        viewer,
+        "void ResetAntiAliasingState()");
+    passed &= ExpectContains(
+        antiAliasingReset,
+        "m_DenoisingPass->RequestHistoryReset();",
+        "failed MSAA resolve denoiser-history retirement");
+    passed &= ExpectContains(
+        antiAliasingReset,
+        "m_AntiAliasingPhase = 0u;",
+        "AA history reset restarts the authored jitter sequence");
+    const std::string_view synchronizeAntiAliasing = ExtractBalancedScope(
+        viewer,
+        "void SynchronizeAntiAliasingSettings()");
+    passed &= ExpectOrdered(
+        synchronizeAntiAliasing,
+        "const bool requiresTemporalReset =",
+        "ResetAntiAliasingState();",
+        "AA setting changes route through the complete temporal reset");
+    passed &= ExpectOrdered(
+        synchronizeAntiAliasing,
+        "ResetAntiAliasingState();",
+        "m_PreviousView.reset();",
+        "AA reset invalidates both jitter phase and previous-view ownership");
     passed &= ExpectContains(
         viewer,
         "RefreshAntiAliasingTargetPasses();",
         "AA-only refresh dispatch");
-    passed &= ExpectContains(
-        cmaa,
-        "void Cmaa2Pass::UpdateSourceColor(",
-        "CMAA2 source rebinding");
-    passed &= ExpectContains(
-        cmaa,
-        "RebuildBindingSet(sourceColor);",
-        "CMAA2 source rebinding");
-    passed &= ExpectContains(
-        cmaa,
-        "struct alignas(16) Cmaa2Constants",
-        "CMAA2 runtime threshold constants");
-    passed &= ExpectContains(
-        cmaa,
-        "static_assert(sizeof(Cmaa2Constants) == 16u);",
-        "CMAA2 constant-buffer alignment");
-    passed &= ExpectContains(
-        cmaa,
-        "constantBufferDesc.isVolatile = true;",
-        "CMAA2 volatile threshold constants");
-    passed &= ExpectContains(
-        cmaa,
-        "nvrhi::BindingLayoutItem::VolatileConstantBuffer(0)",
-        "CMAA2 threshold binding layout");
-    passed &= ExpectContains(
-        cmaa,
-        "nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer)",
-        "CMAA2 threshold binding set");
-    passed &= ExpectContains(
-        cmaa,
-        "ClampCmaa2EdgeThreshold(settings.cmaa2EdgeThreshold)",
-        "CMAA2 runtime threshold clamp");
-    passed &= ExpectContains(
-        cmaa,
-        "commandList->writeBuffer(\n"
-            "            m_ConstantBuffer, &constants, sizeof(constants));",
-        "CMAA2 per-frame threshold upload");
-    passed &= ExpectContains(
-        cmaaHeader,
-        "static_cast<uint32_t>(Cmaa2EdgeDetector::Count)",
-        "CMAA2 detector permutation count");
-    passed &= ExpectContains(
-        cmaa,
-        "m_EdgePipelines[detector]",
-        "CMAA2 detector pipeline creation");
-    passed &= ExpectContains(
-        cmaa,
-        "m_EdgePipelines[detectorIndex]",
-        "CMAA2 detector pipeline selection");
-    for (const std::string_view sharedPipeline : {
-            std::string_view("m_CandidatePipeline"),
-            std::string_view("m_ApplyPipeline"),
-            std::string_view("m_DispatchArgumentPipeline") })
-    {
-        passed &= ExpectContains(
-            cmaaHeader,
-            sharedPipeline,
-            "detector-independent CMAA2 pipeline");
-    }
-    passed &= ExpectAbsent(
-        cmaaHeader,
-        "c_QualityCount",
-        "retired CMAA2 quality permutation count");
-    passed &= ExpectAbsent(
-        cmaa,
-        "m_CandidatePipelines",
-        "retired duplicated CMAA2 stage pipelines");
-    passed &= ExpectAbsent(
-        cmaa,
-        "CMAA2_STATIC_QUALITY_PRESET",
-        "retired CMAA2 static threshold axis");
-    passed &= ExpectContains(
-        cmaaShader,
-        "cbuffer UvsrCmaa2Constants : register(b0)",
-        "CMAA2 runtime threshold shader constants");
-    passed &= ExpectContains(
-        cmaaShader,
-        "#define g_CMAA2_EdgeThreshold "
-            "lpfloat(g_UvsrCmaa2EdgeThreshold)",
-        "CMAA2 runtime threshold hook");
-    passed &= ExpectContains(
-        cmaaVendoredShader,
-        "#ifndef g_CMAA2_EdgeThreshold",
-        "pinned CMAA2 threshold override boundary");
-    passed &= ExpectContains(
-        renderScene,
-        "displayTexture,\n                antiAliasing);",
-        "resolved CMAA2 runtime settings dispatch");
-
     const std::string_view commandLine = ExtractSection(
         viewer,
         "bool ProcessCommandLine(",

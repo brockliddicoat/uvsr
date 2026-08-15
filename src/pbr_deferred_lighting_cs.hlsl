@@ -38,6 +38,9 @@ Texture2D t_MaterialAmbientOcclusion : register(t14);
 Texture2D<float4> t_FlashlightVisibility : register(t20);
 Texture2D<float4> t_SunVisibility : register(t21);
 Texture2D<float> t_SkyVisibility : register(t22);
+#if WRITE_SOURCE_RADIANCE
+Texture2D<float4> t_SourceSunVisibility : register(t23);
+#endif
 
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Output : register(u0);
 #if WRITE_SOURCE_RADIANCE
@@ -87,6 +90,42 @@ float3 GetDirectLightVisibility(
     }
     return visibility;
 }
+
+#if WRITE_SOURCE_RADIANCE
+float3 GetSourceDirectLightVisibility(
+    uint lightIndex,
+    int2 pixelPosition,
+    float3 finalVisibility)
+{
+    if (int(lightIndex) !=
+        g_PbrDeferred.sourceSunVisibilityLightIndex)
+    {
+        return finalVisibility;
+    }
+
+    const float4 encodedSourceSun =
+        t_SourceSunVisibility[pixelPosition];
+    if (any(!isfinite(encodedSourceSun)))
+        return finalVisibility;
+
+    float3 visibility = 1.0f;
+    if (int(lightIndex) ==
+        g_PbrDeferred.directVisibilityLightIndices.x)
+    {
+        visibility = min(
+            visibility,
+            DecodeDirectLightVisibility(
+                t_FlashlightVisibility[pixelPosition],
+                g_PbrDeferred.directVisibilityEncodings.x));
+    }
+    visibility = min(
+        visibility,
+        DecodeDirectLightVisibility(
+            encodedSourceSun,
+            g_PbrDeferred.sourceSunVisibilityEncoding));
+    return visibility;
+}
+#endif
 
 float EvaluateLightVisibility(
     LightConstants light,
@@ -372,6 +411,11 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
 
     float3 directDiffuse = 0.0f;
     float3 directSpecular = 0.0f;
+#if WRITE_SOURCE_RADIANCE
+    const bool useSourceSunVisibility =
+        g_PbrDeferred.sourceSunVisibilityLightIndex >= 0;
+    float3 sourceDirectDiffuse = 0.0f;
+#endif
     if (g_Deferred.numLights > 0u)
     {
         float angle = GetRandom(i_globalIdx.xy + float2(g_Deferred.randomOffset.x, 0.0f));
@@ -384,8 +428,23 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
                 GetDirectLightVisibility(
                 lightIndex,
                 pixelPosition);
+#if WRITE_SOURCE_RADIANCE
+            const float3 sourceDirectModulation =
+                useSourceSunVisibility
+                    ? GetSourceDirectLightVisibility(
+                        lightIndex,
+                        pixelPosition,
+                        directModulation)
+                    : directModulation;
+            if (!any(directModulation > 0.0f) &&
+                !any(sourceDirectModulation > 0.0f))
+            {
+                continue;
+            }
+#else
             if (!any(directModulation > 0.0f))
                 continue;
+#endif
 
             PbrLightSample lightSample = SamplePbrLight(
                 light,
@@ -411,6 +470,13 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
                 preparedMaterial, preparedSurface, lightSample);
             directDiffuse += direct.diffuse * directModulation;
             directSpecular += direct.specular * directModulation;
+#if WRITE_SOURCE_RADIANCE
+            if (useSourceSunVisibility)
+            {
+                sourceDirectDiffuse +=
+                    direct.diffuse * sourceDirectModulation;
+            }
+#endif
         }
     }
 
@@ -419,8 +485,11 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
     // at the source surface. Carry it into the diffuse GI source so the next
     // bounce sees the same sky illumination as the visible surface. Specular
     // IBL remains excluded from this diffuse transport path.
+    const float3 sourceDiffuse = useSourceSunVisibility
+        ? sourceDirectDiffuse
+        : directDiffuse;
     float3 sourceRadiance = max(
-        directDiffuse + environmentDiffuse, 0.0f);
+        sourceDiffuse + environmentDiffuse, 0.0f);
     if (any(isnan(sourceRadiance)) || any(isinf(sourceRadiance)))
         sourceRadiance = 0.0f;
 #endif

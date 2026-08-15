@@ -53,7 +53,7 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 224u);
+    static_assert(UiSettingsCommandCatalog.size() == 221u);
     static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 14u);
     static_assert(static_cast<std::uint8_t>(UiSettingsCommandKind::Float4) == 7u);
     static_assert(Action("test", Section::General, "test").supportedVerbs ==
@@ -67,7 +67,7 @@ int main()
         13u, // Noise
         20u, // Visibility
         31u, // Denoising
-        31u, // Aliasing
+        28u, // Aliasing
         4u,  // Debug
         25u, // Sky
         27u, // Lights
@@ -275,15 +275,15 @@ int main()
     }
 
     Require(names.size() == UiSettingsCommandCatalog.size(),
-        "the compact catalog must contain 220 unique commands");
+        "the compact catalog must contain 221 unique commands");
     Require(sectionCounts == ExpectedSectionCounts,
         "section counts must match the current UI");
     Require(actionCount == 4u,
         "only open-folder, reset, capture, and restart actions remain");
-    Require(UiSettingsCommandCatalog.size() - actionCount == 220u,
-        "the compact catalog must contain 220 values");
-    Require(snapshotValueCount == 218u,
-        "the current snapshot schema must represent 218 values after excluding "
+    Require(UiSettingsCommandCatalog.size() - actionCount == 217u,
+        "the compact catalog must contain 217 values");
+    Require(snapshotValueCount == 215u,
+        "the current snapshot schema must represent 215 values after excluding "
         "transient root and Material drawer presentation");
     const UiSettingsCommandDefinition* settingsCollapsed =
         Find("ui.settings-collapsed");
@@ -417,10 +417,8 @@ int main()
         "float 0.08..0.25");
     requireDomain("anti-aliasing.fxaa.minimum-edge-threshold",
         "float 0.04..0.06");
-    requireDomain("anti-aliasing.cmaa2.edge-threshold",
-        "float 0.05..0.15");
-    requireDomain("anti-aliasing.cmaa2.detector", "luma|full-color");
     requireDomain("anti-aliasing.msaa.quality", "low|medium|high|ultra");
+    requireDomain("anti-aliasing.msaa.per-sample-shadows", "on|off");
     requireDomain("debug.world.materials",
         "scene|white|white-detail|white-lighting");
     requireDomain("debug.visibility.view",

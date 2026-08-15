@@ -252,6 +252,25 @@ int main(int argc, char** argv)
                 "jitter samples must be bounded, deterministic, and periodic");
         }
     }
+    bool defaultHaltonSamplesAreUnique = true;
+    for (uint32_t first = 0u; first < 16u; ++first)
+    {
+        const auto firstSample = uvsr::GetTemporalAaJitter(
+            Jitter::Halton23x16,
+            first);
+        for (uint32_t second = first + 1u; second < 16u; ++second)
+        {
+            const auto secondSample = uvsr::GetTemporalAaJitter(
+                Jitter::Halton23x16,
+                second);
+            defaultHaltonSamplesAreUnique &=
+                firstSample.x != secondSample.x ||
+                firstSample.y != secondSample.y;
+        }
+    }
+    passed &= Check(
+        defaultHaltonSamplesAreUnique,
+        "the default Halton 16 cycle must retain sixteen unique phases");
     for (uint32_t count : { 2u, 4u, 8u, 16u, 32u })
     {
         passed &= Check(
@@ -263,7 +282,7 @@ int main(int argc, char** argv)
     const auto invalidJitter = uvsr::GetTemporalAaJitter(
         static_cast<Jitter>(999u), 0u);
     const auto defaultJitter =
-        uvsr::GetTemporalAaJitter(Jitter::Halton23x8, 0u);
+        uvsr::GetTemporalAaJitter(Jitter::Halton23x16, 0u);
     uvsr::AntiAliasingSettings invalidJitterSettings;
     invalidJitterSettings.temporal.jitterSequence =
         static_cast<Jitter>(999u);
@@ -271,12 +290,12 @@ int main(int argc, char** argv)
         uvsr::ResolveAntiAliasingSettings(invalidJitterSettings);
     passed &= Check(
         uvsr::GetTemporalAaJitterSequenceLength(
-            static_cast<Jitter>(999u)) == 8u &&
+            static_cast<Jitter>(999u)) == 16u &&
             invalidJitter.x == defaultJitter.x &&
             invalidJitter.y == defaultJitter.y &&
             invalidJitterResolved.temporalJitterSequence ==
-                Jitter::Halton23x8,
-        "invalid jitter selections must fall back to Filament Halton 8");
+                Jitter::Halton23x16,
+        "invalid jitter selections must fall back to Filament Halton 16");
 
     constexpr auto jitterDelta =
         uvsr::GetTemporalAaCurrentToPreviousJitter(
@@ -292,8 +311,8 @@ int main(int argc, char** argv)
         !defaults.temporal.enabled &&
             defaults.temporal.quality == Quality::Medium &&
             defaults.temporal.costMode == Cost::Reduced &&
-            defaults.temporal.jitterSequence == Jitter::Halton23x8 &&
-            !defaults.temporal.nearestTexelDepth &&
+            defaults.temporal.jitterSequence == Jitter::Halton23x16 &&
+            defaults.temporal.nearestTexelDepth &&
             !defaults.fastApproximate.enabled &&
             defaults.fastApproximate.quality == Quality::Ultra &&
             NearlyEqual(
@@ -305,40 +324,43 @@ int main(int argc, char** argv)
             NearlyEqual(
                 defaults.fastApproximate.darkEdgeThreshold,
                 uvsr::FastApproximateAaDefaultDarkEdgeThreshold) &&
-            !defaults.cmaa2.enabled &&
-            defaults.cmaa2.quality == Quality::Ultra &&
-            NearlyEqual(
-                defaults.cmaa2.edgeThreshold,
-                uvsr::Cmaa2DefaultEdgeThreshold) &&
-            defaults.cmaa2.detector ==
-                uvsr::Cmaa2EdgeDetector::FullColor &&
             !defaults.msaa.enabled &&
             defaults.msaa.quality == Quality::Medium &&
-            defaults.msaa.sampleCount == 4u,
-        "TAA, FXAA, CMAA2, and MSAA must be independent default-off techniques");
+            defaults.msaa.sampleCount == 4u &&
+            defaults.msaa.perSampleRayTracedShadows,
+        "TAA, FXAA, and MSAA must be independent default-off techniques");
+    uvsr::MsaaSettings changedShadowSampling = defaults.msaa;
+    changedShadowSampling.perSampleRayTracedShadows = false;
+    passed &= Check(
+        !(changedShadowSampling == defaults.msaa),
+        "MSAA equality must include the ray traced shadow sampling policy");
 
     const auto defaultResolved =
         uvsr::ResolveAntiAliasingSettings(defaults);
     passed &= Check(
         !defaultResolved.temporalEnabled &&
             !defaultResolved.fastApproximateEnabled &&
-            !defaultResolved.cmaa2Enabled &&
             defaultResolved.temporalJitterSequence ==
-                Jitter::Halton23x8 &&
+                Jitter::Halton23x16 &&
             defaultResolved.rasterSampleCount == 1u &&
             defaultResolved.depthValidation ==
-                uvsr::TemporalAaDepthValidation::FourTexelFootprint &&
+                uvsr::TemporalAaDepthValidation::NearestTexel &&
             defaultResolved.blendDomain ==
                 uvsr::TemporalAaBlendDomain::LinearRgb,
         "disabled AA defaults must preserve validated linear-RGB history");
+    passed &= Check(
+        !uvsr::ShouldUseRasterTemporalAa(false, false) &&
+            !uvsr::ShouldUseRasterTemporalAa(false, true) &&
+            uvsr::ShouldUseRasterTemporalAa(true, false) &&
+            !uvsr::ShouldUseRasterTemporalAa(true, true),
+        "progressive accumulation must suppress requested raster TAA and its jitter");
 
-    for (uint32_t mask = 0u; mask < 16u; ++mask)
+    for (uint32_t mask = 0u; mask < 8u; ++mask)
     {
         uvsr::AntiAliasingSettings settings;
         settings.temporal.enabled = (mask & 1u) != 0u;
         settings.fastApproximate.enabled = (mask & 2u) != 0u;
-        settings.cmaa2.enabled = (mask & 4u) != 0u;
-        settings.msaa.enabled = (mask & 8u) != 0u;
+        settings.msaa.enabled = (mask & 4u) != 0u;
         settings.msaa.sampleCount = 8u;
         const auto resolved =
             uvsr::ResolveAntiAliasingSettings(settings);
@@ -346,10 +368,9 @@ int main(int argc, char** argv)
             resolved.temporalEnabled == settings.temporal.enabled &&
                 resolved.fastApproximateEnabled ==
                     settings.fastApproximate.enabled &&
-                resolved.cmaa2Enabled == settings.cmaa2.enabled &&
                 resolved.rasterSampleCount ==
                     (settings.msaa.enabled ? 8u : 1u),
-            "all sixteen AA enable combinations must resolve independently");
+            "all eight AA enable combinations must resolve independently");
     }
 
     uvsr::AntiAliasingSettings invalidFastApproximate = defaults;
@@ -371,21 +392,6 @@ int main(int argc, char** argv)
                 uvsr::FastApproximateAaMinimumDarkEdgeThreshold),
         "Fast Approximate controls must clamp finite and non-finite input");
 
-    uvsr::AntiAliasingSettings invalidCmaa2 = defaults;
-    invalidCmaa2.cmaa2.edgeThreshold =
-        std::numeric_limits<float>::quiet_NaN();
-    invalidCmaa2.cmaa2.detector =
-        static_cast<uvsr::Cmaa2EdgeDetector>(99u);
-    const auto sanitizedCmaa2 =
-        uvsr::ResolveAntiAliasingSettings(invalidCmaa2);
-    passed &= Check(
-        NearlyEqual(
-            sanitizedCmaa2.cmaa2EdgeThreshold,
-            uvsr::Cmaa2MinimumEdgeThreshold) &&
-            sanitizedCmaa2.cmaa2EdgeDetector ==
-                uvsr::Cmaa2EdgeDetector::FullColor,
-        "CMAA2 controls must clamp invalid threshold and detector input");
-
     constexpr std::array<Quality, 4> qualities = {
         Quality::Low,
         Quality::Medium,
@@ -403,15 +409,6 @@ int main(int argc, char** argv)
     };
     constexpr std::array<float, 4> fxaaDarkThresholds = {
         0.06f, 0.055f, 0.05f, 0.04f
-    };
-    constexpr std::array<float, 4> cmaa2Thresholds = {
-        0.15f, 0.10f, 0.07f, 0.05f
-    };
-    constexpr std::array<uvsr::Cmaa2EdgeDetector, 4> cmaa2Detectors = {
-        uvsr::Cmaa2EdgeDetector::Luma,
-        uvsr::Cmaa2EdgeDetector::Luma,
-        uvsr::Cmaa2EdgeDetector::Luma,
-        uvsr::Cmaa2EdgeDetector::FullColor
     };
     constexpr std::array<uint32_t, 4> multisampleCounts = {
         2u, 4u, 8u, 16u
@@ -460,40 +457,39 @@ int main(int argc, char** argv)
             uvsr::MatchesFastApproximateAaQualityPreset(fxaa),
             "reapplying the selected FXAA Quality must clear Advanced overrides");
 
-        const auto cmaa2Preset =
-            uvsr::GetCmaa2QualityPreset(qualities[index]);
-        uvsr::Cmaa2Settings cmaa2;
-        uvsr::ApplyCmaa2QualityPreset(cmaa2, qualities[index]);
-        passed &= Check(
-            NearlyEqual(
-                cmaa2Preset.edgeThreshold,
-                cmaa2Thresholds[index]) &&
-                cmaa2Preset.detector == cmaa2Detectors[index] &&
-                cmaa2.quality == qualities[index] &&
-                uvsr::MatchesCmaa2QualityPreset(cmaa2),
-            "CMAA2 quality must apply its threshold and detector recipe");
-        cmaa2.detector = cmaa2.detector ==
-                uvsr::Cmaa2EdgeDetector::Luma
-            ? uvsr::Cmaa2EdgeDetector::FullColor
-            : uvsr::Cmaa2EdgeDetector::Luma;
-        passed &= Check(
-            !uvsr::MatchesCmaa2QualityPreset(cmaa2),
-            "a CMAA2 Advanced override must mark Quality custom");
-        uvsr::ApplyCmaa2QualityPreset(cmaa2, qualities[index]);
-        passed &= Check(
-            uvsr::MatchesCmaa2QualityPreset(cmaa2),
-            "reapplying the selected CMAA2 Quality must clear Advanced overrides");
-
         uvsr::MsaaSettings multisample;
         uvsr::ApplyMultisampleQualityPreset(
             multisample, qualities[index]);
         passed &= Check(
             multisample.quality == qualities[index] &&
                 multisample.sampleCount == multisampleCounts[index] &&
+                multisample.perSampleRayTracedShadows &&
                 uvsr::GetMultisampleQualitySampleCount(
                     qualities[index]) == multisampleCounts[index] &&
                 uvsr::MatchesMultisampleQualityPreset(multisample),
             "Multisample quality must map Low through Ultra to 2x through 16x");
+        passed &= Check(
+            !uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 1u) &&
+                uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 2u) &&
+                uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 4u) &&
+                uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 8u) &&
+                uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 16u),
+            "per-sample ray traced shadows must be active only under MSAA");
+        multisample.perSampleRayTracedShadows = false;
+        passed &= Check(
+            !uvsr::MatchesMultisampleQualityPreset(multisample) &&
+                !uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 1u) &&
+                !uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 2u) &&
+                !uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 4u) &&
+                !uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 8u) &&
+                !uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 16u),
+            "disabling per-sample shadows must mark Multisample Quality custom");
+        uvsr::ApplyMultisampleQualityPreset(
+            multisample, qualities[index]);
+        passed &= Check(
+            multisample.perSampleRayTracedShadows &&
+                uvsr::MatchesMultisampleQualityPreset(multisample),
+            "reapplying Multisample Quality must restore per-sample shadows");
         multisample.sampleCount = multisampleCounts[
             (index + 1u) % multisampleCounts.size()];
         passed &= Check(
@@ -523,7 +519,7 @@ int main(int argc, char** argv)
     passed &= Check(
         uvsr::ResolveAntiAliasingSettings(fourTexel).depthValidation ==
             uvsr::TemporalAaDepthValidation::FourTexelFootprint,
-        "Nearest Texel must be a direct normal TAA setting");
+        "Legacy Four-Texel Footprint must remain an explicit TAA setting");
 
     uvsr::AntiAliasingSettings advanced = defaults;
     advanced.temporal.enabled = true;
@@ -574,26 +570,19 @@ int main(int argc, char** argv)
             uvsr::GetTemporalAaStaticPerformanceIndex(optimized) == 3u,
         "TAA execution topology must contain only cost-derived compute paths");
 
-    uvsr::AntiAliasingSettings cmaaOnlyChange = minimum;
-    cmaaOnlyChange.cmaa2.enabled = true;
-    cmaaOnlyChange.cmaa2.quality = Quality::Low;
-    cmaaOnlyChange.cmaa2.edgeThreshold = 0.15f;
-    cmaaOnlyChange.cmaa2.detector = uvsr::Cmaa2EdgeDetector::Luma;
     uvsr::AntiAliasingSettings fastApproximateOnlyChange = minimum;
     fastApproximateOnlyChange.fastApproximate.enabled = true;
     fastApproximateOnlyChange.fastApproximate.edgeSharpness = 4.f;
     uvsr::AntiAliasingSettings msaaOnlyChange = minimum;
     msaaOnlyChange.msaa.enabled = true;
     uvsr::AntiAliasingSettings temporalImageChange = minimum;
-    temporalImageChange.temporal.nearestTexelDepth = true;
+    temporalImageChange.temporal.nearestTexelDepth = false;
     uvsr::AntiAliasingSettings jitterSequenceChange = minimum;
     jitterSequenceChange.temporal.jitterSequence = Jitter::Halton23x32;
     uvsr::AntiAliasingSettings disabledJitterChange = defaults;
     disabledJitterChange.temporal.jitterSequence = Jitter::Sobol32;
     passed &= Check(
         !uvsr::AntiAliasingSettingsRequireTemporalReset(
-            minimum, cmaaOnlyChange) &&
-            !uvsr::AntiAliasingSettingsRequireTemporalReset(
                 minimum, fastApproximateOnlyChange) &&
             !uvsr::AntiAliasingSettingsRequireTemporalReset(
                 minimum, msaaOnlyChange) &&
@@ -717,6 +706,331 @@ int main(int argc, char** argv)
                 0.f, 0.f, 1.f }),
         "invalid motion must fail closed before history sampling");
 
+    const std::array<uvsr::TemporalAaMotionCandidate, 5>
+        invalidCenterCandidates = {{
+            { 10.f, true, false },
+            { 5.f, true, true },
+            { 0.f, false, false },
+            { 0.f, false, false },
+            { 0.f, false, false }
+        }};
+    const std::array<uvsr::TemporalAaMotionCandidate, 5>
+        foregroundNeighborCandidates = {{
+            { 10.f, true, true },
+            { 5.f, true, true },
+            { 0.f, false, false },
+            { 0.f, false, false },
+            { 0.f, false, false }
+        }};
+    const std::array<uvsr::TemporalAaMotionCandidate, 5>
+        fartherNeighborCandidates = {{
+            { 10.f, true, true },
+            { 12.f, true, true },
+            { 0.f, false, false },
+            { 0.f, false, false },
+            { 0.f, false, false }
+        }};
+    passed &= Check(
+        uvsr::SelectTemporalAaCenterFirstEdgeCandidate(
+            invalidCenterCandidates) == -1 &&
+            uvsr::SelectTemporalAaCenterFirstEdgeCandidate(
+                foregroundNeighborCandidates) == 1 &&
+            uvsr::SelectTemporalAaCenterFirstEdgeCandidate(
+                fartherNeighborCandidates) == 0,
+        "edge dilation must preserve center ownership, borrow only a valid "
+        "foreground neighbor's XY reprojection, and reject invalid centers");
+
+    std::array<uvsr::TemporalAaMotionCandidate, 5>
+        stationaryCoverageCandidates = {{
+            { 0.f, false, false, 0.f },
+            { 5.f, true, true, 0.5f, 0.01f, 0.f, 1e-6f },
+            { 0.f, false, false },
+            { 0.f, false, false },
+            { 0.f, false, false }
+        }};
+    bool everyCrossOrientationHandsOffCoverage = true;
+    for (int32_t candidateIndex = 1; candidateIndex < 5; ++candidateIndex)
+    {
+        auto oriented = stationaryCoverageCandidates;
+        std::swap(oriented[1], oriented[candidateIndex]);
+        everyCrossOrientationHandsOffCoverage &=
+            uvsr::SelectTemporalAaStationaryCoverageCandidate(oriented) ==
+                candidateIndex;
+    }
+    auto movingCoverageCandidates = stationaryCoverageCandidates;
+    movingCoverageCandidates[1].motionX = 0.0101f;
+    auto changingDepthCoverageCandidates = stationaryCoverageCandidates;
+    changingDepthCoverageCandidates[1].depthDelta = 1.01e-6f;
+    auto invalidSurfaceCenterCandidates = stationaryCoverageCandidates;
+    invalidSurfaceCenterCandidates[0] = {
+        10.f, true, false, 0.5f
+    };
+    auto corruptCenterCandidates = stationaryCoverageCandidates;
+    corruptCenterCandidates[0].deviceDepth =
+        std::numeric_limits<float>::quiet_NaN();
+    auto negativeCenterCandidates = stationaryCoverageCandidates;
+    negativeCenterCandidates[0].deviceDepth = -0.25f;
+    auto outOfRangeCenterCandidates = stationaryCoverageCandidates;
+    outOfRangeCenterCandidates[0].deviceDepth = 1.25f;
+    passed &= Check(
+        everyCrossOrientationHandsOffCoverage &&
+            uvsr::SelectTemporalAaStationaryCoverageCandidate(
+                stationaryCoverageCandidates) == 1 &&
+            uvsr::SelectTemporalAaStationaryCoverageCandidate(
+                movingCoverageCandidates) == -1 &&
+            uvsr::SelectTemporalAaStationaryCoverageCandidate(
+                changingDepthCoverageCandidates) == -1 &&
+            uvsr::SelectTemporalAaStationaryCoverageCandidate(
+                invalidSurfaceCenterCandidates) == -1 &&
+            uvsr::SelectTemporalAaStationaryCoverageCandidate(
+                corruptCenterCandidates) == -1 &&
+            uvsr::SelectTemporalAaStationaryCoverageCandidate(
+                negativeCenterCandidates) == -1 &&
+            uvsr::SelectTemporalAaStationaryCoverageCandidate(
+                outOfRangeCenterCandidates) == -1,
+        "thin stationary coverage may hand off from exact cleared background "
+        "in every cross orientation, while moving, changing-depth, corrupt, "
+        "and finite invalid centers must fail closed");
+
+    float thinCoverageHistory = 0.f;
+    float settledThinCoverageMinimum = 1.f;
+    float settledThinCoverageMaximum = 0.f;
+    bool alternatingThinCoverageRetainsHistory = true;
+    for (uint32_t frame = 0u; frame < 128u; ++frame)
+    {
+        const bool centerCovered = (frame & 1u) == 0u;
+        const bool historyAccepted = centerCovered ||
+            uvsr::SelectTemporalAaStationaryCoverageCandidate(
+                stationaryCoverageCandidates) == 1;
+        alternatingThinCoverageRetainsHistory &= historyAccepted;
+        const float currentCoverage = centerCovered ? 1.f : 0.f;
+        thinCoverageHistory = historyAccepted
+            ? thinCoverageHistory * (6.f / 7.f) +
+                currentCoverage * (1.f / 7.f)
+            : currentCoverage;
+        if (frame >= 96u)
+        {
+            settledThinCoverageMinimum = std::min(
+                settledThinCoverageMinimum,
+                thinCoverageHistory);
+            settledThinCoverageMaximum = std::max(
+                settledThinCoverageMaximum,
+                thinCoverageHistory);
+        }
+    }
+    passed &= Check(
+        alternatingThinCoverageRetainsHistory &&
+            settledThinCoverageMaximum - settledThinCoverageMinimum < 0.08f,
+        "validated foreground/background coverage phases must converge instead "
+        "of resetting a stationary thin outline to raw current color");
+
+    constexpr uint32_t coverageViewportWidth = 16u;
+    constexpr uint32_t coverageViewportHeight = 16u;
+    constexpr std::array<uvsr::TemporalAaJitterSample, 4>
+        coverageHistoryColors = {{
+            { 8.f, 15.f },
+            { 8.f, 0.f },
+            { 15.f, 8.f },
+            { 0.f, 8.f }
+        }};
+    constexpr std::array<uvsr::TemporalAaJitterSample, 4>
+        unshiftedCoverageDepths = {{
+            { 8.f, 15.75f },
+            { 8.f, -0.75f },
+            { 15.75f, 8.f },
+            { -0.75f, 8.f }
+        }};
+    constexpr std::array<uvsr::TemporalAaJitterSample, 4>
+        coverageDepthOffsets = {{
+            { 0.f, -1.f },
+            { 0.f, 1.f },
+            { -1.f, 0.f },
+            { 1.f, 0.f }
+        }};
+    bool everyBorderCoverageWitnessUsesSelectedDepth = true;
+    for (uint32_t orientation = 0u; orientation < 4u; ++orientation)
+    {
+        everyBorderCoverageWitnessUsesSelectedDepth &=
+            !uvsr::IsTemporalAaPointPositionInBounds(
+                unshiftedCoverageDepths[orientation],
+                coverageViewportWidth,
+                coverageViewportHeight) &&
+            uvsr::IsTemporalAaCoverageHandoffPositionInBounds(
+                coverageHistoryColors[orientation],
+                unshiftedCoverageDepths[orientation],
+                coverageDepthOffsets[orientation],
+                coverageViewportWidth,
+                coverageViewportHeight);
+    }
+    passed &= Check(
+        everyBorderCoverageWitnessUsesSelectedDepth,
+        "all four viewport-edge handoffs must use the selected neighbor depth "
+        "coordinate instead of the rejected unshifted center coordinate");
+
+    const float invalidViewDepth =
+        std::numeric_limits<float>::quiet_NaN();
+    passed &= Check(
+        uvsr::TemporalAaPointViewDepthAccepted(
+                0.1f / 0.5f,
+                0.1f / 0.5f) &&
+            uvsr::TemporalAaPointViewDepthAccepted(
+                0.1f / 0.5f,
+                0.1f / 0.49f) &&
+            uvsr::TemporalAaPointViewDepthAccepted(
+                0.1f / 0.5f,
+                0.1f / 0.504f) &&
+            !uvsr::TemporalAaPointViewDepthAccepted(
+                0.1f / 0.5f,
+                0.1f / 0.506f) &&
+            !uvsr::TemporalAaPointViewDepthAccepted(
+                0.1f / 0.5f,
+                0.1f / 0.75f) &&
+            uvsr::TemporalAaPointViewDepthAccepted(
+                0.1f / 0.001f,
+                0.1f / 0.0007f) &&
+            !uvsr::TemporalAaPointViewDepthAccepted(
+                0.1f / 0.001f,
+                0.1f / 0.0014f) &&
+            !uvsr::TemporalAaPointViewDepthAccepted(10.f, 0.f) &&
+            !uvsr::TemporalAaPointViewDepthAccepted(
+                10.f,
+                invalidViewDepth),
+        "moving point validation must reject stale nearer ownership while "
+        "conservatively accepting equal and farther history within its "
+        "one-percent linear-view-depth boundary");
+
+    bool stationaryBypassIsPhaseInvariant = true;
+    bool stationaryViewportAcceptanceIsPhaseInvariant = true;
+    bool policyBoundsMatchSamplingFootprints = true;
+    bool sawChangingRawDepthPoint = false;
+    bool sawDepthOutsideLinearFootprint = false;
+    int32_t firstDepthX = 0;
+    int32_t firstDepthY = 0;
+    constexpr uint32_t viewportWidth = 16u;
+    constexpr uint32_t viewportHeight = 16u;
+    constexpr uvsr::TemporalAaJitterSample borderHistoryColor = {
+        0.25f,
+        0.25f
+    };
+    for (uint64_t frame = 0u; frame < 16u; ++frame)
+    {
+        const auto currentPhase = uvsr::GetTemporalAaJitter(
+            Jitter::Halton23x16,
+            frame);
+        const auto previousPhase = uvsr::GetTemporalAaJitter(
+            Jitter::Halton23x16,
+            (frame + 15u) % 16u);
+        const auto phaseDelta =
+            uvsr::GetTemporalAaCurrentToPreviousJitter(
+                currentPhase,
+                previousPhase);
+        const int32_t depthX =
+            uvsr::GetTemporalAaNearestPointCoordinate(
+                12.f + phaseDelta.x);
+        const int32_t depthY =
+            uvsr::GetTemporalAaNearestPointCoordinate(
+                8.f + phaseDelta.y);
+        if (frame == 0u)
+        {
+            firstDepthX = depthX;
+            firstDepthY = depthY;
+        }
+        else
+        {
+            sawChangingRawDepthPoint |=
+                depthX != firstDepthX || depthY != firstDepthY;
+        }
+        stationaryBypassIsPhaseInvariant &=
+            uvsr::IsTemporalAaStationaryDepthBypass(
+                0.f,
+                0.f,
+                0.f,
+                0.f,
+                0.f);
+
+        const uvsr::TemporalAaJitterSample borderHistoryDepth = {
+            phaseDelta.x,
+            phaseDelta.y
+        };
+        const bool depthPointInBounds =
+            uvsr::IsTemporalAaPointPositionInBounds(
+                borderHistoryDepth,
+                viewportWidth,
+                viewportHeight);
+        const bool depthLinearInBounds =
+            uvsr::IsTemporalAaLinearFootprintInBounds(
+                borderHistoryDepth,
+                viewportWidth,
+                viewportHeight);
+        sawDepthOutsideLinearFootprint |= !depthLinearInBounds;
+        stationaryViewportAcceptanceIsPhaseInvariant &=
+            uvsr::IsTemporalAaReprojectionPositionInBounds(
+                borderHistoryColor,
+                borderHistoryDepth,
+                viewportWidth,
+                viewportHeight,
+                true,
+                true);
+        policyBoundsMatchSamplingFootprints &=
+            uvsr::IsTemporalAaReprojectionPositionInBounds(
+                borderHistoryColor,
+                borderHistoryDepth,
+                viewportWidth,
+                viewportHeight,
+                false,
+                true) == depthPointInBounds &&
+            uvsr::IsTemporalAaReprojectionPositionInBounds(
+                borderHistoryColor,
+                borderHistoryDepth,
+                viewportWidth,
+                viewportHeight,
+                false,
+                false) == depthLinearInBounds;
+    }
+    constexpr uvsr::TemporalAaJitterSample pointOnlyBorderDepth = {
+        -0.25f,
+        0.25f
+    };
+    const bool pointOnlyBorderWitness =
+        uvsr::IsTemporalAaPointPositionInBounds(
+            pointOnlyBorderDepth,
+            viewportWidth,
+            viewportHeight) &&
+        !uvsr::IsTemporalAaLinearFootprintInBounds(
+            pointOnlyBorderDepth,
+            viewportWidth,
+            viewportHeight);
+    passed &= Check(
+        stationaryBypassIsPhaseInvariant &&
+            stationaryViewportAcceptanceIsPhaseInvariant &&
+            policyBoundsMatchSamplingFootprints &&
+            sawChangingRawDepthPoint &&
+            sawDepthOutsideLinearFootprint &&
+            pointOnlyBorderWitness &&
+            uvsr::IsTemporalAaReprojectionPositionInBounds(
+                borderHistoryColor,
+                pointOnlyBorderDepth,
+                viewportWidth,
+                viewportHeight,
+                false,
+                true) &&
+            !uvsr::IsTemporalAaReprojectionPositionInBounds(
+                borderHistoryColor,
+                pointOnlyBorderDepth,
+                viewportWidth,
+                viewportHeight,
+                false,
+                false) &&
+            uvsr::IsTemporalAaStationaryDepthBypass(
+                0.01f, 0.f, 0.01f, 0.f, 1e-6f) &&
+            !uvsr::IsTemporalAaStationaryDepthBypass(
+                0.0101f, 0.f, 0.f, 0.f, 0.f) &&
+            !uvsr::IsTemporalAaStationaryDepthBypass(
+                0.f, 0.f, 0.0101f, 0.f, 0.f) &&
+            !uvsr::IsTemporalAaStationaryDepthBypass(
+                0.f, 0.f, 0.f, 0.f, 1.01e-6f),
+        "stationary history must remain accepted across every Halton-16 raw-depth phase while moving point and legacy Gather bounds stay exact");
+
     if (argc > 1)
     {
         const std::filesystem::path sourceDirectory = argv[1];
@@ -734,12 +1048,6 @@ int main(int argc, char** argv)
             sourceDirectory / "temporal_aa_common.hlsli");
         const std::string resolveShader = ReadTextFile(
             sourceDirectory / "temporal_aa_resolve_cs.hlsl");
-        const std::string cmaaHeader = ReadTextFile(
-            sourceDirectory / "cmaa2.h");
-        const std::string cmaaSource = ReadTextFile(
-            sourceDirectory / "cmaa2.cpp");
-        const std::string cmaaShader = ReadTextFile(
-            sourceDirectory / "cmaa2.hlsl");
         const std::string fastApproximateHeader = ReadTextFile(
             sourceDirectory / "fast_approximate_aa.h");
         const std::string fastApproximateSource = ReadTextFile(
@@ -786,32 +1094,138 @@ int main(int argc, char** argv)
                     std::string::npos,
             "TAA must retain only 8x8 compute and legacy/packed LDS");
         passed &= Check(
-            qualityShader.find("const bool stationary") ==
+            qualityShader.find(
+                    "selection.centerVelocity = selection.velocity.xy;") !=
                     std::string::npos &&
-                qualityShader.find("reprojectionAcceptance = 1.0") ==
+                qualityShader.find(
+                    "borrowClosest >= 0.5 && centerValid > 0.0;") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "selection.velocity.xy = useClosest") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "const bool centerIsClearedBackground =") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "selection.currentDeviceDepth == 0.0;") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "const int offsets[5] = {\n"
+                    "        0,\n"
+                    "        -int(kColorPitch),\n"
+                    "        int(kColorPitch),\n"
+                    "        -1,\n"
+                    "        1\n"
+                    "    };\n"
+                    "    const float2 pixelOffsets[5] = {\n"
+                    "        float2(0.0, 0.0),\n"
+                    "        float2(0.0, -1.0),\n"
+                    "        float2(0.0, 1.0),\n"
+                    "        float2(-1.0, 0.0),\n"
+                    "        float2(1.0, 0.0)\n"
+                    "    };") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "const bool coverageHandoff =") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "selection.coverageHandoff = 1.0;") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "validationDepthPixel = historyDepthPixel +") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "motion.coverageHandoff < 0.5;") !=
+                    std::string::npos &&
+                qualityShader.find("const bool stationary") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "stationaryDepthBypass = float(stationary);") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "if (stationaryDepthBypass > 0.5)") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "if (colorPositionValid * depthPositionValid == 0.0)") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "float centerDepthPositionValid = stationaryDepthBypass > 0.5") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "? HistoryPointPositionInBounds(centerDepthPosition)") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    ": HistoryPositionInBounds(centerDepthPosition);") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "HistoryPointPositionInBounds(validationDepthPixel)") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "UvsrTemporalPointDepthAccepted(") !=
                     std::string::npos &&
                 qualityShader.find(
                     "PreDepth.Load(int3(depthPixel, 0))") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "boxMin = min(boxMin, motion.coverageSourceWorking);") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "LoadWorkingColor(closestColorIdx)") !=
+                    std::string::npos &&
+                qualityShader.find(
+                    "LoadWorkingColor(candidateIdx)") ==
                     std::string::npos,
-            "reduced-cost TAA must depth-validate stationary silhouette history");
+            "quality TAA must preserve center ownership, validate stationary "
+            "thin-coverage handoff, bypass center-owned stationary raw depth, "
+            "and point-validate moving history");
+        const size_t sampleHistoryStart = qualityShader.find(
+            "HistorySample SampleHistory(");
+        const size_t coverageHandoffFilter = qualityShader.find(
+            "if (coverageHandoff > 0.5)", sampleHistoryStart);
+        const size_t configuredHistoryFilter = qualityShader.find(
+            "#if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_BILINEAR",
+            sampleHistoryStart);
         passed &= Check(
-            minimumShader.find("prepared.velocitySquared > 1e-4f") ==
+            sampleHistoryStart != std::string::npos &&
+                coverageHandoffFilter != std::string::npos &&
+                configuredHistoryFilter != std::string::npos &&
+                coverageHandoffFilter < configuredHistoryFilter &&
+                qualityShader.find(
+                    "motion.coverageHandoff);",
+                    sampleHistoryStart) != std::string::npos,
+            "thin-coverage handoff must reuse only its already validated "
+            "history sample before wider filter depth footprints");
+        passed &= Check(
+            minimumShader.find("const bool stationary") !=
+                    std::string::npos &&
+                minimumShader.find(
+                    "IsPointHistoryPositionInBounds(historyDepthPixel)") !=
+                    std::string::npos &&
+                minimumShader.find(
+                    "prepared.historySupport = 1.0f;") !=
+                    std::string::npos &&
+                minimumShader.find(
+                    "UvsrTemporalDeviceDepthPrecisionValidity(") !=
                     std::string::npos &&
                 minimumShader.find(
                     "PreviousDepth.Load(int3(depthPixel, 0))") !=
+                    std::string::npos &&
+                minimumShader.find(
+                    "UvsrTemporalPointDepthAccepted(") !=
                     std::string::npos,
-            "minimum-cost TAA must depth-validate stationary silhouette history");
+            "minimum-cost TAA must bypass stationary raw depth and point-validate moving history");
         passed &= Check(
             temporalPass.find(
                 "minimumDefaultBehaviorFlags =\n"
+                "            UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH |\n"
                 "            UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT") !=
                     std::string::npos &&
                 minimumShader.find(
                     "kMinimumBehaviorFlags =\n"
+                    "        UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH |\n"
                     "        UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT") !=
                     std::string::npos,
-            "default Minimum TAA must select its statically folded four-texel "
-            "depth policy");
+            "default Minimum TAA must statically fold Stationary Bypass");
         passed &= Check(
                 commonShader.find(
                     "UvsrTemporalFootprintDepthCoherence(") !=
@@ -822,11 +1236,14 @@ int main(int argc, char** argv)
                 commonShader.find(
                     "UvsrTemporalDeviceDepthFartherViewAllowance(") !=
                     std::string::npos &&
+                commonShader.find(
+                    "float UvsrTemporalPointDepthAccepted(") !=
+                    std::string::npos &&
                 qualityShader.find(
-                    "reprojectionAcceptance = UvsrTemporalDeviceDepthAccepted(") !=
+                    "UvsrTemporalPointDepthAccepted(") !=
                     std::string::npos &&
                 minimumShader.find(
-                    "prepared.historySupport = UvsrTemporalDeviceDepthAccepted(") !=
+                    "UvsrTemporalPointDepthAccepted(") !=
                     std::string::npos &&
                 temporalPass.find(
                     "blendConstants.depthStorageFlags = useMinimum") !=
@@ -842,22 +1259,11 @@ int main(int argc, char** argv)
             "all TAA paths must use filtered footprint depth, discontinuity "
             "confidence, and format-exact history-depth uncertainty");
         passed &= Check(
-            cmaaHeader.find("Cmaa2ColorRange") == std::string::npos &&
-                cmaaSource.find("colorRange") == std::string::npos &&
-                cmaaShader.find(
-                    "#define CMAA2_SUPPORT_HDR_COLOR_RANGE 0") !=
-                    std::string::npos,
-            "CMAA2 must be display-linear LDR only");
-        passed &= Check(
             temporalPass.find("minimumPresentationCompatible") ==
                     std::string::npos &&
-                temporalPass.find("settings.cmaa2Enabled") ==
-                    std::string::npos &&
                 temporalPass.find("settings.fastApproximateEnabled") ==
-                    std::string::npos &&
-                temporalPass.find("CMAA2 input is incompatible") ==
                     std::string::npos,
-            "Minimum TAA and display-linear CMAA2 must remain composable");
+            "Minimum TAA and display-linear FXAA must remain composable");
         passed &= Check(
             fastApproximateHeader.find("FastApproximateAAPass") !=
                     std::string::npos &&
@@ -918,17 +1324,9 @@ int main(int argc, char** argv)
                 shaderManifest.find("TAA_OPTIMIZED_COMPUTE") !=
                     std::string::npos &&
                 shaderManifest.find(
-                    "CMAA2_SUPPORT_HDR_COLOR_RANGE") ==
-                    std::string::npos &&
-                shaderManifest.find(
-                    "CMAA2_EDGE_DETECTION_LUMA_PATH={0,1}") !=
-                    std::string::npos &&
-                shaderManifest.find("CMAA2_STATIC_QUALITY_PRESET") ==
-                    std::string::npos &&
-                shaderManifest.find(
                     "fast_approximate_aa_ps.hlsl -T ps -E main") !=
                     std::string::npos,
-            "shader manifests must remove retired TAA and HDR CMAA2 dimensions");
+            "shader manifests must remove retired TAA dimensions");
     }
 
     return passed ? 0 : 1;

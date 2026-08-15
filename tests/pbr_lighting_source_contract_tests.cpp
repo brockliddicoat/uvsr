@@ -91,6 +91,8 @@ int main(int argc, char** argv)
         sourceDirectory / "src/pbr_deferred_lighting_pass.cpp"));
     const std::string deferredPassHeader = Canonicalize(ReadSource(
         sourceDirectory / "src/pbr_deferred_lighting_pass.h"));
+    const std::string deferredConstants = Canonicalize(ReadSource(
+        sourceDirectory / "src/pbr_deferred_lighting_cb.h"));
     const std::string pbrLighting = Canonicalize(ReadSource(
         sourceDirectory / "src/pbr_lighting.hlsli"));
     const std::string pbrCore = Canonicalize(ReadSource(
@@ -213,6 +215,51 @@ int main(int argc, char** argv)
             "each deferred variant must evaluate attached local-light shadow "
             "maps");
     }
+    RequireContains(
+        deferredShader,
+        "#ifwrite_source_radiance"
+            "texture2d<float4>t_sourcesunvisibility:register(t23);"
+            "#endif",
+        "the alternate sun source must exist only in the write-source shader");
+    Require(
+        deferredMsaaShader.find("register(t23)") == std::string::npos,
+        "the alternate sun source must not enter an MSAA pipeline");
+    RequireContains(
+        deferredShader,
+        "if(int(lightindex)!=g_pbrdeferred."
+            "sourcesunvisibilitylightindex)"
+            "{returnfinalvisibility;}",
+        "unmatched lights must preserve their ordinary final modulation");
+    RequireContains(
+        deferredShader,
+        "if(any(!isfinite(encodedsourcesun)))"
+            "returnfinalvisibility;",
+        "invalid alternate texels must fall back to ordinary final sun modulation");
+    RequireContains(
+        deferredShader,
+        "constfloat3sourcedirectmodulation="
+            "usesourcesunvisibility?getsourcedirectlightvisibility("
+            "lightindex,pixelposition,directmodulation):directmodulation;",
+        "source-only sun modulation must not replace final direct modulation");
+    RequireContains(
+        deferredShader,
+        "directdiffuse+=direct.diffuse*directmodulation;"
+            "directspecular+=direct.specular*directmodulation;",
+        "ordinary total modulation must continue to own final direct lighting");
+    RequireContains(
+        deferredShader,
+        "sourcedirectdiffuse+=direct.diffuse*sourcedirectmodulation;",
+        "the GI source must apply its alternate only to direct diffuse");
+    Require(
+        CountOccurrences(
+            deferredShader,
+            "evaluatedirectlightprevalidated(") == 1u,
+        "final and source lighting must share one BRDF evaluation");
+    RequireContains(
+        deferredShader,
+        "constfloat3sourcediffuse=usesourcesunvisibility?"
+            "sourcedirectdiffuse:directdiffuse;",
+        "omitting the alternate must preserve the ordinary source path");
 
     RequireContains(
         deferredPass,
@@ -250,6 +297,17 @@ int main(int argc, char** argv)
         "float3finallinearhdr=g_pbrdeferred.lightingdebugview==0u?"
             "max(t_resolvedbackground[pixelposition].rgb,0.0f):0.0f;",
         "MSAA information filters must use a black no-surface background");
+    RequireContains(
+        deferredMsaaShader,
+        "constfloatsampledepth=t_gbufferdepth.load("
+            "pixelposition,sampleindex);",
+        "MSAA lighting must load the sample depth once");
+    RequireContains(
+        deferredMsaaShader,
+        "if(!isfinite(sampledepth)||sampledepth<=0.0f||"
+            "!(dot(normalchannels.xyz,normalchannels.xyz)>1e-12f))"
+            "returnfalse;",
+        "MSAA lighting coverage must require finite positive depth and a surface normal");
     RequireContains(
         rendererSource,
         "constboolscreenspacevisibilityrequested="
@@ -452,6 +510,14 @@ int main(int argc, char** argv)
             deferredPass,
             "bindinglayoutitem::texture_srv(22)") == 2u,
         "sky visibility needs one normal and one MSAA CPU layout entry");
+    Require(
+        CountOccurrences(
+            deferredPass,
+            "bindinglayoutitem::texture_srv(23)") == 1u &&
+            CountOccurrences(
+                deferredPass,
+                "bindingsetitem::texture_srv(23,") == 1u,
+        "alternate source sun visibility must bind only in the write-source pipeline");
     RequireContains(
         deferredPass,
         "bindingsetitem::texture_srv(20,"
@@ -489,6 +555,24 @@ int main(int argc, char** argv)
         "unmatched visibility slots must retain neutral light indices");
     RequireContains(
         deferredPass,
+        "constants.sourcesunvisibilitylightindex=-1;",
+        "an absent or rejected source alternate must select ordinary final sun modulation");
+    RequireContains(
+        deferredPass,
+        "if(candidate.iscomplete()&&"
+            "activevisibilities.sun.iscomplete()&&"
+            "candidate.light==activevisibilities.sun.light)"
+            "{activesourcesunvisibility=candidate;}",
+        "the source alternate must match the accepted final sun exactly");
+    RequireContains(
+        deferredPass,
+        "bindingsetitem::texture_srv(23,"
+            "activesourcesunvisibility.texture?"
+            "activesourcesunvisibility.texture:"
+            "m_commonpasses->m_whitetexture.get())",
+        "the optional source binding must remain valid when no alternate is accepted");
+    RequireContains(
+        deferredPass,
         "uvsr::targetsdirectlight("
             "activevisibilities.flashlight,light.get())",
         "the flashlight CPU adapter must use pointer-identical matching");
@@ -512,6 +596,24 @@ int main(int argc, char** argv)
         "std::array<pipeline,2>m_pipelines;",
         "deferred lighting must retain only no-source and one-source "
         "pipelines");
+    RequireContains(
+        deferredPassHeader,
+        "nvrhi::itexture*visibilitycomposite=nullptr,"
+            "constuvsr::directlightvisibility&"
+            "sourcesunvisibility={});",
+        "the alternate source sun must remain a final optional render argument");
+    RequireContains(
+        deferredConstants,
+        "intflashlightlightindex;"
+            "intsourcesunvisibilitylightindex;"
+            "uintsourcesunvisibilityencoding;"
+            "uintflashlightpadding;",
+        "the source sun contract must consume only two former padding words");
+    RequireContains(
+        deferredPass,
+        "sizeof(pbrdeferredlightingconstants)=="
+            "sizeof(deferredlightingconstants)+96",
+        "the source sun contract must preserve the deferred constant-buffer byte size");
     Require(
         deferredShader.find("write_bounce_metadata") == std::string::npos &&
             deferredShader.find("sourcemetadata") == std::string::npos &&

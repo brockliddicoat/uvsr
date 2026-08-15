@@ -58,7 +58,6 @@ license decision before it should be strengthened.
 - [NVIDIA FXAA](nvidia-fxaa.md)
 - [G3D Innovation Engine](g3d-innovation-engine.md)
 - [Stochastic Sobol Generation](stochastic-sobol-generation.md)
-- [Intel CMAA2](intel-cmaa2.md)
 - [NVIDIA NRD](nvidia-nrd.md)
 - [AgX Display Transform](agx-display-transform.md)
 - [Wicked Engine Temporal Anti-Aliasing](wicked-engine-temporal-aa.md)
@@ -85,6 +84,7 @@ license decision before it should be strengthened.
 
 ## Historical and Retired Sources
 
+- [Intel CMAA2](intel-cmaa2.md)
 - [Bend Studio Screen-Space Shadows](bend-studio-screen-space-shadows.md)
 - [SMAA](smaa.md)
 - [Electronic Arts FAST Noise](electronic-arts-fast-noise.md)

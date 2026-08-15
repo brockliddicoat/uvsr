@@ -13,11 +13,11 @@ production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 125,083 non-blank source lines.
+**First-Party Lines of Code:** 127,351 non-blank source lines.
 
-**Third-Party Lines of Code:** 387,457 non-blank source lines.
+**Third-Party Lines of Code:** 386,164 non-blank source lines.
 
-**Total Lines of Code:** 512,540 non-blank source lines.
+**Total Lines of Code:** 513,515 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -45,12 +45,14 @@ with `tools/update_readme_line_counts.cmd --write`.
   disocclusion blocks. The ReSTIR subsets do not claim complete NVIDIA
   namesake or arbitrary full-path reconnection parity.
 - **Ratio Estimators:** Correlated visible and unshadowed RGB responses reduce
-  current-frame ray-traced sun-shadow variance; sky visibility separately uses
-  a 1-64-sample cosine-hemisphere visible-ray ratio for environment lighting.
+  current-frame ray-traced sun-shadow variance across covered 1x-16x raster
+  receivers; Multisample Adaptive can instead reuse the closest receiver as an
+  explicit lower-cost shadow approximation. Sky visibility separately uses a
+  1-64-sample cosine-hemisphere visible-ray ratio for environment lighting.
 - **Deferred PBR:** A packed G-buffer feeds material-aware lighting, SH9 diffuse
   IBL, and prefiltered GGX specular IBL; median-luminance exposure feeds AgX.
 - **Composable Anti-Aliasing:** Deferred 2x-16x MSAA, TAA with Filament and
-  Sobol jitter, display-linear Fast Approximate AA, and CMAA2 can be combined.
+  Sobol jitter, and display-linear Fast Approximate AA can be combined.
 - **Noise Research Stack:** Deterministic white, blue, and 64-layer
   spatiotemporal blue-noise textures support global and per-effect sampling.
 - **Physical Diagnostic Flashlight:** A dedicated scene spot light uses shared
@@ -70,9 +72,9 @@ with `tools/update_readme_line_counts.cmd --write`.
   Material and Interface drawers, deferred dropdowns, exact-input sliders, and
   slash commands share one animated presentation; Ogg keeps stock ImGui
   behavior and immediate endpoints.
-- **Compact Runtime Surface:** The build retains 333 first-party shader
-  permutations in 51 staged shader binaries, fourteen Settings drawers, and
-  209 commands without dormant experiments.
+- **Compact Runtime Surface:** The build retains 311 first-party shader
+  permutations in 48 staged shader binaries, fourteen Settings drawers, and
+  221 commands without dormant experiments.
 - **Five Packaged Scenes:** Sponza Decorated, Sponza Plain, Bistro Interior,
   San Miguel, and Classroom Interior ship ready-to-run; Bistro and San Miguel
   copy glTF buffer views byte-for-byte into standard external buffers below
@@ -121,8 +123,8 @@ build variants and the complete validation workflow are documented below.
   inheritance, effect overrides, precomputed assets, centered sampling,
   temporal progression, and provenance.
 - [Temporal Aliasing Options](docs/temporal-aa-options.md) defines temporal,
-  fast approximate, morphological, and multisample composition, history
-  behavior, and coordinate conventions.
+  fast approximate, and multisample composition, history behavior, and
+  coordinate conventions.
 - [Engine Cutdown Archive](docs/postmortem/engine-cutdowns/README.md) keeps the
   dated shader and renderer cutdown reports, their measurements, complete
   removal inventories, and restoration boundaries.

@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-08-14.4`.
+UI reference version: `2026-08-15.1`.
 
 ## Purpose
 
@@ -62,7 +62,7 @@ rendering views and output diagnostics belong in Debug, grouped under the effect
 they explain.
 
 The fixed settings code is exactly 32 lowercase hexadecimal characters. The
-first four characters are its registered schema version (currently `0003`);
+first four characters are its registered schema version (currently `0004`);
 the remaining 112 bits are a deterministic fingerprint of every sorted
 represented non-action command value,
 including stored inactive and runtime-dynamic selections. Root Settings
@@ -363,22 +363,40 @@ recorded in
 
 Shadows exposes one **Ray Traced Shadows** group for the primary sun. It owns
 **Enabled**, **Ratio Estimator**, and **Output Hit Distance**, and preserves all
-stored values while inactive. Ratio Estimator off is the one ray route accepted
-by SIGMA. The group directly explains a missing directional light, DXR 1.1,
-MSAA, Representation readiness, zero angular size, producer data, and optional
-backend conditions. **Specify Noise** reveals its private Pattern, Resolution,
-and Animate Samples settings. Screen space directional shadow controls and debug
-state are absent from main.
+stored values while inactive. Output Hit Distance is inactive for the ratio
+route; Ratio Estimator off is the one-ray route accepted by SIGMA at 1x. The
+ratio route separately supplies total direct-light and diffuse GI-source
+modulation. The group directly explains a missing directional light, DXR
+1.1, Representation readiness, zero angular size, producer data, and optional
+backend conditions. Under 2x through 16x MSAA it reports the per-covered-
+receiver cost while Per-Sample Shadows is on or the one-receiver cost while it
+is off. It preserves but disables Output Hit Distance and explains that neither
+MSAA policy can feed sun denoising. Multisample Adaptive Advanced owns the default-on
+**Per-Sample Shadows** switch. Off explains that it selects the closest
+receiver, reduces directional shadow work to one receiver, and can alias across
+mixed surfaces or shadow boundaries. **Specify Noise** reveals its private
+Pattern, Resolution, and Animate Samples settings. Screen space directional
+shadow controls and debug state are absent from main.
 
-Temporal Reconstructive, Fast Approximate, Conservative Morphological, and
-Multisample Adaptive each show a Low, Medium, High, or Ultra **Quality** row
+Temporal Reconstructive, Fast Approximate, and Multisample Adaptive each show a
+Low, Medium, High, or Ultra **Quality** row
 while enabled, followed by an animated **Advanced** tree that starts collapsed.
 Disabling a technique preserves its stored values. Temporal **Cost** also
 remains visible. Temporal **Jitter Sequence** is the first control under
 Advanced's **Algorithm** section; it owns a dedicated reset and does not
-participate in either Custom recipe marker. **Depth Validation** follows it.
-Fast Approximate's three edge controls, CMAA2 Edge Threshold and Detector, and
-Multisample Adaptive Samples live inside their respective Advanced trees.
+participate in either Custom recipe marker. Its factory/reset choice is
+**Halton 16**. **Depth Validation** follows it. Its factory choice is
+**Stationary Bypass**; **Legacy Four-Texel Footprint** remains the explicit
+comparison choice. With Edge Dilation, an exact cleared-center thin feature may
+reuse a stationary cross neighbor only through point-depth continuity at that
+neighbor's prior coordinate; it never changes center output ownership or uses
+the unconditional stationary bypass. Ray Marching **Accumulate Samples**
+preserves the stored Temporal controls but resolves raster TAA and its camera
+jitter inactive until accumulation is disabled.
+Fast Approximate's three edge controls and Multisample Adaptive Samples live
+inside their respective Advanced trees. Multisample Advanced also contains
+Per-Sample Shadows after Samples, with a dedicated reset to its default-on
+policy. Reapplying any named Multisample Quality recipe restores that policy.
 
 An inherited dropdown previews its resolved concrete value but lists that value
 only once. Its reset icon is the route back to recipe ownership. Do not append
@@ -446,8 +464,8 @@ as ordinary long General controls; do not reserve a same-row reset lane.
 Selecting **Complete Renderer** is the direct route back to the default view.
 Complete Renderer uses a striped two-column table for the full
 retained stage list; an ordinary stage includes the complete frame for context.
-Visibility, Directional Shadows, Temporal Reconstructive, Fast Approximate,
-Conservative Morphological, and Multisample Adaptive use the same readable table language for their
+Visibility, Directional Shadows, Temporal Reconstructive, Fast Approximate, and
+Multisample Adaptive use the same readable table language for their
 retained breakdowns. Completed query availability gates every timing. Omit a
 timing row until its first completed measurement, then retain that row for the
 session and display `--` with a zero unavailable value whenever its current
@@ -585,18 +603,23 @@ dependency. In particular:
   exposure buffer and cannot change color. The enabled route changes only the
   scene-linear exposure multiplier before the same AgX clamps and output
   handling.
-- TAA, Fast Approximate AA, CMAA2, and MSAA are independent states with
+- TAA, Fast Approximate AA, and MSAA are independent states with
   deterministic pass order.
 - World appearance, Visibility views, and Physically Based Lighting filters are
   separate Debug states. A Physically Based Lighting
   filter preserves Visibility execution but suppresses its ordinary composite;
   an explicit Visibility view wins. The retired Edge Overlay must not return as
   hidden shadow state.
-- Ray Traced Shadows requires a primary directional light, DXR 1.1, a ready
-  Representation hierarchy, and single sample deferred rendering. Ratio
-  Estimator and Output Hit Distance remain independent. Screen space
-  directional shadows are quarantined with the CSM and SVSM experiment rather
-  than compiled into main.
+- Ray Traced Shadows requires a primary directional light, DXR 1.1, and a ready
+  Representation hierarchy. Its sample-frequency receiver path supports 1x,
+  2x, 4x, 8x, and 16x deferred rendering. Ratio Estimator and Output Hit
+  Distance remain independent stored settings, but the ratio route and resolved
+  MSAA suppress physical hit distance, while resolved MSAA also disables all sun
+  denoising. Multisample Adaptive Per-Sample Shadows selects
+  all valid receivers by default or only the coherent closest receiver as an
+  explicit performance approximation; it changes no resource or hit-distance
+  topology. Screen space directional shadows are quarantined with the
+  CSM and SVSM experiment rather than compiled into main.
 - The flashlight remains one analytical spot light. Its ray traced visibility is
   matched to that exact light, and its SIGMA history is independent from the
   sun's history. A positive emitter radius uses four shared-noise rays. A
@@ -716,8 +739,13 @@ Use the exact candidate executable and a bundled scene. Exercise:
   value without changing the control width;
 - Representation rebuild/refit transitions, staged status, and **Allow Ray
   Traversal** with sky, sun, and flashlight effects selected;
-- both sun Ratio Estimator states, both Output Hit Distance states, and the
-  MSAA unavailable state;
+- both sun Ratio Estimator states and both Output Hit Distance states at 1x;
+- 2x, 4x, 8x, and 16x sun shadows across sparse and full coverage, verifying
+  both Per-Sample Shadows states, default/reset/Quality ownership,
+  sample-frequency material inputs, per-covered-receiver versus one-receiver
+  cost, retained but inactive hit-distance state, both routes without sun
+  denoising, closest-owner GI-source routing, final direct-light use, and the
+  documented mixed-surface quality boundary;
 - flashlight ray traced shadows, horizontal and vertical offset endpoints,
   beam and Angular Size defaults/endpoints, increasing penumbra width, pure-white
   Color reset, initial overlap repair, radius growth at contact, fast-motion and
@@ -755,6 +783,12 @@ The UI handoff includes:
 - confirmation that this reference was updated when normative behavior changed.
 
 ## Reference Revision History
+
+- `2026-08-15.1`: Composed the settings-menu and denoising revamp with
+  Halton-16 thin-outline stability, MSAA per-sample shadow control,
+  per-receiver ratio-estimator routing, and complete CMAA2 retirement. Preserved
+  mainline retained surfaces, drawer animation, built-in denoisers, and
+  append-only settings snapshots while regenerating the combined registry.
 
 - `2026-08-14.4`: Made the Performance summary and Settings hash use permanent
   full-opacity retained surfaces and fixed text baselines, removed the root

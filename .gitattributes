@@ -2,7 +2,6 @@ docs/postmortem/archive/*.restore.patch -diff -text
 overrides/*.patch -diff -text
 legal/licenses/Apache-2.0.txt -text -whitespace
 legal/licenses/BSD-2-Clause.txt -text -whitespace
-legal/licenses/Intel-CMAA2-Apache-2.0.txt -text -whitespace
 assets/scenes/bistro_interior_retextured/LICENSE.txt -diff -text
 assets/scenes/bistro_interior_retextured/SOURCE-README.txt -diff -text
 assets/scenes/bistro_interior_retextured/components/bistro_interior.gltf -diff -text

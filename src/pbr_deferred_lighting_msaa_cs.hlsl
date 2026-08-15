@@ -182,7 +182,10 @@ bool ShadeDeferredSample(
     finalLinearHdr = 0.0f;
     float4 normalChannels =
         t_GBuffer2.Load(pixelPosition, sampleIndex);
-    if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
+    const float sampleDepth =
+        t_GBufferDepth.Load(pixelPosition, sampleIndex);
+    if (!isfinite(sampleDepth) || sampleDepth <= 0.0f ||
+        !(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
         return false;
 
     float4 gbufferChannels[4];
@@ -199,14 +202,14 @@ bool ShadeDeferredSample(
             pixelPosition,
             sampleIndex));
 
-    // G-buffer rasterization owns coverage and per-sample depth. UVSR uses
-    // the fixed D3D12 sample pattern and no programmable sample positions;
-    // reconstructing XY at the pixel center matches the established deferred
-    // convention while the stored sample depth preserves the silhouette owner.
+    // G-buffer attributes use ordinary pixel-frequency interpolation, while
+    // coverage and depth remain sample-frequency. Preserve the established
+    // center-interpolated attribute convention here; exact sample-position
+    // reconstruction requires a coordinated sample-frequency G-buffer path.
     float3 surfaceWorldPosition = ReconstructWorldPosition(
         g_Deferred.view,
         float2(pixelPosition) + 0.5f,
-        t_GBufferDepth.Load(pixelPosition, sampleIndex));
+        sampleDepth);
     float3 viewIncident = GetIncidentVector(
         g_Deferred.view.cameraDirectionOrPosition,
         surfaceWorldPosition);

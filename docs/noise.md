@@ -105,7 +105,8 @@ Ray Marching accumulation resolves the raw scene-linear frame before TAA. While
 it is enabled, the accumulator is the sole long-term history owner: TAA's
 history, rectification, and temporal blend are bypassed, and Ray Marching
 denoisers are bypassed instead of feeding a second temporal estimate into the
-mean. A selected TAA jitter sequence may still diversify the raw raster samples.
+mean. Raster TAA camera jitter is also inactive so a reset cannot expose one raw
+Halton phase per displayed frame.
 This prevents an already clipped, denoised, or nonlinear temporal result from
 being averaged a second time. A matching transactional resolve commits only a
 finite attempted sample; rejected and non-finite attempts copy the prior mean,

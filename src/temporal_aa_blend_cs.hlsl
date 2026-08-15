@@ -145,9 +145,17 @@ cbuffer CB1 : register(b1)
 struct MotionSelection
 {
     float3 velocity;
+    // Preserve center motion even when a policy borrows XY reprojection. A
+    // borrowed stationary neighbor must not hide a moving center.
+    float2 centerVelocity;
     float currentDeviceDepth;
     float currentViewDepth;
     float valid;
+    // A stationary coverage handoff lets an exact cleared center accumulate
+    // a persistent cross-neighbor outline without changing output ownership.
+    float coverageHandoff;
+    float2 coverageDepthOffset;
+    float3 coverageSourceWorking;
 };
 
 struct HistorySample
@@ -328,6 +336,11 @@ float HistoryPositionInBounds(float2 ST)
     // their real footprint instead of accepting a clamped half-pixel excursion
     // beyond the viewport.
     return UvsrTemporalLinearFootprintInBounds(ST, BufferDim);
+}
+
+float HistoryPointPositionInBounds(float2 ST)
+{
+    return UvsrTemporalPointPositionInBounds(ST, BufferDim);
 }
 
 // These are Temporal AA's local reversible blend-domain transforms, not a
@@ -726,9 +739,13 @@ MotionSelection SelectMotion(uint2 ST, uint ldsIdx)
 {
     MotionSelection selection;
     selection.velocity = 0.0;
+    selection.centerVelocity = 0.0;
     selection.currentDeviceDepth = LoadDepth(ldsIdx);
     selection.currentViewDepth = LoadViewDepth(ldsIdx);
     selection.valid = 0.0;
+    selection.coverageHandoff = 0.0;
+    selection.coverageDepthOffset = 0.0;
+    selection.coverageSourceWorking = 0.0;
 
 #if TAA_NEEDS_LDS_MOTION
     float4 packedMotion = LoadMotion(ldsIdx);
@@ -744,6 +761,7 @@ MotionSelection SelectMotion(uint2 ST, uint ldsIdx)
     selection.velocity = centerValid > 0.0
         ? packedMotion.xyz
         : 0.0;
+    selection.centerVelocity = selection.velocity.xy;
     selection.valid = centerValid;
 
 #if TAA_MOTION_SOURCE != UVSR_TAA_MOTION_CENTER
@@ -758,12 +776,21 @@ MotionSelection SelectMotion(uint2 ST, uint ldsIdx)
         -1,
         1
     };
+    const float2 pixelOffsets[5] = {
+        float2(0.0, 0.0),
+        float2(0.0, -1.0),
+        float2(0.0, 1.0),
+        float2(-1.0, 0.0),
+        float2(1.0, 0.0)
+    };
     // The extra unit lets a finite surface that clamps to kFarViewDepth win
     // the initial comparison while preserving strict center-first ties.
     float closestViewDepth = kFarViewDepth + 1.0;
     float3 closestVelocity = 0.0;
     float closestDeviceDepth = 0.0;
     float closestValid = 0.0;
+    float2 closestPixelOffset = 0.0;
+    uint closestColorIdx = ldsIdx;
     [unroll]
     for (uint index = 0; index < 5; ++index)
     {
@@ -793,6 +820,13 @@ MotionSelection SelectMotion(uint2 ST, uint ldsIdx)
             closestDeviceDepth,
             safeCandidateDepth,
             choose);
+        closestPixelOffset = lerp(
+            closestPixelOffset,
+            pixelOffsets[index],
+            choose);
+        closestColorIdx = choose > 0.0
+            ? candidateIdx
+            : closestColorIdx;
         closestValid = max(closestValid, choose);
     }
 
@@ -827,19 +861,48 @@ MotionSelection SelectMotion(uint2 ST, uint ldsIdx)
     // ownership itself is discrete. Interpolating independently owned vectors
     // creates a synthetic reprojection that belongs to neither surface and
     // visibly accelerates swimming through the threshold region.
-    bool useClosest = borrowClosest >= 0.5;
-    selection.velocity = useClosest
-        ? closestVelocity
-        : selection.velocity;
-    selection.currentDeviceDepth = useClosest
-        ? closestDeviceDepth
-        : selection.currentDeviceDepth;
-    selection.currentViewDepth = useClosest
-        ? closestViewDepth
-        : selection.currentViewDepth;
-    selection.valid = useClosest
-        ? closestValid
-        : selection.valid;
+    const bool centerIsClearedBackground =
+        selection.currentDeviceDepth == 0.0;
+    const bool closestIsStationary =
+        dot(closestVelocity.xy, closestVelocity.xy) <= 1e-4 &&
+        abs(closestVelocity.z) <= 1e-6;
+    const bool stationaryCoveragePolicy =
+        (TemporalBehaviorFlags &
+            UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH) != 0u;
+    const bool coverageHandoff =
+        centerIsClearedBackground &&
+        closestValid > 0.0 &&
+        closestIsStationary &&
+        stationaryCoveragePolicy;
+
+    if (coverageHandoff)
+    {
+        // Validate the foreground candidate at its own previous raw-depth
+        // coordinate, but keep current color and output depth center-owned.
+        // This reconstructs subpixel coverage without granting an unchecked
+        // stationary bypass to background or invalid-motion surfaces.
+        selection.velocity = closestVelocity;
+        selection.currentDeviceDepth = closestDeviceDepth;
+        selection.currentViewDepth = closestViewDepth;
+        selection.valid = closestValid;
+        selection.coverageHandoff = 1.0;
+        selection.coverageDepthOffset = closestPixelOffset;
+        // The source is needed only by the rare handoff rectification path.
+        // Defer the LDS color read so ordinary Edge Dilation pixels retain the
+        // same color-read budget as the center-owned implementation.
+        selection.coverageSourceWorking =
+            LoadWorkingColor(closestColorIdx);
+    }
+    else
+    {
+        bool useClosest =
+            borrowClosest >= 0.5 && centerValid > 0.0;
+        // A valid center borrows only foreground XY reprojection. Its depth,
+        // Z delta, validity, current color, and output remain center-owned.
+        selection.velocity.xy = useClosest
+            ? closestVelocity.xy
+            : selection.velocity.xy;
+    }
 #endif
 #endif
     return selection;
@@ -932,8 +995,19 @@ float HistoryTapDepthCoherence(
     float2 historyColorPixel,
     float expectedDeviceDepth,
     float quantizedDeviceDepthDelta,
-    float expectedDepthValid)
+    float expectedDepthValid,
+    float stationaryDepthBypass)
 {
+    float colorPositionValid =
+        expectedDepthValid *
+        HistoryPositionInBounds(historyColorPixel);
+    // Resolved color is on the phase-invariant history grid. A stationary
+    // sample must not reintroduce phase-changing raw-depth rejection through
+    // Catmull-Rom's outer color taps.
+    [branch]
+    if (stationaryDepthBypass > 0.5)
+        return colorPositionValid;
+
     // Color history is unjittered, while depth history stores the raw
     // previous jittered grid. Match each outer color tap's discrete four-texel
     // footprint by adding the same previous-minus-current jitter delta used by
@@ -942,6 +1016,12 @@ float HistoryTapDepthCoherence(
     // outer depth operation is a Gather and is reduced before comparison.
     float2 historyDepthPixel =
         historyColorPixel + CurrentToPreviousJitter;
+    float depthPositionValid =
+        HistoryPositionInBounds(historyDepthPixel);
+    [branch]
+    if (colorPositionValid * depthPositionValid == 0.0)
+        return 0.0;
+
     float4 tapDeviceDepths = PreDepth.Gather(
         LinearSampler,
         STtoUV(historyDepthPixel));
@@ -951,10 +1031,7 @@ float HistoryTapDepthCoherence(
         LinearSampler,
         STtoUV(historyDepthPixel),
         0.0);
-    float valid =
-        expectedDepthValid *
-        HistoryPositionInBounds(historyColorPixel) *
-        HistoryPositionInBounds(historyDepthPixel);
+    float valid = colorPositionValid * depthPositionValid;
     float tapViewDepth = LinearViewDepth(
         tapFootprint.farthestValidDeviceDepth);
     float expectedViewDepth =
@@ -996,8 +1073,24 @@ HistorySample SampleHistory(
     float historyDepthSupport,
     float expectedPreviousDeviceDepth,
     float quantizedDeviceDepthDelta,
-    float expectedPreviousDepthValid)
+    float expectedPreviousDepthValid,
+    float stationaryDepthBypass,
+    float coverageHandoff)
 {
+#if TAA_HISTORY_FILTER != UVSR_TAA_HISTORY_BILINEAR
+    // A cleared center has no current-surface support for outer filter taps.
+    // Its selected cross neighbor was already point-validated at the exact
+    // prior-depth coordinate, so reuse only the corresponding bilinear history
+    // color and never re-gate it against unshifted outer depth footprints.
+    [branch]
+    if (coverageHandoff > 0.5)
+    {
+        return RecoverHistory(InTemporal.SampleLevel(
+            LinearSampler,
+            STtoUV(historyPixel),
+            0));
+    }
+#endif
 #if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_BILINEAR
     return RecoverHistory(InTemporal.SampleLevel(
         LinearSampler,
@@ -1104,7 +1197,8 @@ HistorySample SampleHistory(
             cross.leftPosition,
             expectedPreviousDeviceDepth,
             quantizedDeviceDepthDelta,
-            expectedPreviousDepthValid);
+            expectedPreviousDepthValid,
+            stationaryDepthBypass);
     float rightSupport =
         depthSupport.y *
         historyDepthSupport *
@@ -1112,7 +1206,8 @@ HistorySample SampleHistory(
             cross.rightPosition,
             expectedPreviousDeviceDepth,
             quantizedDeviceDepthDelta,
-            expectedPreviousDepthValid);
+            expectedPreviousDepthValid,
+            stationaryDepthBypass);
     float northSupport =
         depthSupport.z *
         historyDepthSupport *
@@ -1120,7 +1215,8 @@ HistorySample SampleHistory(
             cross.northPosition,
             expectedPreviousDeviceDepth,
             quantizedDeviceDepthDelta,
-            expectedPreviousDepthValid);
+            expectedPreviousDepthValid,
+            stationaryDepthBypass);
     float southSupport =
         depthSupport.w *
         historyDepthSupport *
@@ -1128,7 +1224,8 @@ HistorySample SampleHistory(
             cross.southPosition,
             expectedPreviousDeviceDepth,
             quantizedDeviceDepthDelta,
-            expectedPreviousDepthValid);
+            expectedPreviousDepthValid,
+            stationaryDepthBypass);
 #if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_NINE_TAP_CATMULL_ROM
     float northWestSupport =
         min(depthSupport.x, depthSupport.z) *
@@ -1137,7 +1234,8 @@ HistorySample SampleHistory(
             cross.northWestPosition,
             expectedPreviousDeviceDepth,
             quantizedDeviceDepthDelta,
-            expectedPreviousDepthValid);
+            expectedPreviousDepthValid,
+            stationaryDepthBypass);
     float northEastSupport =
         min(depthSupport.y, depthSupport.z) *
         historyDepthSupport *
@@ -1145,7 +1243,8 @@ HistorySample SampleHistory(
             cross.northEastPosition,
             expectedPreviousDeviceDepth,
             quantizedDeviceDepthDelta,
-            expectedPreviousDepthValid);
+            expectedPreviousDepthValid,
+            stationaryDepthBypass);
     float southWestSupport =
         min(depthSupport.x, depthSupport.w) *
         historyDepthSupport *
@@ -1153,7 +1252,8 @@ HistorySample SampleHistory(
             cross.southWestPosition,
             expectedPreviousDeviceDepth,
             quantizedDeviceDepthDelta,
-            expectedPreviousDepthValid);
+            expectedPreviousDepthValid,
+            stationaryDepthBypass);
     float southEastSupport =
         min(depthSupport.y, depthSupport.w) *
         historyDepthSupport *
@@ -1161,7 +1261,8 @@ HistorySample SampleHistory(
             cross.southEastPosition,
             expectedPreviousDeviceDepth,
             quantizedDeviceDepthDelta,
-            expectedPreviousDepthValid);
+            expectedPreviousDepthValid,
+            stationaryDepthBypass);
 #endif
     float centerWeight = cross.centerWeight;
     float leftWeight = cross.leftWeight * leftSupport;
@@ -1223,9 +1324,15 @@ HistorySample SampleHistory(
     HistorySample result = RecoverHistory(reconstructed);
     float2 centerDepthPosition =
         cross.centerPosition + CurrentToPreviousJitter;
+    float centerDepthPositionValid = stationaryDepthBypass > 0.5
+        ? 1.0
+        : (TemporalBehaviorFlags &
+                UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH) != 0u
+            ? HistoryPointPositionInBounds(centerDepthPosition)
+            : HistoryPositionInBounds(centerDepthPosition);
     result.weight *=
         HistoryPositionInBounds(cross.centerPosition) *
-        HistoryPositionInBounds(centerDepthPosition);
+        centerDepthPositionValid;
 
     HistorySample centerHistory = RecoverHistory(center);
     HistorySample leftHistory = RecoverHistory(left);
@@ -1438,9 +1545,10 @@ void ApplyTemporalBlend(
             float2(ST),
             motion.velocity.xy,
             CurrentToPreviousJitter);
-    float historyPositionValid =
-        HistoryPositionInBounds(historyColorPixel) *
-        HistoryPositionInBounds(historyDepthPixel);
+    float2 validationDepthPixel = historyDepthPixel +
+        motion.coverageDepthOffset;
+    float historyColorPositionValid =
+        HistoryPositionInBounds(historyColorPixel);
     float expectedPreviousDepthValid =
         DeviceDepthValidity(expectedPreviousDeviceDepth) *
         UvsrTemporalDeviceDepthPrecisionValidity(
@@ -1450,6 +1558,8 @@ void ApplyTemporalBlend(
             DepthStorageFlags);
     float velocitySquared =
         dot(motion.velocity.xy, motion.velocity.xy);
+    float centerVelocitySquared =
+        dot(motion.centerVelocity, motion.centerVelocity);
     float speedFactor = TemporalBehaviorEnabled(
             UVSR_TAA_BEHAVIOR_SQUARED_MOTION_TRUST)
         ? saturate(
@@ -1462,14 +1572,14 @@ void ApplyTemporalBlend(
                 RcpSpeedLimiter);
     float preliminaryAcceptance =
         motion.valid *
-        historyPositionValid *
+        historyColorPositionValid *
         expectedPreviousDepthValid *
         speedFactor;
 
-    // Motion, both history coordinates, legal reverse-Z depth, and the speed
-    // limiter are all known before any previous-frame texture access. This
-    // mandatory shared gate is correctness-neutral: an exact-zero candidate
-    // could never contribute history later in the resolver.
+    // Motion, history color coordinates, legal reverse-Z depth, and the speed
+    // limiter are known before any previous-frame texture access. Previous
+    // depth bounds are policy-specific; stationary reuse deliberately has no
+    // raw previous-depth coordinate dependency.
     [branch]
     if (preliminaryAcceptance == 0.0)
     {
@@ -1481,59 +1591,82 @@ void ApplyTemporalBlend(
     }
 
     float historyDepthSupport = 1.0;
+    float stationaryDepthBypass = 0.0;
     float reprojectionAcceptance = 0.0;
     [branch]
     if (TemporalBehaviorEnabled(
             UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH))
     {
-        // The reduced-cost mode validates one nearest previous-depth texel.
-        // It must never turn nominally stationary motion into unconditional
-        // history acceptance: projection jitter moves silhouette footprints
-        // even when the scene-space motion vector is zero.
-        int2 depthPixel = clamp(
-            int2(floor(historyDepthPixel + 0.5)),
-            int2(0, 0),
-            int2(BufferDim) - 1);
-        float previousDeviceDepth =
-            PreDepth.Load(int3(depthPixel, 0));
-        reprojectionAcceptance = UvsrTemporalDeviceDepthAccepted(
-            expectedPreviousDeviceDepth,
-            motion.velocity.z,
-            SourceDepthPairQuantizationError,
-            previousDeviceDepth,
-            DepthStorageFlags,
-            Projection,
-            1e-3);
+        const bool stationary =
+            centerVelocitySquared <= 1e-4 &&
+            velocitySquared <= 1e-4 &&
+            abs(motion.velocity.z) <= 1e-6 &&
+            motion.coverageHandoff < 0.5;
+        stationaryDepthBypass = float(stationary);
+        if (stationary)
+        {
+            // Resolved history color is phase invariant. Do not let the raw
+            // jittered previous-depth footprint toggle stationary silhouettes
+            // between history and a visibly displaced current sample.
+            reprojectionAcceptance = 1.0;
+        }
+        else
+        {
+            // Moving samples retain a depth ownership test, but validate the
+            // exact point texel they load rather than a wider footprint.
+            [branch]
+            if (HistoryPointPositionInBounds(validationDepthPixel) > 0.0)
+            {
+                int2 depthPixel =
+                    int2(floor(validationDepthPixel + 0.5));
+                float previousDeviceDepth =
+                    PreDepth.Load(int3(depthPixel, 0));
+                reprojectionAcceptance =
+                    UvsrTemporalPointDepthAccepted(
+                        expectedPreviousDeviceDepth,
+                        motion.velocity.z,
+                        SourceDepthPairQuantizationError,
+                        previousDeviceDepth,
+                        DepthStorageFlags,
+                        Projection);
+            }
+        }
     }
     else
     {
-        // The robust policy validates the complete bilinear/Gather footprint.
-        float4 historyDeviceDepths = PreDepth.Gather(
-            LinearSampler,
-            STtoUV(historyDepthPixel));
-        UvsrTemporalReverseZFootprint historyDepthFootprint =
-            UvsrTemporalReduceReverseZFootprint(
-                historyDeviceDepths);
-        float filteredPreviousDeviceDepth = PreDepth.SampleLevel(
-            LinearSampler,
-            STtoUV(historyDepthPixel),
-            0.0);
-        reprojectionAcceptance =
-            UvsrTemporalDepthAccepted(
-                expectedPreviousDeviceDepth,
-                motion.velocity.z,
-                SourceDepthPairQuantizationError,
-                historyDepthFootprint,
-                filteredPreviousDeviceDepth,
-                DepthStorageFlags,
-                Projection,
-                1e-3);
+        // The legacy comparison validates its complete Gather footprint. Test
+        // those bounds before reading so clamp addressing cannot manufacture
+        // a valid border footprint.
+        [branch]
+        if (HistoryPositionInBounds(historyDepthPixel) > 0.0)
+        {
+            float4 historyDeviceDepths = PreDepth.Gather(
+                LinearSampler,
+                STtoUV(historyDepthPixel));
+            UvsrTemporalReverseZFootprint historyDepthFootprint =
+                UvsrTemporalReduceReverseZFootprint(
+                    historyDeviceDepths);
+            float filteredPreviousDeviceDepth = PreDepth.SampleLevel(
+                LinearSampler,
+                STtoUV(historyDepthPixel),
+                0.0);
+            reprojectionAcceptance =
+                UvsrTemporalDepthAccepted(
+                    expectedPreviousDeviceDepth,
+                    motion.velocity.z,
+                    SourceDepthPairQuantizationError,
+                    historyDepthFootprint,
+                    filteredPreviousDeviceDepth,
+                    DepthStorageFlags,
+                    Projection,
+                    1e-3);
+        }
     }
 
     reprojectionAcceptance *=
         float(HistoryValid != 0u) *
         motion.valid *
-        historyPositionValid *
+        historyColorPositionValid *
         expectedPreviousDepthValid;
     float hardAcceptance =
         speedFactor * reprojectionAcceptance;
@@ -1609,7 +1742,9 @@ void ApplyTemporalBlend(
             historyDepthSupport,
             expectedPreviousDeviceDepth,
             motion.velocity.z,
-            expectedPreviousDepthValid);
+            expectedPreviousDepthValid,
+            stationaryDepthBypass,
+            motion.coverageHandoff);
     float historyConfidence =
         TemporalBehaviorEnabled(
             UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT)
@@ -1625,6 +1760,14 @@ void ApplyTemporalBlend(
     // This is an identity for Direct and aligns De-Jittered with its bounds.
     boxMin = min(boxMin, currentWorking);
     boxMax = max(boxMax, currentWorking);
+    if (motion.coverageHandoff > 0.5)
+    {
+        // Pair and variance bounds do not necessarily retain a one-pixel cross
+        // contributor. Keep the exact validated coverage source legal so a
+        // vertical or horizontal thin outline is not clipped by jitter phase.
+        boxMin = min(boxMin, motion.coverageSourceWorking);
+        boxMax = max(boxMax, motion.coverageSourceWorking);
+    }
 
 #if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_VARIANCE_YCOCG
     // Expand the plain-YCoCg range before line clipping. This controls

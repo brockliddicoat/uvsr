@@ -85,7 +85,8 @@ public:
         nvrhi::ITexture* resolvedBackground = nullptr,
         uint32_t msaaSampleCount = 1u,
         nvrhi::ITexture* visibilityBaseLighting = nullptr,
-        nvrhi::ITexture* visibilityComposite = nullptr);
+        nvrhi::ITexture* visibilityComposite = nullptr,
+        const uvsr::DirectLightVisibility& sourceSunVisibility = {});
 
     void ResetBindingCache();
 };

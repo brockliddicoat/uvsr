@@ -70,6 +70,16 @@ static_assert(offsetof(
     "The flashlight index must begin the third UVSR register.");
 static_assert(offsetof(
         PbrDeferredLightingConstants,
+        sourceSunVisibilityLightIndex) ==
+    sizeof(DeferredLightingConstants) + 36u,
+    "The source-only sun index must follow the flashlight index.");
+static_assert(offsetof(
+        PbrDeferredLightingConstants,
+        sourceSunVisibilityEncoding) ==
+    sizeof(DeferredLightingConstants) + 40u,
+    "The source-only sun encoding must remain in the third UVSR register.");
+static_assert(offsetof(
+        PbrDeferredLightingConstants,
         flashlightBeamProfile) ==
     sizeof(DeferredLightingConstants) + 48u,
     "The flashlight profile must begin the fourth UVSR register.");
@@ -364,7 +374,11 @@ bool PbrDeferredLightingPass::PreparePipelinesStep()
             nvrhi::BindingLayoutItem::Texture_UAV(0)
         };
         if (writeSourceRadiance)
+        {
+            layoutDesc.bindings.push_back(
+                nvrhi::BindingLayoutItem::Texture_SRV(23));
             layoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Texture_UAV(1));
+        }
         layoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Sampler(1));
         layoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Sampler(2));
         layoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Sampler(3));
@@ -477,7 +491,8 @@ void PbrDeferredLightingPass::Render(
     nvrhi::ITexture* resolvedBackground,
     uint32_t msaaSampleCount,
     nvrhi::ITexture* visibilityBaseLighting,
-    nvrhi::ITexture* visibilityComposite)
+    nvrhi::ITexture* visibilityComposite,
+    const uvsr::DirectLightVisibility& sourceSunVisibility)
 {
     if (!m_PipelinesReady)
     {
@@ -540,6 +555,18 @@ void PbrDeferredLightingPass::Render(
         directLightVisibilities.flashlight);
     activeVisibilities.sun = acceptVisibility(
         directLightVisibilities.sun);
+    uvsr::DirectLightVisibility activeSourceSunVisibility;
+    if (writeSourceRadiance)
+    {
+        const uvsr::DirectLightVisibility candidate =
+            acceptVisibility(sourceSunVisibility);
+        if (candidate.IsComplete() &&
+            activeVisibilities.sun.IsComplete() &&
+            candidate.light == activeVisibilities.sun.light)
+        {
+            activeSourceSunVisibility = candidate;
+        }
+    }
     const bool hasSkyVisibilityConsumer =
         applySkyVisibilityToDiffuseIbl ||
         applySkyVisibilityToSpecularIbl ||
@@ -573,6 +600,9 @@ void PbrDeferredLightingPass::Render(
     constants.directVisibilityEncodings = uint2(
         uint32_t(uvsr::DirectLightVisibilityEncoding::ScalarR8Unorm));
     constants.flashlightLightIndex = -1;
+    constants.sourceSunVisibilityLightIndex = -1;
+    constants.sourceSunVisibilityEncoding = uint32_t(
+        uvsr::DirectLightVisibilityEncoding::ScalarR8Unorm);
     deferredConstants.randomOffset = randomOffset;
     deferredConstants.noisePattern[0] = float4(0.059f, 0.529f, 0.176f, 0.647f);
     deferredConstants.noisePattern[1] = float4(0.765f, 0.294f, 0.882f, 0.412f);
@@ -635,6 +665,14 @@ void PbrDeferredLightingPass::Render(
                     int(deferredConstants.numLights);
                 constants.directVisibilityEncodings.y = uint32_t(
                     activeVisibilities.sun.encoding);
+            }
+            if (uvsr::TargetsDirectLight(
+                    activeSourceSunVisibility, light.get()))
+            {
+                constants.sourceSunVisibilityLightIndex =
+                    int(deferredConstants.numLights);
+                constants.sourceSunVisibilityEncoding = uint32_t(
+                    activeSourceSunVisibility.encoding);
             }
             if (flashlight && light.get() == flashlight)
             {
@@ -758,6 +796,12 @@ void PbrDeferredLightingPass::Render(
         {
             if (writeSourceRadiance)
             {
+                bindingSetDesc.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(
+                        23,
+                        activeSourceSunVisibility.texture
+                            ? activeSourceSunVisibility.texture
+                            : m_CommonPasses->m_WhiteTexture.Get()));
                 bindingSetDesc.bindings.push_back(
                     nvrhi::BindingSetItem::Texture_UAV(
                         1,

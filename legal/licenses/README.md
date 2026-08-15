@@ -13,10 +13,8 @@
 - [Apache License 2.0](Apache-2.0.txt) is retained for Google Filament lineage
   and other Apache-licensed material.
 - [BSD 2-Clause](BSD-2-Clause.txt) is retained for G3D lineage.
-- [Intel CMAA2 Apache 2.0](Intel-CMAA2-Apache-2.0.txt) is the exact license
-  distributed with the incorporated CMAA2 source.
 - [Microsoft DirectX Graphics Samples MIT](Microsoft-DirectX-Graphics-Samples-MIT.txt)
-  covers adapted MiniEngine TAA portions and Microsoft-derived CMAA2 portions.
+  covers adapted MiniEngine TAA portions.
 - [IOLITE AgX MIT](IOLITE-AgX-MIT.txt) covers Benjamin Wrensch's Minimal AgX
   implementation adapted by UVSR.
 

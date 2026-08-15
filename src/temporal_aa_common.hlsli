@@ -370,6 +370,73 @@ float UvsrTemporalFootprintDepthCoherence(
         (1.0 - smoothstep(0.005, 0.05, relativeRange));
 }
 
+float UvsrTemporalPointDepthAccepted(
+    float expectedPreviousDeviceDepth,
+    float quantizedDeviceDepthDelta,
+    float sourceDepthPairQuantizationError,
+    float previousDeviceDepth,
+    uint depthStorageFlags,
+    float4x4 projection)
+{
+    if (UvsrTemporalDeviceDepthValidity(
+            expectedPreviousDeviceDepth) == 0.0 ||
+        UvsrTemporalDeviceDepthValidity(previousDeviceDepth) == 0.0 ||
+        !isfinite(quantizedDeviceDepthDelta) ||
+        UvsrTemporalDeviceDepthPrecisionValidity(
+            expectedPreviousDeviceDepth,
+            quantizedDeviceDepthDelta,
+            sourceDepthPairQuantizationError,
+            depthStorageFlags) == 0.0)
+    {
+        return 0.0;
+    }
+
+    const float expectedViewDepth =
+        UvsrTemporalLinearViewDepth(
+            expectedPreviousDeviceDepth,
+            projection);
+    const float previousViewDepth =
+        UvsrTemporalLinearViewDepth(
+            previousDeviceDepth,
+            projection);
+    const float currentDeviceDepthError =
+        UvsrTemporalStoredDeviceDepthError(
+            expectedPreviousDeviceDepth - quantizedDeviceDepthDelta,
+            (depthStorageFlags &
+                UvsrTemporalDepthStorageCurrentFp16) != 0u);
+    const float historyDeviceDepthError =
+        UvsrTemporalStoredDeviceDepthError(
+            previousDeviceDepth,
+            (depthStorageFlags &
+                UvsrTemporalDepthStorageHistoryFp16) != 0u);
+    if (historyDeviceDepthError >
+            previousDeviceDepth *
+                UvsrTemporalMinimumRelativeDeviceDepthPrecision)
+    {
+        return 0.0;
+    }
+
+    const float nearerViewAllowance =
+        UvsrTemporalDeviceDepthViewAllowance(
+            expectedPreviousDeviceDepth,
+            quantizedDeviceDepthDelta,
+            sourceDepthPairQuantizationError,
+            currentDeviceDepthError + historyDeviceDepthError,
+            projection);
+    const float viewDepthAllowance = max(
+        1e-3,
+        expectedViewDepth * 0.01);
+
+    // A stale foreground is the destructive disocclusion case. A farther
+    // point is a conservative ownership match and must not make thin edges
+    // toggle solely because they crossed the stationary-motion threshold.
+    return float(
+        expectedViewDepth <=
+            previousViewDepth +
+                viewDepthAllowance +
+                nearerViewAllowance);
+}
+
 float UvsrTemporalDeviceDepthAccepted(
     float expectedPreviousDeviceDepth,
     float quantizedDeviceDepthDelta,

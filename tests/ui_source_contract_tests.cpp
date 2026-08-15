@@ -879,6 +879,14 @@ namespace
                 "Variance Guided"
             },
             "sample accumulation preset labels");
+        RequireContains(
+            accumulationControls,
+            "Ray Marching ",
+            "sample accumulation Ray Marching jitter policy");
+        RequireContains(
+            accumulationControls,
+            "disables TAA jitter; Path Tracing Shared Primary can retain it.",
+            "sample accumulation Path Tracing jitter exception");
         Require(
             CountOccurrences(
                 accumulationControls,
@@ -1416,7 +1424,7 @@ namespace
             "old table rolls up while the new table rolls down without a "
             "transient sibling gap");
         Require(
-            CountOccurrences(statistics, "case StatisticsEffect::") == 15u,
+            CountOccurrences(statistics, "case StatisticsEffect::") == 14u,
             "the keyed Performance table exchange must retain every timing "
             "effect.");
 
@@ -1637,7 +1645,6 @@ namespace
                 "Directional Shadows",
                 "Temporal Reconstructive",
                 "Fast Approximate",
-                "Conservative Morphological",
                 "Multisample Adaptive",
                 "Material Picking",
                 "Environment Background",
@@ -1726,7 +1733,6 @@ namespace
                 std::string_view("##VisibilityStatistics"),
                 std::string_view("##ShadowStatistics"),
                 std::string_view("##TemporalStatistics"),
-                std::string_view("##MorphologicalStatistics"),
                 std::string_view("##MultisampleStatistics"),
                 std::string_view("##ToneMappingStatistics") })
         {
@@ -1869,14 +1875,6 @@ namespace
             "timings->dispatchCount > 0u &&\n                timings->available",
             "completed temporal timing gate");
         RequireContains(
-            viewer,
-            "snapshot.hasCmaa2Timings = timings->available;",
-            "completed morphological timing gate");
-        RequireContains(
-            viewer,
-            "m_ui.AntiAliasing.cmaa2.enabled",
-            "disabled morphological timing gate");
-        RequireContains(
             statistics,
             "RendererTimingStage::FastApproximate",
             "Fast Approximate renderer timing gate");
@@ -1922,10 +1920,6 @@ namespace
             statistics,
             "\"Presentation Sharpen\"",
             "deferred temporal sharpening timing");
-        RequireContains(
-            statistics,
-            "m_HasCmaa2StatSnapshot",
-            "morphological cost breakdown");
         RequireContains(
             statistics,
             "\"Geometry\", RendererTimingStage::Geometry",
@@ -1984,8 +1978,7 @@ namespace
                 std::string_view("Dispatches"),
                 std::string_view("Active History Memory"),
                 std::string_view("History Status"),
-                std::string_view("Minimum History Formats"),
-                std::string_view("Candidate Processing") })
+                std::string_view("Minimum History Formats") })
         {
             RequireContains(
                 statistics,
@@ -2058,19 +2051,27 @@ namespace
                 "\"Edge Sharpness##FastApproximate\"",
                 "\"Relative Edge Threshold##FastApproximate\"",
                 "\"Minimum Edge Threshold##FastApproximate\"",
-                "\"Conservative Morphological##Aliasing\"",
-                "\"Enable##ConservativeMorphological\"",
-                "\"Quality##ConservativeMorphological\"",
-                "\"Advanced##ConservativeMorphological\"",
-                "\"Edge Threshold##ConservativeMorphological\"",
-                "\"Detector##ConservativeMorphological\"",
                 "\"Multisample Adaptive##Aliasing\"",
                 "\"Enable##MultisampleAdaptive\"",
                 "\"Quality##MultisampleAdaptive\"",
                 "\"Advanced##MultisampleAdaptive\"",
-                "\"Samples##MultisampleAdaptive\""
+                "\"Samples##MultisampleAdaptive\"",
+                "\"Per-Sample Shadows##MultisampleAdaptive\""
             },
             "independent Aliasing controls");
+        RequireContains(
+            aliasing,
+            "&aliasing.msaa.perSampleRayTracedShadows",
+            "Multisample Adaptive shadow sampling control");
+        RequireContains(
+            aliasing,
+            "MultisamplePerSampleShadows",
+            "Multisample Adaptive shadow sampling reset");
+        RequireContains(
+            Compact(aliasing),
+            "Thisreducesrayqueries\""
+                "\"butcanaliaswheremultiplesurfacesshareapixel.\"",
+            "closest-only shadow quality boundary");
         RequireContains(
             aliasing,
             "const bool temporalQualityCustom =",
@@ -2155,6 +2156,15 @@ namespace
             "Jitter Sequence dedicated reset");
         RequireContains(
             aliasing,
+            "aliasing.temporal.jitterSequence =\n"
+            "                        aliasingDefaults.temporal.jitterSequence;",
+            "Jitter Sequence dedicated factory reset assignment");
+        RequireContains(
+            aliasing,
+            "Halton 16 is the factory default",
+            "Jitter Sequence factory-default tooltip");
+        RequireContains(
+            aliasing,
             "settings->temporal.jitterSequence =\n"
             "                                    static_cast<TemporalAaJitterSequence>(",
             "Jitter Sequence independent selection callback");
@@ -2204,15 +2214,13 @@ namespace
             "Cost group sharpening reset");
 
         Require(
-            CountOccurrences(aliasing, "drawPresetEnum(") == 5u,
-            "Aliasing must expose four shared Quality rows and the nested "
+            CountOccurrences(aliasing, "drawPresetEnum(") == 4u,
+            "Aliasing must expose three shared Quality rows and the nested "
             "Temporal Cost mode; Jitter Sequence remains independent in "
             "Advanced.");
         for (const std::string_view recipeContract : {
                 std::string_view("MatchesFastApproximateAaQualityPreset"),
                 std::string_view("ApplyFastApproximateAaQualityPreset"),
-                std::string_view("MatchesCmaa2QualityPreset"),
-                std::string_view("ApplyCmaa2QualityPreset"),
                 std::string_view("MatchesMultisampleQualityPreset"),
                 std::string_view("ApplyMultisampleQualityPreset") })
         {
@@ -2221,31 +2229,6 @@ namespace
                 recipeContract,
                 "spatial AA Quality recipe wiring");
         }
-
-        const std::string_view cmaa2Advanced = ExtractSection(
-            aliasing,
-            "\"Advanced##ConservativeMorphological\"",
-            "\"Multisample Adaptive##Aliasing\"",
-            "CMAA2 Advanced section");
-        RequireOrdered(
-            cmaa2Advanced,
-            {
-                "\"Edge Threshold##ConservativeMorphological\"",
-                "\"Detector##ConservativeMorphological\""
-            },
-            "CMAA2 Advanced controls");
-        RequireExactStrings(
-            ExtractSection(
-                cmaa2Advanced,
-                "static constexpr const char* DetectorLabels[] = {",
-                "};",
-                "CMAA2 detector labels"),
-            { "Luma", "Full Color" },
-            "CMAA2 detector labels");
-        RequireAbsent(
-            cmaa2Advanced,
-            "Quality##ConservativeMorphological",
-            "CMAA2 Advanced section");
 
         const std::string_view advanced = ExtractSection(
             aliasing,
@@ -2279,6 +2262,18 @@ namespace
             advanced,
             "ResolveAntiAliasingSettings(inheritedAliasing)",
             "resolved inherited Advanced previews");
+        RequireContains(
+            advanced,
+            "\"Stationary Bypass\", \"Legacy Four-Texel Footprint\"",
+            "phase-stable default and explicit legacy depth policies");
+        RequireContains(
+            advanced,
+            "point-validate thin-coverage handoffs",
+            "Depth Validation stability tooltip");
+        RequireContains(
+            advanced,
+            "Edge Dilation best preserves stationary thin coverage.",
+            "Motion Source thin-coverage guidance");
         RequireOrdered(
             advanced,
             {
@@ -2385,13 +2380,13 @@ namespace
             "requested != -1.f &&\n                        (requested < 0.f || requested > 2.f)",
             "history-strength command rejects sentinel-adjacent values");
         Require(
-            CountOccurrences(aliasing, "BeginAnimatedTreeNode(") == 9u,
-            "Aliasing must expose four technique disclosures, four Advanced "
+            CountOccurrences(aliasing, "BeginAnimatedTreeNode(") == 7u,
+            "Aliasing must expose three technique disclosures, three Advanced "
             "disclosures, and the nested Temporal Cost disclosure.");
         Require(
             CountOccurrences(
                 aliasing,
-                "ImGui::SetNextItemOpen(false, ImGuiCond_Once);") == 5u,
+                "ImGui::SetNextItemOpen(false, ImGuiCond_Once);") == 4u,
             "every Aliasing Advanced disclosure and nested Temporal Cost "
             "disclosure must start collapsed.");
 
@@ -2403,13 +2398,8 @@ namespace
         const std::string_view fastApproximateSettings = ExtractSection(
             temporalOptions,
             "struct FastApproximateAaSettings",
-            "struct Cmaa2Settings",
-            "Fast Approximate defaults");
-        const std::string_view cmaa2Settings = ExtractSection(
-            temporalOptions,
-            "struct Cmaa2Settings",
             "struct MsaaSettings",
-            "CMAA2 defaults");
+            "Fast Approximate defaults");
         const std::string_view msaaSettings = ExtractSection(
             temporalOptions,
             "struct MsaaSettings",
@@ -2432,18 +2422,6 @@ namespace
             "AntiAliasingQualityquality=AntiAliasingQuality::Ultra;",
             "Fast Approximate Quality default");
         RequireContains(
-            Compact(cmaa2Settings),
-            "boolenabled=false;",
-            "CMAA2 default");
-        RequireContains(
-            Compact(cmaa2Settings),
-            "edgeThreshold=Cmaa2DefaultEdgeThreshold;",
-            "CMAA2 threshold default");
-        RequireContains(
-            Compact(cmaa2Settings),
-            "Cmaa2EdgeDetectordetector=Cmaa2EdgeDetector::FullColor;",
-            "CMAA2 detector default");
-        RequireContains(
             Compact(msaaSettings),
             "boolenabled=false;",
             "MSAA default");
@@ -2452,14 +2430,17 @@ namespace
             "AntiAliasingQualityquality=AntiAliasingQuality::Medium;",
             "Multisample Adaptive Quality default");
         RequireContains(
+            Compact(msaaSettings),
+            "boolperSampleRayTracedShadows=true;",
+            "per-sample ray-traced shadow default");
+        RequireContains(
             Compact(temporalSettings),
-            "boolnearestTexelDepth=false;",
-            "Four Texel Footprint default");
+            "boolnearestTexelDepth=true;",
+            "Stationary Bypass default");
         for (const std::string_view retired : {
                 std::string_view("AntiAliasingMethod"),
                 std::string_view("Sample Resurrection"),
                 std::string_view("SampleResurrection"),
-                std::string_view("HDR CMAA2"),
                 std::string_view("PresentSelectors("),
                 std::string_view("PresentStructuralBody(") })
         {
@@ -2768,9 +2749,38 @@ namespace
             },
             "ray traced shadow custom noise isolation");
         RequireContains(
+            Compact(shadowControls),
+            "constboolstochasticSunExtent="
+                "std::clamp(angularSize,0.f,90.f)*"
+                "0.0087266462599716478846f>1e-6f;"
+            "constboolratioEstimatorProducesAreaRatio="
+                "ratio.useRatioEstimator&&!ratio.hardShadows&&"
+                "stochasticSunExtent;"
+                "constboolhitDistanceUnavailable="
+                "receiverSampleCount>1u||"
+                "ratioEstimatorProducesAreaRatio;",
+            "hit-distance availability only for the 1x one-ray shadow route");
+        RequireContains(
+            Compact(shadowControls),
+            "\"usedbythird-partySIGMAshadowdenoising.\""
+                "\"Built-inshadowdenoisersdonotrequireit.\"",
+            "method-aware shadow hit-distance tooltip");
+        RequireContains(
             shadows,
             "drawRatioEstimatorShadowControls();",
             "ray traced shadow control placement");
+        RequireContains(
+            Compact(shadows),
+            "m_ui.AntiAliasing.msaa.perSampleRayTracedShadows?"
+                "\"MSAAshadowsevaluateeverycoveredsample.Hit\""
+                "\"distanceandsundenoisingareunavailableinthismode.\"",
+            "per-sample MSAA shadow status");
+        RequireContains(
+            Compact(shadows),
+            "\"MSAAshadowsreusetheclosestcoveredsample.This\""
+                "\"savesrayswithamixed-surfacequalitytradeoff;\""
+                "\"hitdistanceandsundenoisingremainunavailable.\"",
+            "closest-only MSAA shadow status");
         for (const std::string_view removedControl : {
                 std::string_view("Denoiser Radius##RatioEstimatorShadows"),
                 std::string_view("Origin Safety##RatioEstimatorShadows"),
@@ -3085,7 +3095,6 @@ namespace
                 std::string_view("temporalQualityCustom"),
                 std::string_view("temporalCostCustom"),
                 std::string_view("fastApproximateQualityCustom"),
-                std::string_view("cmaa2QualityCustom"),
                 std::string_view("multisampleQualityCustom") })
         {
             Require(
@@ -3093,6 +3102,17 @@ namespace
                 "Aliasing recipe commands must permit same-tier reapplication only for " +
                     std::string(customState) + ".");
         }
+        const std::string_view msaaShadowDispatcher = ExtractSection(
+            aliasingDispatcher,
+            "else if (path == \"anti-aliasing.msaa.per-sample-shadows\")",
+            "else if (path == \"anti-aliasing.sharpen.enabled\")",
+            "MSAA shadow sampling command dispatcher");
+        RequireContains(
+            Compact(msaaShadowDispatcher),
+            "ApplyCommandBool(operation,arguments,path,"
+                "candidate.msaa.perSampleRayTracedShadows,"
+                "defaults.msaa.perSampleRayTracedShadows,value,error)",
+            "MSAA shadow sampling Boolean command and factory reset");
 
         const std::string_view catalog = ExtractSection(
             catalogSource,
@@ -3100,8 +3120,8 @@ namespace
             "inline constexpr std::array<std::string_view, 5>",
             "Settings command catalog");
         const std::vector<CatalogEntry> entries = ParseCatalog(catalog);
-        Require(entries.size() == 224u,
-            "Settings command catalog must contain exactly 224 entries.");
+        Require(entries.size() == 221u,
+            "Settings command catalog must contain exactly 221 entries.");
 
         std::set<std::string> names;
         std::set<std::string> actions;
@@ -3115,8 +3135,8 @@ namespace
             else
                 ++valueCount;
         }
-        Require(valueCount == 220u,
-            "Settings command catalog must contain exactly 220 values.");
+        Require(valueCount == 217u,
+            "Settings command catalog must contain exactly 217 values.");
         Require(actions == std::set<std::string>{
                 "open-scene-folder",
                 "reset-settings",
@@ -3141,11 +3161,10 @@ namespace
                 std::string_view("anti-aliasing.fxaa.quality"),
                 std::string_view(
                     "anti-aliasing.fxaa.minimum-edge-threshold"),
-                std::string_view("anti-aliasing.cmaa2.enabled"),
-                std::string_view("anti-aliasing.cmaa2.edge-threshold"),
-                std::string_view("anti-aliasing.cmaa2.detector"),
                 std::string_view("anti-aliasing.msaa.enabled"),
                 std::string_view("anti-aliasing.msaa.quality"),
+                std::string_view(
+                    "anti-aliasing.msaa.per-sample-shadows"),
                 std::string_view("debug.world.materials"),
                 std::string_view("debug.visibility.view"),
                 std::string_view("debug.pbr.filter"),

@@ -39,6 +39,64 @@ namespace uvsr
     {
         constexpr float Pi = 3.14159265358979323846f;
 
+        struct HeitzPipelineVariant
+        {
+            uint32_t receiverSampleCount;
+            const char* receiverSampleCountMacro;
+            bool outputSourceModulation;
+            bool outputHitDistance;
+        };
+
+        constexpr std::array<HeitzPipelineVariant, 7>
+            HeitzPipelineVariants = {{
+                { 1u, "1", false, false },
+                { 1u, "1", false, true },
+                { 1u, "1", true, false },
+                { 2u, "2", true, false },
+                { 4u, "4", true, false },
+                { 8u, "8", true, false },
+                { 16u, "16", true, false }
+            }};
+
+        uint32_t FindHeitzPipelineVariant(
+            uint32_t receiverSampleCount,
+            bool outputSourceModulation,
+            bool outputHitDistance)
+        {
+            for (uint32_t index = 0u;
+                index < HeitzPipelineVariants.size();
+                ++index)
+            {
+                const HeitzPipelineVariant& variant =
+                    HeitzPipelineVariants[index];
+                if (variant.receiverSampleCount == receiverSampleCount &&
+                    variant.outputSourceModulation ==
+                        outputSourceModulation &&
+                    variant.outputHitDistance == outputHitDistance)
+                {
+                    return index;
+                }
+            }
+            return uint32_t(HeitzPipelineVariants.size());
+        }
+
+        bool IsSupportedReceiverSampleCount(uint32_t sampleCount)
+        {
+            return FindHeitzPipelineVariant(
+                sampleCount,
+                sampleCount > 1u,
+                false) <
+                HeitzPipelineVariants.size();
+        }
+
+        uint32_t GetHeitzBindingLayoutIndex(
+            const HeitzPipelineVariant& variant)
+        {
+            if (variant.outputHitDistance)
+                return 1u;
+            return variant.outputSourceModulation ? 2u : 0u;
+        }
+
         bool HasFormatSupport(
             nvrhi::IDevice* device,
             nvrhi::Format format,
@@ -154,9 +212,11 @@ namespace uvsr
                 .setAllFilters(true)
                 .setAllAddressModes(nvrhi::SamplerAddressMode::Wrap));
 
-        for (uint32_t variant = 0u; variant < 2u; ++variant)
+        for (uint32_t layoutIndex = 0u;
+            layoutIndex < m_BindingLayouts.size();
+            ++layoutIndex)
         {
-            const bool outputHitDistance = variant != 0u;
+            const bool outputHitDistance = layoutIndex == 1u;
             if (outputHitDistance && !m_HitDistanceSupported)
                 continue;
 
@@ -179,48 +239,83 @@ namespace uvsr
                 nvrhi::BindingLayoutItem::Sampler(0),
                 nvrhi::BindingLayoutItem::Texture_UAV(0)
             };
-            if (outputHitDistance)
+            if (layoutIndex != 0u)
             {
                 layoutDescription.bindings.push_back(
                     nvrhi::BindingLayoutItem::Texture_UAV(1));
             }
-            m_BindingLayouts[variant] =
+            m_BindingLayouts[layoutIndex] =
                 device->createBindingLayout(layoutDescription);
+        }
+
+        for (uint32_t variantIndex = 0u;
+            variantIndex < HeitzPipelineVariants.size();
+            ++variantIndex)
+        {
+            const HeitzPipelineVariant& variant =
+                HeitzPipelineVariants[variantIndex];
+            if (variant.outputHitDistance && !m_HitDistanceSupported)
+                continue;
 
             std::vector<ShaderMacro> macros;
             macros.push_back({
                 "OUTPUT_HIT_DISTANCE",
-                outputHitDistance ? "1" : "0" });
-            m_Shaders[variant] = shaderFactory->CreateShader(
+                variant.outputHitDistance ? "1" : "0" });
+            macros.push_back({
+                "OUTPUT_SOURCE_MODULATION",
+                variant.outputSourceModulation ? "1" : "0" });
+            macros.push_back({
+                "HEITZ_RASTER_SAMPLES",
+                variant.receiverSampleCountMacro });
+            m_Shaders[variantIndex] = shaderFactory->CreateShader(
                 "uvsr/heitz_ratio_estimator_shadows_cs.hlsl",
                 "Generate",
                 &macros,
                 nvrhi::ShaderType::Compute);
-            if (m_Shaders[variant] && m_BindingLayouts[variant])
+            const uint32_t layoutIndex =
+                GetHeitzBindingLayoutIndex(variant);
+            if (m_Shaders[variantIndex] &&
+                m_BindingLayouts[layoutIndex])
             {
                 nvrhi::ComputePipelineDesc pipelineDescription;
-                pipelineDescription.CS = m_Shaders[variant];
+                pipelineDescription.CS = m_Shaders[variantIndex];
                 pipelineDescription.bindingLayouts = {
-                    m_BindingLayouts[variant],
+                    m_BindingLayouts[layoutIndex],
                     m_BindlessLayout
                 };
-                m_Pipelines[variant] = device->createComputePipeline(
-                    pipelineDescription);
+                m_Pipelines[variantIndex] =
+                    device->createComputePipeline(pipelineDescription);
             }
         }
 
+        const uint32_t hitDistanceVariant =
+            FindHeitzPipelineVariant(1u, false, true);
         if (m_HitDistanceSupported &&
-            (!m_BindingLayouts[1] || !m_Shaders[1] || !m_Pipelines[1]))
+            (!m_BindingLayouts[1] ||
+                !m_Shaders[hitDistanceVariant] ||
+                !m_Pipelines[hitDistanceVariant]))
         {
             m_HitDistanceSupported = false;
             m_BindingLayouts[1] = nullptr;
-            m_Shaders[1] = nullptr;
-            m_Pipelines[1] = nullptr;
+            m_Shaders[hitDistanceVariant] = nullptr;
+            m_Pipelines[hitDistanceVariant] = nullptr;
         }
 
-        if (!m_BindingLayouts[0] || !m_ConstantBuffer ||
-            !m_MaterialSampler ||
-            !m_Shaders[0] || !m_Pipelines[0])
+        bool completeNonHitPipelines = true;
+        for (uint32_t variantIndex = 0u;
+            variantIndex < HeitzPipelineVariants.size();
+            ++variantIndex)
+        {
+            if (!HeitzPipelineVariants[variantIndex].outputHitDistance)
+            {
+                completeNonHitPipelines = completeNonHitPipelines &&
+                    m_Shaders[variantIndex] &&
+                    m_Pipelines[variantIndex];
+            }
+        }
+        if (!m_BindingLayouts[0] || !m_BindingLayouts[2] ||
+            !m_ConstantBuffer ||
+            !m_MaterialSampler || !completeNonHitPipelines)
         {
             m_Supported = false;
             log::error(
@@ -230,6 +325,7 @@ namespace uvsr
 
     bool HeitzRatioEstimatorShadowPass::EnsureResources(
         const HeitzRatioEstimatorShadowInputs& inputs,
+        bool outputSourceModulation,
         bool outputHitDistance)
     {
         const nvrhi::ITexture* textures[] = {
@@ -244,11 +340,24 @@ namespace uvsr
             return false;
         const nvrhi::TextureDesc& depthDescription =
             inputs.depth->getDesc();
+        const uint32_t receiverSampleCount =
+            depthDescription.sampleCount;
+        if (outputSourceModulation && outputHitDistance)
+            return false;
+        if (!IsSupportedReceiverSampleCount(receiverSampleCount) ||
+            (outputHitDistance && receiverSampleCount != 1u))
+        {
+            return false;
+        }
+        const nvrhi::TextureDimension expectedDimension =
+            receiverSampleCount == 1u
+                ? nvrhi::TextureDimension::Texture2D
+                : nvrhi::TextureDimension::Texture2DMS;
         for (const nvrhi::ITexture* texture : textures)
         {
-            if (!texture || texture->getDesc().sampleCount != 1u ||
-                texture->getDesc().dimension !=
-                    nvrhi::TextureDimension::Texture2D ||
+            if (!texture ||
+                texture->getDesc().sampleCount != receiverSampleCount ||
+                texture->getDesc().dimension != expectedDimension ||
                 texture->getDesc().width != depthDescription.width ||
                 texture->getDesc().height != depthDescription.height)
             {
@@ -258,6 +367,13 @@ namespace uvsr
         const bool modulationSizeMatches = m_OutputModulation &&
             m_OutputModulation->getDesc().width == depthDescription.width &&
             m_OutputModulation->getDesc().height == depthDescription.height;
+        const bool closestSourceRequired = outputSourceModulation;
+        const bool closestSourceSizeMatches =
+            m_OutputClosestSourceModulation &&
+            m_OutputClosestSourceModulation->getDesc().width ==
+                depthDescription.width &&
+            m_OutputClosestSourceModulation->getDesc().height ==
+                depthDescription.height;
         const bool hitDistanceSizeMatches = m_OutputHitDistance &&
             m_OutputHitDistance->getDesc().width == depthDescription.width &&
             m_OutputHitDistance->getDesc().height == depthDescription.height;
@@ -273,6 +389,28 @@ namespace uvsr
             if (!outputModulation)
                 return false;
             m_OutputModulation = outputModulation;
+            resourcesChanged = true;
+        }
+
+        if (closestSourceRequired && !closestSourceSizeMatches)
+        {
+            nvrhi::TextureHandle outputClosestSourceModulation =
+                CreateOutputTexture(
+                    m_Device,
+                    depthDescription.width,
+                    depthDescription.height,
+                    nvrhi::Format::RGBA16_FLOAT,
+                    "Ray Traced Sun Shadows/Closest Source Modulation");
+            if (!outputClosestSourceModulation)
+                return false;
+            m_OutputClosestSourceModulation =
+                outputClosestSourceModulation;
+            resourcesChanged = true;
+        }
+        else if (!closestSourceRequired &&
+            m_OutputClosestSourceModulation)
+        {
+            m_OutputClosestSourceModulation = nullptr;
             resourcesChanged = true;
         }
 
@@ -305,11 +443,26 @@ namespace uvsr
         nvrhi::rt::IAccelStruct* worldTlas,
         nvrhi::ITexture* noiseTexture,
         nvrhi::ITexture* attemptMask,
+        bool outputSourceModulation,
         bool outputHitDistance)
     {
-        const uint32_t variant = outputHitDistance ? 1u : 0u;
+        const uint32_t receiverSampleCount = inputs.depth
+            ? inputs.depth->getDesc().sampleCount
+            : 0u;
+        const uint32_t variant = FindHeitzPipelineVariant(
+            receiverSampleCount,
+            outputSourceModulation,
+            outputHitDistance);
+        if (variant >= HeitzPipelineVariants.size())
+            return false;
+        const HeitzPipelineVariant& pipelineVariant =
+            HeitzPipelineVariants[variant];
+        const uint32_t layoutIndex =
+            GetHeitzBindingLayoutIndex(pipelineVariant);
         if (!worldTlas || !materialVisibility || !noiseTexture ||
             !m_OutputModulation ||
+            (outputSourceModulation &&
+                !m_OutputClosestSourceModulation) ||
             (outputHitDistance && !m_OutputHitDistance))
             return false;
         if (m_BoundTlas != worldTlas ||
@@ -356,8 +509,14 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_UAV(
                     1, m_OutputHitDistance));
         }
+        else if (outputSourceModulation)
+        {
+            description.bindings.push_back(
+                nvrhi::BindingSetItem::Texture_UAV(
+                    1, m_OutputClosestSourceModulation));
+        }
         m_BindingSets[variant] = m_Device->createBindingSet(
-            description, m_BindingLayouts[variant]);
+            description, m_BindingLayouts[layoutIndex]);
         if (!m_BindingSets[variant])
         {
             ClearBindingSets();
@@ -370,6 +529,7 @@ namespace uvsr
         HeitzRatioEstimatorShadowPass::Render(
             nvrhi::ICommandList* commandList,
             const HeitzRatioEstimatorShadowSettings& settings,
+            bool traceAllMsaaReceivers,
             const IView& view,
             const HeitzRatioEstimatorShadowInputs& inputs,
             const RayTracedMaterialVisibilityInputs& materialVisibility,
@@ -431,8 +591,14 @@ namespace uvsr
             settings.useRatioEstimator;
         const uint32_t sampleCount = ResolveHeitzShadowTraceCount(
             settings, stochastic);
+        const uint32_t receiverSampleCount = inputs.depth
+            ? inputs.depth->getDesc().sampleCount
+            : 0u;
+        const bool requestedSourceModulation = useRatioEstimator ||
+            receiverSampleCount > 1u;
         const bool requestedHitDistance = settings.outputHitDistance &&
-            m_HitDistanceSupported;
+            m_HitDistanceSupported && receiverSampleCount == 1u &&
+            !requestedSourceModulation;
         if (settings.outputHitDistance && !m_HitDistanceSupported &&
             !m_ReportedHitDistanceUnavailable)
         {
@@ -440,7 +606,25 @@ namespace uvsr
                 "Ray traced sun shadow hit distance output is unavailable");
             m_ReportedHitDistanceUnavailable = true;
         }
-        if (!EnsureResources(inputs, requestedHitDistance))
+        if (settings.outputHitDistance && receiverSampleCount > 1u &&
+            !m_ReportedHitDistanceUnavailable)
+        {
+            log::warning(
+                "Ray traced sun shadow hit distance is unavailable for resolved MSAA receivers");
+            m_ReportedHitDistanceUnavailable = true;
+        }
+        if (settings.outputHitDistance && useRatioEstimator &&
+            receiverSampleCount == 1u &&
+            !m_ReportedHitDistanceUnavailable)
+        {
+            log::warning(
+                "Ray traced sun shadow hit distance is unavailable for a ratio-estimated signal");
+            m_ReportedHitDistanceUnavailable = true;
+        }
+        if (!EnsureResources(
+                inputs,
+                requestedSourceModulation,
+                requestedHitDistance))
         {
             if (!m_ReportedInvalidInput)
             {
@@ -450,6 +634,9 @@ namespace uvsr
             }
             return {};
         }
+        const bool outputSourceModulation =
+            requestedSourceModulation &&
+            m_OutputClosestSourceModulation;
         const bool outputHitDistance = requestedHitDistance &&
             m_OutputHitDistance;
         if (settings.outputHitDistance && !outputHitDistance &&
@@ -465,6 +652,7 @@ namespace uvsr
                 worldTlas,
                 noiseTexture,
                 sampleSchedule.attemptMask,
+                outputSourceModulation,
                 outputHitDistance))
         {
             if (!m_ReportedInvalidInput)
@@ -501,10 +689,17 @@ namespace uvsr
                 sampleSchedule,
                 stochastic,
                 noiseSettings.animate));
+        constants.traceAllMsaaReceivers =
+            receiverSampleCount <= 1u || traceAllMsaaReceivers ? 1u : 0u;
         commandList->writeBuffer(
             m_ConstantBuffer, &constants, sizeof(constants));
 
-        const uint32_t variant = outputHitDistance ? 1u : 0u;
+        const uint32_t variant = FindHeitzPipelineVariant(
+            receiverSampleCount,
+            outputSourceModulation,
+            outputHitDistance);
+        if (variant >= HeitzPipelineVariants.size())
+            return {};
         commandList->beginMarker("Ray Traced Sun Shadows");
         nvrhi::ComputeState state;
         state.pipeline = m_Pipelines[variant];
@@ -520,11 +715,16 @@ namespace uvsr
         commandList->endMarker();
         return {
             m_OutputModulation,
+            outputSourceModulation
+                ? m_OutputClosestSourceModulation.Get()
+                : nullptr,
             outputHitDistance ? m_OutputHitDistance.Get() : nullptr,
             light,
             true,
             stochastic,
-            useRatioEstimator
+            useRatioEstimator,
+            outputHitDistance && !useRatioEstimator,
+            receiverSampleCount
         };
     }
 

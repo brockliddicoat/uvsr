@@ -53,6 +53,10 @@ namespace uvsr
         // UINT64_MAX selects the pass-owned monotonic serial.
         uint64_t schedulingSerial = ~uint64_t(0u);
         bool accumulateSamples = false;
+        // True only when progressive Shared Primary transport owns the
+        // authored camera-jitter sequence. Adaptive retries then decorrelate
+        // successful receiver samples from that sequence.
+        bool accumulationJitterActive = false;
         SampleAccumulationSettings accumulationSettings;
         // True only when the renderer-wide history epoch changed solely
         // because the physical view changed. This never authorizes retaining

@@ -21,7 +21,9 @@ struct PbrDeferredLightingConstants
     uint2 directVisibilityEncodings;
 
     int flashlightLightIndex;
-    uint3 flashlightPadding;
+    int sourceSunVisibilityLightIndex;
+    uint sourceSunVisibilityEncoding;
+    uint flashlightPadding;
 
     FlashlightBeamProfile flashlightBeamProfile;
 };

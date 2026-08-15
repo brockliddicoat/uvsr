@@ -45,8 +45,6 @@ UVSR-controlled rights; it cannot sublicense someone else's work.
 
 - [Licenses](licenses/README.md) contains the first-party license, contributor
   agreement, and verbatim third-party license texts kept in this repository.
-- [Samples](samples/README.md) contains incorporated upstream source
-  that is compiled by UVSR and remains separately licensed.
 - [Documentation](documentation/README.md) combines the substantial-source
   registry, commercial-clearance notes, third-party notices, privacy notice,
   and contributor-agreement automation.

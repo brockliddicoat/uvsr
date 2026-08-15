@@ -128,10 +128,6 @@ namespace
             "ray_traced_flashlight_shadows_cs_GenerateVisibility",
             "ray_traced_flashlight_shadows_cs_GenerateVisibilityAndHitDistance",
             "ray_traced_sky_visibility_cs_Generate",
-            "cmaa2_ComputeDispatchArgsCS",
-            "cmaa2_DeferredColorApply2x2CS",
-            "cmaa2_EdgesColor2x2CS",
-            "cmaa2_ProcessCandidatesCS",
             "image_based_lighting_background_ps",
             "lighting_accumulation_cs",
             "lighting_accumulation_prepare_cs",
@@ -280,8 +276,6 @@ int main(int argc, char** argv)
         "TAA_LDS_LAYOUT",
         "TAA_SHARED_WORK_REUSE",
         "TAA_EARLY_HISTORY_REJECTION",
-        "CMAA2_SUPPORT_HDR_COLOR_RANGE",
-        "CMAA2_STATIC_QUALITY_PRESET",
         "ENABLE_AO_POWER",
         "ENABLE_BOUNCE",
         "DEPTH_HIERARCHY",
@@ -336,14 +330,26 @@ int main(int argc, char** argv)
         CountOccurrences(
             config,
             "heitz_ratio_estimator_shadows_cs.hlsl -T cs -E Generate") ==
-                1u &&
+                3u &&
             CountOccurrences(
                 config,
-                "heitz_ratio_estimator_shadows_cs.hlsl") == 1u &&
+                "heitz_ratio_estimator_shadows_cs.hlsl") == 3u &&
             config.find(
                 "heitz_ratio_estimator_shadows_cs.hlsl -T cs -E Generate "
-                "-D OUTPUT_HIT_DISTANCE={0,1}") != std::string::npos,
-        "production must package Heitz visibility with optional hit distance");
+                "-D HEITZ_RASTER_SAMPLES=1 "
+                "-D OUTPUT_SOURCE_MODULATION=0 "
+                "-D OUTPUT_HIT_DISTANCE={0,1}") != std::string::npos &&
+            config.find(
+                "heitz_ratio_estimator_shadows_cs.hlsl -T cs -E Generate "
+                "-D HEITZ_RASTER_SAMPLES=1 "
+                "-D OUTPUT_SOURCE_MODULATION=1 "
+                "-D OUTPUT_HIT_DISTANCE=0") != std::string::npos &&
+            config.find(
+                "heitz_ratio_estimator_shadows_cs.hlsl -T cs -E Generate "
+                "-D HEITZ_RASTER_SAMPLES={2,4,8,16} "
+                "-D OUTPUT_SOURCE_MODULATION=1 "
+                "-D OUTPUT_HIT_DISTANCE=0") != std::string::npos,
+        "production must package mutually exclusive 1x source/hit outputs and multisample source visibility");
     passed &= Check(
         CountOccurrences(
             config,
@@ -432,16 +438,6 @@ int main(int argc, char** argv)
             manifest.find("fast_approximate_aa_ps") != std::string::npos,
         "production must package one runtime-configured Fast Approximate shader");
     passed &= Check(
-        CountOccurrences(config, "cmaa2.hlsl -T cs") == 4u &&
-            CountOccurrences(
-                config,
-                "CMAA2_EDGE_DETECTION_LUMA_PATH={0,1}") == 1u &&
-            CountOccurrences(
-                config,
-                "CMAA2_EDGE_DETECTION_LUMA_PATH=1") == 3u,
-        "production must package two CMAA2 edge detectors and one copy of "
-        "each detector-independent stage");
-    passed &= Check(
         CountOccurrences(
             config,
             "temporal_aa_sharpen_cs.hlsl") == 1u &&
@@ -481,8 +477,8 @@ int main(int argc, char** argv)
     const std::set<std::string> expectedFiles =
         GetExpectedShaderFiles();
     passed &= Check(
-        expectedFiles.size() == 52u,
-        "production shader contract must enumerate exactly 52 files");
+        expectedFiles.size() == 48u,
+        "production shader contract must enumerate exactly 48 files");
     if (stagedFiles != expectedFiles)
     {
         std::vector<std::string> missing;

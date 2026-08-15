@@ -531,20 +531,41 @@ namespace uvsr
             : 0u;
     }
 
+    [[nodiscard]] inline constexpr uint32_t
+        GetSampleAccumulationSuccessfulUpdatePhase(
+            uint32_t previousCount,
+            uint32_t successfulSamplesPerUpdate = 1u)
+    {
+        const uint32_t samplesPerUpdate =
+            std::max(successfulSamplesPerUpdate, 1u);
+        // Ceil without an overflow-prone previousCount + N - 1. This is the
+        // exact accepted-update count for full batches and still advances
+        // eventually when a batch contains one or more rejected samples.
+        return previousCount == 0u
+            ? 0u
+            : 1u + (previousCount - 1u) / samplesPerUpdate;
+    }
+
     [[nodiscard]] inline constexpr bool
         IsSampleAccumulationUpdateScheduled(
             uint64_t schedulingSerial,
             uint32_t schedulePhase,
             uint32_t updateInterval,
-            uint32_t previousCount)
+            uint32_t previousCount,
+            bool coverageJitterActive = true,
+            uint32_t successfulSamplesPerUpdate = 1u)
     {
         if (updateInterval <= 1u)
             return true;
         const uint32_t serialModulo = static_cast<uint32_t>(
             schedulingSerial % updateInterval);
         const uint32_t successfulPhaseAdvance =
-            (previousCount % updateInterval) *
-            GetSampleAccumulationCoverageStep(updateInterval);
+            coverageJitterActive
+                ? (GetSampleAccumulationSuccessfulUpdatePhase(
+                    previousCount,
+                    successfulSamplesPerUpdate) % updateInterval) *
+                    GetSampleAccumulationCoverageStep(updateInterval)
+                : 0u;
         return (serialModulo + schedulePhase + successfulPhaseAdvance) %
             updateInterval == 0u;
     }

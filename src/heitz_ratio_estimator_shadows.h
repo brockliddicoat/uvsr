@@ -33,11 +33,14 @@ namespace uvsr
     struct HeitzRatioEstimatorShadowResult
     {
         nvrhi::ITexture* modulation = nullptr;
+        nvrhi::ITexture* closestSourceModulation = nullptr;
         nvrhi::ITexture* hitDistance = nullptr;
         const donut::engine::Light* light = nullptr;
         bool dispatched = false;
         bool stochastic = false;
         bool ratioEstimator = false;
+        bool hitDistanceMatchesSignal = false;
+        uint32_t receiverSampleCount = 1u;
 
         [[nodiscard]] explicit operator bool() const
         {
@@ -70,6 +73,7 @@ namespace uvsr
         [[nodiscard]] HeitzRatioEstimatorShadowResult Render(
             nvrhi::ICommandList* commandList,
             const HeitzRatioEstimatorShadowSettings& settings,
+            bool traceAllMsaaReceivers,
             const donut::engine::IView& view,
             const HeitzRatioEstimatorShadowInputs& inputs,
             const RayTracedMaterialVisibilityInputs& materialVisibility,
@@ -86,14 +90,15 @@ namespace uvsr
     private:
         nvrhi::DeviceHandle m_Device;
         nvrhi::BindingLayoutHandle m_BindlessLayout;
-        std::array<nvrhi::BindingLayoutHandle, 2> m_BindingLayouts;
+        std::array<nvrhi::BindingLayoutHandle, 3> m_BindingLayouts;
         nvrhi::SamplerHandle m_MaterialSampler;
         nvrhi::BufferHandle m_ConstantBuffer;
-        std::array<nvrhi::ShaderHandle, 2> m_Shaders;
-        std::array<nvrhi::ComputePipelineHandle, 2> m_Pipelines;
-        std::array<nvrhi::BindingSetHandle, 2> m_BindingSets;
+        std::array<nvrhi::ShaderHandle, 7> m_Shaders;
+        std::array<nvrhi::ComputePipelineHandle, 7> m_Pipelines;
+        std::array<nvrhi::BindingSetHandle, 7> m_BindingSets;
 
         nvrhi::TextureHandle m_OutputModulation;
+        nvrhi::TextureHandle m_OutputClosestSourceModulation;
         nvrhi::TextureHandle m_OutputHitDistance;
 
         nvrhi::rt::IAccelStruct* m_BoundTlas = nullptr;
@@ -108,6 +113,7 @@ namespace uvsr
 
         [[nodiscard]] bool EnsureResources(
             const HeitzRatioEstimatorShadowInputs& inputs,
+            bool outputSourceModulation,
             bool outputHitDistance);
         [[nodiscard]] bool EnsureBindingSets(
             const HeitzRatioEstimatorShadowInputs& inputs,
@@ -115,6 +121,7 @@ namespace uvsr
             nvrhi::rt::IAccelStruct* worldTlas,
             nvrhi::ITexture* noiseTexture,
             nvrhi::ITexture* attemptMask,
+            bool outputSourceModulation,
             bool outputHitDistance);
         void ClearBindingSets();
     };

@@ -98,7 +98,6 @@
 #include "auto_exposure.h"
 #include "camera_collision.h"
 #include "camera_controllers.h"
-#include "cmaa2.h"
 #include "command_line_options.h"
 #include "denoising_pass.h"
 #include "denoising_settings.h"
@@ -796,10 +795,9 @@ public:
         desc.debugName = "MaterialIDs";
         MaterialIDs = device->createTexture(desc);
 
-        // Keep the display-referred image linear and undithered until the
-        // final presentation pass. CMAA2 can then detect and blend the same
-        // post-AgX edges the user sees without an illegal sRGB UAV alias or
-        // classifying quantization noise.
+        // Keep the display-referred image linear and undithered through the
+        // optional presentation filter. The final output pass owns transfer
+        // encoding and dithering so neither is classified as image detail.
         desc.format = nvrhi::Format::RGBA16_FLOAT;
         desc.isUAV = false;
         desc.debugName = "LdrColor";
@@ -1327,7 +1325,16 @@ struct UIData
     {
         ResolvedAntiAliasingSettings resolved =
             ResolveAntiAliasingSettings(settings);
-        if (Lighting == LightingSolution::PathTracing)
+        if (Lighting == LightingSolution::RayMarching)
+        {
+            // Progressive Ray Marching accumulation is already the sole
+            // long-term history owner. A bypassed TAA pass must not leave its
+            // camera jitter active on the raw frame presented by a reset.
+            resolved.temporalEnabled = ShouldUseRasterTemporalAa(
+                resolved.temporalEnabled,
+                AccumulateSamples);
+        }
+        else if (Lighting == LightingSolution::PathTracing)
         {
             // Shared Primary supplies full-resolution ray-traced depth/motion.
             // Progressive accumulation remains the sole long-term history
@@ -1366,12 +1373,6 @@ struct UIData
                 PathTracingDebugView::FinalImage &&
             ResolveAntiAliasingSettings(AntiAliasing).temporalEnabled;
     }
-
-    [[nodiscard]] bool UsesCmaa2() const
-    {
-        return GetResolvedAntiAliasingSettings().cmaa2Enabled;
-    }
-
     [[nodiscard]] bool UsesFastApproximateAA() const
     {
         return GetResolvedAntiAliasingSettings().fastApproximateEnabled;
@@ -1460,7 +1461,6 @@ private:
         TemporalAA,
         TemporalAAPipelines,
         FastApproximateAA,
-        Cmaa2,
         EnvironmentBackground,
         ToneMapping,
         Complete
@@ -1554,7 +1554,6 @@ private:
     nvrhi::ITexture* m_PathTemporalMotion = nullptr;
     std::unique_ptr<FastApproximateAAPass>
                                         m_FastApproximateAAPass;
-    std::unique_ptr<Cmaa2Pass>          m_Cmaa2Pass;
     std::unique_ptr<MaterialIDPass>     m_MaterialIDPass;
     std::unique_ptr<PixelReadbackPass>  m_PixelReadbackPass;
 
@@ -3429,9 +3428,26 @@ public:
             AntiAliasingSettingsRequireTemporalReset(
                 m_AppliedAntiAliasingSettings,
                 m_ui.AntiAliasing);
-        if (requiresTemporalReset)
+        const uint32_t appliedRasterSampleCount =
+            ResolveAntiAliasingSettings(applied).rasterSampleCount;
+        const uint32_t requestedRasterSampleCount =
+            ResolveAntiAliasingSettings(requested).rasterSampleCount;
+        const bool requiresShadowSamplingReset =
+            m_HasAppliedAntiAliasingSettings &&
+            applied.msaa.perSampleRayTracedShadows !=
+                requested.msaa.perSampleRayTracedShadows &&
+            (appliedRasterSampleCount > 1u ||
+                requestedRasterSampleCount > 1u);
+        if (requiresShadowSamplingReset)
+        {
+            ResetImageBasedLightingHistory();
+        }
+        else if (requiresTemporalReset)
         {
             ResetAntiAliasingState();
+        }
+        if (requiresTemporalReset)
+        {
             // A new temporal sequence must not inherit a previous view whose
             // jitter phase belongs to the old preset or history layout.
             m_PreviousView.reset();
@@ -3534,20 +3550,6 @@ public:
         {
             log::error(
                 "Fast Approximate AA initialization failed; "
-                "the presentation input will be shown unchanged");
-        }
-    }
-
-    void CreateCmaa2Pass()
-    {
-        m_Cmaa2Pass = std::make_unique<Cmaa2Pass>(
-            GetDevice(),
-            m_ShaderFactory,
-            GetPresentationAaInitializationSource());
-        if (!m_Cmaa2Pass->IsValid())
-        {
-            log::error(
-                "Intel CMAA2 initialization failed; "
                 "the presentation input will be shown unchanged");
         }
     }
@@ -3679,21 +3681,6 @@ public:
         {
             CreateFastApproximateAAPass();
         }
-        if (m_Cmaa2Pass)
-        {
-            // CMAA2 owns only same-sized single-sample intermediates and can
-            // safely survive an MSAA/motion-vector target swap. Rebinding its
-            // source avoids recreating the large candidate buffers, two edge
-            // detector PSOs, and three shared pipelines on every technique
-            // change.
-            m_Cmaa2Pass->UpdateSourceColor(
-                GetPresentationAaInitializationSource());
-        }
-        else if (m_ui.UsesCmaa2())
-        {
-            CreateCmaa2Pass();
-        }
-
         m_ImageBasedLightingBackgroundPass =
             m_ImageBasedLightingEnvironment
                 ? std::make_unique<ImageBasedLightingBackgroundPass>(
@@ -3720,7 +3707,6 @@ public:
     {
         m_TemporalAAPass.reset();
         m_FastApproximateAAPass.reset();
-        m_Cmaa2Pass.reset();
         m_RenderPassPreparationWaitForIbl = waitForIbl;
         m_RenderPassPreparationStage =
             RenderPassPreparationStage::GBuffer;
@@ -3853,13 +3839,6 @@ public:
         case RenderPassPreparationStage::FastApproximateAA:
             if (m_ui.UsesFastApproximateAA())
                 CreateFastApproximateAAPass();
-            m_RenderPassPreparationStage =
-                RenderPassPreparationStage::Cmaa2;
-            return false;
-
-        case RenderPassPreparationStage::Cmaa2:
-            if (m_ui.UsesCmaa2())
-                CreateCmaa2Pass();
             m_RenderPassPreparationStage =
                 RenderPassPreparationStage::EnvironmentBackground;
             return false;
@@ -4345,7 +4324,6 @@ public:
                         m_ui.Denoising.skyVisibility.method));
             const bool fastApproximateAARequired =
                 m_ui.UsesFastApproximateAA();
-            const bool cmaa2Required = m_ui.UsesCmaa2();
             const bool motionVectorsRequired =
                 rasterTemporalAARequired ||
                 denoisingMotionVectorsRequired ||
@@ -4474,29 +4452,7 @@ public:
             if (fastApproximateAARequired && !m_FastApproximateAAPass)
                 CreateFastApproximateAAPass();
             else if (!fastApproximateAARequired && m_FastApproximateAAPass)
-            {
-                // A retained CMAA2 pass may still own a binding to the FXAA
-                // output. Rebind it before releasing the producing pass so
-                // disabling FXAA also releases that full-resolution texture.
-                if (m_Cmaa2Pass)
-                {
-                    m_Cmaa2Pass->UpdateSourceColor(
-                        GetPresentationAaInitializationSource());
-                }
                 m_FastApproximateAAPass.reset();
-            }
-
-            // CMAA2 is a presentation-only spatial filter when Temporal is
-            // active. Allocate or retain it independently so changing only
-            // morphology cannot recreate the temporal pass and lose history.
-            if (cmaa2Required && !m_Cmaa2Pass)
-                CreateCmaa2Pass();
-            else if (!cmaa2Required &&
-                m_Cmaa2Pass &&
-                !temporalAARequired)
-            {
-                m_Cmaa2Pass.reset();
-            }
 
             m_ui.ShaderReloadRequested = false;
         }
@@ -4527,7 +4483,6 @@ public:
             !pathTracingSelected &&
             m_ui.Representation.allowRayTraversal &&
             m_ui.DirectionalShadows.ratioEstimator.enabled &&
-            m_RenderTargets->GetSampleCount() == 1u &&
             SupportsHeitzRatioEstimatorShadows();
         const bool rayTracedFlashlightShadowSelected =
             !pathTracingSelected &&
@@ -4607,7 +4562,6 @@ public:
         const bool deferTemporalSharpenToPresentation =
             temporalSharpenEnabled &&
             (antiAliasing.fastApproximateEnabled ||
-                antiAliasing.cmaa2Enabled ||
                 antiAliasing.historyStorage ==
                     TemporalAaHistoryStorage::Compact);
         bool temporalAaWillRender =
@@ -4775,7 +4729,6 @@ public:
             *submittedLights,
             worldRepresentationReady,
             lightingSceneContentChanged,
-            temporalAaWillRender,
             visibilityNoiseSettings,
             shadowNoiseSettings,
             skyNoiseSettings,
@@ -4901,15 +4854,15 @@ public:
 
             BeginRendererStage(
                 RendererTimingStage::MultisampleResolve);
-            m_MsaaVisibilityResolvePass->Render(
+            closestSurfaceResolved =
+                m_MsaaVisibilityResolvePass->Render(
                 m_CommandList,
                 resolveInputs,
                 closestSurfaceOutputs,
                 m_RenderTargets->GetSampleCount());
             EndRendererStage(
                 RendererTimingStage::MultisampleResolve);
-            closestSurfaceResolved = true;
-            return true;
+            return closestSurfaceResolved;
         };
 
         DeferredLightingPass::Inputs deferredMsaaInputs;
@@ -4961,6 +4914,10 @@ public:
             pathInputs.historyResetByViewOnly =
                 m_LightingHistoryChangedByViewOnly;
             pathInputs.accumulateSamples = m_ui.AccumulateSamples;
+            pathInputs.accumulationJitterActive =
+                m_ui.UsesPathTracingAccumulationJitter() &&
+                m_PathTracingPass->GetCapabilities()
+                    .sharedPrimarySurfaceSupported;
             pathInputs.accumulationSettings = m_ui.SampleAccumulation;
             pathInputs.settings =
                 SanitizePathTracingSettings(m_ui.PathTracing);
@@ -5080,15 +5037,22 @@ public:
             EndRendererStage(RendererTimingStage::Geometry);
 
             const bool singleSurfaceVisibilityProducerEnabled =
-                heitzRatioEstimatorSelected ||
                 rayTracedFlashlightShadowSelected ||
                 rayTracedSkyVisibilitySelected;
-            if (m_RenderTargets->GetSampleCount() > 1u &&
+            const bool closestSurfaceResolveRequired =
+                m_RenderTargets->GetSampleCount() > 1u &&
                 (runScreenSpaceVisibility ||
                     singleSurfaceVisibilityProducerEnabled ||
-                    m_ui.UsesLongTermTemporalAA()))
+                    m_ui.UsesLongTermTemporalAA());
+            if (closestSurfaceResolveRequired &&
+                !resolveClosestMsaaSurface())
             {
-                resolveClosestMsaaSurface();
+                // None of the single-sample consumers may read last frame's
+                // resolved depth, attributes, or motion. Present the current
+                // raw MSAA frame, and retire every temporal history that was
+                // prepared against this unavailable topology.
+                temporalAaWillRender = false;
+                ResetAntiAliasingState();
             }
             const bool singleSurfaceInputsAvailable =
                 m_RenderTargets->GetSampleCount() == 1u ||
@@ -5099,12 +5063,13 @@ public:
                     : m_RenderTargets->Depth.Get();
             const bool shadowRayDispatchExpected =
                 worldRepresentationReady &&
-                singleSurfaceInputsAvailable &&
                 ((rayTracedFlashlightShadowSelected &&
+                        singleSurfaceInputsAvailable &&
                         submittedFlashlight &&
                         flashlightNoise) ||
                     (heitzRatioEstimatorSelected &&
-                        m_HeitzRatioEstimatorShadowPass));
+                        m_HeitzRatioEstimatorShadowPass &&
+                        shadowNoise));
             if (shadowRayDispatchExpected)
             {
                 BeginRendererStage(
@@ -5160,31 +5125,22 @@ public:
             if (heitzRatioEstimatorSelected &&
                 m_HeitzRatioEstimatorShadowPass &&
                 worldRepresentationReady &&
-                singleSurfaceInputsAvailable &&
                 shadowNoise)
             {
                 HeitzRatioEstimatorShadowInputs shadowInputs;
-                shadowInputs.depth = visibilityDepth;
-                shadowInputs.diffuse = closestSurfaceResolved
-                    ? closestSurfaceOutputs.diffuse
-                    : m_RenderTargets->GBufferDiffuse.Get();
-                shadowInputs.material = closestSurfaceResolved
-                    ? closestSurfaceOutputs.material
-                    : m_RenderTargets->GBufferSpecular.Get();
-                shadowInputs.normals = closestSurfaceResolved
-                    ? closestSurfaceOutputs.normals
-                    : m_RenderTargets->GBufferNormals.Get();
-                shadowInputs.emissive = closestSurfaceResolved
-                    ? closestSurfaceOutputs.emissive
-                    : m_RenderTargets->GBufferEmissive.Get();
+                shadowInputs.depth = m_RenderTargets->Depth;
+                shadowInputs.diffuse = m_RenderTargets->GBufferDiffuse;
+                shadowInputs.material = m_RenderTargets->GBufferSpecular;
+                shadowInputs.normals = m_RenderTargets->GBufferNormals;
+                shadowInputs.emissive = m_RenderTargets->GBufferEmissive;
                 shadowInputs.materialAmbientOcclusion =
-                    closestSurfaceResolved
-                        ? closestSurfaceOutputs.materialAmbientOcclusion
-                        : m_RenderTargets->MaterialAmbientOcclusion.Get();
+                    m_RenderTargets->MaterialAmbientOcclusion;
                 heitzShadowResult =
                     m_HeitzRatioEstimatorShadowPass->Render(
                         m_CommandList,
                         m_ui.DirectionalShadows.ratioEstimator,
+                        m_ui.AntiAliasing.msaa
+                            .perSampleRayTracedShadows,
                         *m_View,
                         shadowInputs,
                         rayMaterialVisibility,
@@ -5304,6 +5260,7 @@ public:
                 !rayMarchingAccumulationOwnsTemporalHistory;
             const bool ambientOcclusionDenoisingReady =
                 rayMarchingDenoisingAllowed &&
+                singleSurfaceInputsAvailable &&
                 runScreenSpaceVisibility &&
                 m_ui.ScreenSpaceVisibility.HasActiveAmbientOcclusion() &&
                 m_ui.Denoising.ambientOcclusion.method !=
@@ -5314,6 +5271,7 @@ public:
                         .outputHitDistance);
             const bool diffuseGiDenoisingReady =
                 rayMarchingDenoisingAllowed &&
+                singleSurfaceInputsAvailable &&
                 runScreenSpaceVisibility &&
                 m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
                 m_ui.Denoising.diffuseGi.method !=
@@ -5434,13 +5392,12 @@ public:
             const bool sunDenoisingReady =
                 rayMarchingDenoisingAllowed &&
                 heitzShadowResult &&
-                !m_ui.DirectionalShadows.ratioEstimator.hardShadows &&
+                heitzShadowResult.receiverSampleCount == 1u &&
                 shadowDenoisingMethod != DenoisingMethodChoice::None &&
                 (!shadowThirdPartyDenoising ||
-                    (!m_ui.DirectionalShadows.ratioEstimator
-                        .useRatioEstimator &&
-                     m_ui.DirectionalShadows.ratioEstimator
-                        .outputHitDistance));
+                    (!m_ui.DirectionalShadows.ratioEstimator.hardShadows &&
+                     heitzShadowResult.hitDistance &&
+                     heitzShadowResult.hitDistanceMatchesSignal));
             const bool shadowDenoisingExpected =
                 m_DenoisingPass &&
                 (flashlightDenoisingReady || sunDenoisingReady);
@@ -5502,7 +5459,7 @@ public:
                             m_ui.DirectionalShadows.ratioEstimator.maxDistance,
                             m_SceneDiagonal);
                     inputs.hitDistanceMatchesSignal =
-                        !heitzShadowResult.ratioEstimator;
+                        heitzShadowResult.hitDistanceMatchesSignal;
                     inputs.lightDirectionWorld =
                         -float3(m_SunLight->GetDirection());
                     inputs.directionalTanAngularRadius = std::tan(
@@ -5637,13 +5594,31 @@ public:
                             .materialAmbientOcclusion;
                     visibilityDeferredInputs.output =
                         m_RenderTargets->BaseLighting;
+                    DirectLightVisibilities
+                        visibilityDirectLightVisibilities =
+                            directLightVisibilities;
+                    if (heitzShadowResult.receiverSampleCount > 1u &&
+                        heitzShadowResult.closestSourceModulation)
+                    {
+                        // Screen-space GI transports diffuse radiance from the
+                        // same closest receiver selected by the coherent G-buffer
+                        // resolve. Use that receiver's diffuse-only ratio here;
+                        // final MSAA direct lighting keeps the selected policy's
+                        // total modulation below: independently response-weighted
+                        // per receiver, or the closest-owner approximation.
+                        visibilityDirectLightVisibilities.sun = {
+                            heitzShadowResult.closestSourceModulation,
+                            heitzShadowResult.light,
+                            DirectLightVisibilityEncoding::RgbRgba16Float
+                        };
+                    }
                     BeginRendererStage(
                         RendererTimingStage::VisibilityLightingPreparation);
                     m_PbrDeferredLightingPass->Render(
                         m_CommandList,
                         *m_View,
                         visibilityDeferredInputs,
-                        directLightVisibilities,
+                        visibilityDirectLightVisibilities,
                         submittedFlashlight,
                         flashlightBeamProfile,
                         globalEnvironment,
@@ -5742,6 +5717,21 @@ public:
             }
             else
             {
+                DirectLightVisibility sourceSunVisibility;
+                if (heitzShadowResult.receiverSampleCount == 1u &&
+                    heitzShadowResult.ratioEstimator &&
+                    heitzShadowResult.closestSourceModulation)
+                {
+                    // The final 1x sun signal is weighted by total material
+                    // response. Screen-space GI transports diffuse radiance,
+                    // so provide the same receiver's independently matched
+                    // diffuse ratio only to the source-radiance write.
+                    sourceSunVisibility = {
+                        heitzShadowResult.closestSourceModulation,
+                        heitzShadowResult.light,
+                        DirectLightVisibilityEncoding::RgbRgba16Float
+                    };
+                }
                 BeginRendererStage(RendererTimingStage::DirectLighting);
                 m_PbrDeferredLightingPass->Render(
                     m_CommandList,
@@ -5759,7 +5749,12 @@ public:
                     writeSourceRadiance,
                     uint32_t(m_ui.LightingDebugView),
                     uint32_t(m_ui.ScreenSpaceVisibility.debugView),
-                    float2(0.f));
+                    float2(0.f),
+                    nullptr,
+                    1u,
+                    nullptr,
+                    nullptr,
+                    sourceSunVisibility);
                 EndRendererStage(RendererTimingStage::DirectLighting);
 
                 if (runScreenSpaceVisibility)
@@ -6008,7 +6003,6 @@ public:
         }
 
         nvrhi::ITexture* accumulatedSceneColor = sceneColor;
-        bool lightingAccumulationResolvedThisFrame = false;
         if (lightingSampleSchedulePrepared &&
             m_LightingAccumulationPass)
         {
@@ -6024,7 +6018,6 @@ public:
             if (accumulationResult)
             {
                 accumulatedSceneColor = accumulationResult.sceneLinear;
-                lightingAccumulationResolvedThisFrame = true;
                 ++m_LightingAccumulationSchedulingCycle;
             }
         }
@@ -6116,14 +6109,6 @@ public:
             EndRendererStage(RendererTimingStage::FastApproximate);
         }
 
-        if (antiAliasing.cmaa2Enabled && m_Cmaa2Pass)
-        {
-            displayTexture = m_Cmaa2Pass->Render(
-                m_CommandList,
-                displayTexture,
-                antiAliasing);
-        }
-
         BeginRendererStage(RendererTimingStage::OutputBlit);
         if (m_AgxToneMappingPass &&
             m_AgxToneMappingPass->RenderOutput(
@@ -6153,9 +6138,7 @@ public:
         const bool pathTracingJitterAdvanced = pathTracingResult &&
             pathTracingResult.sharedPrimarySurfaceActive &&
             m_ui.UsesPathTracingAccumulationJitter();
-        if (temporalAaRenderedThisFrame || pathTracingJitterAdvanced ||
-            (lightingAccumulationResolvedThisFrame &&
-                antiAliasing.temporalEnabled))
+        if (temporalAaRenderedThisFrame || pathTracingJitterAdvanced)
         {
             ++m_AntiAliasingPhase;
         }
@@ -6283,7 +6266,6 @@ public:
         const std::vector<std::shared_ptr<Light>>& submittedLights,
         bool worldRepresentationReady,
         bool sceneContentChanged,
-        bool temporalAaWillRender,
         const NoiseSettings& visibilityNoiseSettings,
         const NoiseSettings& shadowNoiseSettings,
         const NoiseSettings& skyNoiseSettings,
@@ -6413,25 +6395,20 @@ public:
             m_ui.AccumulateSamples)
         {
             // Accumulation owns long-term temporal history and consumes raw
-            // scene-linear frames. TAA's selected jitter still diversifies the
-            // raw raster input, while its history/clipping stage is bypassed.
+            // scene-linear frames. Raster TAA and its camera jitter are both
+            // inactive; MSAA and shadow receiver policy still affect input.
             const ResolvedAntiAliasingSettings antiAliasing =
                 m_ui.GetResolvedAntiAliasingSettings();
             HashLightingHistoryValue(
-                signature, antiAliasing.temporalEnabled);
-            HashLightingHistoryValue(
                 signature, antiAliasing.rasterSampleCount);
-            if (antiAliasing.temporalEnabled)
-            {
-                HashLightingHistoryValue(
-                    signature, antiAliasing.temporalJitterSequence);
-            }
-
+            HashLightingHistoryValue(
+                signature,
+                ShouldUsePerSampleRayTracedShadows(
+                    m_ui.AntiAliasing.msaa,
+                    antiAliasing.rasterSampleCount));
             // Upstream scheduling may retain each stochastic producer's raw
             // texture. Hash every behavior-affecting field individually so
             // structure padding can never manufacture compatibility.
-            HashLightingHistoryValue(signature, temporalAaWillRender);
-
             const auto hashNoiseSettings =
                 [&](const NoiseSettings& settings)
                 {
@@ -6743,8 +6720,7 @@ public:
 
     bool SupportsHeitzRatioEstimatorShadows() const
     {
-        return HasHeitzRatioEstimatorHardwareSupport() &&
-            m_ui.GetResolvedAntiAliasingSettings().rasterSampleCount == 1u;
+        return HasHeitzRatioEstimatorHardwareSupport();
     }
 
     bool HasRayTracedSkyVisibilityHardwareSupport() const
@@ -6903,13 +6879,6 @@ public:
         }
         return m_TemporalAAPass
             ? &m_TemporalAAPass->GetTimings()
-            : nullptr;
-    }
-
-    const Cmaa2Timings* GetCmaa2Timings() const
-    {
-        return m_Cmaa2Pass
-            ? &m_Cmaa2Pass->GetTimings()
             : nullptr;
     }
 
@@ -7934,7 +7903,6 @@ private:
         Shadows,
         TemporalReconstructive,
         FastApproximate,
-        ConservativeMorphological,
         Multisample,
         MaterialPicking,
         EnvironmentBackground,
@@ -8018,10 +7986,8 @@ private:
         double frameTimeSeconds = 0.0;
         ScreenSpaceVisibilityTimings visibilityTimings;
         TemporalAATimings temporalAATimings;
-        Cmaa2Timings cmaa2Timings;
         bool hasVisibilityTimings = false;
         bool hasTemporalAATimings = false;
-        bool hasCmaa2Timings = false;
     };
 
     std::shared_ptr<UvsrSceneViewer> m_app;
@@ -8041,12 +8007,10 @@ private:
     uvsr::PerformanceTimingRowRetention m_PerformanceTimingRows;
     ScreenSpaceVisibilityTimings m_DisplayedVisibilityTimings;
     TemporalAATimings m_DisplayedTemporalAATimings;
-    Cmaa2Timings m_DisplayedCmaa2Timings;
     std::deque<StatSnapshot> m_StatUpdateQueue;
     bool m_HasAppliedStatSnapshot = false;
     bool m_HasVisibilityStatSnapshot = false;
     bool m_HasTemporalAAStatSnapshot = false;
-    bool m_HasCmaa2StatSnapshot = false;
     bool m_WasSceneLoading = false;
     bool m_SceneLoadFailed = false;
     std::chrono::steady_clock::time_point m_SceneLoadCounterStart;
@@ -13562,49 +13526,6 @@ private:
                 FastApproximateAaMaximumDarkEdgeThreshold,
                 value, error);
         }
-        else if (path == "anti-aliasing.cmaa2.enabled")
-            handled = ApplyCommandBool(operation, arguments, path,
-                candidate.cmaa2.enabled, defaults.cmaa2.enabled,
-                value, error);
-        else if (path == "anti-aliasing.cmaa2.quality")
-        {
-            const bool cmaa2QualityCustom =
-                !MatchesCmaa2QualityPreset(candidate.cmaa2);
-            handled = ApplyCommandEnum(operation, arguments, path,
-                candidate.cmaa2.quality, defaults.cmaa2.quality,
-                QualityOptions, value, error,
-                cmaa2QualityCustom);
-            if (handled && operation != CommandValueOperation::Get)
-            {
-                ApplyCmaa2QualityPreset(
-                    candidate.cmaa2, candidate.cmaa2.quality);
-            }
-        }
-        else if (path == "anti-aliasing.cmaa2.edge-threshold")
-        {
-            const Cmaa2QualityPreset preset = GetCmaa2QualityPreset(
-                candidate.cmaa2.quality);
-            handled = ApplyCommandFloat(operation, arguments, path,
-                candidate.cmaa2.edgeThreshold,
-                preset.edgeThreshold,
-                Cmaa2MinimumEdgeThreshold,
-                Cmaa2MaximumEdgeThreshold,
-                value, error);
-        }
-        else if (path == "anti-aliasing.cmaa2.detector")
-        {
-            static constexpr std::array<
-                std::pair<std::string_view, Cmaa2EdgeDetector>, 2>
-                Options = {{
-                    { "luma", Cmaa2EdgeDetector::Luma },
-                    { "full-color", Cmaa2EdgeDetector::FullColor }
-                }};
-            const Cmaa2QualityPreset preset = GetCmaa2QualityPreset(
-                candidate.cmaa2.quality);
-            handled = ApplyCommandEnum(operation, arguments, path,
-                candidate.cmaa2.detector, preset.detector,
-                Options, value, error);
-        }
         else if (path == "anti-aliasing.msaa.enabled")
             handled = ApplyCommandBool(operation, arguments, path,
                 candidate.msaa.enabled, defaults.msaa.enabled,
@@ -13634,6 +13555,17 @@ private:
                 candidate.msaa.sampleCount,
                 GetMultisampleQualitySampleCount(candidate.msaa.quality),
                 Options, value, error);
+        }
+        else if (path == "anti-aliasing.msaa.per-sample-shadows")
+        {
+            handled = ApplyCommandBool(
+                operation,
+                arguments,
+                path,
+                candidate.msaa.perSampleRayTracedShadows,
+                defaults.msaa.perSampleRayTracedShadows,
+                value,
+                error);
         }
         else if (path == "anti-aliasing.sharpen.enabled")
         {
@@ -13668,10 +13600,6 @@ private:
             candidate.fastApproximate.darkEdgeThreshold =
                 ClampFastApproximateAaDarkEdgeThreshold(
                     candidate.fastApproximate.darkEdgeThreshold);
-            candidate.cmaa2.edgeThreshold = ClampCmaa2EdgeThreshold(
-                candidate.cmaa2.edgeThreshold);
-            candidate.cmaa2.detector = SanitizeCmaa2EdgeDetector(
-                candidate.cmaa2.detector);
             candidate.msaa.sampleCount =
                 SanitizeMsaaSampleCount(candidate.msaa.sampleCount);
             m_ui.AntiAliasing = candidate;
@@ -15531,8 +15459,7 @@ private:
             !m_app->SupportsHeitzRatioEstimatorShadows())
         {
             error =
-                "Correlated ratio sun shadows require DXR 1.1 support and "
-                "single-sample rendering.";
+                "Correlated ratio sun shadows require DXR 1.1 support.";
             return false;
         }
 
@@ -17213,7 +17140,6 @@ private:
                 "Directional Shadows",
                 "Temporal Reconstructive",
                 "Fast Approximate",
-                "Conservative Morphological",
                 "Multisample Adaptive",
                 "Material Picking",
                 "Environment Background",
@@ -17648,37 +17574,6 @@ private:
                 drawSelectedRendererTable(
                     "Fast Approximate",
                     RendererTimingStage::FastApproximate);
-                break;
-            case StatisticsEffect::ConservativeMorphological:
-                if (beginStatisticsTable(
-                        "##MorphologicalStatistics", "Morphological Stage"))
-                {
-                    const Cmaa2Timings& morphological =
-                        m_DisplayedCmaa2Timings;
-                    const bool available =
-                        m_ui.AntiAliasing.cmaa2.enabled &&
-                        m_HasCmaa2StatSnapshot;
-                    drawMilliseconds(
-                        "Complete Effect",
-                        morphological.CompleteEffectMilliseconds(),
-                        available);
-                    drawMilliseconds(
-                        "Edge Detection",
-                        morphological.edgeMilliseconds,
-                        available);
-                    drawMilliseconds(
-                        "Candidate Processing",
-                        morphological.candidateMilliseconds,
-                        available);
-                    drawMilliseconds(
-                        "Apply",
-                        morphological.applyMilliseconds,
-                        available);
-                    drawRendererTiming(
-                        "Complete Renderer Frame",
-                        RendererTimingStage::CompleteFrame);
-                    ImGui::EndTable();
-                }
                 break;
             case StatisticsEffect::Multisample:
                 if (beginStatisticsTable(
@@ -18960,15 +18855,6 @@ private:
                 timings->dispatchCount > 0u &&
                 timings->available;
         }
-        if (m_ui.AntiAliasing.cmaa2.enabled)
-        {
-            if (const Cmaa2Timings* timings = m_app->GetCmaa2Timings())
-            {
-                snapshot.cmaa2Timings = *timings;
-                snapshot.hasCmaa2Timings = timings->available;
-            }
-        }
-
         // Keep a complete snapshot as the queue's atomic update unit. If a
         // future render path ever delays consumption, replace its stale pending
         // sample instead of replaying old statistics.
@@ -19023,10 +18909,8 @@ private:
 
         m_DisplayedVisibilityTimings = snapshot.visibilityTimings;
         m_DisplayedTemporalAATimings = snapshot.temporalAATimings;
-        m_DisplayedCmaa2Timings = snapshot.cmaa2Timings;
         m_HasVisibilityStatSnapshot = snapshot.hasVisibilityTimings;
         m_HasTemporalAAStatSnapshot = snapshot.hasTemporalAATimings;
-        m_HasCmaa2StatSnapshot = snapshot.hasCmaa2Timings;
     }
 
     bool DrawBoundedSliderFloat(
@@ -19673,11 +19557,9 @@ protected:
                     value.clear();
                 m_DisplayedVisibilityTimings = {};
                 m_DisplayedTemporalAATimings = {};
-                m_DisplayedCmaa2Timings = {};
                 m_HasAppliedStatSnapshot = false;
                 m_HasVisibilityStatSnapshot = false;
                 m_HasTemporalAAStatSnapshot = false;
-                m_HasCmaa2StatSnapshot = false;
                 m_SettingsAppearance = 0.f;
                 m_MaterialDrawerAppearance = 0.f;
                 m_SceneLoadCounterStart =
@@ -20722,8 +20604,8 @@ protected:
                 m_app->ResetImageBasedLightingHistory();
             }
             static constexpr char AccumulateSamplesTooltip[] =
-                "Average finite scene-linear samples while the camera, scene, "
-                "and lighting are still. Any change clears history.";
+                "Accumulate while still. Ray Marching "
+                "disables TAA jitter; Path Tracing Shared Primary can retain it.";
             static_assert(sizeof(AccumulateSamplesTooltip) - 1u <= 120u);
             ImGui::SetItemTooltip("%s", AccumulateSamplesTooltip);
             if (BeginAnimatedToggleRegion(
@@ -21269,6 +21151,8 @@ protected:
                 const bool ratioAvailable =
                     m_app->HasPrimaryDirectionalLight() &&
                     m_app->SupportsHeitzRatioEstimatorShadows();
+                const uint32_t receiverSampleCount =
+                    m_app->GetActiveRasterSampleCount();
                 const bool disableRatioEnable =
                     !ratioAvailable && !ratio.enabled;
                 if (disableRatioEnable)
@@ -21303,8 +21187,10 @@ protected:
                     }
                     ImGui::SetItemTooltip(
                         "Use the correlated material ratio estimate. Turn "
-                        "this off for one stochastic shadow ray suitable for "
-                        "denoising.");
+                        "this off for one stochastic shadow ray per active "
+                        "receiver. Multisample Adaptive can limit that work "
+                        "to the closest receiver. Only the single-sample "
+                        "signal is suitable for denoising.");
                     if (DrawPresetResetIcon(
                             "RatioEstimatorUseRatioEstimator",
                             ratio.useRatioEstimator !=
@@ -21315,15 +21201,42 @@ protected:
                         m_app->ResetImageBasedLightingHistory();
                     }
 
+                    const std::shared_ptr<DirectionalLight> primaryLight =
+                        m_app->GetPrimaryDirectionalLight();
+                    const float angularSize = primaryLight
+                        ? primaryLight->angularSize
+                        : 0.f;
+                    const bool stochasticSunExtent =
+                        std::clamp(angularSize, 0.f, 90.f) *
+                                0.0087266462599716478846f >
+                            1e-6f;
+                    const bool ratioEstimatorProducesAreaRatio =
+                        ratio.useRatioEstimator && !ratio.hardShadows &&
+                        stochasticSunExtent;
+                    const bool hitDistanceUnavailable =
+                        receiverSampleCount > 1u ||
+                        ratioEstimatorProducesAreaRatio;
+                    if (hitDistanceUnavailable)
+                        ImGui::BeginDisabled();
                     if (ImGui::Checkbox(
                             "Output Hit Distance##RatioEstimatorShadows",
                             &ratio.outputHitDistance))
                     {
                         m_app->ResetImageBasedLightingHistory();
                     }
-                    ImGui::SetItemTooltip(
-                        "Output the physical closest blocker distance required "
-                        "by shadow denoising. Disabled adds no distance output.");
+                    ImGui::SetItemTooltip(receiverSampleCount > 1u
+                        ? "A resolved MSAA pixel has no single matched "
+                          "physical blocker distance. The stored setting is "
+                          "inactive until single-sample rendering is restored."
+                        : ratioEstimatorProducesAreaRatio
+                            ? "The area-light ratio has no matched single "
+                              "blocker distance. The stored setting becomes "
+                              "active on the one-ray route."
+                            : "Output the physical closest blocker distance "
+                              "used by third-party SIGMA shadow denoising. "
+                              "Built-in shadow denoisers do not require it.");
+                    if (hitDistanceUnavailable)
+                        ImGui::EndDisabled();
                     if (DrawPresetResetIcon(
                             "RatioEstimatorOutputHitDistance",
                             ratio.outputHitDistance !=
@@ -21341,9 +21254,10 @@ protected:
                         m_app->ResetImageBasedLightingHistory();
                     }
                     ImGui::SetItemTooltip(
-                        "Trace one center ray; skip emitter sampling, material "
-                        "setup, and ratio evaluation. Angular Size is kept for "
-                        "soft mode.");
+                        "Trace one center ray per active receiver. The 1x path "
+                        "skips material setup; full per-sample MSAA response-"
+                        "weights the resolved result. Angular Size is kept "
+                        "for soft mode.");
                     if (DrawPresetResetIcon(
                             "RatioEstimatorHardShadows",
                             ratio.hardShadows !=
@@ -21353,14 +21267,9 @@ protected:
                         m_app->ResetImageBasedLightingHistory();
                     }
 
-                    const std::shared_ptr<DirectionalLight> primaryLight =
-                        m_app->GetPrimaryDirectionalLight();
-                    const float angularSize = primaryLight
-                        ? primaryLight->angularSize
-                        : 0.f;
                     const bool multipleSamplesEnabled =
                         ratio.useRatioEstimator &&
-                        !ratio.hardShadows && angularSize > 1e-4f;
+                        !ratio.hardShadows && stochasticSunExtent;
                     int sampleRateLog2 = multipleSamplesEnabled
                         ? ratio.sampleRateLog2
                         : HeitzRatioEstimatorMinimumSampleRateLog2;
@@ -21392,9 +21301,11 @@ protected:
                         }
                     }
                     ImGui::SetItemTooltip(
-                        "Choose 1 to 64 matched rays per pixel; all ratio "
-                        "samples run this frame. Stored while Ratio Estimator "
-                        "is off.");
+                        "Choose 1 to 64 matched emitter rays per active "
+                        "receiver. Worst-case work is MSAA samples times this "
+                        "value only while Multisample Adaptive Per-Sample "
+                        "Shadows is enabled. Stored while Ratio Estimator is "
+                        "off.");
                     if (DrawPresetResetIcon(
                             "RatioEstimatorShadowSamples",
                             ratio.sampleRateLog2 !=
@@ -21503,7 +21414,7 @@ protected:
                         ImGui::TextDisabled(
                             "Hard Shadows uses one center ray; soft settings are preserved.");
                     }
-                    else if (!(angularSize > 1e-4f))
+                    else if (!stochasticSunExtent)
                     {
                         ImGui::TextDisabled(
                             "Angular Size is 0 deg: this directional emitter has zero extent.");
@@ -22589,8 +22500,8 @@ protected:
         {
         const bool antiAliasingOpen = DrawCollapsingHeader(
             "Aliasing",
-            "Enable temporal, fast approximate, morphological, and "
-            "multisample techniques independently.");
+            "Enable temporal, fast approximate, and multisample techniques "
+            "independently.");
         if (antiAliasingOpen)
         {
             BeginDrawerBody("##AliasingBody", settingsControlWidth);
@@ -22854,9 +22765,9 @@ protected:
                     ImGui::EndCombo();
                 }
                 ImGui::SetItemTooltip(
-                    "Choose camera jitter. Sobol 32 uses fixed seed 43 and "
-                    "optimized toroidal spacing. Changes reset temporal "
-                    "history.");
+                    "Choose camera jitter. Halton 16 is the factory default; "
+                    "Sobol 32 uses fixed seed 43 and optimized toroidal "
+                    "spacing. Changes reset temporal history.");
                 if (DrawNestedDropdownResetIcon(
                         "TemporalJitterSequence",
                         aliasing.temporal.jitterSequence !=
@@ -22867,7 +22778,7 @@ protected:
                 }
 
                 static constexpr const char* DepthValidationLabels[] = {
-                    "Nearest Texel", "Four-Texel Footprint"
+                    "Stationary Bypass", "Legacy Four-Texel Footprint"
                 };
                 int depthValidation =
                     aliasing.temporal.nearestTexelDepth ? 0 : 1;
@@ -22885,8 +22796,10 @@ protected:
                         depthValidation == 0;
                 }
                 ImGui::SetItemTooltip(
-                    "Validate the nearest reprojected depth texel or the "
-                    "complete four-texel interpolation footprint.");
+                    "Keep center-owned stationary history phase stable, "
+                    "point-validate thin-coverage handoffs, and reject stale "
+                    "nearer moving depth; or use the legacy complete "
+                    "four-texel footprint.");
                 if (DrawNestedDropdownResetIcon(
                         "TemporalDepthValidation",
                         aliasing.temporal.nearestTexelDepth !=
@@ -22908,7 +22821,8 @@ protected:
                         resolvedAliasing.temporal.motionSource),
                     MotionSourceLabels,
                     static_cast<int>(std::size(MotionSourceLabels)),
-                    "Choose where motion is sampled for history reprojection.");
+                    "Choose where motion is sampled for history reprojection. "
+                    "Edge Dilation best preserves stationary thin coverage.");
 
                 static constexpr const char*
                     CurrentSampleLabels[] = {
@@ -23192,7 +23106,7 @@ protected:
                 "Enable##FastApproximate",
                 &aliasing.fastApproximate.enabled);
             ImGui::SetItemTooltip(
-                "Apply a fast post-tone-map edge filter before morphological AA.");
+                "Apply a fast post-tone-map edge filter.");
             if (DrawPresetResetIcon(
                     "FastApproximateEnabled",
                     aliasing.fastApproximate.enabled !=
@@ -23312,118 +23226,6 @@ protected:
             }
 
             if (BeginAnimatedTreeNode(
-                    "Conservative Morphological##Aliasing",
-                    ImGuiTreeNodeFlags_DefaultOpen,
-                    "Detect and smooth visible edge patterns in the current frame."))
-            {
-            ImGui::Checkbox(
-                "Enable##ConservativeMorphological",
-                &aliasing.cmaa2.enabled);
-            ImGui::SetItemTooltip(
-                "Apply conservative morphological edge smoothing after tone mapping.");
-            if (DrawPresetResetIcon(
-                    "MorphologicalEnabled",
-                    aliasing.cmaa2.enabled !=
-                        aliasingDefaults.cmaa2.enabled))
-            {
-                aliasing.cmaa2.enabled = aliasingDefaults.cmaa2.enabled;
-            }
-            if (BeginAnimatedToggleRegion(
-                    "##ConservativeMorphologicalControls",
-                    aliasing.cmaa2.enabled))
-            {
-            const bool cmaa2QualityCustom =
-                !MatchesCmaa2QualityPreset(aliasing.cmaa2);
-            const auto applyCmaa2QualityPreset =
-                [settings = &aliasing.cmaa2](AntiAliasingQuality quality)
-                {
-                    ApplyCmaa2QualityPreset(*settings, quality);
-                };
-            drawPresetEnum(
-                "Quality##ConservativeMorphological",
-                aliasing.cmaa2.quality,
-                QualityLabels,
-                static_cast<int>(std::size(QualityLabels)),
-                cmaa2QualityCustom,
-                applyCmaa2QualityPreset);
-            ImGui::SetItemTooltip(
-                "Choose CMAA2 Quality. Advanced changes append (Custom); the "
-                "arrow restores factory Quality and both controls.");
-            if (DrawPresetResetIcon(
-                    "MorphologicalQuality",
-                    aliasing.cmaa2.quality !=
-                        aliasingDefaults.cmaa2.quality ||
-                    cmaa2QualityCustom))
-            {
-                applyCmaa2QualityPreset(
-                    aliasingDefaults.cmaa2.quality);
-            }
-
-            const Cmaa2QualityPreset cmaa2Preset =
-                GetCmaa2QualityPreset(aliasing.cmaa2.quality);
-            ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-            if (BeginAnimatedTreeNode(
-                    "Advanced##ConservativeMorphological",
-                    ImGuiTreeNodeFlags_None,
-                    "Tune edge detection. This section is closed by default."))
-            {
-                SetNextLabeledControlWidth(
-                    "Edge Threshold##ConservativeMorphological",
-                    settingsControlWidth);
-                DrawSliderFloat(
-                    "Edge Threshold##ConservativeMorphological",
-                    &aliasing.cmaa2.edgeThreshold,
-                    Cmaa2MinimumEdgeThreshold,
-                    Cmaa2MaximumEdgeThreshold,
-                    "%.3f");
-                ImGui::SetItemTooltip(
-                    "Lower values detect and smooth lower-contrast edges.");
-                if (DrawNestedDropdownResetIcon(
-                        "MorphologicalEdgeThreshold",
-                        aliasing.cmaa2.edgeThreshold !=
-                            cmaa2Preset.edgeThreshold))
-                {
-                    aliasing.cmaa2.edgeThreshold =
-                        cmaa2Preset.edgeThreshold;
-                }
-
-                static constexpr const char* DetectorLabels[] = {
-                    "Luma", "Full Color"
-                };
-                int detector = std::clamp(
-                    static_cast<int>(aliasing.cmaa2.detector),
-                    0,
-                    static_cast<int>(std::size(DetectorLabels)) - 1);
-                SetNextLabeledControlWidth(
-                    "Detector##ConservativeMorphological",
-                    settingsControlWidth);
-                if (ImGui::Combo(
-                        "Detector##ConservativeMorphological",
-                        &detector,
-                        DetectorLabels,
-                        static_cast<int>(std::size(DetectorLabels))))
-                {
-                    aliasing.cmaa2.detector =
-                        static_cast<Cmaa2EdgeDetector>(detector);
-                }
-                ImGui::SetItemTooltip(
-                    "Use the faster luma detector or full-color detection "
-                    "that also catches isoluminant chromatic edges.");
-                if (DrawNestedDropdownResetIcon(
-                        "MorphologicalDetector",
-                        aliasing.cmaa2.detector !=
-                            cmaa2Preset.detector))
-                {
-                    aliasing.cmaa2.detector = cmaa2Preset.detector;
-                }
-            EndAnimatedTreeNode();
-            }
-            EndAnimatedToggleRegion();
-            }
-            EndAnimatedTreeNode();
-            }
-
-            if (BeginAnimatedTreeNode(
                     "Multisample Adaptive##Aliasing",
                     ImGuiTreeNodeFlags_DefaultOpen,
                     "Render multiple coverage samples for each pixel."))
@@ -23476,7 +23278,8 @@ protected:
             if (BeginAnimatedTreeNode(
                     "Advanced##MultisampleAdaptive",
                     ImGuiTreeNodeFlags_None,
-                    "Choose the raster sample count. This section is closed by default."))
+                    "Choose the raster sample count and shadow sampling policy. "
+                    "This section is closed by default."))
             {
             static constexpr uint32_t SampleCounts[] = {
                 2u, 4u, 8u, 16u
@@ -23512,6 +23315,24 @@ protected:
             {
                 aliasing.msaa.sampleCount =
                     multisamplePresetSamples;
+            }
+            ImGui::Checkbox(
+                "Per-Sample Shadows##MultisampleAdaptive",
+                &aliasing.msaa.perSampleRayTracedShadows);
+            ImGui::SetItemTooltip(
+                "Trace directional ray-traced shadows for every covered MSAA "
+                "sample. Disable to trace only the closest covered sample and "
+                "reuse its shadow across the pixel. This reduces ray queries "
+                "but can alias where multiple surfaces share a pixel.");
+            if (DrawNestedDropdownResetIcon(
+                    "MultisamplePerSampleShadows",
+                    aliasing.msaa.perSampleRayTracedShadows !=
+                        aliasingDefaults.msaa
+                            .perSampleRayTracedShadows))
+            {
+                aliasing.msaa.perSampleRayTracedShadows =
+                    aliasingDefaults.msaa
+                        .perSampleRayTracedShadows;
             }
             EndAnimatedTreeNode();
             }
@@ -25272,10 +25093,6 @@ protected:
                 m_app->HasPrimaryDirectionalLight();
             const bool rayTracedShadowHardwareAvailable =
                 m_app->HasHeitzRatioEstimatorHardwareSupport();
-            const bool rayTracedShadowsAvailable =
-                directionalVisibilityAvailable &&
-                m_app->SupportsHeitzRatioEstimatorShadows();
-
             if (!directionalVisibilityAvailable)
             {
                 ImGui::TextDisabled(
@@ -25286,11 +25103,15 @@ protected:
                 ImGui::TextDisabled(
                     "Ray traced shadows require DXR 1.1 support.");
             }
-            else if (!rayTracedShadowsAvailable)
+            else if (m_app->GetActiveRasterSampleCount() > 1u)
             {
                 ImGui::TextDisabled(
-                    "Ray traced shadows require single sample "
-                    "rendering; disable MSAA to use it.");
+                    m_ui.AntiAliasing.msaa.perSampleRayTracedShadows
+                        ? "MSAA shadows evaluate every covered sample. Hit "
+                          "distance and sun denoising are unavailable in this mode."
+                        : "MSAA shadows reuse the closest covered sample. This "
+                          "saves rays with a mixed-surface quality tradeoff; "
+                          "hit distance and sun denoising remain unavailable.");
             }
 
             drawRatioEstimatorShadowControls();

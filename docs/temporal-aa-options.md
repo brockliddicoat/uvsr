@@ -2,22 +2,20 @@
 
 ## Independent Techniques
 
-The **Aliasing** drawer exposes four animated, independently collapsible,
+The **Aliasing** drawer exposes three animated, independently collapsible,
 default-off techniques:
 
 - **Temporal Reconstructive** performs long-term temporal reconstruction in
   scene-linear RGB.
 - **Fast Approximate** adapts Google Filament's FXAA implementation for
   current-frame edge smoothing after tone mapping.
-- **Conservative Morphological** performs conservative morphological
-  anti-aliasing after tone mapping.
 - **Multisample Adaptive** preserves 2x, 4x, 8x, or 16x G-buffer samples
   through deferred material decode and lighting before the high-dynamic-range
   resolve.
 
 The controls are not a mutually exclusive method dropdown. Any combination is
-valid. The deterministic order is MSAA resolve, TAA, tone mapping, Fast
-Approximate AA, then CMAA2. All four disabled is also a supported configuration.
+valid. The deterministic order is MSAA resolve, TAA, tone mapping, then Fast
+Approximate AA. All three disabled is also a supported configuration.
 Every technique shows a Low, Medium, High, or Ultra **Quality** selector while
 enabled, followed by an animated **Advanced** disclosure that starts collapsed.
 Disabling a technique preserves its stored values.
@@ -42,8 +40,8 @@ pinned revision `47c86eec22e56d75897e16651eb4d2abd64fc29a`:
 
 - **Rotated Grid 4**;
 - **Uniform Helix 4**;
-- **Halton 8**, the UVSR factory default;
-- **Halton 16**; and
+- **Halton 8**;
+- **Halton 16**, the UVSR factory default; and
 - **Halton 32**.
 
 The Halton choices use Filament's exact shared sequence, including its 409-entry
@@ -74,30 +72,44 @@ the
 and [pinned author code](https://github.com/Andrew-Helmer/stochastic-generation/tree/f90b115806675035c8c727bab4575ca5ba1760b6).
 
 Jitter Sequence remains independent from the Quality and Cost recipes. Its
-reset returns to Halton 8. The shorter cycle covers its complete distribution
-sooner after a reset and during short stationary runs. Its tradeoff is eight
-unique subpixel locations instead of sixteen before repetition, which can leave
-more periodic correlation or slightly less long-run edge diversity than Halton
-16 in difficult stationary scenes. A live sequence
-change invalidates temporal history, clears the previous-view jitter basis,
-and restarts phase zero so samples from two distributions never share one
-accumulated history.
+reset returns to Halton 16, restoring sixteen unique subpixel locations before
+repetition for longer edge diversity. Halton 8 remains available when a shorter
+cycle is preferred, with the tradeoff of more periodic correlation on difficult
+stationary outlines. A live sequence change invalidates temporal history,
+clears the previous-view jitter basis, and restarts phase zero so samples from
+two distributions never share one accumulated history.
 
 ## Advanced Temporal Controls
 
 Advanced begins directly with:
 
 - **Jitter Sequence**, with all six patterns described above;
-- **Depth Validation**, with Nearest Texel and Four-Texel Footprint choices;
+- **Depth Validation**, with Stationary Bypass and Legacy Four-Texel Footprint
+  choices;
 - motion source;
 - current-sample reconstruction;
 - history filter and rectification;
 - history frames and strength.
 
-Nearest Texel performs one previous-depth load for the reprojected sample.
-Four-Texel Footprint, the factory default, validates the complete bilinear
-support. Both choices validate nominally stationary pixels; neither grants
-unconditional history acceptance at a jittering silhouette.
+Stationary Bypass is the factory default. It keeps center-owned stationary
+history on the phase-invariant resolved-color grid instead of testing the raw
+previous-depth grid at a different projection-jitter phase. Center and selected
+XY motion must both be at most 0.01 pixel and the device-depth delta must be at
+most `1e-6`. Center-First Edge Dilation normally borrows only the foreground XY
+reprojection and retains center depth, Z delta, validity, and output ownership.
+When projection jitter clears the center of a thin stationary feature exactly
+to background, it may instead hand coverage to the nearest stationary cross
+neighbor. That handoff never receives the unconditional stationary bypass: it
+must point-validate the neighbor's expected depth at the neighbor's own prior
+raw-depth coordinate, while current color and output depth remain center-owned.
+
+Moving and coverage-handoff samples reject a stale nearer prior surface with a
+one-sided linear-view-depth comparison. A farther sample is conservatively
+accepted so a harmless slope or subpixel ownership transition does not toggle
+history at the stationary threshold. Legacy Four-Texel Footprint remains an
+explicit comparison mode that validates the complete bilinear/Gather footprint
+and can reject stationary silhouette history as that raw footprint changes with
+the jitter phase.
 
 The default-closed Cost submenu comes last and contains:
 
@@ -130,9 +142,13 @@ Temporal Reconstructive preserves the stored configuration.
 TAA owns long-term image history only when Ray Marching **Accumulate Samples**
 is off. With that accumulator enabled, raw scene-linear samples are resolved
 before TAA and the TAA history/blend stage is bypassed, preventing one temporal
-estimator from averaging another. The selected jitter sequence may still
-diversify raw raster samples. Path Tracing resolves TAA off and owns its own
-progressive sample history.
+estimator from averaging another. Raster TAA and its camera jitter both resolve
+inactive in this mode, so a camera-driven accumulation reset cannot present a
+different raw subpixel phase on each frame. The stored TAA controls are restored
+when Ray Marching accumulation is disabled. Path Tracing accumulation resolves
+TAA off and owns its own progressive sample history, including its explicit
+Shared Primary coverage-jitter exception. With accumulation off, Shared Primary
+can provide the depth and motion needed for ordinary TAA.
 
 The default TAA blend operates directly in scene-linear RGB. The optional
 luminance-compressed domain remains an Advanced cost policy, but it is not the
@@ -141,8 +157,8 @@ a long history and reduce contrast after inversion.
 
 Effective image-policy, format, render-size, sample-topology, or
 camera-discontinuity changes reset TAA history. A live Jitter Sequence change
-also resets history and its phase. Fast-Approximate-only and CMAA2-only changes
-do not. MSAA topology changes rebuild the relevant render targets and
+also resets history and its phase. Fast-Approximate-only changes do not. MSAA
+topology changes rebuild the relevant render targets and
 invalidate history through the same image-key contract.
 
 Robust history uses RGBA16F color and R32 depth. Compact history uses
@@ -186,17 +202,6 @@ recorded in `legal/documentation/google-filament-fxaa.md`. The runtime
 package includes that attribution plus the shared Apache 2.0 and BSD 2-Clause
 license texts.
 
-## CMAA2 Contract
-
-CMAA2 consumes the display-linear, single-sample output. Its visible Quality
-recipes reproduce Intel's thresholds: Low 0.15, Medium 0.10, High 0.07, and
-Ultra 0.05. Low through High use the Luma detector; Ultra uses Full Color.
-Advanced exposes the continuous **Edge Threshold** and **Detector** controls.
-The threshold is uploaded through a runtime constant buffer, while only the two
-detectors compile as edge-stage permutations. The other three CMAA2 stages are
-shared. HDR range support remains fixed off; the retired HDR-CMAA2 and static
-threshold axes are not part of the runtime package.
-
 ## MSAA Contract
 
 MSAA is part of deferred PBR rather than a separate forward path. Every sample
@@ -205,6 +210,21 @@ the active adapter and reports a fallback when a requested sample count is not
 supported by all required formats. Multisample Adaptive Quality maps Low,
 Medium, High, and Ultra to 2x, 4x, 8x, and 16x respectively. Direct Samples
 selection remains under the technique's default-collapsed Advanced disclosure.
+
+Advanced also exposes **Per-Sample Shadows**, which defaults on and applies only
+to the directional ray-traced sun producer. On preserves the exact current
+MSAA policy: every valid covered receiver gets independent shadow evidence.
+Off selects the coherent closest reverse-Z receiver before tracing and reuses
+that receiver's total modulation across final MSAA lighting while routing its
+diffuse-only modulation to the screen-space GI source. This changes ray work
+from at most `covered samples * emitter samples` to `emitter samples`, or from
+one ray per covered sample to one ray in hard and non-ratio modes. It is an
+intentional performance approximation at mixed-surface or shadow-boundary
+pixels; one covered receiver and receivers sharing the same modulation retain
+the per-sample result. The switch is inert at 1x, does not affect sky or
+flashlight visibility, and does not make MSAA hit-distance output or any sun
+denoising available. Reapplying a Multisample Quality recipe restores the
+default-on policy.
 
 ## Command Interface
 
@@ -222,28 +242,33 @@ anti-aliasing.fxaa.quality
 anti-aliasing.fxaa.edge-sharpness
 anti-aliasing.fxaa.edge-threshold
 anti-aliasing.fxaa.minimum-edge-threshold
-anti-aliasing.cmaa2.enabled
-anti-aliasing.cmaa2.quality
-anti-aliasing.cmaa2.edge-threshold
-anti-aliasing.cmaa2.detector
 anti-aliasing.msaa.enabled
 anti-aliasing.msaa.quality
 anti-aliasing.msaa.samples
+anti-aliasing.msaa.per-sample-shadows
 ```
 
 Use Tab completion for the complete current catalog. Accepted image-changing
 mutations normalize the aggregate AA state and cross the renderer boundary at
 the same safe post-ImGui point as visible controls. The previous-depth command
-accepts `nearest-texel` or `four-texel-footprint`.
+accepts `nearest-texel` or `four-texel-footprint`; the retained
+`nearest-texel` token selects the Stationary Bypass plus moving-point policy for
+command compatibility.
 
 ## Validation Boundary
 
 Reference tests cover quality resolution, every Filament jitter sample,
 Sobol 32 prefix stratification and spacing, C++17 settings comparison,
-history keys and reset rules, all 16 independent enable combinations, reverse-Z
-footprints, stationary nearest-depth rejection in both normal and compact TAA
-shaders, motion validity, linear-RGB defaults, the Fast Approximate
+history keys and reset rules, all eight independent enable combinations,
+reverse-Z footprints, center-owned edge dilation, all sixteen default Halton
+phases at an interior and viewport-edge stationary silhouette, exact-background
+coverage handoff in all four cross directions, conservative moving-point depth,
+point-versus-Gather bounds, accumulation-owned raster-TAA suppression, motion
+validity, linear-RGB defaults, the Fast Approximate
 source/resource/provenance contract, retained shader axes, and the absence of
-resurrection/HDR-CMAA2 paths.
+resurrection paths. MSAA shadow-policy coverage also checks default-on preset
+ownership, closest-owner selection at 2x through 16x, single-covered parity,
+direct total-versus-diffuse output routing, failure-open behavior, and the
+one-receiver ray budget.
 Product validation still requires viewing each technique alone and the
 supported combined order on the exact candidate executable.

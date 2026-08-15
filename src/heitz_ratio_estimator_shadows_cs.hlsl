@@ -13,30 +13,119 @@
 #define OUTPUT_HIT_DISTANCE 0
 #endif
 
+#ifndef HEITZ_RASTER_SAMPLES
+#define HEITZ_RASTER_SAMPLES 1
+#endif
+
+#ifndef OUTPUT_SOURCE_MODULATION
+#define OUTPUT_SOURCE_MODULATION 0
+#endif
+
+#if OUTPUT_SOURCE_MODULATION && OUTPUT_HIT_DISTANCE
+#error Source modulation and hit distance are mutually exclusive outputs.
+#endif
+
 cbuffer c_HeitzShadows : register(b0)
 {
     HeitzRatioEstimatorShadowConstants g_Heitz;
 };
 
 RaytracingAccelerationStructure t_WorldBvh : register(t0);
+#if HEITZ_RASTER_SAMPLES > 1
+Texture2DMS<float, HEITZ_RASTER_SAMPLES> t_Depth : register(t1);
+Texture2DMS<float4, HEITZ_RASTER_SAMPLES>
+    t_GBufferDiffuse : register(t2);
+Texture2DMS<float4, HEITZ_RASTER_SAMPLES>
+    t_GBufferMaterial : register(t3);
+Texture2DMS<float4, HEITZ_RASTER_SAMPLES>
+    t_GBufferNormals : register(t4);
+Texture2DMS<float, HEITZ_RASTER_SAMPLES>
+    t_MaterialAmbientOcclusion : register(t5);
+#else
 Texture2D<float> t_Depth : register(t1);
 Texture2D<float4> t_GBufferDiffuse : register(t2);
 Texture2D<float4> t_GBufferMaterial : register(t3);
 Texture2D<float4> t_GBufferNormals : register(t4);
 Texture2D<float> t_MaterialAmbientOcclusion : register(t5);
+#endif
 Texture2DArray<float> t_Noise : register(t6);
+#if HEITZ_RASTER_SAMPLES > 1
+Texture2DMS<float4, HEITZ_RASTER_SAMPLES>
+    t_GBufferEmissive : register(t7);
+#else
 Texture2D<float4> t_GBufferEmissive : register(t7);
+#endif
 Texture2D<uint> t_AttemptMask : register(t8);
 
 VK_IMAGE_FORMAT("rgba16f")
 RWTexture2D<float4> u_Output : register(u0);
-#if OUTPUT_HIT_DISTANCE
+#if OUTPUT_SOURCE_MODULATION
+VK_IMAGE_FORMAT("rgba16f")
+RWTexture2D<float4> u_ClosestSourceOutput : register(u1);
+#elif OUTPUT_HIT_DISTANCE
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_HitDistance : register(u1);
 #endif
 
 static const float HeitzTwoPi = 6.28318530717958647692f;
 static const float HeitzHitDistanceMaximum = 65472.0f;
 static const float HeitzHitDistanceMiss = 65504.0f;
+
+float HeitzLoadDepth(int2 pixelPosition, uint receiverSampleIndex)
+{
+#if HEITZ_RASTER_SAMPLES > 1
+    return t_Depth.Load(pixelPosition, receiverSampleIndex);
+#else
+    return t_Depth[pixelPosition];
+#endif
+}
+
+float4 HeitzLoadDiffuse(int2 pixelPosition, uint receiverSampleIndex)
+{
+#if HEITZ_RASTER_SAMPLES > 1
+    return t_GBufferDiffuse.Load(pixelPosition, receiverSampleIndex);
+#else
+    return t_GBufferDiffuse[pixelPosition];
+#endif
+}
+
+float4 HeitzLoadMaterial(int2 pixelPosition, uint receiverSampleIndex)
+{
+#if HEITZ_RASTER_SAMPLES > 1
+    return t_GBufferMaterial.Load(pixelPosition, receiverSampleIndex);
+#else
+    return t_GBufferMaterial[pixelPosition];
+#endif
+}
+
+float4 HeitzLoadNormals(int2 pixelPosition, uint receiverSampleIndex)
+{
+#if HEITZ_RASTER_SAMPLES > 1
+    return t_GBufferNormals.Load(pixelPosition, receiverSampleIndex);
+#else
+    return t_GBufferNormals[pixelPosition];
+#endif
+}
+
+float HeitzLoadMaterialAmbientOcclusion(
+    int2 pixelPosition,
+    uint receiverSampleIndex)
+{
+#if HEITZ_RASTER_SAMPLES > 1
+    return t_MaterialAmbientOcclusion.Load(
+        pixelPosition, receiverSampleIndex);
+#else
+    return t_MaterialAmbientOcclusion[pixelPosition];
+#endif
+}
+
+float4 HeitzLoadEmissive(int2 pixelPosition, uint receiverSampleIndex)
+{
+#if HEITZ_RASTER_SAMPLES > 1
+    return t_GBufferEmissive.Load(pixelPosition, receiverSampleIndex);
+#else
+    return t_GBufferEmissive[pixelPosition];
+#endif
+}
 
 bool HeitzInViewport(uint2 dispatchPosition)
 {
@@ -243,13 +332,53 @@ bool HeitzTraceVisibility(
     return !hit;
 }
 
-float3 HeitzEvaluateNormalizedResponse(
+struct HeitzNormalizedResponse
+{
+    float3 diffuse;
+    float3 total;
+};
+
+float3 HeitzSanitizeNonnegativeResponse(float3 response)
+{
+    return float3(
+        isfinite(response.x) ? max(response.x, 0.0f) : 0.0f,
+        isfinite(response.y) ? max(response.y, 0.0f) : 0.0f,
+        isfinite(response.z) ? max(response.z, 0.0f) : 0.0f);
+}
+
+float HeitzResolveDeterministicRatioChannel(
+    float numerator,
+    float denominator)
+{
+    if (!isfinite(numerator) || !isfinite(denominator) ||
+        !(denominator > 0.0f))
+    {
+        return 1.0f;
+    }
+    return saturate(numerator / denominator);
+}
+
+float3 HeitzResolveDeterministicRatio(
+    float3 numerator,
+    float3 denominator)
+{
+    return float3(
+        HeitzResolveDeterministicRatioChannel(
+            numerator.x, denominator.x),
+        HeitzResolveDeterministicRatioChannel(
+            numerator.y, denominator.y),
+        HeitzResolveDeterministicRatioChannel(
+            numerator.z, denominator.z));
+}
+
+HeitzNormalizedResponse HeitzEvaluateNormalizedResponse(
     PbrPreparedMaterial material,
     PbrPreparedSurface surface,
     float3 directionToLight)
 {
+    HeitzNormalizedResponse response = (HeitzNormalizedResponse)0;
     if (!CanEvaluatePbrDirectSurfacePrepared(surface, directionToLight))
-        return 0.0f;
+        return response;
 
     PbrBsdfEvaluation bsdf = EvaluateBsdfPrepared(
         material,
@@ -260,8 +389,11 @@ float3 HeitzEvaluateNormalizedResponse(
         directionToLight));
     // Uniform-cone sampling has one constant PDF. Its reciprocal cancels in
     // S_N / U_N, so the normalized response retains a stable epsilon scale.
-    float3 response = max(bsdf.total, 0.0f) * cosineTerm;
-    return any(!isfinite(response)) ? 0.0f : response;
+    response.diffuse = HeitzSanitizeNonnegativeResponse(
+        bsdf.diffuse * cosineTerm);
+    response.total = HeitzSanitizeNonnegativeResponse(
+        bsdf.total * cosineTerm);
+    return response;
 }
 
 [numthreads(8, 8, 1)]
@@ -283,51 +415,67 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
         g_Heitz.sampleSequenceMode,
         attemptToken,
         g_Heitz.sampleSequencePhase);
-    const float4 normalChannels = t_GBufferNormals[pixelPosition];
-    if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
-    {
-        u_Output[pixelPosition] = 1.0f;
-#if OUTPUT_HIT_DISTANCE
-        u_HitDistance[pixelPosition] = 0.0f;
-#endif
-        return;
-    }
-
-    // The scalar path deliberately stops after the minimum surface data needed
-    // for a robust center ray. Diffuse, emissive, AO, material preparation,
-    // emitter sampling, and ratio evaluation stay entirely in the soft path.
-    const float4 packedMaterial = t_GBufferMaterial[pixelPosition];
-    const PbrGBufferSurfaceNormals surfaceNormals =
-        DecodePbrGBufferSurfaceNormals(normalChannels, packedMaterial);
-    const float depth = t_Depth[pixelPosition];
     const float2 pixelCenter = float2(pixelPosition) + 0.5f;
-    const float3 surfacePosition = ReconstructWorldPosition(
-        g_Heitz.view,
-        pixelCenter,
-        depth);
-    if (!all(isfinite(surfacePosition)))
-    {
-        u_Output[pixelPosition] = 1.0f;
-#if OUTPUT_HIT_DISTANCE
-        u_HitDistance[pixelPosition] = 0.0f;
-#endif
-        return;
-    }
-    const float3 viewIncident = GetIncidentVector(
-        g_Heitz.view.cameraDirectionOrPosition,
-        surfacePosition);
-    const float3 viewDirection = -viewIncident;
-    PbrSurfaceInteraction surface;
-    surface.position = surfacePosition;
-    surface.shadingNormal = surfaceNormals.shadingNormal;
-    surface.geometricNormal = surfaceNormals.geometricNormal;
-    surface.viewDirection = viewDirection;
-    const PbrPreparedSurface preparedSurface = PreparePbrSurface(surface);
+    const bool useRatioEstimator =
+        g_Heitz.hardShadows == 0u &&
+        g_Heitz.useRatioEstimator != 0u;
+    const uint emitterSampleCount = useRatioEstimator
+        ? max(g_Heitz.sampleCount, 1u)
+        : 1u;
+    const bool traceAllMsaaReceivers =
+        HEITZ_RASTER_SAMPLES == 1 ||
+        g_Heitz.traceAllMsaaReceivers != 0u;
 
+#if HEITZ_RASTER_SAMPLES == 1
+    // Preserve the optimized 1x scalar route. MSAA needs material response
+    // weighting across receivers, but one receiver's scalar visibility
+    // factors exactly without those additional G-buffer loads.
     [branch]
-    if (g_Heitz.hardShadows != 0u ||
-        g_Heitz.useRatioEstimator == 0u)
+    if (!useRatioEstimator)
     {
+        const float4 normalChannels = HeitzLoadNormals(pixelPosition, 0u);
+        const float depth = HeitzLoadDepth(pixelPosition, 0u);
+        if (!isfinite(depth) || depth <= 0.0f ||
+            !(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
+        {
+            u_Output[pixelPosition] = 1.0f;
+#if OUTPUT_SOURCE_MODULATION
+            u_ClosestSourceOutput[pixelPosition] = 1.0f;
+#endif
+#if OUTPUT_HIT_DISTANCE
+            u_HitDistance[pixelPosition] = 0.0f;
+#endif
+            return;
+        }
+        const float4 packedMaterial = HeitzLoadMaterial(pixelPosition, 0u);
+        const PbrGBufferSurfaceNormals surfaceNormals =
+            DecodePbrGBufferSurfaceNormals(normalChannels, packedMaterial);
+        const float3 surfacePosition = ReconstructWorldPosition(
+            g_Heitz.view,
+            pixelCenter,
+            depth);
+        if (!all(isfinite(surfacePosition)))
+        {
+            u_Output[pixelPosition] = 1.0f;
+#if OUTPUT_SOURCE_MODULATION
+            u_ClosestSourceOutput[pixelPosition] = 1.0f;
+#endif
+#if OUTPUT_HIT_DISTANCE
+            u_HitDistance[pixelPosition] = 0.0f;
+#endif
+            return;
+        }
+        const float3 viewIncident = GetIncidentVector(
+            g_Heitz.view.cameraDirectionOrPosition,
+            surfacePosition);
+        const float3 viewDirection = -viewIncident;
+        PbrSurfaceInteraction surface;
+        surface.position = surfacePosition;
+        surface.shadingNormal = surfaceNormals.shadingNormal;
+        surface.geometricNormal = surfaceNormals.geometricNormal;
+        surface.viewDirection = viewDirection;
+        const PbrPreparedSurface preparedSurface =
+            PreparePbrSurface(surface);
         const float3 directionToLight = g_Heitz.hardShadows != 0u
             ? HeitzLightCenterDirection()
             : HeitzSampleDirectionalEmitter(
@@ -339,9 +487,10 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
                 preparedSurface,
                 directionToLight))
         {
-            // Deferred direct lighting is exactly zero for this light/surface,
-            // so a visibility query cannot affect the final result.
             u_Output[pixelPosition] = 1.0f;
+#if OUTPUT_SOURCE_MODULATION
+            u_ClosestSourceOutput[pixelPosition] = 1.0f;
+#endif
 #if OUTPUT_HIT_DISTANCE
             u_HitDistance[pixelPosition] = 0.0f;
 #endif
@@ -359,75 +508,283 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
             directionToLight,
             hitDistance));
         u_Output[pixelPosition] = float4(visible.xxx, 1.0f);
+#if OUTPUT_SOURCE_MODULATION
+        u_ClosestSourceOutput[pixelPosition] =
+            float4(visible.xxx, 1.0f);
+#endif
 #if OUTPUT_HIT_DISTANCE
         u_HitDistance[pixelPosition] = hitDistance;
 #endif
         return;
     }
+#endif
 
-    float4 channels[4];
-    channels[0] = t_GBufferDiffuse[pixelPosition];
-    channels[1] = packedMaterial;
-    channels[2] = normalChannels;
-    channels[3] = t_GBufferEmissive[pixelPosition];
-    const PbrGBufferData gbuffer = DecodePbrGBuffer(
-        channels,
-        t_MaterialAmbientOcclusion[pixelPosition]);
-
-    const PbrPreparedMaterial preparedMaterial =
-        PreparePbrMaterial(gbuffer.material);
-    const float3 rayOrigin = HeitzPrepareRayOrigin(
-        surfacePosition,
-        preparedSurface.geometricNormal,
-        viewDirection,
-        pixelCenter,
-        depth);
-
-    const uint sampleCount = max(g_Heitz.sampleCount, 1u);
-    float3 currentNumerator = 0.0f;
-    float3 currentDenominator = 0.0f;
+    float3 resolvedNumerator = 0.0f;
+    float3 resolvedDenominator = 0.0f;
+    float3 closestTotalModulation = 1.0f;
+    float3 closestSourceModulation = 1.0f;
     float nearestHitDistance = HeitzHitDistanceMiss;
     uint tracedRayCount = 0u;
-    [loop]
-    for (uint sampleIndex = 0u;
-        sampleIndex < sampleCount;
-        ++sampleIndex)
+    uint validReceiverCount = 0u;
+    bool foundClosestReceiver = false;
+    float closestReceiverDepth = 0.0f;
+#if HEITZ_RASTER_SAMPLES > 1
+    bool selectedClosestReceiver = false;
+    uint selectedClosestReceiverIndex = 0u;
+    if (!traceAllMsaaReceivers)
     {
-        const float3 directionToLight = HeitzSampleDirectionalEmitter(
-            HeitzSample2D(
-                dispatchPosition,
-                sampleIndex,
-                sampleSequencePhase));
-        const float3 contribution = HeitzEvaluateNormalizedResponse(
-            preparedMaterial,
-            preparedSurface,
-            directionToLight);
-        if (!any(contribution > 0.0f))
+        // Determine the final coherent owner before issuing any ray query.
+        // Tracing successive closest-so-far receivers would make the budget
+        // data-dependent and could publish a different GI owner.
+        [unroll]
+        for (uint receiverSampleIndex = 0u;
+            receiverSampleIndex < HEITZ_RASTER_SAMPLES;
+            ++receiverSampleIndex)
+        {
+            const float4 normalChannels = HeitzLoadNormals(
+                pixelPosition, receiverSampleIndex);
+            const float depth = HeitzLoadDepth(
+                pixelPosition, receiverSampleIndex);
+            if (!isfinite(depth) || depth <= 0.0f ||
+                !(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
+            {
+                continue;
+            }
+            if (!selectedClosestReceiver ||
+                depth > closestReceiverDepth)
+            {
+                selectedClosestReceiver = true;
+                selectedClosestReceiverIndex = receiverSampleIndex;
+                closestReceiverDepth = depth;
+            }
+        }
+    }
+#endif
+    [loop]
+    for (uint receiverSampleIndex = 0u;
+        receiverSampleIndex < HEITZ_RASTER_SAMPLES;
+        ++receiverSampleIndex)
+    {
+#if HEITZ_RASTER_SAMPLES > 1
+        if (!traceAllMsaaReceivers &&
+            (!selectedClosestReceiver ||
+                receiverSampleIndex != selectedClosestReceiverIndex))
+        {
+            continue;
+        }
+#endif
+        const float4 normalChannels = HeitzLoadNormals(
+            pixelPosition, receiverSampleIndex);
+        const float depth = HeitzLoadDepth(
+            pixelPosition, receiverSampleIndex);
+        if (!isfinite(depth) || depth <= 0.0f ||
+            !(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
             continue;
 
-        // The exact same direction, proposal normalization, BRDF, cosine, and
-        // validity decision feed both estimates. Binary visibility is their
-        // only difference.
-        currentDenominator += contribution;
-        float hitDistance;
-        if (HeitzTraceVisibility(
-                rayOrigin, directionToLight, hitDistance))
-            currentNumerator += contribution;
-        nearestHitDistance = min(nearestHitDistance, hitDistance);
-        ++tracedRayCount;
+        const bool ownsClosestSource = !foundClosestReceiver ||
+            depth > closestReceiverDepth;
+        if (ownsClosestSource)
+        {
+            foundClosestReceiver = true;
+            closestReceiverDepth = depth;
+            // The coherent closest-surface resolve owns this raw depth and
+            // normal even if later reconstruction fails. Never retain an
+            // older receiver's shadow factor for that newer owner.
+            closestSourceModulation = 1.0f;
+        }
+
+        const float4 packedMaterial = HeitzLoadMaterial(
+            pixelPosition, receiverSampleIndex);
+        const PbrGBufferSurfaceNormals surfaceNormals =
+            DecodePbrGBufferSurfaceNormals(
+                normalChannels, packedMaterial);
+        const float3 surfacePosition = ReconstructWorldPosition(
+            g_Heitz.view,
+            pixelCenter,
+            depth);
+        if (!all(isfinite(surfacePosition)))
+            continue;
+
+        const float3 viewIncident = GetIncidentVector(
+            g_Heitz.view.cameraDirectionOrPosition,
+            surfacePosition);
+        const float3 viewDirection = -viewIncident;
+        PbrSurfaceInteraction surface;
+        surface.position = surfacePosition;
+        surface.shadingNormal = surfaceNormals.shadingNormal;
+        surface.geometricNormal = surfaceNormals.geometricNormal;
+        surface.viewDirection = viewDirection;
+        const PbrPreparedSurface preparedSurface =
+            PreparePbrSurface(surface);
+
+        float4 channels[4];
+        channels[0] = HeitzLoadDiffuse(
+            pixelPosition, receiverSampleIndex);
+        channels[1] = packedMaterial;
+        channels[2] = normalChannels;
+        channels[3] = HeitzLoadEmissive(
+            pixelPosition, receiverSampleIndex);
+        const PbrGBufferData gbuffer = DecodePbrGBuffer(
+            channels,
+            HeitzLoadMaterialAmbientOcclusion(
+                pixelPosition, receiverSampleIndex));
+        const PbrPreparedMaterial preparedMaterial =
+            PreparePbrMaterial(gbuffer.material);
+        const float3 rayOrigin = HeitzPrepareRayOrigin(
+            surfacePosition,
+            preparedSurface.geometricNormal,
+            viewDirection,
+            pixelCenter,
+            depth);
+        ++validReceiverCount;
+
+        const HeitzNormalizedResponse centerResponse =
+            HeitzEvaluateNormalizedResponse(
+                preparedMaterial,
+                preparedSurface,
+                HeitzLightCenterDirection());
+        float3 receiverTotalNumerator = 0.0f;
+        float3 receiverTotalDenominator = 0.0f;
+        float3 receiverDiffuseNumerator = 0.0f;
+        float3 receiverDiffuseDenominator = 0.0f;
+        float3 receiverTotalModulation = 1.0f;
+        float3 receiverDiffuseModulation = 1.0f;
+
+        if (!useRatioEstimator)
+        {
+            if (any(centerResponse.total > 0.0f))
+            {
+                const float3 directionToLight =
+                    g_Heitz.hardShadows != 0u
+                        ? HeitzLightCenterDirection()
+                        : HeitzSampleDirectionalEmitter(
+                            HeitzSample2D(
+                                dispatchPosition,
+                                receiverSampleIndex,
+                                sampleSequencePhase));
+                bool visible = true;
+                if (CanEvaluatePbrDirectSurfacePrepared(
+                        preparedSurface,
+                        directionToLight))
+                {
+                    float hitDistance;
+                    visible = HeitzTraceVisibility(
+                        rayOrigin, directionToLight, hitDistance);
+                    nearestHitDistance = min(
+                        nearestHitDistance, hitDistance);
+                    ++tracedRayCount;
+                }
+                const float visibility = visible ? 1.0f : 0.0f;
+                receiverTotalModulation = visibility;
+                receiverDiffuseModulation = receiverTotalModulation;
+            }
+        }
+        else
+        {
+            [loop]
+            for (uint emitterSampleIndex = 0u;
+                emitterSampleIndex < emitterSampleCount;
+                ++emitterSampleIndex)
+            {
+                const uint sequenceIndex =
+                    receiverSampleIndex * emitterSampleCount +
+                    emitterSampleIndex;
+                const float3 directionToLight =
+                    HeitzSampleDirectionalEmitter(
+                        HeitzSample2D(
+                            dispatchPosition,
+                            sequenceIndex,
+                            sampleSequencePhase));
+                const HeitzNormalizedResponse contribution =
+                    HeitzEvaluateNormalizedResponse(
+                        preparedMaterial,
+                        preparedSurface,
+                        directionToLight);
+                if (!any(contribution.total > 0.0f))
+                    continue;
+
+                // Each receiver owns a matched S/U estimator. Visibility is
+                // the only difference between its numerator and denominator.
+                receiverTotalDenominator += contribution.total;
+                receiverDiffuseDenominator += contribution.diffuse;
+                float hitDistance;
+                if (HeitzTraceVisibility(
+                        rayOrigin, directionToLight, hitDistance))
+                {
+                    receiverTotalNumerator += contribution.total;
+                    receiverDiffuseNumerator += contribution.diffuse;
+                }
+                nearestHitDistance = min(
+                    nearestHitDistance, hitDistance);
+                ++tracedRayCount;
+            }
+
+            const float inverseEmitterSampleCount =
+                rcp(float(emitterSampleCount));
+            receiverTotalModulation = saturate(
+                ResolveCorrelatedRatio(
+                    receiverTotalNumerator * inverseEmitterSampleCount,
+                    receiverTotalDenominator * inverseEmitterSampleCount,
+                    g_Heitz.denominatorEpsilon));
+            receiverDiffuseModulation = saturate(
+                ResolveCorrelatedRatio(
+                    receiverDiffuseNumerator * inverseEmitterSampleCount,
+                    receiverDiffuseDenominator * inverseEmitterSampleCount,
+                    g_Heitz.denominatorEpsilon));
+        }
+
+        // Deferred PBR evaluates the analytic sun at its center direction.
+        // Weight independent receiver ratios by that same response so one
+        // pixel modulation factors exactly through the linear MSAA resolve.
+        resolvedNumerator +=
+            centerResponse.total * receiverTotalModulation;
+        resolvedDenominator += centerResponse.total;
+        if (ownsClosestSource)
+        {
+            closestTotalModulation = receiverTotalModulation;
+            closestSourceModulation = receiverDiffuseModulation;
+        }
     }
 
-    // Normalize both matched current-frame sums before the guarded division.
-    // The ratio is homogeneous, but its fail-open epsilon is deliberately not,
-    // so retaining means keeps the epsilon independent of sample count.
-    const float inverseSampleCount = rcp(float(sampleCount));
-    const float3 numeratorMean = currentNumerator * inverseSampleCount;
-    const float3 denominatorMean = currentDenominator * inverseSampleCount;
-    const float3 modulation = saturate(ResolveCorrelatedRatio(
-        numeratorMean,
-        denominatorMean,
-        g_Heitz.denominatorEpsilon));
+    if (validReceiverCount == 0u)
+    {
+        u_Output[pixelPosition] = 1.0f;
+#if OUTPUT_SOURCE_MODULATION
+        u_ClosestSourceOutput[pixelPosition] = 1.0f;
+#endif
+#if OUTPUT_HIT_DISTANCE
+        u_HitDistance[pixelPosition] = 0.0f;
+#endif
+        return;
+    }
+
+#if HEITZ_RASTER_SAMPLES > 1
+    if (!traceAllMsaaReceivers)
+    {
+        // This is the deliberate lower-cost approximation: broadcast the
+        // selected owner's total modulation to final MSAA lighting while the
+        // auxiliary GI source receives that owner's diffuse-only modulation.
+        // Do not response-weight or coverage-scale either factor again.
+        u_Output[pixelPosition] = float4(
+            closestTotalModulation, 1.0f);
+        u_ClosestSourceOutput[pixelPosition] = float4(
+            closestSourceModulation, 1.0f);
+        return;
+    }
+#endif
+
+    // This is a deterministic factorization of deferred PBR's analytic
+    // response, not another Monte Carlo estimate. A second stochastic epsilon
+    // would turn low-energy shadowed channels white as valid receiver count
+    // grows, so only zero or non-finite analytic denominators fail open.
+    const float3 modulation = HeitzResolveDeterministicRatio(
+        resolvedNumerator,
+        resolvedDenominator);
     u_Output[pixelPosition] = float4(modulation, 1.0f);
+#if OUTPUT_SOURCE_MODULATION
+    u_ClosestSourceOutput[pixelPosition] = float4(
+        closestSourceModulation, 1.0f);
+#endif
 #if OUTPUT_HIT_DISTANCE
     u_HitDistance[pixelPosition] = tracedRayCount != 0u
         ? nearestHitDistance

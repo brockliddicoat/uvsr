@@ -406,15 +406,15 @@ namespace
         // A fixed interval that is a multiple of the default Halton period
         // must not lock a
         // pixel to one projection-jitter location. Successful-count phase
-        // advancement produces an odd revisit stride and covers all 8 phases
+        // advancement produces an odd revisit stride and covers all 16 phases
         // while never leaving more than 16 committed cycles between samples.
-        std::array<bool, 8> visitedJitterPhases{};
+        std::array<bool, 16> visitedJitterPhases{};
         uint32_t successfulCount = 16u;
         uint64_t previousUpdate = 0u;
         bool hasPreviousUpdate = false;
         uint32_t updateCount = 0u;
         for (uint64_t serial = 0u;
-            serial < 512u && updateCount < 8u;
+            serial < 512u && updateCount < 16u;
             ++serial)
         {
             if (!IsSampleAccumulationUpdateScheduled(
@@ -427,15 +427,107 @@ namespace
             }
             if (hasPreviousUpdate)
                 assert(serial - previousUpdate <= 16u);
-            visitedJitterPhases[serial % 8u] = true;
+            visitedJitterPhases[serial % 16u] = true;
             previousUpdate = serial;
             hasPreviousUpdate = true;
             ++successfulCount;
             ++updateCount;
         }
-        assert(updateCount == 8u);
+        assert(updateCount == 16u);
         for (const bool visited : visitedJitterPhases)
             assert(visited);
+
+        assert(GetSampleAccumulationSuccessfulUpdatePhase(0u, 2u) == 0u);
+        assert(GetSampleAccumulationSuccessfulUpdatePhase(1u, 2u) == 1u);
+        assert(GetSampleAccumulationSuccessfulUpdatePhase(2u, 2u) == 1u);
+        assert(GetSampleAccumulationSuccessfulUpdatePhase(3u, 2u) == 2u);
+        assert(GetSampleAccumulationSuccessfulUpdatePhase(
+            std::numeric_limits<uint32_t>::max(), 8u) == 536870912u);
+        for (uint32_t samplesPerUpdate = 1u;
+            samplesPerUpdate <= 8u;
+            ++samplesPerUpdate)
+        {
+            std::array<bool, 16> pathJitterPhases{};
+            uint32_t pathSuccessfulCount = samplesPerUpdate * 16u;
+            uint32_t pathUpdateCount = 0u;
+            for (uint64_t serial = 0u;
+                serial < 512u && pathUpdateCount < 16u;
+                ++serial)
+            {
+                if (!IsSampleAccumulationUpdateScheduled(
+                        serial,
+                        0u,
+                        16u,
+                        pathSuccessfulCount,
+                        true,
+                        samplesPerUpdate))
+                {
+                    continue;
+                }
+                pathJitterPhases[serial % 16u] = true;
+                pathSuccessfulCount += samplesPerUpdate;
+                ++pathUpdateCount;
+            }
+            assert(pathUpdateCount == 16u);
+            for (const bool visited : pathJitterPhases)
+                assert(visited);
+        }
+
+        // Even one accepted ray from each configured eight-ray update must
+        // eventually advance through every camera-coverage phase.
+        std::array<bool, 16> partialBatchJitterPhases{};
+        uint32_t partialSuccessfulCount = 8u * 16u;
+        uint32_t partialUpdateCount = 0u;
+        for (uint64_t serial = 0u;
+            serial < 4096u && partialUpdateCount < 16u * 8u;
+            ++serial)
+        {
+            if (!IsSampleAccumulationUpdateScheduled(
+                    serial,
+                    0u,
+                    16u,
+                    partialSuccessfulCount,
+                    true,
+                    8u))
+            {
+                continue;
+            }
+            partialBatchJitterPhases[serial % 16u] = true;
+            ++partialSuccessfulCount;
+            ++partialUpdateCount;
+        }
+        assert(partialUpdateCount == 16u * 8u);
+        for (const bool visited : partialBatchJitterPhases)
+            assert(visited);
+
+        // The same schedule must retain its original fixed congruence when
+        // no camera-coverage jitter is active. This gates the phase advance
+        // to the one transport mode that consumes it.
+        std::array<bool, 16> disabledJitterPhases{};
+        successfulCount = 16u;
+        updateCount = 0u;
+        for (uint64_t serial = 0u;
+            serial < 512u && updateCount < 16u;
+            ++serial)
+        {
+            if (!IsSampleAccumulationUpdateScheduled(
+                    serial,
+                    0u,
+                    16u,
+                    successfulCount,
+                    false,
+                    2u))
+            {
+                continue;
+            }
+            disabledJitterPhases[serial % 16u] = true;
+            ++successfulCount;
+            ++updateCount;
+        }
+        assert(updateCount == 16u);
+        assert(disabledJitterPhases[0]);
+        for (size_t phase = 1u; phase < disabledJitterPhases.size(); ++phase)
+            assert(!disabledJitterPhases[phase]);
 
         for (uint32_t interval = 2u; interval <= 256u; ++interval)
         {

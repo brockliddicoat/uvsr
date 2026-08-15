@@ -463,6 +463,7 @@ namespace uvsr
             settings.rectificationClip,
             settings.blendDomain);
         constexpr uint32_t minimumDefaultBehaviorFlags =
+            UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH |
             UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT |
             UVSR_TAA_BEHAVIOR_SQUARED_MOTION_TRUST |
             UVSR_TAA_BEHAVIOR_TIGHT_RECTIFICATION |
@@ -727,6 +728,7 @@ namespace uvsr
             settings.rectificationClip,
             settings.blendDomain);
         constexpr uint32_t minimumDefaultBehaviorFlags =
+            UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH |
             UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT |
             UVSR_TAA_BEHAVIOR_SQUARED_MOTION_TRUST |
             UVSR_TAA_BEHAVIOR_TIGHT_RECTIFICATION |

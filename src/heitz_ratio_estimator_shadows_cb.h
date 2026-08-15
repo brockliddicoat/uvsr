@@ -24,6 +24,11 @@ struct HeitzRatioEstimatorShadowConstants
     uint floatDepth;
     uint useRatioEstimator;
     uint sampleSequenceMode;
+
+    uint traceAllMsaaReceivers;
+    uint padding0;
+    uint padding1;
+    uint padding2;
 };
 
 #endif // UVSR_HEITZ_RATIO_ESTIMATOR_SHADOWS_CB_H

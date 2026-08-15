@@ -17,6 +17,17 @@ namespace uvsr
         float y;
     };
 
+    struct TemporalAaMotionCandidate
+    {
+        float viewDepth;
+        bool depthValid;
+        bool motionValid;
+        float deviceDepth = std::numeric_limits<float>::quiet_NaN();
+        float motionX = 0.f;
+        float motionY = 0.f;
+        float depthDelta = 0.f;
+    };
+
     inline constexpr std::array<TemporalAaJitterSample, 4>
         TemporalAaRotatedGrid4 = {{
             { 0.125f, -0.375f },
@@ -191,6 +202,226 @@ namespace uvsr
                 [](float value) { return std::isfinite(value); });
     }
 
+    [[nodiscard]] inline bool
+        IsTemporalAaStationaryDepthBypass(
+            float centerMotionX,
+            float centerMotionY,
+            float selectedMotionX,
+            float selectedMotionY,
+            float deviceDepthDelta)
+    {
+        return std::isfinite(centerMotionX) &&
+            std::isfinite(centerMotionY) &&
+            std::isfinite(selectedMotionX) &&
+            std::isfinite(selectedMotionY) &&
+            std::isfinite(deviceDepthDelta) &&
+            centerMotionX * centerMotionX +
+                centerMotionY * centerMotionY <= 1e-4f &&
+            selectedMotionX * selectedMotionX +
+                selectedMotionY * selectedMotionY <= 1e-4f &&
+            std::abs(deviceDepthDelta) <= 1e-6f;
+    }
+
+    [[nodiscard]] inline int32_t
+        GetTemporalAaNearestPointCoordinate(float pixelPosition)
+    {
+        return static_cast<int32_t>(
+            std::floor(pixelPosition + 0.5f));
+    }
+
+    [[nodiscard]] inline constexpr bool
+        IsTemporalAaPointPositionInBounds(
+            TemporalAaJitterSample pixelPosition,
+            uint32_t width,
+            uint32_t height)
+    {
+        const float windowX = pixelPosition.x + 0.5f;
+        const float windowY = pixelPosition.y + 0.5f;
+        return windowX > 0.f &&
+            windowY > 0.f &&
+            windowX < static_cast<float>(width) &&
+            windowY < static_cast<float>(height);
+    }
+
+    [[nodiscard]] inline constexpr bool
+        IsTemporalAaLinearFootprintInBounds(
+            TemporalAaJitterSample pixelPosition,
+            uint32_t width,
+            uint32_t height)
+    {
+        if (width == 0u || height == 0u)
+            return false;
+        return pixelPosition.x >= 0.f &&
+            pixelPosition.y >= 0.f &&
+            pixelPosition.x <= static_cast<float>(width - 1u) &&
+            pixelPosition.y <= static_cast<float>(height - 1u);
+    }
+
+    [[nodiscard]] inline constexpr bool
+        IsTemporalAaClearedBackgroundDepth(float deviceDepth)
+    {
+        // Equality with zero is false for NaN, infinities, negative depth, and
+        // every finite non-background value. This mirrors the shader's exact
+        // cleared reverse-Z sentinel rather than trusting a caller-authored bit.
+        return deviceDepth == 0.f;
+    }
+
+    [[nodiscard]] inline constexpr bool
+        IsTemporalAaCoverageHandoffPositionInBounds(
+            TemporalAaJitterSample historyColorPosition,
+            TemporalAaJitterSample historyDepthPosition,
+            TemporalAaJitterSample coverageDepthOffset,
+            uint32_t width,
+            uint32_t height)
+    {
+        return IsTemporalAaLinearFootprintInBounds(
+                historyColorPosition,
+                width,
+                height) &&
+            IsTemporalAaPointPositionInBounds(
+                {
+                    historyDepthPosition.x + coverageDepthOffset.x,
+                    historyDepthPosition.y + coverageDepthOffset.y
+                },
+                width,
+                height);
+    }
+
+    [[nodiscard]] inline constexpr bool
+        IsTemporalAaReprojectionPositionInBounds(
+            TemporalAaJitterSample historyColorPosition,
+            TemporalAaJitterSample historyDepthPosition,
+            uint32_t width,
+            uint32_t height,
+            bool stationaryDepthBypass,
+            bool movingPointDepth)
+    {
+        if (!IsTemporalAaLinearFootprintInBounds(
+                historyColorPosition,
+                width,
+                height))
+        {
+            return false;
+        }
+        if (stationaryDepthBypass)
+            return true;
+        return movingPointDepth
+            ? IsTemporalAaPointPositionInBounds(
+                historyDepthPosition,
+                width,
+                height)
+            : IsTemporalAaLinearFootprintInBounds(
+                historyDepthPosition,
+                width,
+                height);
+    }
+
+    [[nodiscard]] inline constexpr int32_t
+        SelectTemporalAaClosestCrossCandidate(
+            const std::array<TemporalAaMotionCandidate, 5>& candidates)
+    {
+        int32_t selected = -1;
+        float closestViewDepth =
+            std::numeric_limits<float>::max();
+        for (uint32_t index = 0u; index < candidates.size(); ++index)
+        {
+            const TemporalAaMotionCandidate& candidate = candidates[index];
+            if (candidate.depthValid &&
+                candidate.motionValid &&
+                candidate.viewDepth < closestViewDepth)
+            {
+                closestViewDepth = candidate.viewDepth;
+                selected = static_cast<int32_t>(index);
+            }
+        }
+        return selected;
+    }
+
+    [[nodiscard]] inline constexpr int32_t
+        SelectTemporalAaStationaryCoverageCandidate(
+            const std::array<TemporalAaMotionCandidate, 5>& candidates)
+    {
+        // Only an exact cleared-background center may borrow coverage. A
+        // finite surface with invalid motion remains center-owned and fails
+        // closed instead of inheriting a neighbor's history.
+        if (!IsTemporalAaClearedBackgroundDepth(
+                candidates[0].deviceDepth) ||
+            candidates[0].depthValid)
+        {
+            return -1;
+        }
+
+        const int32_t closest =
+            SelectTemporalAaClosestCrossCandidate(candidates);
+        if (closest <= 0)
+            return -1;
+
+        const TemporalAaMotionCandidate& candidate =
+            candidates[static_cast<size_t>(closest)];
+        const float motionSquared =
+            candidate.motionX * candidate.motionX +
+            candidate.motionY * candidate.motionY;
+        const float absoluteDepthDelta = candidate.depthDelta < 0.f
+            ? -candidate.depthDelta
+            : candidate.depthDelta;
+        return motionSquared <= 1e-4f &&
+                absoluteDepthDelta <= 1e-6f
+            ? closest
+            : -1;
+    }
+
+    [[nodiscard]] inline constexpr float TemporalAaSmoothStep(
+        float minimum,
+        float maximum,
+        float value)
+    {
+        const float normalized = value <= minimum
+            ? 0.f
+            : value >= maximum
+                ? 1.f
+                : (value - minimum) / (maximum - minimum);
+        return normalized * normalized * (3.f - 2.f * normalized);
+    }
+
+    [[nodiscard]] inline constexpr int32_t
+        SelectTemporalAaCenterFirstEdgeCandidate(
+            const std::array<TemporalAaMotionCandidate, 5>& candidates)
+    {
+        const bool centerValid =
+            candidates[0].depthValid && candidates[0].motionValid;
+        if (!centerValid)
+            return -1;
+
+        const int32_t closest =
+            SelectTemporalAaClosestCrossCandidate(candidates);
+        if (closest < 0)
+            return 0;
+
+        const float centerViewDepth = candidates[0].viewDepth;
+        const float closestViewDepth =
+            candidates[static_cast<size_t>(closest)].viewDepth;
+        const float minimumViewDepth =
+            centerViewDepth < closestViewDepth
+                ? centerViewDepth
+                : closestViewDepth;
+        const float depthDifference =
+            centerViewDepth - closestViewDepth;
+        const float relativeDepthDifference =
+            (depthDifference < 0.f
+                ? -depthDifference
+                : depthDifference) /
+            (minimumViewDepth > 1e-3f ? minimumViewDepth : 1e-3f);
+        const float silhouetteActivation = TemporalAaSmoothStep(
+            0.005f,
+            0.02f,
+            relativeDepthDifference);
+        const bool nearestIsForeground =
+            closestViewDepth + 1e-3f < centerViewDepth;
+        const float borrowActivation =
+            silhouetteActivation * (nearestIsForeground ? 1.f : 0.f);
+        return borrowActivation >= 0.5f ? closest : 0;
+    }
+
     struct TemporalAaReverseZFootprint
     {
         float farthestValidDeviceDepth = 1.f;
@@ -250,6 +481,30 @@ namespace uvsr
                 previousViewDepth + baseAllowance + nearerViewAllowance &&
             previousViewDepth <=
                 expectedViewDepth + baseAllowance + fartherViewAllowance;
+    }
+
+    [[nodiscard]] inline bool TemporalAaPointViewDepthAccepted(
+        float expectedViewDepth,
+        float previousViewDepth,
+        float nearerViewAllowance = 0.f)
+    {
+        if (!std::isfinite(expectedViewDepth) ||
+            !std::isfinite(previousViewDepth) ||
+            expectedViewDepth <= 0.f ||
+            previousViewDepth <= 0.f)
+        {
+            return false;
+        }
+
+        // A stale nearer surface is destructive, while a farther sample is a
+        // conservative ownership match for this single-texel moving test.
+        const float viewDepthAllowance = std::max(
+            1e-3f,
+            expectedViewDepth * 0.01f);
+        return expectedViewDepth <=
+            previousViewDepth +
+                viewDepthAllowance +
+                std::max(nearerViewAllowance, 0.f);
     }
 
     [[nodiscard]] inline float TemporalAaViewDepthFootprintCoherence(

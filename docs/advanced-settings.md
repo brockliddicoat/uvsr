@@ -75,8 +75,8 @@ owned by the user until another away-and-back solution switch:
    optional Ray Marching NRD processing, or the supported Path Tracing
    raw/firefly controls and RTX PT spatial path-layer resolve.
 6. **Buffers** owns the two retained Visibility precision choices.
-7. **Aliasing** independently enables the temporal, fast approximate,
-   morphological, and multisample techniques.
+7. **Aliasing** independently enables the temporal, fast approximate, and
+   multisample techniques.
 8. **Debug** combines world appearance and effect specific information views.
 9. **Sky** configures the global environment, display exposure, and ambient
     fill.
@@ -130,7 +130,7 @@ Performance view. It
 preserves the camera, scene, active graphics adapter, and command history.
 
 The snapshot code is exactly 32 lowercase hexadecimal characters. Its first
-four characters are the registered settings schema version (currently `0003`);
+four characters are the registered settings schema version (currently `0004`);
 the remaining 28 characters fingerprint the complete sorted represented
 command-value snapshot.
 The root Settings collapsed state and Material drawer visibility are
@@ -354,7 +354,7 @@ tooltip.
 Each solver/RTXDI/NEE combination has an independent packaged shader pipeline:
 three solvers times two RTXDI modes times three NEE modes produce 18 path
 variants. Six Shared Primary variants bring the complete production catalog to
-333 shader tasks in 51 staged binaries. If an optional combination cannot
+311 shader tasks in 48 staged binaries. If an optional combination cannot
 initialize, a stored or
 preset request resolves through the same solver and NEE mode without RTXDI,
 the same solver with Uniform NEE, Realtime Path Tracer with the requested NEE
@@ -448,9 +448,11 @@ scene-linear frame before TAA; rejected or invalid pixels preserve the prior
 mean, RGB variance, and count exactly. While Ray Marching accumulation is
 active, it is the sole long-term history owner and TAA's history/blend stage is
 bypassed. Ray Marching denoisers are also bypassed so their temporal estimates
-cannot be averaged again or preserve pre-motion signal history. A selected TAA
-jitter sequence may still diversify raw raster samples. Disabling accumulation
-bypasses the full-resolution Ray Marching history.
+cannot be averaged again or preserve pre-motion signal history. Raster TAA and
+its camera jitter resolve inactive while accumulation owns history, preventing
+camera-driven resets from presenting a different raw subpixel phase every
+frame. Disabling accumulation bypasses the full-resolution Ray Marching history
+and restores the stored TAA configuration.
 
 With accumulation off, Path Tracing continuously replaces each pixel with the
 current **Samples** frame batch. That is useful for immediate change
@@ -582,10 +584,14 @@ GI, sky visibility, sun shadows, and flashlight shadows therefore retain
 explicit **Output Hit Distance** switches with a default of off. Sky and sun
 also retain independent **Ratio Estimator** switches with a default of on. Sky
 ReBLUR or ReLAX and sun SIGMA consume the raw one-ray producer route, so sky or
-sun third-party denoising also requires its Ratio Estimator to be off. Changing
-a denoising choice never changes those producer switches. Missing data, an
-unsupported combination, or an unavailable backend leaves the raw signal in
-use.
+sun third-party denoising also requires its Ratio Estimator to be off. Sun
+SIGMA additionally requires Hard Shadows off and 1x deferred rendering because
+a resolved MSAA pixel has no matched physical blocker distance. Built-in
+bilateral sun filtering also remains 1x-only: its closest-surface guide cannot
+represent a response-weighted modulation spanning heterogeneous MSAA receivers.
+It does not require hit distance at 1x. Changing a denoising choice never
+changes those producer switches. Missing data, an unsupported combination, or
+an unavailable backend leaves the raw signal in use.
 
 The drawer has exactly one subdued status line, placed after all signal groups:
 `Third Party denoisers are configurable, but not installed in this build.` No
@@ -621,25 +627,30 @@ participate in Visibility profile custom/reset tracking.
 
 ## Aliasing
 
-TAA, Fast Approximate AA, CMAA2, and MSAA are separate checkboxes and all
-default off. They can be combined. The execution order is deferred MSAA
-resolve, TAA, tone mapping, display-linear Fast Approximate AA, then
-display-linear CMAA2.
+TAA, Fast Approximate AA, and MSAA are separate checkboxes and all default off.
+They can be combined. The execution order is deferred MSAA resolve, TAA, tone
+mapping, then display-linear Fast Approximate AA.
 
-The four animated technique sections are **Temporal Reconstructive**, **Fast
-Approximate**, **Conservative Morphological**, and **Multisample Adaptive**.
+The three animated technique sections are **Temporal Reconstructive**, **Fast
+Approximate**, and **Multisample Adaptive**.
 Each has an **Enable** control, a visible **Quality** selector with Low, Medium,
 High, and Ultra choices, and its own default-closed **Advanced** tree. Temporal
 Advanced opens directly on its current algorithm controls. Its first control is
 **Jitter Sequence**,
 with Rotated Grid 4, Uniform Helix 4, Halton 8, Halton 16, Halton 32, and Sobol
-32 choices. Filament Halton 8 is the factory default. The selector owns its
+32 choices. Filament Halton 16 is the factory default. The selector owns its
 own reset and does not make Quality or Cost Custom. Changing it restarts
-temporal history at phase zero. **Depth Validation** follows, with Nearest Texel
-and Four-Texel Footprint choices. Four-Texel Footprint is the factory default.
-Both modes validate stationary reprojection depth, preventing projection jitter
-from accepting unrelated silhouette history. Reconstruction, history, motion,
-and rectification come next. A default-closed **Cost** submenu is last. Its
+temporal history at phase zero. **Depth Validation** follows, with Stationary
+Bypass and Legacy Four-Texel Footprint choices. Stationary Bypass is the factory
+default: it preserves center-owned stationary history without consulting the
+phase-jittered raw-depth grid. Edge Dilation can retain a thin feature when its
+center becomes exact background, but only after the stationary cross-neighbor
+passes one point-depth continuity check at its own prior coordinate; current
+color and output depth remain center-owned. Moving samples use the same
+conservative point policy to reject stale nearer depth while accepting farther
+history. Legacy Four-Texel remains an explicit comparison policy.
+Reconstruction, history, motion, and rectification come next. A default-closed
+**Cost** submenu is last. Its
 **Mode** selects Full Quality, Reduced, or Minimum, followed by storage,
 weighting, motion trust, clipping, blending, and sharpening policies. Linear
 RGB is the factory blend domain; the optional luminance-compressed domain can
@@ -659,25 +670,28 @@ does not erase stored choices.
 
 When Ray Marching **Accumulate Samples** is enabled, that accumulator consumes
 raw scene-linear frames and becomes the sole long-term history owner. TAA's
-temporal blend and Ray Marching denoisers are bypassed in that state, while the
-selected TAA jitter sequence can still diversify the raw raster input. Path
-Tracing resolves TAA off.
+temporal blend, raster camera jitter, and Ray Marching denoisers are bypassed in
+that state. Stored TAA settings become active again when accumulation is turned
+off. Path Tracing accumulation resolves the TAA blend off but retains its
+separate Shared Primary coverage-jitter contract; non-accumulating Shared
+Primary output may use TAA normally.
 
 Fast Approximate Quality owns Edge Sharpness, Relative Edge Threshold, and
 Minimum Edge Threshold. Low uses 2, 0.25, and 0.06; Medium uses 4, 0.1875, and
 0.055; High uses 8, 0.125, and 0.05; Ultra uses Filament's 8, 0.08, and 0.04.
 Advanced exposes those three controls over their source-backed ranges.
 
-CMAA2 Quality owns **Edge Threshold** and **Detector**. Low, Medium, High, and
-Ultra use thresholds 0.15, 0.10, 0.07, and 0.05 respectively; Low through High
-use Luma detection, while Ultra uses Full Color. Advanced exposes the continuous
-0.05-through-0.15 threshold and Luma/Full Color detector. CMAA2 remains
-LDR/display-linear only; the retired HDR variant is not compiled.
-
 Multisample Adaptive Quality maps Low, Medium, High, and Ultra to 2x, 4x, 8x,
-and 16x respectively. Advanced retains direct sample-count selection and falls
-back with a visible diagnostic when the active adapter cannot provide the
-requested topology.
+and 16x respectively. Advanced retains direct sample-count selection plus
+**Per-Sample Shadows**, which defaults on. That switch applies only to
+directional ray-traced sun shadows. Turning it off chooses the closest covered
+receiver before tracing and reuses its shadow across the pixel, reducing the
+worst-case shadow work from MSAA samples times the emitter-ray count to one
+receiver's emitter-ray count. The cheaper mode can alias or bleed shadow detail
+when multiple surfaces or visibility regions share a pixel. It does not affect
+sky or flashlight visibility and remains inert at 1x. Reapplying a Multisample
+Quality recipe restores it on. The renderer falls back with a visible diagnostic
+when the active adapter cannot provide the requested topology.
 
 See [Temporal Aliasing Options](temporal-aa-options.md) for the retained
 history and coordinate contracts.
@@ -853,22 +867,41 @@ degree full angular size. A zero angular size or **Hard Shadows** selects one
 center ray.
 
 **Ratio Estimator** defaults on. Its soft route uses matched RGB stochastic
-numerator and denominator sums in one inline ray query dispatch. Turning Ratio
-Estimator off uses one raw scalar stochastic ray, replicated for deferred PBR,
-which is the input expected by SIGMA. **Output Hit Distance** is independent,
-defaults off, and writes the nearest physical blocker distance. SIGMA needs both
-the raw route and hit output; choosing SIGMA in Denoising does not change either
-producer switch.
+numerator and denominator sums in one inline ray query dispatch. With MSAA and
+Multisample Adaptive **Per-Sample Shadows** on, each valid covered raster
+receiver forms its own matched ratio from coherent sample-frequency G-buffer
+data. Final direct lighting resolves those ratios by the same center-direction
+analytic response used by deferred PBR; a second output carries the closest
+reverse-Z receiver's diffuse ratio to the screen-space GI source. Turning Ratio
+Estimator off uses one binary visibility ray per active receiver; the 1x route
+remains scalar, while full per-sample MSAA uses the same deterministic response
+weighting. Disabling Per-Sample Shadows selects one closest receiver for either
+route and broadcasts its total and diffuse factors to their existing consumers.
+**Output Hit Distance** defaults off and writes the nearest physical blocker
+distance only for the 1x one-ray route. A ratio-estimated area-light signal and
+a resolved MSAA pixel have no one matched blocker distance, so the setting is
+preserved but inactive in either case. At 1x, the ratio route exports a separate
+diffuse-only modulation for the screen-space GI source while its total-response
+modulation continues to drive final direct lighting. All sun denoising remains
+inactive under MSAA because its guide represents only the closest surface. At
+1x, built-in bilateral filtering needs no hit output and can filter hard or soft
+sun visibility, while SIGMA needs the non-hard one-ray route and matched hit
+output; choosing SIGMA in Denoising does not change either producer switch.
 
-**Samples Per Pixel** covers `1` through `64` while Ratio Estimator is active.
+**Samples Per Pixel** covers `1` through `64` while Ratio Estimator is active
+and is the emitter-ray count per active receiver. At fully covered 16x MSAA,
+the maximum setting traces up to `1024` sun rays per pixel with Per-Sample
+Shadows on or up to `64` with it off. The off mode is exact for one covered
+receiver or shared modulation but is an intentional quality tradeoff for mixed
+surfaces and shadow boundaries.
 **Specify Noise** reveals this effect's private pattern, resolution, and Animate
 Samples controls; otherwise it inherits the Noise drawer. **Max Distance** defaults to
 the scene diagonal Max reference; finite `32m` through `2m` modes intentionally
 ignore farther blockers. **Ray Bias** moves the origin once along the view
 facing raster triangle normal, defaults to `0.002` world units, and can detach
 nearby contact shadows when raised. Ray traced sun shadows require DirectX
-Raytracing 1.1, a ready Representation hierarchy, and single sample deferred
-rendering.
+Raytracing 1.1 and a ready Representation hierarchy. Receiver inputs support
+1x, 2x, 4x, 8x, and 16x deferred rendering.
 
 All three material-aware ray-query effects use the same alpha-test candidate
 contract. Alpha-tested sun-shadow occluders commit only where base-color alpha
@@ -897,7 +930,7 @@ ordinary long General controls and shows one selected view at a time in a
 labeled, striped two-column table. It contains **Complete Renderer**, **Scene
 Setup**, **Geometry**, **Direct Lighting**, **Screen Space
 Visibility**, **Directional Shadows**, **Temporal Reconstructive**,
-**Fast Approximate**, **Conservative Morphological**, **Multisample Adaptive**,
+**Fast Approximate**, **Multisample Adaptive**,
 **Material Picking**,
 **Environment Background**, **Tone Mapping**, and **Output
 Blit**. Complete
@@ -913,8 +946,7 @@ instead of being folded into either Direct Lighting or Visibility. Selecting an 
 the complete frame beside it for context. Directional Shadows includes
 **Shadow Ray Dispatch**, **Shadow Denoise**, **Sky Visibility Ray Dispatch**,
 and **Sky Visibility Denoise** as independent rows.
-Visibility, shadows, temporal
-reconstruction, and conservative morphology retain their measured stages,
+Visibility, shadows, and temporal reconstruction retain their measured stages,
 resource or history metrics, and active-work counts. Multisample reports its
 requested and hardware-resolved sample counts plus Geometry, Direct Lighting,
 Visibility Lighting Preparation, and any active Closest Surface resolve. These
@@ -939,7 +971,6 @@ scrollable, selectable read only view. The catalog mirrors the current UI
 settings. Type a section prefix such as
 `lighting.`, `pathing.`, `representation.`, `noise.`, `visibility.`,
 `denoising.`, `anti-aliasing.taa.`, `anti-aliasing.fxaa.`,
-`anti-aliasing.cmaa2.`,
 `anti-aliasing.msaa.`, `debug.`, or `shadows.` and use completion to inspect the
 exact paths and accepted values. A `list` result uses `/` between each row's
 supported verbs and value domain.
@@ -985,14 +1016,22 @@ Validate a candidate with the exact executable from its isolated build tree.
 At minimum, load a bundled scene and exercise Diffuse, all four noise
 resolutions and three patterns, inheritance and each Specify Noise override,
 the independent AA toggles, Debug composition, sky, lights, the flashlight,
-Ray Traced Shadows on a single sample target, and the Representation
+Ray Traced Shadows on 1x, 2x, 4x, 8x, and 16x targets, and the Representation
 rebuild/refit choices. Confirm that **Allow Ray Traversal** stops sky, sun, and
 flashlight queries while preserving every individual setting. Exercise hard and
 soft sun shadows, both Ratio Estimator states, both Output Hit Distance states,
 1 and 64 sample endpoints, zero and positive directional light angular sizes,
 zero and default Ray Bias, cutout foliage in all three ray-query effects, and
-the separate Shadow Ray Dispatch and denoising timings. Confirm the unavailable
-explanation under MSAA. Confirm that disabled Auto Exposure shows only Enable
+the separate Shadow Ray Dispatch and denoising timings. At MSAA silhouettes,
+compare mixed materials, glossy highlights, horizon-clipped receivers, sparse
+coverage, and fully covered pixels against a per-sample reference capture in
+both Per-Sample Shadows states. Confirm the default-on path retains coherent
+sample-frequency shading and stable thin coverage; confirm the off path uses a
+single closest-owner budget and exposes its expected mixed-surface aliasing
+boundary. In both states, verify preserved Output Hit Distance state, its
+MSAA-inactive explanation, both routes without sun denoising, closest-owner GI
+source routing, and no sun-denoiser dispatch. Confirm that disabled Auto
+Exposure shows only Enable
 and exactly matches the established manual AgX presentation. Enable it, compare
 its median-luminance adaptation across bright, dark, neutral, and saturated
 views, exercise both Maximum Brightening and Maximum Darkening endpoints,
@@ -1056,14 +1095,21 @@ every accumulation mode.
 Exercise every History Preset and Adaptive Workload recipe, then edit each
 underlying slider and confirm the visible values remain authoritative. In Path
 Tracing, ordinary presets must report a full-frame update; only extreme work
-vectors may report a bounded 1/N lattice. Compare solvers by accepted samples
-and wall-clock convergence as well as FPS.
+vectors may report a bounded 1/N lattice. With Shared Primary accumulation and
+the normal full-rate lattice, an even adaptive revisit interval must traverse
+all 16 default camera-jitter phases; a nonjittered run must retain its fixed
+spatial schedule. Extreme even-phase safety lattices remain bounded but do not
+claim complete temporal-phase coverage. Compare solvers by accepted samples and
+wall-clock convergence as well as FPS.
 
 Exercise TAA at static high-contrast silhouettes with both depth-validation
-choices and the normal and Minimum cost routes. Stationary pixels must still
-read previous depth, and increasing history must not produce a bright geometry
-outline or the prior nonlinear dark/low-contrast shift under the Linear RGB
-default.
+choices. On effective Edge Dilation routes, verify that exact-background
+thin-coverage handoffs do one point-depth continuity read without changing
+output ownership. On both normal and true Minimum routes, verify that
+center-owned stationary pixels do not read raw previous depth and moving pixels
+reject a stale nearer surface. Increasing history must not produce a bright
+geometry outline or the prior nonlinear dark/low-contrast shift under the
+Linear RGB default.
 
 On an NRD build, exercise every supported method, quality, resolution, and
 history endpoint. Verify that a missing hit output or an active sky/sun Ratio

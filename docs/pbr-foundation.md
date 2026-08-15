@@ -83,10 +83,39 @@ scalar visibility replicated across RGB. A mismatched or unavailable producer
 falls back to neutral white. Each selected visibility is multiplied once into both
 the diffuse and specular contribution of its source light.
 
-When Shadows selects SIGMA and the required raw visibility plus physical hit
-distance is present, denoised visibility replaces that light's raw slot. Sun and
-flashlight use separate SIGMA signals and histories even though they share one
-visible Denoising policy.
+For a 1x correlated sun ratio, final direct lighting uses the total-response
+modulation while the optional source-radiance write uses a second diffuse-only
+modulation from the same receiver and emitter samples. This keeps transported
+diffuse energy independent of a glossy material's specular response. The
+one-ray route needs no alternate because its scalar visibility is identical for
+both consumers.
+
+Under MSAA, Multisample Adaptive **Per-Sample Shadows** defaults on. That policy
+resolves matched evidence independently for every valid covered raster receiver
+while loading coherent per-sample G-buffer attributes. One single-sample RGB
+texture analytically weights those receiver ratios so sample-frequency deferred
+lighting reproduces their resolved total sun response without a per-sample
+output array. A second RGB texture carries the closest reverse-Z receiver's
+diffuse-only ratio. Turning the policy off selects that closest receiver before
+tracing, broadcasts its total factor to final MSAA lighting, and keeps its
+diffuse factor for the auxiliary screen-space GI source. The cheaper route is
+an explicit mixed-surface and shadow-boundary approximation; neither output is
+coverage-scaled or response-weighted a second time.
+
+The screen-space visibility source remains closest-surface rather than fully
+sample-frequency. At mixed-primitive or sparse-coverage pixels, one owner's
+source radiance and indirect correction can still represent more coverage than
+that surface owns. The direct-sun modulation repair prevents unshadowed source
+radiance, but exact heterogeneous-surface GI requires coverage/owner metadata
+or sample-aware traversal.
+
+At 1x, built-in bilateral shadow denoising can filter hard or soft visibility
+without hit distance. When Shadows selects SIGMA and the required non-hard
+one-ray visibility plus physical hit distance is present, denoised visibility
+replaces that light's raw slot. Sun and flashlight use separate SIGMA signals
+and histories even though they share one visible Denoising policy. A resolved
+MSAA sun result has closest-surface guidance for a potentially heterogeneous
+signal and therefore bypasses every sun denoising method.
 
 The primary sun initializes to irradiance `8` and a `0.2` degree full angular
 size. Screen space directional shadows are absent from main. Their implementation
@@ -196,8 +225,8 @@ clamps or add another output transfer. This is a display transform only:
 scene-linear lighting and effect histories remain unchanged. In Ray Marching,
 TAA runs before auto exposure and tone mapping when enabled. Path Tracing uses
 its own scene-linear progressive history and never routes through TAA. Fast
-Approximate AA and CMAA2, when enabled, run afterward in that order in the
-display-linear domain. Final transfer and dithering are applied at output.
+Approximate AA, when enabled, runs afterward in the display-linear domain.
+Final transfer and dithering are applied at output.
 
 ## Debug Contract
 

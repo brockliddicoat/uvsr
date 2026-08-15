@@ -85,7 +85,7 @@ Scene refresh
   -> optional path TAA when progressive accumulation is off
   -> auto exposure
   -> AgX
-  -> optional Fast Approximate AA and CMAA2
+  -> optional Fast Approximate AA
   -> output transfer and dither
 ```
 
@@ -224,6 +224,19 @@ accumulation bypasses TAA history to avoid double temporal ownership, but still
 advances the authored camera-jitter sequence so stationary coverage converges.
 Diagnostic views remain raw and do not inherit TAA history.
 
+When Shared Primary uses the normal full-rate dispatch lattice, adaptive
+indirect revisits add a successful-count phase step for even update intervals.
+Full successful ray batches then use odd revisit gaps and cannot lock a 16-cycle
+adaptive interval to one Halton-16 coverage location. Partial batches remain
+bounded and advance coverage whenever their cumulative successes cross a
+configured batch boundary, eventually traversing every phase while progress
+continues. The step is active only while progressive Shared Primary accumulation
+owns camera jitter; ordinary nonjittered path scheduling retains its fixed
+spatial phase. An extreme safety lattice with an even dispatch phase count can
+still visit only a subset of a power-of-two jitter sequence. Full phase
+completion for that bounded fallback requires a future lattice-level sequencing
+design and is not claimed here.
+
 ### Primary and Continuation Rays
 
 The all-ray integrator derives each camera ray from the inverse nonjittered
@@ -352,8 +365,8 @@ when a required shader permutation or resource format is unavailable.
 The 18 executable transport variants are packaged independently as three
 solvers times direct-reservoir off/on times Uniform, Power, and Adaptively
 Temporally. Six matching Shared
-Primary variants bring the complete production catalog to 333 shader tasks in a
-51-binary runtime bundle. A missing optional variant does not
+Primary variants bring the complete production catalog to 311 shader tasks in a
+48-binary runtime bundle. A missing optional variant does not
 disable Path Tracing or strand the selector on a raster image. UVSR tries the
 requested solver and NEE mode without RTXDI, then the same solver with Uniform
 NEE, then RTX PT with the requested NEE mode, and finally baseline Uniform RTX
@@ -522,7 +535,9 @@ count exactly. A non-finite attempted sample is not successful and also
 preserves history. Only a valid matching prepare/resolve transaction may
 advance the history epoch and ping-pong index. Ray Marching accumulation is the
 sole long-term history owner while active, so TAA history and temporal blending
-are bypassed rather than averaged into a second estimator.
+are bypassed rather than averaged into a second estimator. Raster TAA camera
+jitter is inactive with that bypass; the distinct Path Tracing Shared Primary
+accumulation-jitter contract is unchanged.
 
 With accumulation disabled, Ray Marching bypasses its full-resolution history,
 while Path Tracing attempts every eligible pixel and replaces history with the
@@ -710,7 +725,7 @@ epoch mismatch, or make the raw fallback depend on an optional SDK.
 
 The implementation is accepted only when focused contracts prove settings and
 presets, CPU/HLSL layout, all 18 transport and six Shared Primary permutations,
-the 333-task/51-binary
+the 311-task/48-binary
 shader bundle, committed-hit material coverage, finite multi-sample batch math,
 history invalidation inputs, renderer pass ordering, and drawer gating. A
 Release build must exercise Ray Marching and RTX PT, one and multiple fresh

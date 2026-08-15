@@ -304,7 +304,6 @@ file(GLOB_RECURSE UVSR_SHADER_INPUTS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsl"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hlsli"
-    "${CMAKE_CURRENT_SOURCE_DIR}/legal/samples/*.hlsl"
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/shaders/*"
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/include/donut/shaders/*"
 )
@@ -376,7 +375,6 @@ if (UVSR_BUILD_APPLICATION)
     add_executable(uvsr WIN32
         src/auto_exposure.cpp
         src/camera_collision.cpp
-        src/cmaa2.cpp
         src/denoising_pass.cpp
         src/fast_approximate_aa.cpp
         src/heitz_ratio_estimator_shadows.cpp
@@ -974,10 +972,6 @@ set(UVSR_APP_SHADERS
     ray_traced_flashlight_shadows_cs_GenerateVisibility
     ray_traced_flashlight_shadows_cs_GenerateVisibilityAndHitDistance
     ray_traced_sky_visibility_cs_Generate
-    cmaa2_ComputeDispatchArgsCS
-    cmaa2_DeferredColorApply2x2CS
-    cmaa2_EdgesColor2x2CS
-    cmaa2_ProcessCandidatesCS
     image_based_lighting_background_ps
     lighting_accumulation_cs
     lighting_accumulation_prepare_cs
@@ -1364,9 +1358,6 @@ if (UVSR_BUILD_APPLICATION)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/legal/licenses/BSD-2-Clause.txt"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/BSD-2-Clause.txt"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/legal/licenses/Intel-CMAA2-Apache-2.0.txt"
-            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Intel-CMAA2-Apache-2.0.txt"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/legal/licenses/IOLITE-AgX-MIT.txt"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/IOLITE-AgX-MIT.txt"

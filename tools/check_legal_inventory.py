@@ -58,6 +58,7 @@ def tracked_paths() -> set[str]:
         value.decode("utf-8").replace("\\", "/")
         for value in output.split(b"\0")
         if value
+        and (ROOT / value.decode("utf-8")).exists()
     }
 
 
@@ -72,7 +73,6 @@ def check_layout(paths: set[str]) -> None:
     for required in (
         "legal/README.md",
         "legal/licenses/README.md",
-        "legal/samples/README.md",
         "legal/documentation/README.md",
         "legal/documentation/commercial-licensing.md",
         "legal/documentation/contributor-agreement-privacy-notice.md",

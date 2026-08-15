@@ -33,6 +33,23 @@ namespace
         return result;
     }
 
+    std::string_view ExtractSection(
+        std::string_view source,
+        std::string_view begin,
+        std::string_view end)
+    {
+        const size_t beginPosition = source.find(begin);
+        if (beginPosition == std::string_view::npos)
+            return {};
+        const size_t endPosition = source.find(
+            end, beginPosition + begin.size());
+        if (endPosition == std::string_view::npos)
+            return {};
+        return source.substr(
+            beginPosition,
+            endPosition - beginPosition);
+    }
+
     void RequireContains(
         std::string_view source,
         std::string_view required,
@@ -130,20 +147,202 @@ int main(int argc, char** argv)
     RequireOrdered(
         shader,
         {
-            "constfloat3directionToLight=HeitzSampleDirectionalEmitter(",
-            "constfloat3contribution=HeitzEvaluateNormalizedResponse(",
-            "currentDenominator+=contribution;",
+            "for(uintreceiverSampleIndex=0u;",
+            "constfloat4normalChannels=HeitzLoadNormals("
+                "pixelPosition,receiverSampleIndex);",
+            "constfloatdepth=HeitzLoadDepth("
+                "pixelPosition,receiverSampleIndex);",
+            "if(!isfinite(depth)||depth<=0.0f||",
+            "constboolownsClosestSource=!foundClosestReceiver||"
+                "depth>closestReceiverDepth;",
+            "closestSourceModulation=1.0f;",
+            "constfloat4packedMaterial=HeitzLoadMaterial("
+                "pixelPosition,receiverSampleIndex);",
+            "++validReceiverCount;",
+            "constHeitzNormalizedResponsecenterResponse=",
+            "float3receiverTotalModulation=1.0f;",
+            "float3receiverDiffuseModulation=1.0f;",
+            "constfloatvisibility=visible?1.0f:0.0f;",
+            "receiverTotalModulation=visibility;",
+            "receiverDiffuseModulation=receiverTotalModulation;",
+            "for(uintemitterSampleIndex=0u;",
+            "constuintsequenceIndex=receiverSampleIndex*"
+                "emitterSampleCount+emitterSampleIndex;",
+            "constHeitzNormalizedResponsecontribution="
+                "HeitzEvaluateNormalizedResponse(",
+            "receiverTotalDenominator+=contribution.total;",
+            "receiverDiffuseDenominator+=contribution.diffuse;",
             "if(HeitzTraceVisibility(",
-            "currentNumerator+=contribution;",
-            "constfloatinverseSampleCount=rcp(float(sampleCount));",
-            "constfloat3numeratorMean=currentNumerator*inverseSampleCount;",
-            "constfloat3denominatorMean=currentDenominator*inverseSampleCount;",
-            "constfloat3modulation=saturate(ResolveCorrelatedRatio(",
-            "numeratorMean,",
-            "denominatorMean,",
-            "u_Output[pixelPosition]=float4(modulation,1.0f);"
+            "receiverTotalNumerator+=contribution.total;",
+            "receiverDiffuseNumerator+=contribution.diffuse;",
+            "receiverTotalModulation=saturate(ResolveCorrelatedRatio(",
+            "receiverDiffuseModulation=saturate(ResolveCorrelatedRatio(",
+            "resolvedNumerator+=centerResponse.total*"
+                "receiverTotalModulation;",
+            "resolvedDenominator+=centerResponse.total;",
+            "if(ownsClosestSource){",
+            "closestTotalModulation=receiverTotalModulation;",
+            "closestSourceModulation=receiverDiffuseModulation;",
+            "constfloat3modulation=HeitzResolveDeterministicRatio(",
+            "resolvedNumerator,",
+            "resolvedDenominator);",
+            "u_Output[pixelPosition]=float4(modulation,1.0f);",
+            "u_ClosestSourceOutput[pixelPosition]=float4("
+                "closestSourceModulation,1.0f);"
         },
-        "matched current-frame accumulation before guarded division");
+        "per-receiver matched ratios, analytic MSAA resolution, and closest diffuse source output");
+    RequireContains(
+        shader,
+        "ResolveCorrelatedRatio("
+            "receiverTotalNumerator*inverseEmitterSampleCount,"
+            "receiverTotalDenominator*inverseEmitterSampleCount,"
+            "g_Heitz.denominatorEpsilon)",
+        "matched total-response numerator and denominator pair");
+    RequireContains(
+        shader,
+        "ResolveCorrelatedRatio("
+            "receiverDiffuseNumerator*inverseEmitterSampleCount,"
+            "receiverDiffuseDenominator*inverseEmitterSampleCount,"
+            "g_Heitz.denominatorEpsilon)",
+        "matched diffuse-response numerator and denominator pair");
+    if (CountOccurrences(shader, "ResolveCorrelatedRatio(") != 2u)
+    {
+        std::cerr << "FAIL: only the two per-receiver stochastic S/U ratios may use the estimator epsilon.\n";
+        ++g_Failures;
+    }
+    RequireContains(
+        constants,
+        "uinttraceAllMsaaReceivers;uintpadding0;uintpadding1;uintpadding2;",
+        "aligned closest-only receiver policy constant");
+    RequireContains(
+        passHeader,
+        "constHeitzRatioEstimatorShadowSettings&settings,"
+            "booltraceAllMsaaReceivers,constdonut::engine::IView&view,",
+        "explicit receiver-frequency render contract");
+    RequireContains(
+        pass,
+        "constants.traceAllMsaaReceivers=receiverSampleCount<=1u||"
+            "traceAllMsaaReceivers?1u:0u;",
+        "inert closest-only policy at single-sample raster frequency");
+    RequireContains(
+        shader,
+        "constbooltraceAllMsaaReceivers=HEITZ_RASTER_SAMPLES==1||"
+            "g_Heitz.traceAllMsaaReceivers!=0u;",
+        "runtime receiver-frequency policy without shader variants");
+
+    const std::string_view closestOnlySelection = ExtractSection(
+        shader,
+        "#ifHEITZ_RASTER_SAMPLES>1boolselectedClosestReceiver=false;",
+        "#endif[loop]for(uintreceiverSampleIndex=0u;");
+    RequireOrdered(
+        closestOnlySelection,
+        {
+            "if(!traceAllMsaaReceivers){",
+            "for(uintreceiverSampleIndex=0u;",
+            "constfloat4normalChannels=HeitzLoadNormals(",
+            "constfloatdepth=HeitzLoadDepth(",
+            "if(!isfinite(depth)||depth<=0.0f||",
+            "if(!selectedClosestReceiver||depth>closestReceiverDepth){",
+            "selectedClosestReceiverIndex=receiverSampleIndex;"
+        },
+        "complete strict reverse-depth owner selection before receiver evaluation");
+    RequireAbsent(
+        closestOnlySelection,
+        "HeitzTraceVisibility(",
+        "ray-free closest-owner selection prepass");
+
+    const std::string_view receiverEvaluation = ExtractSection(
+        shader,
+        "[loop]for(uintreceiverSampleIndex=0u;",
+        "if(validReceiverCount==0u)");
+    RequireOrdered(
+        receiverEvaluation,
+        {
+            "if(!traceAllMsaaReceivers&&"
+                "(!selectedClosestReceiver||"
+                "receiverSampleIndex!=selectedClosestReceiverIndex))",
+            "constfloat4normalChannels=HeitzLoadNormals(",
+            "constfloat4packedMaterial=HeitzLoadMaterial(",
+            "HeitzTraceVisibility("
+        },
+        "non-owner rejection before material and ray work");
+    RequireContains(
+        receiverEvaluation,
+        "constuintsequenceIndex=receiverSampleIndex*emitterSampleCount+"
+            "emitterSampleIndex;",
+        "original receiver identity in ratio-estimator sampling");
+    RequireContains(
+        receiverEvaluation,
+        "HeitzSample2D(dispatchPosition,receiverSampleIndex,"
+            "sampleSequencePhase)",
+        "original receiver identity in the one-ray sampling route");
+
+    const std::string_view closestOnlyOutput = ExtractSection(
+        shader,
+        "#ifHEITZ_RASTER_SAMPLES>1if(!traceAllMsaaReceivers)",
+        "//Thisisadeterministicfactorization");
+    RequireOrdered(
+        closestOnlyOutput,
+        {
+            "u_Output[pixelPosition]=float4("
+                "closestTotalModulation,1.0f);",
+            "u_ClosestSourceOutput[pixelPosition]=float4("
+                "closestSourceModulation,1.0f);",
+            "return;"
+        },
+        "direct closest-owner total and diffuse output routing");
+    RequireAbsent(
+        closestOnlyOutput,
+        "resolvedNumerator",
+        "response reweighting in closest-only mode");
+    RequireAbsent(
+        closestOnlyOutput,
+        "validReceiverCount/",
+        "coverage scaling in closest-only mode");
+    RequireContains(
+        shader,
+        "float3HeitzSanitizeNonnegativeResponse(float3response){"
+            "returnfloat3("
+            "isfinite(response.x)?max(response.x,0.0f):0.0f,"
+            "isfinite(response.y)?max(response.y,0.0f):0.0f,"
+            "isfinite(response.z)?max(response.z,0.0f):0.0f);}",
+        "componentwise finite response sanitization");
+    RequireContains(
+        shader,
+        "#ifHEITZ_RASTER_SAMPLES>1Texture2DMS<float,"
+            "HEITZ_RASTER_SAMPLES>t_Depth:register(t1);",
+        "compile-time multisampled receiver depth input");
+    for (const std::string_view coherentLoad : {
+            "t_Depth.Load(pixelPosition,receiverSampleIndex)",
+            "t_GBufferDiffuse.Load(pixelPosition,receiverSampleIndex)",
+            "t_GBufferMaterial.Load(pixelPosition,receiverSampleIndex)",
+            "t_GBufferNormals.Load(pixelPosition,receiverSampleIndex)",
+            "t_MaterialAmbientOcclusion.Load(pixelPosition,receiverSampleIndex)",
+            "t_GBufferEmissive.Load(pixelPosition,receiverSampleIndex)" })
+    {
+        RequireContains(
+            shader,
+            coherentLoad,
+            "coherent per-raster-sample G-buffer loads");
+    }
+    RequireContains(
+        shader,
+        "if(validReceiverCount==0u){u_Output[pixelPosition]=1.0f;",
+        "zero-covered-surface neutral output");
+    RequireContains(
+        shader,
+        "RWTexture2D<float4>u_ClosestSourceOutput:register(u1);",
+        "ratio and closest-receiver diffuse modulation output");
+    RequireContains(
+        shader,
+        "#ifOUTPUT_SOURCE_MODULATION&&OUTPUT_HIT_DISTANCE"
+            "#errorSourcemodulationandhitdistancearemutuallyexclusiveoutputs."
+            "#endif",
+        "mutually exclusive source-ratio and physical-distance outputs");
+    RequireContains(
+        shader,
+        "u_ClosestSourceOutput[pixelPosition]=1.0f;",
+        "zero-covered closest-source neutral output");
     RequireAbsent(
         shader,
         "RAY_FLAG_FORCE_OPAQUE",
@@ -277,8 +476,7 @@ int main(int argc, char** argv)
     RequireOrdered(
         shader,
         {
-            "if(g_Heitz.hardShadows!=0u||"
-                "g_Heitz.useRatioEstimator==0u){",
+            "if(!useRatioEstimator){",
             "g_Heitz.hardShadows!=0u?HeitzLightCenterDirection():"
                 "HeitzSampleDirectionalEmitter(",
             "if(!CanEvaluatePbrDirectSurfacePrepared(",
@@ -286,7 +484,8 @@ int main(int argc, char** argv)
             "constfloat3rayOrigin=HeitzPrepareRayOrigin(",
             "constfloatvisible=float(HeitzTraceVisibility(",
             "u_Output[pixelPosition]=float4(visible.xxx,1.0f);",
-            "channels[0]=t_GBufferDiffuse[pixelPosition];",
+            "channels[0]=HeitzLoadDiffuse("
+                "pixelPosition,receiverSampleIndex);",
             "constPbrPreparedMaterialpreparedMaterial="
         },
         "receiver gated hard or one ray scalar branch before ratio material work");
@@ -376,7 +575,7 @@ int main(int argc, char** argv)
     RequireContains(
         pass,
         "pipelineDescription.bindingLayouts={"
-            "m_BindingLayouts[variant],m_BindlessLayout};",
+            "m_BindingLayouts[layoutIndex],m_BindlessLayout};",
         "bindless material texture pipeline layout");
     RequireContains(
         pass,
@@ -397,12 +596,24 @@ int main(int argc, char** argv)
         "all material visibility resources participate in cache identity");
     RequireContains(
         passHeader,
-        "std::array<nvrhi::BindingSetHandle,2>m_BindingSets;",
-        "independent hit and no hit frame local binding sets");
+        "std::array<nvrhi::BindingSetHandle,7>m_BindingSets;",
+        "one frame-local binding set per receiver-count and source or hit permutation");
+    RequireContains(
+        passHeader,
+        "std::array<nvrhi::BindingLayoutHandle,3>m_BindingLayouts;",
+        "base, hit-distance, and multisample-owner output layouts");
     RequireContains(
         pass,
         "nvrhi::BindingLayoutItem::Texture_UAV(1)",
-        "the hit permutation must bind its optional R16 output");
+        "the optional hit or closest-source output binding");
+    RequireContains(
+        pass,
+        "\"RayTracedSunShadows/ClosestSourceModulation\"",
+        "closest-source RGBA16F allocation");
+    RequireContains(
+        pass,
+        "1,m_OutputClosestSourceModulation",
+        "ratio or multisample closest-source output binding");
     RequireAbsent(
         passHeader,
         "ResetHistory",
@@ -419,8 +630,31 @@ int main(int argc, char** argv)
     }
     RequireContains(
         pass,
-        "texture->getDesc().sampleCount!=1u",
-        "single-surface Heitz input contract");
+        "receiverSampleCount==1u?nvrhi::TextureDimension::Texture2D:"
+            "nvrhi::TextureDimension::Texture2DMS;",
+        "single-sample and multisampled input dimension contract");
+    RequireContains(
+        pass,
+        "{1u,\"1\",false,false},{1u,\"1\",false,true},"
+            "{1u,\"1\",true,false},{2u,\"2\",true,false},"
+            "{4u,\"4\",true,false},{8u,\"8\",true,false},"
+            "{16u,\"16\",true,false}",
+        "complete 1x source-or-hit and 2x-through-16x source pipeline matrix");
+    RequireContains(
+        pass,
+        "if(outputSourceModulation&&outputHitDistance)",
+        "source modulation and hit distance resource exclusion");
+    RequireContains(
+        pass,
+        "constboolrequestedSourceModulation=useRatioEstimator||"
+            "receiverSampleCount>1u;",
+        "1x ratio and MSAA diffuse-source output request");
+    RequireContains(
+        pass,
+        "constboolrequestedHitDistance=settings.outputHitDistance&&"
+            "m_HitDistanceSupported&&receiverSampleCount==1u&&"
+            "!requestedSourceModulation;",
+        "physical hit output only for a matched 1x one-ray signal");
     RequireContains(
         pass,
         "HasFormatSupport(device,nvrhi::Format::RGBA16_FLOAT,true)&&"
@@ -506,16 +740,30 @@ int main(int argc, char** argv)
     RequireAbsent(settings, "ResolveHeitzRatioEstimatorSamplePeriod", "fractional period policy");
     if (CountOccurrences(
             shaderConfig,
-            "heitz_ratio_estimator_shadows_cs.hlsl-Tcs-EGenerate") != 1u)
+            "heitz_ratio_estimator_shadows_cs.hlsl-Tcs-EGenerate") != 3u)
     {
-        std::cerr << "FAIL: the shader catalog must package one complete Heitz Generate permutation axis.\n";
+        std::cerr << "FAIL: the shader catalog must package single-sample base, single-sample source, and MSAA Heitz Generate axes.\n";
         ++g_Failures;
     }
     RequireContains(
         shaderConfig,
         "heitz_ratio_estimator_shadows_cs.hlsl-Tcs-EGenerate"
+            "-DHEITZ_RASTER_SAMPLES=1-DOUTPUT_SOURCE_MODULATION=0"
             "-DOUTPUT_HIT_DISTANCE={0,1}",
-        "base and optional closest hit Heitz shader permutations");
+        "single-sample base and optional closest-hit permutations");
+    RequireContains(
+        shaderConfig,
+        "heitz_ratio_estimator_shadows_cs.hlsl-Tcs-EGenerate"
+            "-DHEITZ_RASTER_SAMPLES=1-DOUTPUT_SOURCE_MODULATION=1"
+            "-DOUTPUT_HIT_DISTANCE=0",
+        "single-sample ratio diffuse-source permutation");
+    RequireContains(
+        shaderConfig,
+        "heitz_ratio_estimator_shadows_cs.hlsl-Tcs-EGenerate"
+            "-DHEITZ_RASTER_SAMPLES={2,4,8,16}"
+            "-DOUTPUT_SOURCE_MODULATION=1"
+            "-DOUTPUT_HIT_DISTANCE=0",
+        "hit-distance-free multisampled receiver permutations");
     RequireAbsent(
         ratioHelper,
         "saturate(",
@@ -527,9 +775,95 @@ int main(int argc, char** argv)
 
     RequireContains(
         viewer,
-        "returnHasHeitzRatioEstimatorHardwareSupport()&&"
-            "m_ui.GetResolvedAntiAliasingSettings().rasterSampleCount==1u;",
-        "single-sample renderer availability gate");
+        "boolSupportsHeitzRatioEstimatorShadows()const{"
+            "returnHasHeitzRatioEstimatorHardwareSupport();}",
+        "MSAA-independent renderer availability gate");
+    RequireContains(
+        viewer,
+        "shadowInputs.depth=m_RenderTargets->Depth;"
+            "shadowInputs.diffuse=m_RenderTargets->GBufferDiffuse;"
+            "shadowInputs.material=m_RenderTargets->GBufferSpecular;"
+            "shadowInputs.normals=m_RenderTargets->GBufferNormals;"
+            "shadowInputs.emissive=m_RenderTargets->GBufferEmissive;"
+            "shadowInputs.materialAmbientOcclusion="
+                "m_RenderTargets->MaterialAmbientOcclusion;",
+        "Heitz dispatch consumes the original sample-frequency G-buffer");
+    RequireAbsent(
+        viewer,
+        "shadowInputs.depth=visibilityDepth;shadowInputs.diffuse="
+            "closestSurfaceOutputs.diffuse",
+        "closest-surface Heitz receiver shortcut");
+    RequireContains(
+        viewer,
+        "heitzShadowResult.receiverSampleCount==1u&&"
+            "shadowDenoisingMethod!=DenoisingMethodChoice::None&&"
+            "(!shadowThirdPartyDenoising||"
+            "(!m_ui.DirectionalShadows.ratioEstimator.hardShadows&&"
+            "heitzShadowResult.hitDistance&&"
+            "heitzShadowResult.hitDistanceMatchesSignal))",
+        "single-sample sun denoising with method-specific third-party inputs");
+    RequireAbsent(
+        viewer,
+        "visibilityDirectLightVisibilities.sun={};",
+        "unshadowed MSAA GI source regression");
+    const std::string_view auxiliarySourcePreparation = ExtractSection(
+        viewer,
+        "DirectLightVisibilitiesvisibilityDirectLightVisibilities="
+            "directLightVisibilities;",
+        "BeginRendererStage("
+            "RendererTimingStage::VisibilityLightingPreparation);");
+    if (CountOccurrences(
+            auxiliarySourcePreparation,
+            "visibilityDirectLightVisibilities.sun=") != 1u)
+    {
+        std::cerr << "FAIL: auxiliary GI-source preparation must assign the closest-owner sun exactly once.\n";
+        ++g_Failures;
+    }
+    RequireAbsent(
+        auxiliarySourcePreparation,
+        "visibilityDirectLightVisibilities.sun={};",
+        "auxiliary GI-source shadow retention");
+    RequireAbsent(
+        auxiliarySourcePreparation,
+        "sourceSunVisibility",
+        "single-sample alternate source inside the MSAA-only branch");
+    RequireOrdered(
+        viewer,
+        {
+            "if(heitzShadowResult.receiverSampleCount>1u&&"
+                "heitzShadowResult.closestSourceModulation){",
+            "visibilityDirectLightVisibilities.sun={"
+                "heitzShadowResult.closestSourceModulation,"
+                "heitzShadowResult.light,"
+                "DirectLightVisibilityEncoding::RgbRgba16Float};",
+            "m_PbrDeferredLightingPass->Render("
+                "m_CommandList,*m_View,visibilityDeferredInputs,"
+                "visibilityDirectLightVisibilities,",
+            "m_PbrDeferredLightingPass->Render("
+                "m_CommandList,*m_View,deferredMsaaInputs,"
+                "directLightVisibilities,"
+        },
+        "closest-owner diffuse GI source and total-response final MSAA lighting");
+    const std::string_view singleSampleLighting = ExtractSection(
+        viewer,
+        "else{DirectLightVisibilitysourceSunVisibility;",
+        "EndRendererStage(RendererTimingStage::DirectLighting);");
+    RequireOrdered(
+        singleSampleLighting,
+        {
+            "if(heitzShadowResult.receiverSampleCount==1u&&"
+                "heitzShadowResult.ratioEstimator&&"
+                "heitzShadowResult.closestSourceModulation){",
+            "sourceSunVisibility={"
+                "heitzShadowResult.closestSourceModulation,"
+                "heitzShadowResult.light,"
+                "DirectLightVisibilityEncoding::RgbRgba16Float};",
+            "m_PbrDeferredLightingPass->Render("
+                "m_CommandList,*m_View,deferredInputs,"
+                "directLightVisibilities,",
+            "sourceSunVisibility);"
+        },
+        "reachable 1x diffuse-only GI source routing");
     RequireContains(
         viewer,
         "\"Representation\",\"Configuretheworldspacehierarchysharedbyraytraced\""
@@ -563,6 +897,11 @@ int main(int argc, char** argv)
         "combined shadow-ray dispatch statistics timing envelope");
     RequireContains(
         viewer,
+        "(heitzRatioEstimatorSelected&&"
+            "m_HeitzRatioEstimatorShadowPass&&shadowNoise)",
+        "Heitz timing expectation must mirror the dispatch noise dependency");
+    RequireContains(
+        viewer,
         "\"ShadowRayDispatch\","
             "RendererTimingStage::ShadowRayDispatch",
         "shadow ray dispatch cost in Statistics");
@@ -591,8 +930,11 @@ int main(int argc, char** argv)
     RequireOrdered(
         viewer,
         {
+            "constboolstochasticSunExtent="
+                "std::clamp(angularSize,0.f,90.f)*"
+                "0.0087266462599716478846f>1e-6f;",
             "constboolmultipleSamplesEnabled=ratio.useRatioEstimator&&"
-                "!ratio.hardShadows&&angularSize>1e-4f;",
+                "!ratio.hardShadows&&stochasticSunExtent;",
             "intsampleRateLog2=multipleSamplesEnabled?"
                 "ratio.sampleRateLog2:"
                 "HeitzRatioEstimatorMinimumSampleRateLog2;",

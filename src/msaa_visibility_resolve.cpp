@@ -4,6 +4,7 @@
 #include <donut/engine/ShaderFactory.h>
 
 #include <array>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,30 @@ namespace
         case 16u: return 3;
         default: return -1;
         }
+    }
+
+    bool IsSupportedDepthFormat(nvrhi::Format format)
+    {
+        return format == nvrhi::Format::D16 ||
+            format == nvrhi::Format::D24S8 ||
+            format == nvrhi::Format::D32 ||
+            format == nvrhi::Format::D32S8;
+    }
+
+    bool HasExpectedTextureTopology(
+        const nvrhi::TextureDesc& description,
+        uint32_t width,
+        uint32_t height,
+        uint32_t sampleCount,
+        nvrhi::TextureDimension dimension)
+    {
+        return description.width == width &&
+            description.height == height &&
+            description.depth == 1u &&
+            description.arraySize == 1u &&
+            description.mipLevels == 1u &&
+            description.sampleCount == sampleCount &&
+            description.dimension == dimension;
     }
 }
 
@@ -99,7 +124,7 @@ namespace uvsr
         return m_PipelinesReady;
     }
 
-    void MsaaVisibilityResolvePass::Render(
+    bool MsaaVisibilityResolvePass::Render(
         nvrhi::ICommandList* commandList,
         const MsaaVisibilityResolveInputs& inputs,
         const MsaaVisibilityResolveOutputs& outputs,
@@ -109,7 +134,7 @@ namespace uvsr
         {
             log::error(
                 "MSAA visibility resolve rendered before pipeline preparation completed.");
-            return;
+            return false;
         }
 
         const int pipelineIndex =
@@ -119,7 +144,7 @@ namespace uvsr
             log::error(
                 "MSAA visibility resolve requires a command list and "
                 "a static 2x, 4x, 8x, or 16x sample count.");
-            return;
+            return false;
         }
 
         const std::array<nvrhi::ITexture*, 7> inputTextures = {
@@ -140,27 +165,73 @@ namespace uvsr
             outputs.materialAmbientOcclusion,
             outputs.motionVectors
         };
-        for (nvrhi::ITexture* texture : inputTextures)
+        if (!inputs.depth)
         {
-            if (!texture ||
-                texture->getDesc().sampleCount != sampleCount)
+            log::error(
+                "MSAA visibility resolve requires a depth input.");
+            return false;
+        }
+        const nvrhi::TextureDesc& inputExtent =
+            inputs.depth->getDesc();
+        const std::array<nvrhi::Format, 6> expectedInputFormats = {
+            nvrhi::Format::SRGBA8_UNORM,
+            nvrhi::Format::RGBA8_UNORM,
+            nvrhi::Format::RGBA16_SNORM,
+            nvrhi::Format::RGBA16_FLOAT,
+            nvrhi::Format::R8_UNORM,
+            nvrhi::Format::RGBA16_FLOAT
+        };
+        for (std::size_t textureIndex = 0u;
+            textureIndex < inputTextures.size();
+            ++textureIndex)
+        {
+            nvrhi::ITexture* texture = inputTextures[textureIndex];
+            if (!texture || !HasExpectedTextureTopology(
+                    texture->getDesc(),
+                    inputExtent.width,
+                    inputExtent.height,
+                    sampleCount,
+                    nvrhi::TextureDimension::Texture2DMS) ||
+                (textureIndex == 0u
+                    ? !IsSupportedDepthFormat(texture->getDesc().format)
+                    : texture->getDesc().format !=
+                        expectedInputFormats[textureIndex - 1u]))
             {
                 log::error(
-                    "MSAA visibility resolve inputs must all match "
-                    "the selected multisample count.");
-                return;
+                    "MSAA visibility resolve inputs must match the exact "
+                    "2DMS extent, sample count, single-mip topology, and "
+                    "G-buffer formats.");
+                return false;
             }
         }
-        for (nvrhi::ITexture* texture : outputTextures)
+        const std::array<nvrhi::Format, 7> expectedOutputFormats = {
+            nvrhi::Format::R32_FLOAT,
+            nvrhi::Format::RGBA16_FLOAT,
+            nvrhi::Format::RGBA16_FLOAT,
+            nvrhi::Format::RGBA16_FLOAT,
+            nvrhi::Format::RGBA16_FLOAT,
+            nvrhi::Format::R16_FLOAT,
+            nvrhi::Format::RGBA16_FLOAT
+        };
+        for (std::size_t textureIndex = 0u;
+            textureIndex < outputTextures.size();
+            ++textureIndex)
         {
-            if (!texture ||
-                texture->getDesc().sampleCount != 1u ||
+            nvrhi::ITexture* texture = outputTextures[textureIndex];
+            if (!texture || !HasExpectedTextureTopology(
+                    texture->getDesc(),
+                    inputExtent.width,
+                    inputExtent.height,
+                    1u,
+                    nvrhi::TextureDimension::Texture2D) ||
+                texture->getDesc().format !=
+                    expectedOutputFormats[textureIndex] ||
                 !texture->getDesc().isUAV)
             {
                 log::error(
-                    "MSAA visibility resolve outputs must be "
-                    "single-sample UAV textures.");
-                return;
+                    "MSAA visibility resolve outputs must match the input "
+                    "extent and exact single-sample UAV topology and formats.");
+                return false;
             }
         }
 
@@ -189,10 +260,22 @@ namespace uvsr
         };
         const Pipeline& pipeline =
             m_Pipelines[size_t(pipelineIndex)];
+        if (!pipeline.bindingLayout || !pipeline.pso)
+        {
+            log::error(
+                "MSAA visibility resolve requires a valid prepared pipeline.");
+            return false;
+        }
         nvrhi::BindingSetHandle bindingSet =
             m_Device->createBindingSet(
                 bindingSetDesc,
                 pipeline.bindingLayout);
+        if (!bindingSet)
+        {
+            log::error(
+                "MSAA visibility resolve could not create its binding set.");
+            return false;
+        }
 
         nvrhi::ComputeState state;
         state.pipeline = pipeline.pso;
@@ -204,5 +287,6 @@ namespace uvsr
             (extent.width + 7u) / 8u,
             (extent.height + 7u) / 8u);
         commandList->endMarker();
+        return true;
     }
 }

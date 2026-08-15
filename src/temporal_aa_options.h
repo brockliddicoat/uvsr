@@ -15,13 +15,6 @@ namespace uvsr
         Count
     };
 
-    enum class Cmaa2EdgeDetector : uint32_t
-    {
-        Luma,
-        FullColor,
-        Count
-    };
-
     inline constexpr float FastApproximateAaMinimumEdgeSharpness = 2.f;
     inline constexpr float FastApproximateAaMaximumEdgeSharpness = 8.f;
     inline constexpr float FastApproximateAaDefaultEdgeSharpness = 8.f;
@@ -31,21 +24,12 @@ namespace uvsr
     inline constexpr float FastApproximateAaMinimumDarkEdgeThreshold = 0.04f;
     inline constexpr float FastApproximateAaMaximumDarkEdgeThreshold = 0.06f;
     inline constexpr float FastApproximateAaDefaultDarkEdgeThreshold = 0.04f;
-    inline constexpr float Cmaa2MinimumEdgeThreshold = 0.05f;
-    inline constexpr float Cmaa2MaximumEdgeThreshold = 0.15f;
-    inline constexpr float Cmaa2DefaultEdgeThreshold = 0.05f;
 
     struct FastApproximateAaQualityPreset
     {
         float edgeSharpness;
         float edgeThreshold;
         float darkEdgeThreshold;
-    };
-
-    struct Cmaa2QualityPreset
-    {
-        float edgeThreshold;
-        Cmaa2EdgeDetector detector;
     };
 
     enum class TemporalAaJitterSequence : uint32_t
@@ -305,8 +289,11 @@ namespace uvsr
         AntiAliasingQuality quality = AntiAliasingQuality::Medium;
         TemporalAaCostMode costMode = TemporalAaCostMode::Reduced;
         TemporalAaJitterSequence jitterSequence =
-            TemporalAaJitterSequence::Halton23x8;
-        bool nearestTexelDepth = false;
+            TemporalAaJitterSequence::Halton23x16;
+        // Stable center-owned silhouettes bypass the phase-jittered raw-depth
+        // grid. Exact cleared-center coverage handoffs and moving samples still
+        // validate one nearest previous-depth texel.
+        bool nearestTexelDepth = true;
         TemporalAaAlgorithmOverrides algorithmOverrides;
         TemporalAaBehaviorOverrides behaviorOverrides;
 
@@ -345,36 +332,21 @@ namespace uvsr
 
     };
 
-    struct Cmaa2Settings
-    {
-        bool enabled = false;
-        AntiAliasingQuality quality = AntiAliasingQuality::Ultra;
-        float edgeThreshold = Cmaa2DefaultEdgeThreshold;
-        Cmaa2EdgeDetector detector = Cmaa2EdgeDetector::FullColor;
-
-        [[nodiscard]] constexpr bool operator==(
-            const Cmaa2Settings& other) const
-        {
-            return enabled == other.enabled &&
-                quality == other.quality &&
-                edgeThreshold == other.edgeThreshold &&
-                detector == other.detector;
-        }
-
-    };
-
     struct MsaaSettings
     {
         bool enabled = false;
         AntiAliasingQuality quality = AntiAliasingQuality::Medium;
         uint32_t sampleCount = 4u;
+        bool perSampleRayTracedShadows = true;
 
         [[nodiscard]] constexpr bool operator==(
             const MsaaSettings& other) const
         {
             return enabled == other.enabled &&
                 quality == other.quality &&
-                sampleCount == other.sampleCount;
+                sampleCount == other.sampleCount &&
+                perSampleRayTracedShadows ==
+                    other.perSampleRayTracedShadows;
         }
 
     };
@@ -383,7 +355,6 @@ namespace uvsr
     {
         TemporalAaSettings temporal;
         FastApproximateAaSettings fastApproximate;
-        Cmaa2Settings cmaa2;
         MsaaSettings msaa;
 
         [[nodiscard]] constexpr bool operator==(
@@ -391,7 +362,6 @@ namespace uvsr
         {
             return temporal == other.temporal &&
                 fastApproximate == other.fastApproximate &&
-                cmaa2 == other.cmaa2 &&
                 msaa == other.msaa;
         }
 
@@ -405,7 +375,7 @@ namespace uvsr
         TemporalAaCostMode temporalCostMode =
             TemporalAaCostMode::Reduced;
         TemporalAaJitterSequence temporalJitterSequence =
-            TemporalAaJitterSequence::Halton23x8;
+            TemporalAaJitterSequence::Halton23x16;
         TemporalAaOptions temporal;
         TemporalAaHistoryStorage historyStorage =
             TemporalAaHistoryStorage::Robust;
@@ -431,10 +401,6 @@ namespace uvsr
             FastApproximateAaDefaultEdgeThreshold;
         float fastApproximateDarkEdgeThreshold =
             FastApproximateAaDefaultDarkEdgeThreshold;
-        bool cmaa2Enabled = false;
-        float cmaa2EdgeThreshold = Cmaa2DefaultEdgeThreshold;
-        Cmaa2EdgeDetector cmaa2EdgeDetector =
-            Cmaa2EdgeDetector::FullColor;
         uint32_t rasterSampleCount = 1u;
     };
 
@@ -475,15 +441,7 @@ namespace uvsr
     {
         return value < TemporalAaJitterSequence::Count
             ? value
-            : TemporalAaJitterSequence::Halton23x8;
-    }
-
-    [[nodiscard]] inline constexpr Cmaa2EdgeDetector
-        SanitizeCmaa2EdgeDetector(Cmaa2EdgeDetector value)
-    {
-        return value < Cmaa2EdgeDetector::Count
-            ? value
-            : Cmaa2EdgeDetector::FullColor;
+            : TemporalAaJitterSequence::Halton23x16;
     }
 
     [[nodiscard]] inline constexpr float ClampFastApproximateAaEdgeSharpness(
@@ -514,15 +472,6 @@ namespace uvsr
                 ? value
                 : FastApproximateAaMaximumDarkEdgeThreshold
             : FastApproximateAaMinimumDarkEdgeThreshold;
-    }
-
-    [[nodiscard]] inline constexpr float ClampCmaa2EdgeThreshold(float value)
-    {
-        return value >= Cmaa2MinimumEdgeThreshold
-            ? value <= Cmaa2MaximumEdgeThreshold
-                ? value
-                : Cmaa2MaximumEdgeThreshold
-            : Cmaa2MinimumEdgeThreshold;
     }
 
     [[nodiscard]] inline constexpr uint32_t
@@ -575,44 +524,6 @@ namespace uvsr
             settings.darkEdgeThreshold == preset.darkEdgeThreshold;
     }
 
-    [[nodiscard]] inline constexpr Cmaa2QualityPreset
-        GetCmaa2QualityPreset(AntiAliasingQuality quality)
-    {
-        switch (SanitizeAntiAliasingQuality(quality))
-        {
-        case AntiAliasingQuality::Low:
-            return { 0.15f, Cmaa2EdgeDetector::Luma };
-        case AntiAliasingQuality::Medium:
-            return { 0.10f, Cmaa2EdgeDetector::Luma };
-        case AntiAliasingQuality::High:
-            return { 0.07f, Cmaa2EdgeDetector::Luma };
-        case AntiAliasingQuality::Ultra:
-            return { 0.05f, Cmaa2EdgeDetector::FullColor };
-        default:
-            return { 0.10f, Cmaa2EdgeDetector::Luma };
-        }
-    }
-
-    inline constexpr void ApplyCmaa2QualityPreset(
-        Cmaa2Settings& settings,
-        AntiAliasingQuality quality)
-    {
-        settings.quality = SanitizeAntiAliasingQuality(quality);
-        const Cmaa2QualityPreset preset =
-            GetCmaa2QualityPreset(settings.quality);
-        settings.edgeThreshold = preset.edgeThreshold;
-        settings.detector = preset.detector;
-    }
-
-    [[nodiscard]] inline constexpr bool MatchesCmaa2QualityPreset(
-        const Cmaa2Settings& settings)
-    {
-        const Cmaa2QualityPreset preset =
-            GetCmaa2QualityPreset(settings.quality);
-        return settings.edgeThreshold == preset.edgeThreshold &&
-            settings.detector == preset.detector;
-    }
-
     [[nodiscard]] inline constexpr uint32_t
         GetMultisampleQualitySampleCount(AntiAliasingQuality quality)
     {
@@ -633,13 +544,24 @@ namespace uvsr
         settings.quality = SanitizeAntiAliasingQuality(quality);
         settings.sampleCount =
             GetMultisampleQualitySampleCount(settings.quality);
+        settings.perSampleRayTracedShadows = true;
     }
 
     [[nodiscard]] inline constexpr bool MatchesMultisampleQualityPreset(
         const MsaaSettings& settings)
     {
         return settings.sampleCount ==
-            GetMultisampleQualitySampleCount(settings.quality);
+                GetMultisampleQualitySampleCount(settings.quality) &&
+            settings.perSampleRayTracedShadows;
+    }
+
+    [[nodiscard]] inline constexpr bool
+        ShouldUsePerSampleRayTracedShadows(
+            const MsaaSettings& settings,
+            uint32_t rasterSampleCount)
+    {
+        return rasterSampleCount > 1u &&
+            settings.perSampleRayTracedShadows;
     }
 
     [[nodiscard]] inline constexpr uint32_t
@@ -975,15 +897,18 @@ namespace uvsr
         result.fastApproximateDarkEdgeThreshold =
             ClampFastApproximateAaDarkEdgeThreshold(
                 settings.fastApproximate.darkEdgeThreshold);
-        result.cmaa2Enabled = settings.cmaa2.enabled;
-        result.cmaa2EdgeThreshold =
-            ClampCmaa2EdgeThreshold(settings.cmaa2.edgeThreshold);
-        result.cmaa2EdgeDetector =
-            SanitizeCmaa2EdgeDetector(settings.cmaa2.detector);
         result.rasterSampleCount = settings.msaa.enabled
             ? SanitizeMsaaSampleCount(settings.msaa.sampleCount)
             : 1u;
         return result;
+    }
+
+    [[nodiscard]] inline constexpr bool ShouldUseRasterTemporalAa(
+        bool temporalRequested,
+        bool progressiveAccumulationOwnsHistory)
+    {
+        return temporalRequested &&
+            !progressiveAccumulationOwnsHistory;
     }
 
     [[nodiscard]] inline constexpr bool
@@ -1007,7 +932,7 @@ namespace uvsr
     {
         bool enabled = false;
         TemporalAaJitterSequence jitterSequence =
-            TemporalAaJitterSequence::Halton23x8;
+            TemporalAaJitterSequence::Halton23x16;
         TemporalAaOptions temporal;
         TemporalAaDepthValidation depthValidation =
             TemporalAaDepthValidation::FourTexelFootprint;

@@ -475,7 +475,8 @@ namespace uvsr
             const PathTracingInputs& inputs,
             const PathTracingConstants& constants,
             const std::vector<LightConstants>& lights,
-            bool stableSignalsRequired)
+            bool stableSignalsRequired,
+            bool accumulationJitterRequired)
         {
             uint64_t hash = 1469598103934665603ull;
             hash = HashValue(
@@ -542,6 +543,7 @@ namespace uvsr
             hash = HashValue(hash, inputs.noiseSettings.pattern);
             hash = HashValue(hash, inputs.noiseSettings.resolution);
             hash = HashValue(hash, inputs.accumulateSamples);
+            hash = HashValue(hash, accumulationJitterRequired);
             hash = HashValue(hash, inputs.accumulationSettings);
             return hash;
         }
@@ -1763,6 +1765,11 @@ namespace uvsr
             return failure;
         }
 
+        const bool accumulationJitterRequired =
+            inputs.accumulationJitterActive &&
+            inputs.accumulateSamples &&
+            sharedPrimaryRequired;
+
         PathTracingConstants constants = {};
         uint32_t geometryMapCount = 0u;
         uint32_t geometryCount = 0u;
@@ -1921,6 +1928,11 @@ namespace uvsr
             constants.flags |=
                 UVSR_PATH_TRACING_FLAG_SHARED_PRIMARY_SURFACE;
         }
+        if (accumulationJitterRequired)
+        {
+            constants.flags |=
+                UVSR_PATH_TRACING_FLAG_ACCUMULATION_JITTER;
+        }
         if (inputs.view->IsReverseDepth())
             constants.flags |= UVSR_PATH_TRACING_FLAG_REVERSE_DEPTH;
         if (inputs.showEnvironmentBackground)
@@ -1950,7 +1962,8 @@ namespace uvsr
                 inputs,
                 constants,
                 submittedLights,
-                stableSignalsRequired);
+                stableSignalsRequired,
+                accumulationJitterRequired);
         const bool historyReset = m_ResetRequested || !m_HistoryValid ||
             m_LastHistoryEpoch != inputs.historyEpoch ||
             m_LastTransportSignature != transportSignature;

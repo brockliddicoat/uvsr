@@ -51,6 +51,7 @@ bool TemporalBehaviorEnabled(uint flag)
     // shader variant reads the same uniform flags only when a Developer Option
     // changes one of these policies.
     static const uint kMinimumBehaviorFlags =
+        UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH |
         UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT |
         UVSR_TAA_BEHAVIOR_SQUARED_MOTION_TRUST |
         UVSR_TAA_BEHAVIOR_TIGHT_RECTIFICATION |
@@ -160,6 +161,13 @@ bool IsLinearHistoryFootprintInBounds(float2 pixelPosition)
         all(pixelPosition <= float2(BufferDimensions) - 1.0f);
 }
 
+bool IsPointHistoryPositionInBounds(float2 pixelPosition)
+{
+    return UvsrTemporalPointPositionInBounds(
+            pixelPosition,
+            BufferDimensions) > 0.0f;
+}
+
 void GetPairBounds(
     uint leftIndex,
     out float3 minimumColor,
@@ -236,40 +244,55 @@ PreparedPixel PreparePixel(uint2 pixel, uint tileIndex)
         prepared.currentDepth + motion.z;
     if (prepared.velocitySquared >= kMaximumVelocitySquared ||
         !IsDepthValid(expectedPreviousDepth) ||
-        !IsLinearHistoryFootprintInBounds(historyColorPixel) ||
-        !IsLinearHistoryFootprintInBounds(historyDepthPixel))
+        UvsrTemporalDeviceDepthPrecisionValidity(
+            expectedPreviousDepth,
+            motion.z,
+            SourceDepthPairQuantizationError,
+            DepthStorageFlags) == 0.0f ||
+        !IsLinearHistoryFootprintInBounds(historyColorPixel))
     {
         return prepared;
     }
 
+    const bool stationary =
+        prepared.velocitySquared <= 1e-4f &&
+        abs(motion.z) <= 1e-6f;
     [branch]
     if (TemporalBehaviorEnabled(
             UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH))
     {
-        // Compact history still validates the nearest jittered previous-depth
-        // texel for stationary samples. Otherwise subpixel silhouette motion
-        // can accept unrelated background or foreground history.
-        int2 depthPixel = clamp(
-            int2(floor(historyDepthPixel + 0.5f)),
-            int2(0, 0),
-            int2(BufferDimensions) - 1);
-        float previousDepth =
-            PreviousDepth.Load(int3(depthPixel, 0));
-        prepared.historySupport = UvsrTemporalDeviceDepthAccepted(
-                expectedPreviousDepth,
-                motion.z,
-                SourceDepthPairQuantizationError,
-                previousDepth,
-                DepthStorageFlags,
-                Projection,
-                1e-3f);
-        if (prepared.historySupport == 0.0f)
+        // Stationary history color is phase invariant. Moving pixels retain
+        // one exact point-depth ownership test.
+        if (!stationary)
         {
-            return prepared;
+            if (!IsPointHistoryPositionInBounds(historyDepthPixel))
+                return prepared;
+
+            int2 depthPixel =
+                int2(floor(historyDepthPixel + 0.5f));
+            float previousDepth =
+                PreviousDepth.Load(int3(depthPixel, 0));
+            prepared.historySupport =
+                UvsrTemporalPointDepthAccepted(
+                    expectedPreviousDepth,
+                    motion.z,
+                    SourceDepthPairQuantizationError,
+                    previousDepth,
+                    DepthStorageFlags,
+                    Projection);
+            if (prepared.historySupport == 0.0f)
+                return prepared;
+        }
+        else
+        {
+            prepared.historySupport = 1.0f;
         }
     }
     else
     {
+        if (!IsLinearHistoryFootprintInBounds(historyDepthPixel))
+            return prepared;
+
         float4 previousDepths = PreviousDepth.Gather(
             LinearSampler,
             (historyDepthPixel + 0.5f) *

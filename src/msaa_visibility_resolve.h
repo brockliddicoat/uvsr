@@ -69,7 +69,7 @@ namespace uvsr
             return m_PipelinesReady;
         }
 
-        void Render(
+        [[nodiscard]] bool Render(
             nvrhi::ICommandList* commandList,
             const MsaaVisibilityResolveInputs& inputs,
             const MsaaVisibilityResolveOutputs& outputs,

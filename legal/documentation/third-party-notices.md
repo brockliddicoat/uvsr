@@ -10,8 +10,7 @@ beside the relevant dependency or asset.
 
 - NVIDIA Donut, NVRHI, ShaderMake, Dear ImGui, and Donut's transitive
   dependencies retain their upstream notices and licenses.
-- Intel CMAA2 remains under Apache 2.0. Its incorporated Microsoft portion and
-  UVSR's MiniEngine-derived TAA portions retain Microsoft's MIT notice.
+- UVSR's MiniEngine-derived TAA portions retain Microsoft's MIT notice.
 - UVSR's Fast Approximate shader follows Google Filament's Apache-licensed
   adaptation lineage through G3D and NVIDIA FXAA; preserve the notices in
   `legal/documentation/google-filament-fxaa.md` from the source distribution.

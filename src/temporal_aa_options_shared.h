@@ -33,6 +33,8 @@
 #define UVSR_TAA_LDS_LEGACY 0
 #define UVSR_TAA_LDS_PACKED 1
 
+// Stationary center-owned samples bypass raw previous depth; moving samples
+// validate one nearest texel. The historical name preserves the CPU/HLSL ABI.
 #define UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH (1u << 0u)
 #define UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT (1u << 1u)
 #define UVSR_TAA_BEHAVIOR_SQUARED_MOTION_TRUST (1u << 2u)

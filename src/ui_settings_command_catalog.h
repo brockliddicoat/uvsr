@@ -248,13 +248,10 @@ namespace uvsr
         Value("anti-aliasing.fxaa.edge-sharpness", Kind::Float, Section::Aliasing, "float 2..8"),
         Value("anti-aliasing.fxaa.edge-threshold", Kind::Float, Section::Aliasing, "float 0.08..0.25"),
         Value("anti-aliasing.fxaa.minimum-edge-threshold", Kind::Float, Section::Aliasing, "float 0.04..0.06"),
-        Value("anti-aliasing.cmaa2.enabled", Kind::Boolean, Section::Aliasing, "on|off"),
-        Value("anti-aliasing.cmaa2.quality", Kind::Enum, Section::Aliasing, "low|medium|high|ultra"),
-        Value("anti-aliasing.cmaa2.edge-threshold", Kind::Float, Section::Aliasing, "float 0.05..0.15"),
-        Value("anti-aliasing.cmaa2.detector", Kind::Enum, Section::Aliasing, "luma|full-color"),
         Value("anti-aliasing.msaa.enabled", Kind::Boolean, Section::Aliasing, "on|off"),
         Value("anti-aliasing.msaa.quality", Kind::Enum, Section::Aliasing, "low|medium|high|ultra"),
         Value("anti-aliasing.msaa.samples", Kind::Enum, Section::Aliasing, "2x|4x|8x|16x"),
+        Value("anti-aliasing.msaa.per-sample-shadows", Kind::Boolean, Section::Aliasing, "on|off"),
 
         // Debug.
         Value("debug.world.materials", Kind::Enum, Section::Debug, "scene|white|white-detail|white-lighting"),

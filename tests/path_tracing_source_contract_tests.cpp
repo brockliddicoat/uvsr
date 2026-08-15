@@ -1787,11 +1787,46 @@ int main(int argc, char** argv)
         {
             "pathtracingaccumulationcyclemodulo(updateinterval)",
             "constuintupdatephase=updateinterval>1u",
+            "constboolaccumulationjitteractive=pathtracingflagisset("
+                "uvsr_path_tracing_flag_accumulation_jitter);",
+            "constuintcoveragestep=accumulationjitteractive&&"
+                "updateinterval>1u",
+            "constuintsuccessfulsamplesperupdate=max("
+                "g_pathtracing.samplesperpixel,1u);",
+            "constuintsuccessfulupdatephase=oldcount==0u?0u:1u+"
+                "(oldcount-1u)/successfulsamplesperupdate;",
+            "constuintsuccessfulphaseadvance=updateinterval>1u",
+            "(successfulupdatephase%updateinterval)*coveragestep",
             "constboolscheduledupdate=updateinterval==1u||",
             "constboolattempt=refreshdebug||!accumulate||oldcount==0u||"
                 "scheduledupdate;"
         },
-        "adaptive retry must use a deterministic bounded revisit cycle");
+        "adaptive retry must decorrelate successful Shared Primary samples "
+        "from active camera jitter while retaining a bounded revisit cycle");
+    RequireContains(
+        constants,
+        "#defineuvsr_path_tracing_flag_accumulation_jitter(1u<<14u)",
+        "path constants must expose accumulation-jitter scheduling intent");
+    RequireContains(
+        passHeader,
+        "boolaccumulationjitteractive=false;",
+        "path inputs must carry effective accumulation-jitter ownership");
+    RequireOrdered(
+        pass,
+        {
+            "constboolaccumulationjitterrequired="
+                "inputs.accumulationjitteractive&&",
+            "inputs.accumulatesamples&&",
+            "sharedprimaryrequired;",
+            "constants.flags|="
+                "uvsr_path_tracing_flag_accumulation_jitter;"
+        },
+        "only executable accumulating Shared Primary transport may alter the "
+        "adaptive coverage phase");
+    RequireContains(
+        pass,
+        "hash=hashvalue(hash,accumulationjitterrequired);",
+        "the effective accumulation-jitter policy must reset path history");
     RequireOrdered(
         pass,
         {
