@@ -510,6 +510,23 @@ set_tests_properties(
     uvsr_readme_line_count_contract
     PROPERTIES LABELS "documentation"
 )
+if (WIN32)
+    add_test(
+        NAME uvsr_launch_menu_contract
+        COMMAND powershell.exe
+            -NoProfile
+            -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/launch_uvsr_menu_tests.ps1"
+            -Launcher "${CMAKE_CURRENT_SOURCE_DIR}/LaunchUVSR.cmd"
+            -LaunchHelper "${CMAKE_CURRENT_SOURCE_DIR}/tools/launch_uvsr.ps1"
+    )
+    set_tests_properties(
+        uvsr_launch_menu_contract
+        PROPERTIES
+            LABELS "launcher;windows"
+            TIMEOUT 30
+    )
+endif()
 
 add_executable(uvsr_scene_catalog_tests
     tests/scene_catalog_tests.cpp
