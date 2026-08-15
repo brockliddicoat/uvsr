@@ -28,6 +28,11 @@ $startParameters = @{
 if ($RendererArguments.Count -gt 0) {
     $startParameters.ArgumentList = $RendererArguments
 }
-$process = Start-Process @startParameters
+try {
+    $process = Start-Process @startParameters -ErrorAction Stop
+}
+catch {
+    throw "Windows could not launch UVSR from '$executable': $($_.Exception.Message)"
+}
 
 Write-Output $process

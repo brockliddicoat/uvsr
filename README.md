@@ -13,11 +13,11 @@ production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 128,144 non-blank source lines.
+**First-Party Lines of Code:** 128,617 non-blank source lines.
 
 **Third-Party Lines of Code:** 386,164 non-blank source lines.
 
-**Total Lines of Code:** 514,308 non-blank source lines.
+**Total Lines of Code:** 514,781 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -89,7 +89,7 @@ with `tools/update_readme_line_counts.cmd --write`.
 Requires Windows with a DirectX 12-capable GPU and current driver, CMake 3.24 or
 newer, Visual Studio with a C++17-capable MSVC toolchain, and Git with submodule
 support. Configure, build every Release target, run the deterministic tests,
-and launch from PowerShell:
+and open the persistent launcher menu from PowerShell:
 
 ```powershell
 git clone --recurse-submodules https://github.com/brockliddicoat/uvsr.git
@@ -97,8 +97,12 @@ cd uvsr
 cmake -S . -B build
 cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
-.\build\bin\uvsr.exe
+.\LaunchUVSR.cmd -Menu
 ```
+
+Press `1` to launch `uvsr.exe` or `2` to select it in File Explorer. The menu
+reports whether Windows accepted each request and then presents both choices
+again, so it remains available after the renderer closes.
 
 The first configure may download Microsoft's Direct3D 12 Agility SDK. Optional
 build variants and the complete validation workflow are documented below.
