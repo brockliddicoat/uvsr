@@ -161,16 +161,16 @@ and transmission controls without adding explanatory rows to the drawer.
 
 ## Interface
 
-The first Interface controls are **Disable Animations** and **Override Visual
-Maxes**. Disable Animations moves every authored drawer, panel, slider,
-command-interface, and zoom transition directly to its current endpoint.
-Override Visual Maxes defaults off. Enabling it lets exact numeric entry exceed
-a shortened visual track up to that setting's safe logical limit; pointer and
-navigation travel remain on the compact track. Disabling it again preserves an
-already entered supported value. **Interface Skin** selects Amp or Ogg. Amp
-owns the animated UVSR presentation; Ogg uses stock ImGui presentation and
-immediate endpoints. Performance and Settings use the same authored root-panel
-motion as the drawers in Amp.
+The Interface drawer starts collapsed. Its first controls are **Disable
+Animations** and **Override Visual Maxes**. Disable Animations moves every
+authored drawer, panel, slider, command-interface, and zoom transition directly
+to its current endpoint. Override Visual Maxes defaults off. Enabling it lets
+exact numeric entry exceed a shortened visual track up to that setting's safe
+logical limit; pointer and navigation travel remain on the compact track.
+Disabling it again preserves an already entered supported value. **Interface
+Skin** selects Amp or Ogg. Amp owns the animated UVSR presentation; Ogg uses
+stock ImGui presentation and immediate endpoints. Performance and Settings use
+the same authored root-panel motion as the drawers in Amp.
 
 **Primary Accent** edits Amp's drawer and panel headers, footer buttons,
 selection details, checkmarks, and raised slider knobs. Ogg disables this row
@@ -227,7 +227,10 @@ without changing fourth-column alignment. One intermediate hollow-circle size is
 shared by wheel, selector, endpoint, hue-bar, and alpha-bar markers, while
 larger invisible snap zones keep exact hue, white, and black pointer reachable.
 The hue wheel has a clearly visible one-pixel white transparency gradient on
-both its inner and outer edges.
+both its inner and outer edges. Every vertical lane uses that same white,
+one-pixel top-to-bottom gradient outline, inset by its anti-alias fringe plus
+half a stroke so the complete rounded perimeter remains inside the lane at
+every supported display scale.
 
 The popup base and two interior depth layers are translucent. The complete
 outer-to-inner frame band and pointer frame use the same panel-inset color and
@@ -407,10 +410,10 @@ queries.
 
 The Noise drawer defaults to **Spatiotemporal Blue**, **128x128**, animated
 sampling, and **Accumulate Samples** off. **Accumulate Samples** is the final
-Noise section and can be collapsed with its complete contents. Its only
-top-level control is **Enable**; no gray explanatory line appears beneath it.
-The section is available in both lighting solutions. Enabling it reveals three
-starting profiles:
+Noise section. It starts expanded on each launch and can still be collapsed
+with its complete contents. Its only top-level control is **Enable**; no gray
+explanatory line appears beneath it. The section is available in both lighting
+solutions. Enabling it reveals three starting profiles:
 **Progressive Mean**, **Responsive Mean**, and factory-default **Variance
 Guided**. Every averaging, scheduling, effective-history, warmup, target-error,
 and minimum-update-rate control remains exposed. Editing one retains the chosen
@@ -763,8 +766,8 @@ preserve the old image.
 
 ## Debug Drawer
 
-The Debug drawer and each animated effect group start expanded. Every group is
-independently collapsible:
+The Debug drawer starts collapsed. Its animated effect groups start expanded
+when first revealed, and every disclosure remains independently collapsible:
 
 - **World** selects Default, White, White Detail, or White Lighting.
 - **Visibility** selects Default, Ambient Visibility, Traced Indirect, or
@@ -921,21 +924,20 @@ renderer.
 The detached Performance panel shows resolution, submitted triangles, frame
 time, and frame rate in one slash-separated line. Renderer identity remains in
 General. Path Tracing contributes an explicit Path Transport stage and
-solver/history resource rows while selected. Amp draws the same opaque rounded inset frame around Performance and
-Settings after their content, so every corner wedge is filled and Performance
-table lines terminate at the inner outline. Its summary keeps one fixed
-top-padded baseline and a permanently opaque one-line surface through expanded,
-animated, and compact states. The selector uses the same inset and width as
+solver/history resource rows while selected. Amp integrates the Performance
+summary into the same opaque rounded top-margin treatment used by the Settings
+snapshot, so the outer top corners and inner selector fillets remain continuous
+through expanded, animated, and compact states. Performance table lines
+terminate at that inner outline. The selector uses the same inset and width as
 ordinary long General controls and shows one selected view at a time in a
-labeled, striped two-column table. It contains **Complete Renderer**, **Scene
-Setup**, **Geometry**, **Direct Lighting**, **Screen Space
-Visibility**, **Directional Shadows**, **Temporal Reconstructive**,
-**Fast Approximate**, **Multisample Adaptive**,
-**Material Picking**,
-**Environment Background**, **Tone Mapping**, and **Output
-Blit**. Complete
-Renderer restores the available stage breakdown, including Closest Surface
-Resolve when active. A timing row stays hidden until its first completed
+headerless, striped two-column table. The first visible row is data rather than
+the redundant Graphics Stage and Current labels. Views include **Complete
+Renderer**, **Scene Setup**, **Geometry**, **Direct Lighting**, **Screen Space
+Visibility**, **Path Transport**, **Directional Shadows**, **Temporal
+Reconstructive**, **Fast Approximate**, **Multisample Adaptive**, **Material
+Picking**, **Environment Background**, **Tone Mapping**, and **Output Blit**.
+Complete Renderer restores the available stage breakdown, including Closest
+Surface Resolve when active. A timing row stays hidden until its first completed
 measurement. Once shown, it remains in that Performance view for the rest of
 the session and displays `--` with a zero unavailable value whenever no current
 measurement exists. Meaningful resource, count, format, and status rows retain

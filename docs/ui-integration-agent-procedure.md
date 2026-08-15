@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-08-15.1`.
+UI reference version: `2026-08-15.2`.
 
 ## Purpose
 
@@ -188,13 +188,17 @@ and alpha bar without active-state growth. Begin the bright popup interior at
 Regular padding, then inset all controls by one additional Tight token so four
 bright pixels remain on every side at 100 percent scale without changing the
 fourth-column lane geometry. Give both hue-wheel edges a visible one-pixel
-white transparency gradient. The popup base and two depth layers are
-translucent. Fill the complete outer-to-inner frame band and pointer frame with
+white transparency gradient. Give all four vertical lanes that same one-pixel
+white top-to-bottom gradient outline, inset by its anti-alias fringe plus half
+its stroke so each rounded perimeter stays inside its lane at every supported
+display scale. The popup base and two depth layers are translucent. Fill the
+complete outer-to-inner frame band and pointer frame with
 the same panel-inset role and inherited transparency used by the Settings and
 Performance frames. Selector, bar, checker, and comparison colors remain opaque
-at steady state. Emit the rounded source pointer after the popup-body transform so its tip
-stays on the canonical Settings content edge at the source row's vertical center
-throughout reversible zoom and fade. Unscoped and Ogg pickers stay stock.
+at steady state. Emit the rounded source pointer after the popup-body transform
+so its tip stays on the canonical Settings content edge at the source row's
+vertical center throughout reversible zoom and fade. Unscoped and Ogg pickers
+stay stock.
 
 ## Mandatory New-Element Intake Checklist
 
@@ -277,12 +281,12 @@ or up over 180 milliseconds and retain a selected popup through its roll-up;
 Ogg retains stock immediate popup spacing and rendering. This popup-only
 presentation must not change the closed combo trigger or own renderer mutation.
 
-Debug and its World, Visibility, and Physically Based Lighting groups start
-expanded, then preserve user owned disclosure state. Their
-ordinary rendering choices, including the initial World material choice, are
-labeled **Default**. Diffuse has no Reconstruction group: full-resolution
-signals bypass upsampling, while reduced-resolution signals use the one
-automatic guide-aware upsample.
+Debug starts collapsed. Its World, Visibility, Physically Based Lighting, and
+Path Tracing Transport groups start expanded when first revealed, then preserve
+user-owned disclosure state. Their ordinary rendering choices, including the
+initial World material choice, are labeled **Default**. Diffuse has no
+Reconstruction group: full-resolution signals bypass upsampling, while
+reduced-resolution signals use the one automatic guide-aware upsample.
 
 Representation begins with **Allow Ray Traversal**, the single master permission
 for every ray traced effect. Switching it off preserves every effect's stored
@@ -296,13 +300,13 @@ Diffuse exposes independent **Output Hit Distance** controls inside Occlusion
 and Illumination. They preserve profile origin and do not become active merely
 because a denoising method is selected.
 
-Material Domain, Interface Skin, and every Interface color use the ordinary
-side-labeled bounded lane. Material sliders inherit that same bounded width;
-never restore a full-drawer slider. The Material hover contract explains the
-meaning of glossiness, metalness, roughness, opacity, alpha cutoff, normal
-scale, occlusion, emissive, and transmission. A gated alpha value keeps its
-picker lane visible with a checkerboard base instead of replacing the lane with
-solid gray.
+Interface starts collapsed. Material Domain, Interface Skin, and every
+Interface color use the ordinary side-labeled bounded lane. Material sliders
+inherit that same bounded width; never restore a full-drawer slider. The
+Material hover contract explains the meaning of glossiness, metalness,
+roughness, opacity, alpha cutoff, normal scale, occlusion, emissive, and
+transmission. A gated alpha value keeps its picker lane visible with a
+checkerboard base instead of replacing the lane with solid gray.
 
 Noise owns Pattern, Resolution, and Animate Samples for every stochastic effect.
 Pattern choices are **Spatial White**, **Spatial Blue**, and **Spatiotemporal
@@ -316,8 +320,9 @@ effect's sampling changes. AO and GI share one Diffuse override because they
 share one dispatch.
 
 **Accumulate Samples** is the final Noise section. It is an independently
-collapsible tree containing a top-level **Enable** toggle and all enabled-only
-options. Do not render gray explanatory status text beneath the section.
+collapsible tree that starts open on each launch and contains a top-level
+**Enable** toggle plus all enabled-only options. Do not render gray explanatory
+status text beneath the section.
 
 Denoising contains AO, GI, Shadows, and Sky Visibility groups. Every group
 offers Raw, Joint Bilateral, and Gaussian Bilateral. AO additionally offers
@@ -453,17 +458,21 @@ row position and keep the one-line content surface fully opaque in every state;
 do not make the remainder of the expanded body opaque.
 The fully visible command interface uses that same opaque compact-body surface;
 its existing whole-window appearance transform alone owns entry and exit fade.
-In Amp, submit an opaque rounded inset frame after Performance content and after
-the Settings scrolling child. The frame must fill all four outer-to-inner
-corner wedges, leave the interactive center untouched, paint the fixed retained
-row opaque, and finish with outer and inner depth outlines. Do not grade either
-retained row with a root inset shadow.
+In Amp, begin Performance's expanded inner boundary below the retained summary
+row and morph it into that row's perimeter as the root collapses. Paint the
+opaque frame surface and retained row before Performance content, then append
+stable outer and inner depth outlines. This keeps the summary inside the top
+margin, fills every corner wedge, and leaves the interactive center untouched.
+Settings retains its equivalent late composition after the scrolling child.
+Do not grade either retained row with a root inset shadow.
 Keep renderer identity in General. The compact unlabeled selector shows one
 retained renderer timing view at a time. Give it the same inset and fixed width
 as ordinary long General controls; do not reserve a same-row reset lane.
 Selecting **Complete Renderer** is the direct route back to the default view.
-Complete Renderer uses a striped two-column table for the full
-retained stage list; an ordinary stage includes the complete frame for context.
+Complete Renderer uses a headerless, striped two-column table whose first
+visible row is timing data, without redundant Graphics Stage or Current labels.
+It retains the full stage list; an ordinary stage includes the complete frame
+for context.
 Visibility, Directional Shadows, Temporal Reconstructive, Fast Approximate, and
 Multisample Adaptive use the same readable table language for their
 retained breakdowns. Completed query availability gates every timing. Omit a
@@ -700,9 +709,10 @@ Use the exact candidate executable and a bundled scene. Exercise:
   fourth numeric slots with no middle seam, absent
   sub-row preview squares and popup title,
   fourth-column bar alignment, shared intermediate marker size, opaque color
-  assets, visible inner/outer hue-wheel gradients, four-sided bright control
-  margins, translucent base/depth layers, and the full Settings-matched frame
-  band; verify the popup may cover the scrollbar but never Settings content,
+  assets, visible inner/outer hue-wheel gradients, four inset white-gradient
+  lane perimeters without gutter spill, four-sided bright control margins,
+  translucent base/depth layers, and the full Settings-matched frame band;
+  verify the popup may cover the scrollbar but never Settings content,
   centers on high and middle source rows when space permits, clamps at the
   Settings bottom for low rows, targets the canonical
   content edge for inset swatches, zooms and fades reversibly,
@@ -783,6 +793,13 @@ The UI handoff includes:
 - confirmation that this reference was updated when normative behavior changed.
 
 ## Reference Revision History
+
+- `2026-08-15.2`: Integrated the Performance summary into its opaque top
+  margin, corrected expanded and animated fillet direction without corner
+  pinholes, removed timing-table headers, and made Accumulate Samples start
+  expanded while preserving its independent collapse state. Replaced the four
+  translucent color-picker lane borders with inset white-gradient outlines and
+  made the outer Debug and Interface drawers start closed.
 
 - `2026-08-15.1`: Composed the settings-menu and denoising revamp with
   Halton-16 thin-outline stability, MSAA per-sample shadow control,

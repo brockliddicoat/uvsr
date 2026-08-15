@@ -134,6 +134,10 @@ namespace
         bool alphaCheckerEdgeCoverageContinuous = false;
         bool innerWheelGradientOutlineVisible = false;
         bool outerWheelGradientOutlineVisible = false;
+        bool hueBarInsetOutlineVisible = false;
+        bool alphaBarInsetOutlineVisible = false;
+        bool currentBarInsetOutlineVisible = false;
+        bool originalBarInsetOutlineVisible = false;
         bool hueHollowMarkerVisible = false;
         bool alphaHollowMarkerVisible = false;
         bool currentBarVisible = false;
@@ -1160,6 +1164,89 @@ namespace
             topAlpha >= 0.75f &&
             bottomAlpha >= 0.45f &&
             topAlpha - bottomAlpha >= 0.20f;
+    }
+
+    bool HasVisibleInsetBarOutlineCoverage(
+        const ImDrawList& drawList,
+        const ImRect& bounds,
+        float fringe,
+        float alphaScale)
+    {
+        const float thickness = ImMax(1.0f, fringe);
+        const float outlineInset = ImMax(0.0f, fringe) + thickness * 0.5f;
+        const ImRect outlineBounds(
+            Add(bounds.Min, ImVec2(outlineInset, outlineInset)),
+            Subtract(bounds.Max, ImVec2(outlineInset, outlineInset)));
+        if (outlineBounds.IsInverted())
+            return false;
+
+        alphaScale = ImClamp(alphaScale, 0.0f, 1.0f);
+        const float gradientExtent = ImMax(outlineBounds.GetHeight(), 1.0f);
+        const float edgeTolerance = ImMax(1.25f, fringe * 1.5f);
+        const float alphaTolerance = ImMax(
+            2.0f / 255.0f,
+            alphaScale * 0.035f);
+        std::array<bool, 4> edgeCovered = { false, false, false, false };
+        float topAlpha = 0.0f;
+        float bottomAlpha = 0.0f;
+        bool qualifyingCoverageStayedInside = true;
+        for (const ImDrawVert& vertex : drawList.VtxBuffer)
+        {
+            const ImVec4 color = ImGui::ColorConvertU32ToFloat4(vertex.col);
+            const float chroma = ImMax(color.x, ImMax(color.y, color.z)) -
+                ImMin(color.x, ImMin(color.y, color.z));
+            if (chroma > 0.05f || color.x < 0.90f)
+                continue;
+
+            const float gradientPosition = ImSaturate(
+                (vertex.pos.y - outlineBounds.Min.y) / gradientExtent);
+            const float expectedAlpha =
+                ImLerp(0.95f, 0.55f, gradientPosition) * alphaScale;
+            if (std::abs(color.w - expectedAlpha) > alphaTolerance)
+                continue;
+
+            const bool nearLeft =
+                std::abs(vertex.pos.x - outlineBounds.Min.x) <= edgeTolerance &&
+                vertex.pos.y >= outlineBounds.Min.y - edgeTolerance &&
+                vertex.pos.y <= outlineBounds.Max.y + edgeTolerance;
+            const bool nearRight =
+                std::abs(vertex.pos.x - outlineBounds.Max.x) <= edgeTolerance &&
+                vertex.pos.y >= outlineBounds.Min.y - edgeTolerance &&
+                vertex.pos.y <= outlineBounds.Max.y + edgeTolerance;
+            const bool nearTop =
+                std::abs(vertex.pos.y - outlineBounds.Min.y) <= edgeTolerance &&
+                vertex.pos.x >= outlineBounds.Min.x - edgeTolerance &&
+                vertex.pos.x <= outlineBounds.Max.x + edgeTolerance;
+            const bool nearBottom =
+                std::abs(vertex.pos.y - outlineBounds.Max.y) <= edgeTolerance &&
+                vertex.pos.x >= outlineBounds.Min.x - edgeTolerance &&
+                vertex.pos.x <= outlineBounds.Max.x + edgeTolerance;
+            if (!nearLeft && !nearRight && !nearTop && !nearBottom)
+                continue;
+
+            edgeCovered[0] |= nearLeft;
+            edgeCovered[1] |= nearRight;
+            edgeCovered[2] |= nearTop;
+            edgeCovered[3] |= nearBottom;
+            if (nearTop)
+                topAlpha = ImMax(topAlpha, color.w);
+            if (nearBottom)
+                bottomAlpha = ImMax(bottomAlpha, color.w);
+            qualifyingCoverageStayedInside &=
+                vertex.pos.x >= bounds.Min.x - 0.05f &&
+                vertex.pos.x <= bounds.Max.x + 0.05f &&
+                vertex.pos.y >= bounds.Min.y - 0.05f &&
+                vertex.pos.y <= bounds.Max.y + 0.05f;
+        }
+        return
+            std::all_of(
+                edgeCovered.begin(),
+                edgeCovered.end(),
+                [](bool covered) { return covered; }) &&
+            qualifyingCoverageStayedInside &&
+            topAlpha >= 0.75f * alphaScale &&
+            bottomAlpha >= 0.45f * alphaScale &&
+            topAlpha - bottomAlpha >= 0.20f * alphaScale;
     }
 
     bool HasComparisonBarCoverage(
@@ -2417,6 +2504,30 @@ namespace
                     &observation.outerWheelOutlineCoveredBins,
                     &observation.outerWheelOutlineTopAlpha,
                     &observation.outerWheelOutlineBottomAlpha);
+            observation.hueBarInsetOutlineVisible =
+                HasVisibleInsetBarOutlineCoverage(
+                    *popupWindow->DrawList,
+                    observation.hueBarRect,
+                    observation.drawListFringe,
+                    callerStyleAlpha);
+            observation.alphaBarInsetOutlineVisible =
+                HasVisibleInsetBarOutlineCoverage(
+                    *popupWindow->DrawList,
+                    observation.alphaBarRect,
+                    observation.drawListFringe,
+                    callerStyleAlpha);
+            observation.currentBarInsetOutlineVisible =
+                HasVisibleInsetBarOutlineCoverage(
+                    *popupWindow->DrawList,
+                    observation.currentBarRect,
+                    observation.drawListFringe,
+                    callerStyleAlpha);
+            observation.originalBarInsetOutlineVisible =
+                HasVisibleInsetBarOutlineCoverage(
+                    *popupWindow->DrawList,
+                    observation.originalBarRect,
+                    observation.drawListFringe,
+                    callerStyleAlpha);
             if (includeAlpha)
             {
                 observation.alphaBarInteriorCovered = HasCoveredVertexNear(
@@ -4129,6 +4240,23 @@ int main()
         wheelGradientOutlinesVisible,
         "the authored hue wheel renders a visible one-pixel white transparency "
         "gradient around both circumferences");
+    const bool barGradientOutlinesVisible =
+        positionedPicker.hueBarInsetOutlineVisible &&
+        positionedPicker.alphaBarInsetOutlineVisible &&
+        positionedPicker.currentBarInsetOutlineVisible &&
+        positionedPicker.originalBarInsetOutlineVisible;
+    if (!barGradientOutlinesVisible)
+    {
+        std::cerr << "picker bar outlines: hue/alpha/current/original="
+            << positionedPicker.hueBarInsetOutlineVisible << '/'
+            << positionedPicker.alphaBarInsetOutlineVisible << '/'
+            << positionedPicker.currentBarInsetOutlineVisible << '/'
+            << positionedPicker.originalBarInsetOutlineVisible << '\n';
+    }
+    passed &= Check(
+        barGradientOutlinesVisible,
+        "all four authored picker lanes render the wheel-matched one-pixel "
+        "white gradient perimeter entirely inside their rounded bounds");
     passed &= Check(
         positionedPicker.alphaCheckerEdgeCoverageContinuous,
         "the alpha checkerboard retains tight coverage at every straight edge "
@@ -4607,6 +4735,10 @@ int main()
         rgbPicker.transitionInteractionReady &&
         rgbPicker.barCount == 4 &&
         rgbPicker.hueBarRoundedAndVisible &&
+        rgbPicker.hueBarInsetOutlineVisible &&
+        rgbPicker.alphaBarInsetOutlineVisible &&
+        rgbPicker.currentBarInsetOutlineVisible &&
+        rgbPicker.originalBarInsetOutlineVisible &&
         rgbPicker.alphaBarRect.GetWidth() > 0.0f &&
         rgbPicker.gatedAlphaCheckerVisible &&
         !rgbPicker.alphaBarRoundedAndVisible &&
@@ -4642,6 +4774,10 @@ int main()
             << rgbPicker.alphaHollowMarkerVisible << '/'
             << rgbPicker.currentBarVisible << '/'
             << rgbPicker.originalBarVisible
+            << " outlines=" << rgbPicker.hueBarInsetOutlineVisible << '/'
+            << rgbPicker.alphaBarInsetOutlineVisible << '/'
+            << rgbPicker.currentBarInsetOutlineVisible << '/'
+            << rgbPicker.originalBarInsetOutlineVisible
             << " previewSquares="
             << rgbPicker.subordinatePreviewSquareCount
             << " rows/alignment/parity=" << rgbInputRectsObserved << '/'
@@ -5104,6 +5240,332 @@ int main()
             ScrollSourceOffset + ScrollCloseSourceOffset);
     }
 
+    const ImGuiStyle restoredPickerStyle = comboStyle;
+    ImGuiStyle halfScalePickerStyle = restoredPickerStyle;
+    halfScalePickerStyle.ScaleAllSizes(0.5f);
+    halfScalePickerStyle.FontScaleMain = 0.5f;
+    comboStyle = halfScalePickerStyle;
+    ImGui::SetUvsrAuthoredWindowPadding(comboStyle.WindowPadding);
+
+    float minimumPickerCalibrationColor[4] = {
+        0.25f,
+        0.50f,
+        0.75f,
+        0.78f
+    };
+    QueueMouse(outside, false);
+    const ColorPickerObservation minimumPickerCalibration =
+        SubmitColorPickerFrame(
+            minimumPickerCalibrationColor,
+            false,
+            480.0f,
+            270.0f,
+            330.0f,
+            true,
+            false,
+            defaultPickerSurface,
+            defaultOuterMarginLayer,
+            defaultContentLayer,
+            defaultPickerLayer,
+            true,
+            "##MinimumWidthCalibrationColor");
+    const float minimumPickerContentWidth =
+        ImGui::GetUvsrAuthoredColorPickerMinimumWidth(
+            minimumPickerCalibration.sourceSwatchRect.GetHeight());
+    const float minimumPopupPaddingX =
+        comboStyle.WindowPadding.x + comboStyle.ItemInnerSpacing.x;
+    const float minimumPopupWidth =
+        minimumPickerContentWidth + minimumPopupPaddingX * 2.0f;
+    const float exactMinimumPickerDisplayWidth = std::nextafter(
+        minimumPickerCalibration.contentRight +
+            comboStyle.DisplaySafeAreaPadding.x +
+            minimumPopupWidth,
+        FLT_MAX);
+    const auto submitMinimumWidthPicker =
+        [&](float displayWidth,
+            float* color,
+            bool forceOpen,
+            bool closeActivePicker,
+            bool includeAlpha,
+            const char* label,
+            bool nestedZeroWindowPadding,
+            float callerStyleAlpha)
+        {
+            return SubmitColorPickerFrame(
+                color,
+                forceOpen,
+                displayWidth,
+                270.0f,
+                330.0f,
+                true,
+                closeActivePicker,
+                defaultPickerSurface,
+                defaultOuterMarginLayer,
+                defaultContentLayer,
+                defaultPickerLayer,
+                includeAlpha,
+                label,
+                nestedZeroWindowPadding,
+                callerStyleAlpha);
+        };
+    const auto minimumWidthOutlinesVisible =
+        [&](const ColorPickerObservation& observation)
+        {
+            const float thickness = ImMax(
+                1.0f,
+                observation.drawListFringe);
+            const float outlineInset = ImMax(
+                0.0f,
+                observation.drawListFringe) +
+                thickness * 0.5f;
+            const float minimumBarWidth =
+                outlineInset * 2.0f + thickness * 2.0f;
+            return observation.popupOpen &&
+                observation.transitionInteractionReady &&
+                Near(
+                    observation.popupRect.GetWidth(),
+                    minimumPopupWidth) &&
+                observation.hueBarRect.GetWidth() >=
+                    minimumBarWidth - 0.01f &&
+                observation.hueBarInsetOutlineVisible &&
+                observation.alphaBarInsetOutlineVisible &&
+                observation.currentBarInsetOutlineVisible &&
+                observation.originalBarInsetOutlineVisible;
+        };
+
+    float belowMinimumPickerColor[4] = {
+        0.25f,
+        0.50f,
+        0.75f,
+        0.78f
+    };
+    QueueMouse(outside, false);
+    const ColorPickerObservation belowMinimumPicker =
+        submitMinimumWidthPicker(
+            exactMinimumPickerDisplayWidth - 1.0f,
+            belowMinimumPickerColor,
+            true,
+            false,
+            true,
+            "##BelowMinimumWidthRgbaColor",
+            false,
+            1.0f);
+    passed &= Check(
+        !belowMinimumPicker.popupOpen &&
+            !belowMinimumPicker.activeDrawListReported,
+        "the half-scale picker fails closed exactly one pixel below the shared "
+        "minimum outlined-lane width");
+
+    float minimumRgbaPickerColor[4] = {
+        0.25f,
+        0.50f,
+        0.75f,
+        0.78f
+    };
+    QueueMouse(outside, false);
+    ColorPickerObservation minimumRgbaPicker =
+        submitMinimumWidthPicker(
+            exactMinimumPickerDisplayWidth,
+            minimumRgbaPickerColor,
+            true,
+            false,
+            true,
+            "##MinimumWidthRgbaColor",
+            false,
+            1.0f);
+    for (int frame = 0;
+        frame < MaximumAnimationFrames &&
+            !minimumRgbaPicker.transitionInteractionReady;
+        ++frame)
+    {
+        QueueMouse(outside, false);
+        minimumRgbaPicker = submitMinimumWidthPicker(
+            exactMinimumPickerDisplayWidth,
+            minimumRgbaPickerColor,
+            false,
+            false,
+            true,
+            "##MinimumWidthRgbaColor",
+            false,
+            1.0f);
+    }
+    passed &= Check(
+        minimumWidthOutlinesVisible(minimumRgbaPicker) &&
+            minimumRgbaPicker.alphaBarRoundedAndVisible &&
+            minimumRgbaPicker.alphaHollowMarkerVisible,
+        "the exact minimum half-scale RGBA picker retains all four inset white "
+        "outlines with its interactive alpha bar and marker intact");
+    const float minimumRgbaAlphaBeforeEdit = minimumRgbaPickerColor[3];
+    const ImVec2 minimumRgbaAlphaInput(
+        minimumRgbaPicker.alphaBarRect.GetCenter().x,
+        minimumRgbaPicker.alphaBarRect.Min.y +
+            (minimumRgbaPicker.alphaBarRect.GetHeight() - 1.0f) * 0.75f);
+    QueueMouse(minimumRgbaAlphaInput, true);
+    const ColorPickerObservation editedMinimumRgbaPicker =
+        submitMinimumWidthPicker(
+            exactMinimumPickerDisplayWidth,
+            minimumRgbaPickerColor,
+            false,
+            false,
+            true,
+            "##MinimumWidthRgbaColor",
+            false,
+            1.0f);
+    QueueMouse(minimumRgbaAlphaInput, false);
+    submitMinimumWidthPicker(
+        exactMinimumPickerDisplayWidth,
+        minimumRgbaPickerColor,
+        false,
+        false,
+        true,
+        "##MinimumWidthRgbaColor",
+        false,
+        1.0f);
+    passed &= Check(
+        editedMinimumRgbaPicker.popupOpen &&
+            minimumRgbaPickerColor[3] < minimumRgbaAlphaBeforeEdit - 0.10f,
+        "the exact minimum half-scale RGBA alpha lane remains interactive");
+    QueueMouse(outside, false);
+    submitMinimumWidthPicker(
+        exactMinimumPickerDisplayWidth,
+        minimumRgbaPickerColor,
+        false,
+        true,
+        true,
+        "##MinimumWidthRgbaColor",
+        false,
+        1.0f);
+    for (int frame = 0;
+        frame < MaximumAnimationFrames &&
+            GImGui->OpenPopupStack.Size > 0;
+        ++frame)
+    {
+        QueueMouse(outside, false);
+        submitMinimumWidthPicker(
+            exactMinimumPickerDisplayWidth,
+            minimumRgbaPickerColor,
+            false,
+            false,
+            true,
+            "##MinimumWidthRgbaColor",
+            false,
+            1.0f);
+    }
+
+    struct MinimumWidthGuardedRgbColor
+    {
+        float before = 49.25f;
+        float color[3] = { 0.35f, 0.45f, 0.65f };
+        float after = -38.50f;
+    } minimumRgbPickerStorage;
+    constexpr float MinimumWidthCallerAlpha = 0.37f;
+    QueueMouse(outside, false);
+    ColorPickerObservation minimumRgbPicker =
+        submitMinimumWidthPicker(
+            exactMinimumPickerDisplayWidth,
+            minimumRgbPickerStorage.color,
+            true,
+            false,
+            false,
+            "Minimum RGB##MinimumWidthRgbColor",
+            true,
+            MinimumWidthCallerAlpha);
+    for (int frame = 0;
+        frame < MaximumAnimationFrames &&
+            !minimumRgbPicker.transitionInteractionReady;
+        ++frame)
+    {
+        QueueMouse(outside, false);
+        minimumRgbPicker = submitMinimumWidthPicker(
+            exactMinimumPickerDisplayWidth,
+            minimumRgbPickerStorage.color,
+            false,
+            false,
+            false,
+            "Minimum RGB##MinimumWidthRgbColor",
+            true,
+            MinimumWidthCallerAlpha);
+    }
+    passed &= Check(
+        minimumWidthOutlinesVisible(minimumRgbPicker) &&
+            minimumRgbPicker.gatedAlphaCheckerVisible &&
+            !minimumRgbPicker.alphaHollowMarkerVisible &&
+            Near(minimumRgbPickerStorage.before, 49.25f) &&
+            Near(minimumRgbPickerStorage.after, -38.50f),
+        "the exact minimum half-scale guarded RGB picker keeps all four inset "
+        "white outlines without an alpha marker or out-of-bounds access");
+    const std::array<float, 3> minimumRgbBeforeCheckerClick = {
+        minimumRgbPickerStorage.color[0],
+        minimumRgbPickerStorage.color[1],
+        minimumRgbPickerStorage.color[2]
+    };
+    const ImVec2 minimumRgbCheckerInput =
+        minimumRgbPicker.alphaBarRect.GetCenter();
+    QueueMouse(minimumRgbCheckerInput, true);
+    submitMinimumWidthPicker(
+        exactMinimumPickerDisplayWidth,
+        minimumRgbPickerStorage.color,
+        false,
+        false,
+        false,
+        "Minimum RGB##MinimumWidthRgbColor",
+        true,
+        MinimumWidthCallerAlpha);
+    QueueMouse(minimumRgbCheckerInput, false);
+    const ColorPickerObservation afterMinimumRgbCheckerClick =
+        submitMinimumWidthPicker(
+            exactMinimumPickerDisplayWidth,
+            minimumRgbPickerStorage.color,
+            false,
+            false,
+            false,
+            "Minimum RGB##MinimumWidthRgbColor",
+            true,
+            MinimumWidthCallerAlpha);
+    passed &= Check(
+        afterMinimumRgbCheckerClick.popupOpen &&
+            Near(minimumRgbPickerStorage.before, 49.25f) &&
+            Near(minimumRgbPickerStorage.after, -38.50f) &&
+            Near(
+                minimumRgbPickerStorage.color[0],
+                minimumRgbBeforeCheckerClick[0]) &&
+            Near(
+                minimumRgbPickerStorage.color[1],
+                minimumRgbBeforeCheckerClick[1]) &&
+            Near(
+                minimumRgbPickerStorage.color[2],
+                minimumRgbBeforeCheckerClick[2]),
+        "the exact minimum half-scale RGB checker lane remains display-only "
+        "and cannot access a fourth color component");
+    QueueMouse(outside, false);
+    submitMinimumWidthPicker(
+        exactMinimumPickerDisplayWidth,
+        minimumRgbPickerStorage.color,
+        false,
+        true,
+        false,
+        "Minimum RGB##MinimumWidthRgbColor",
+        true,
+        MinimumWidthCallerAlpha);
+    for (int frame = 0;
+        frame < MaximumAnimationFrames &&
+            GImGui->OpenPopupStack.Size > 0;
+        ++frame)
+    {
+        QueueMouse(outside, false);
+        submitMinimumWidthPicker(
+            exactMinimumPickerDisplayWidth,
+            minimumRgbPickerStorage.color,
+            false,
+            false,
+            false,
+            "Minimum RGB##MinimumWidthRgbColor",
+            true,
+            MinimumWidthCallerAlpha);
+    }
+    comboStyle = restoredPickerStyle;
+    ImGui::SetUvsrAuthoredWindowPadding(comboStyle.WindowPadding);
+
     float verticallyBlockedPickerColor[4] = {
         0.25f,
         0.50f,
@@ -5172,7 +5634,11 @@ int main()
             !oggScopedPicker.requestedPickerLayerApplied &&
             !oggScopedPicker.finalCursorLayeredAndClipped &&
             !oggScopedPicker.hueBarRoundedAndVisible &&
-            !oggScopedPicker.alphaBarRoundedAndVisible,
+            !oggScopedPicker.alphaBarRoundedAndVisible &&
+            !oggScopedPicker.hueBarInsetOutlineVisible &&
+            !oggScopedPicker.alphaBarInsetOutlineVisible &&
+            !oggScopedPicker.currentBarInsetOutlineVisible &&
+            !oggScopedPicker.originalBarInsetOutlineVisible,
         "the scoped Ogg picker retains the stock PopupBg surface and upstream "
         "square-bar/cursor rendering without authored depth layers while still "
         "participating in safe placement");
@@ -5225,7 +5691,11 @@ int main()
             !unscopedPicker.activeDrawListReported &&
             !unscopedPicker.finalCursorLayeredAndClipped &&
             !unscopedPicker.hueBarRoundedAndVisible &&
-            !unscopedPicker.alphaBarRoundedAndVisible,
+            !unscopedPicker.alphaBarRoundedAndVisible &&
+            !unscopedPicker.hueBarInsetOutlineVisible &&
+            !unscopedPicker.alphaBarInsetOutlineVisible &&
+            !unscopedPicker.currentBarInsetOutlineVisible &&
+            !unscopedPicker.originalBarInsetOutlineVisible,
         "unscoped ColorEdit popups ignore Settings placement, surface, draw-list, "
         "retained rounded-bar, and final-cursor extensions");
     if (GImGui->OpenPopupStack.Size > 0)
@@ -5845,7 +6315,11 @@ int main()
     float lastPerformanceSummaryTopGap = -1.0f;
     ImVec4 lastPerformanceRetainedSurfaceColor;
     ImRect lastPerformanceRetainedSurfaceRect;
+    ImRect lastPerformanceExpandedContentRect;
+    ImRect lastPerformanceAnimatedContentRect;
     ImRect lastPerformanceBodyRect;
+    float lastPerformanceCollapseAmount = 0.0f;
+    bool lastPerformanceSummaryCornersBacked = false;
     bool lastPerformanceRetainedSurfaceSubmitted = false;
     ImRect settingsExpandedViewportRect;
     ImRect lastSettingsAnimatedContentRect;
@@ -5925,14 +6399,49 @@ int main()
                         contentRect.Max.y,
                         contentRect.Min.y + GImGui->FontSize +
                             TightSpacing)));
+            const ImRect expandedContentRect(
+                ImVec2(
+                    contentRect.Min.x,
+                    retainedContentRect.Max.y),
+                contentRect.Max);
+            const float collapseAmount = resolveRootCollapseAmount(
+                performance->SizeFull.y,
+                performance->Size.y,
+                collapsedHeight);
+            const ImRect animatedContentRect(
+                ImLerp(
+                    expandedContentRect.Min,
+                    retainedContentRect.Min,
+                    collapseAmount),
+                ImLerp(
+                    expandedContentRect.Max,
+                    retainedContentRect.Max,
+                    collapseAmount));
             lastPerformanceBodyRect = bodyRect;
             lastPerformanceRetainedSurfaceRect = retainedContentRect;
+            lastPerformanceExpandedContentRect = expandedContentRect;
+            lastPerformanceAnimatedContentRect = animatedContentRect;
+            lastPerformanceCollapseAmount = collapseAmount;
             lastPerformanceRetainedSurfaceSubmitted =
                 retainedContentRect.GetWidth() > 1.0f &&
                 retainedContentRect.GetHeight() > 1.0f;
             lastPerformanceRetainedSurfaceColor =
                 collapsedSettingsBodyColor;
             lastPerformanceRetainedSurfaceColor.w = 1.0f;
+            const ImU32 performanceTopMarginColor =
+                IM_COL32(37, 91, 133, 255);
+            if (expanded &&
+                animatedContentRect.Min.y > bodyRect.Min.y)
+            {
+                performance->DrawList->AddRectFilled(
+                    bodyRect.Min,
+                    ImVec2(
+                        bodyRect.Max.x,
+                        animatedContentRect.Min.y),
+                    performanceTopMarginColor,
+                    style.WindowRounding,
+                    ImDrawFlags_RoundCornersTop);
+            }
             if (lastPerformanceRetainedSurfaceSubmitted)
             {
                 performance->DrawList->AddRectFilled(
@@ -5942,6 +6451,39 @@ int main()
                         lastPerformanceRetainedSurfaceColor),
                     style.WindowRounding,
                     ImDrawFlags_RoundCornersAll);
+            }
+            lastPerformanceSummaryCornersBacked = false;
+            if (expanded && lastPerformanceRetainedSurfaceSubmitted)
+            {
+                constexpr float CornerProbeInset = 1.0f;
+                const ImVec2 cornerProbes[] = {
+                    ImVec2(
+                        retainedContentRect.Min.x + CornerProbeInset,
+                        retainedContentRect.Min.y + CornerProbeInset),
+                    ImVec2(
+                        retainedContentRect.Max.x - CornerProbeInset,
+                        retainedContentRect.Min.y + CornerProbeInset),
+                    ImVec2(
+                        retainedContentRect.Min.x + CornerProbeInset,
+                        retainedContentRect.Max.y - CornerProbeInset),
+                    ImVec2(
+                        retainedContentRect.Max.x - CornerProbeInset,
+                        retainedContentRect.Max.y - CornerProbeInset)
+                };
+                lastPerformanceSummaryCornersBacked = true;
+                for (const ImVec2& probe : cornerProbes)
+                {
+                    lastPerformanceSummaryCornersBacked &=
+                        HasSolidColorCoverageAtPoint(
+                            *performance->DrawList,
+                            performanceTopMarginColor,
+                            probe) ||
+                        HasSolidColorCoverageAtPoint(
+                            *performance->DrawList,
+                            ImGui::GetColorU32(
+                                lastPerformanceRetainedSurfaceColor),
+                            probe);
+                }
             }
             lastPerformanceSummaryTopGap = -1.0f;
             constexpr const char* Summary = "16.67 ms / 60 fps";
@@ -6411,6 +6953,12 @@ int main()
         lastPerformanceRetainedSurfaceRect;
     const ImRect expandedPerformanceBodyRect =
         lastPerformanceBodyRect;
+    const ImRect expandedPerformanceContentRect =
+        lastPerformanceExpandedContentRect;
+    const ImRect expandedPerformanceAnimatedContentRect =
+        lastPerformanceAnimatedContentRect;
+    const bool expandedPerformanceSummaryCornersBacked =
+        lastPerformanceSummaryCornersBacked;
     const float expandedPerformanceSummaryTopGap =
         lastPerformanceSummaryTopGap;
     performanceWindow = submitAuthoredRootFrame(
@@ -6422,6 +6970,10 @@ int main()
         lastPerformanceRetainedSurfaceRect;
     const ImVec4 intermediatePerformanceRetainedSurfaceColor =
         lastPerformanceRetainedSurfaceColor;
+    const ImRect intermediatePerformanceAnimatedContentRect =
+        lastPerformanceAnimatedContentRect;
+    const float intermediatePerformanceCollapseAmount =
+        lastPerformanceCollapseAmount;
     passed &= Check(
         performanceWindow != nullptr &&
             performanceWindow->Size.y > collapsedPerformanceHeight &&
@@ -6448,14 +7000,35 @@ int main()
                 expandedPerformanceBodyRect.Max.y -
                     style.WindowPadding.y &&
             Near(
+                expandedPerformanceContentRect.Min.y,
+                expandedPerformanceRetainedSurfaceRect.Max.y) &&
+            Near(
+                expandedPerformanceAnimatedContentRect.Min.y,
+                expandedPerformanceContentRect.Min.y) &&
+            Near(
+                expandedPerformanceAnimatedContentRect.Max.y,
+                expandedPerformanceContentRect.Max.y) &&
+            expandedPerformanceSummaryCornersBacked &&
+            intermediatePerformanceCollapseAmount > 0.0f &&
+            intermediatePerformanceCollapseAmount < 1.0f &&
+            intermediatePerformanceAnimatedContentRect.Min.y <
+                expandedPerformanceAnimatedContentRect.Min.y &&
+            intermediatePerformanceAnimatedContentRect.Min.y >
+                intermediatePerformanceRetainedSurfaceRect.Min.y &&
+            intermediatePerformanceAnimatedContentRect.Max.y <
+                expandedPerformanceAnimatedContentRect.Max.y &&
+            intermediatePerformanceAnimatedContentRect.Max.y >
+                intermediatePerformanceRetainedSurfaceRect.Max.y &&
+            Near(
                 expandedPerformanceSummaryTopGap,
                 style.WindowPadding.y) &&
             Near(
                 lastPerformanceSummaryTopGap,
                 style.WindowPadding.y),
         "Performance independently uses the generic clamped root-collapse "
-        "animation while its one-row backing stays fully opaque, fixed, and "
-        "does not cover the expanded body below it");
+        "animation while its opaque one-row backing stays fixed and the inner "
+        "frame boundary starts below that row without corner pinholes, then "
+        "morphs toward its compact perimeter");
     ImGui::SetUvsrUiBehavior(false, false, false);
     performanceWindow = submitAuthoredRootFrame(
         "Performance",
@@ -6509,10 +7082,22 @@ int main()
             Near(
                 expandedPerformanceRetainedSurfaceRect.Max.y,
                 lastPerformanceRetainedSurfaceRect.Max.y) &&
+            Near(
+                lastPerformanceAnimatedContentRect.Min.x,
+                lastPerformanceRetainedSurfaceRect.Min.x) &&
+            Near(
+                lastPerformanceAnimatedContentRect.Min.y,
+                lastPerformanceRetainedSurfaceRect.Min.y) &&
+            Near(
+                lastPerformanceAnimatedContentRect.Max.x,
+                lastPerformanceRetainedSurfaceRect.Max.x) &&
+            Near(
+                lastPerformanceAnimatedContentRect.Max.y,
+                lastPerformanceRetainedSurfaceRect.Max.y) &&
             !currentRootTransitionActive,
         "disabling animations mid-collapse snaps an authored root to its "
         "distinct retained summary endpoint without changing its fixed text "
-        "baseline, full-alpha one-row backing, or rectangle edges");
+        "baseline, full-alpha one-row backing, or converged frame edges");
     ImGui::SetUvsrUiBehavior(true, false, false);
 
     const auto submitOggSettingsFrame = [&] (bool collapsed)

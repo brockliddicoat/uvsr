@@ -144,12 +144,13 @@ selected third-party route on the raw signal.
 
 ## Debug and Performance
 
-The expanded-by-default Debug drawer's Visibility group selects **Default**, **Ambient
-Visibility**, **Traced Indirect**, or **Applied Indirect** while retaining the
-selected World appearance. A Physically Based Lighting filter keeps Visibility
-executing but suppresses ordinary Visibility composition; an explicit
-Visibility view takes precedence when both selectors are active. No debug
-choice silently enables or disables material or lighting modes.
+The Debug drawer starts closed. Once opened, its initially expanded Visibility
+group selects **Default**, **Ambient Visibility**, **Traced Indirect**, or
+**Applied Indirect** while retaining the selected World appearance. A
+Physically Based Lighting filter keeps Visibility executing but suppresses
+ordinary Visibility composition; an explicit Visibility view takes precedence
+when both selectors are active. No debug choice silently enables or disables
+material or lighting modes.
 
 Performance reports First Trace, Upsample, Composition, their exclusive
 sum as Complete Effect, logical texture payloads, and active resource/dispatch

@@ -13,11 +13,11 @@ production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 127,351 non-blank source lines.
+**First-Party Lines of Code:** 128,144 non-blank source lines.
 
 **Third-Party Lines of Code:** 386,164 non-blank source lines.
 
-**Total Lines of Code:** 513,515 non-blank source lines.
+**Total Lines of Code:** 514,308 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -68,10 +68,11 @@ with `tools/update_readme_line_counts.cmd --write`.
 - **Deterministic Verification:** Reference tests and source contracts cover
   estimators, noise, PBR, anti-aliasing, resources, and the packaged shader
   bundle.
-- **Authored Interface:** A detached Performance panel, configurable Amp skin,
-  Material and Interface drawers, deferred dropdowns, exact-input sliders, and
-  slash commands share one animated presentation; Ogg keeps stock ImGui
-  behavior and immediate endpoints.
+- **Authored Interface:** A detached, continuously framed Performance panel,
+  headerless timing tables, an initially open Accumulate Samples section,
+  configurable Amp skin, Material and Interface drawers, deferred dropdowns,
+  exact-input sliders, and slash commands share one animated presentation; Ogg
+  keeps stock ImGui behavior and immediate endpoints.
 - **Compact Runtime Surface:** The build retains 311 first-party shader
   permutations in 48 staged shader binaries, fourteen Settings drawers, and
   221 commands without dormant experiments.

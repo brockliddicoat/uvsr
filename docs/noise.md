@@ -6,10 +6,10 @@ The Noise drawer defines one precomputed texture configuration shared by every
 effect that exposes stochastic noise sampling. The factory configuration is
 **Spatiotemporal Blue**, **128x128**, with **Animate Samples** enabled and
 **Accumulate Samples** disabled. Accumulate Samples is the final collapsible
-section in the drawer. Its top-level toggle is labeled **Enable**, and the
-section can hide both that toggle and every enabled-only option. It renders no
-gray explanatory text. Accumulation is global because it changes the retained
-lighting result rather than one effect's sampling texture.
+section in the drawer. It starts expanded on each launch; collapsing it can
+still hide both its top-level **Enable** toggle and every enabled-only option.
+It renders no gray explanatory text. Accumulation is global because it changes
+the retained lighting result rather than one effect's sampling texture.
 
 Ambient occlusion and diffuse illumination share one screen-space visibility
 dispatch and therefore share one effect override. Ray traced directional

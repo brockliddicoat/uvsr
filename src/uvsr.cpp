@@ -17203,7 +17203,6 @@ private:
                     "Current",
                     ImGuiTableColumnFlags_WidthStretch,
                     1.35f);
-                ImGui::TableHeadersRow();
                 return true;
             };
             const auto beginStatisticsRow =
@@ -18608,8 +18607,7 @@ private:
     {
         const bool interfaceOpen = DrawCollapsingHeader(
             "Interface",
-            "Choose the interface skin and its live colors.",
-            ImGuiTreeNodeFlags_DefaultOpen);
+            "Choose the interface skin and its live colors.");
         if (!interfaceOpen)
         {
             ImGui::Spacing();
@@ -19769,13 +19767,13 @@ protected:
                 workRectangle.maxX -
                     workRectangle.minX -
                     settingsPanelMarginPixels * 2.f);
-        const float colorPickerMinimumSelectorWidth =
-            ImGui::GetFrameHeight() * 4.f;
+        const float colorPickerMinimumContentWidth =
+            ImGui::GetUvsrAuthoredColorPickerMinimumWidth(
+                ImGui::GetFrameHeight());
         const float colorPickerPopupHorizontalPadding =
             style.WindowPadding.x + style.ItemInnerSpacing.x;
-        const float colorPickerMinimumLaneWidth = std::ceil(
-            (colorPickerMinimumSelectorWidth * 4.f +
-                style.ItemInnerSpacing.x) / 3.f) +
+        const float colorPickerMinimumLaneWidth =
+            colorPickerMinimumContentWidth +
             colorPickerPopupHorizontalPadding * 2.f;
         const float settingsWindowMaximumWidth =
             std::max(
@@ -19903,25 +19901,58 @@ protected:
                     performanceContentRect.Max.y,
                     performanceContentRect.Min.y + fontSize +
                         g_UiSpacingTokens.tight)));
+        const float performanceCollapseRange =
+            performanceWindow->SizeFull.y -
+                performanceCollapsedHeight;
+        const bool performanceExpandedRangeKnown =
+            performanceCollapseRange > 0.5f;
+        const float performanceCollapseAmount =
+            performanceExpandedRangeKnown
+                ? std::clamp(
+                    (performanceWindow->SizeFull.y -
+                        performanceWindow->Size.y) /
+                        performanceCollapseRange,
+                    0.f,
+                    1.f)
+                : performanceWindow->Size.y <=
+                    performanceCollapsedHeight + 0.5f
+                    ? 1.f
+                    : 0.f;
+        // The summary is the Performance counterpart of Settings' retained
+        // snapshot row. Start the expanded inner frame below it so the opaque
+        // top margin supports the row's rounded fill instead of exposing four
+        // separately antialiased scene-backed corners. Morph that boundary to
+        // the retained rectangle during collapse so the fillets never flip or
+        // snap at the compact endpoint.
+        const ImRect performanceExpandedContentRect(
+            ImVec2(
+                performanceContentRect.Min.x,
+                performanceRetainedContentRect.Max.y),
+            performanceContentRect.Max);
+        const ImRect performanceAnimatedContentRect(
+            ImLerp(
+                performanceExpandedContentRect.Min,
+                performanceRetainedContentRect.Min,
+                performanceCollapseAmount),
+            ImLerp(
+                performanceExpandedContentRect.Max,
+                performanceRetainedContentRect.Max,
+                performanceCollapseAmount));
         if (performanceBodySubmitted)
         {
-            DrawOpaqueRootPanelRetainedContent(
+            DrawRootPanelBodySurface(
                 performanceWindowDrawList,
                 performanceBodyRect,
+                performanceAnimatedContentRect,
                 performanceRetainedContentRect,
                 style.WindowRounding);
             DrawPerformancePanelContents(
                 settingsControlWidth,
                 performanceLine);
-            DrawFilledRoundedInsetFrame(
-                performanceWindowDrawList,
-                performanceBodyRect,
-                performanceContentRect,
-                style.WindowRounding);
             DrawRootPanelBodyOutlines(
                 performanceWindowDrawList,
                 performanceBodyRect,
-                performanceContentRect,
+                performanceAnimatedContentRect,
                 style.WindowRounding);
         }
         else if (performanceCollapsed)
@@ -21126,7 +21157,7 @@ protected:
                     (1024.0 * 1024.0));
             if (BeginAnimatedTreeNode(
                     "Accumulate Samples##Noise",
-                    ImGuiTreeNodeFlags_None,
+                    ImGuiTreeNodeFlags_DefaultOpen,
                     "Average finite scene-linear samples while the camera, "
                     "scene, and lighting remain still."))
             {
@@ -23348,8 +23379,7 @@ protected:
         }
         const bool debugOpen = DrawCollapsingHeader(
             "Debug",
-            "Combine world appearance and effect-specific information views.",
-            ImGuiTreeNodeFlags_DefaultOpen);
+            "Combine world appearance and effect-specific information views.");
         if (debugOpen)
         {
             BeginDrawerBody("##DebugBody", settingsControlWidth);

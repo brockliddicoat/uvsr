@@ -621,6 +621,15 @@ namespace
             "void DrawInterfaceDrawer(float settingsControlWidth)",
             "static std::string BuildPerformanceLine(",
             "Interface drawer controls");
+        const std::string_view interfaceHeader = ExtractSection(
+            interfaceDrawer,
+            "const bool interfaceOpen = DrawCollapsingHeader(",
+            "if (!interfaceOpen)",
+            "outer Interface drawer header");
+        RequireAbsent(
+            interfaceHeader,
+            "ImGuiTreeNodeFlags_DefaultOpen",
+            "outer Interface drawer default-open flag");
         RequireOrdered(
             interfaceDrawer,
             {
@@ -842,10 +851,12 @@ namespace
                 "Resident texture memory:",
                 "BeginAnimatedTreeNode(",
                 "\"Accumulate Samples##Noise\"",
+                "ImGuiTreeNodeFlags_DefaultOpen",
                 "drawSampleAccumulationControls();",
                 "EndDrawerBody();"
             },
-            "sample accumulation is the final collapsible Noise section");
+            "sample accumulation is the final, initially open collapsible "
+            "Noise section");
         const std::string_view accumulationControls = ExtractSection(
             drawer,
             "const auto drawSampleAccumulationControls = [&]()",
@@ -1486,27 +1497,37 @@ namespace
                 "performanceContentRect.Max.y,",
                 "performanceContentRect.Min.y + fontSize +",
                 "g_UiSpacingTokens.tight",
+                "const float performanceCollapseRange =",
+                "const float performanceCollapseAmount =",
+                "const ImRect performanceExpandedContentRect(",
+                "performanceRetainedContentRect.Max.y",
+                "const ImRect performanceAnimatedContentRect(",
+                "performanceCollapseAmount",
                 "if (performanceBodySubmitted)",
-                "DrawOpaqueRootPanelRetainedContent(",
+                "DrawRootPanelBodySurface(",
+                "performanceAnimatedContentRect,",
                 "performanceRetainedContentRect,",
                 "DrawPerformancePanelContents(",
-                "DrawFilledRoundedInsetFrame(",
-                "performanceContentRect,",
                 "DrawRootPanelBodyOutlines(",
+                "performanceAnimatedContentRect,",
                 "else if (performanceCollapsed)",
                 "DrawCompactRootPanelBody(",
                 "performanceRetainedContentRect,"
             },
-            "Performance paints one fixed opaque retained row before its "
-            "contents and keeps full-body outlines independent of opacity");
+            "Performance integrates its fixed opaque summary into an animated "
+            "top margin before drawing contents and stable outlines");
+        RequireAbsent(
+            performanceRetainedSurface,
+            "DrawOpaqueRootPanelRetainedContent(",
+            "standalone expanded Performance summary sticker");
+        RequireAbsent(
+            performanceRetainedSurface,
+            "DrawFilledRoundedInsetFrame(",
+            "late expanded Performance frame that reverses the top fillets");
         RequireAbsent(
             viewer,
             "compactBodyOverlay",
             "retired collapse-modulated retained-row opacity");
-        RequireAbsent(
-            viewer,
-            "performanceCollapseAmount",
-            "retired Performance opacity animation state");
         const std::string_view collapsedPerformance = ExtractSection(
             performanceRoot,
             "else if (performanceCollapsed)\n        {\n"
@@ -1753,10 +1774,10 @@ namespace
                 removedHardwareSurface,
                 "removed Hardware Performance view");
         }
-        RequireContains(
+        RequireAbsent(
             statistics,
             "ImGui::TableHeadersRow();",
-            "Statistics table headers");
+            "redundant Statistics table header row");
         RequireContains(
             Compact(statistics),
             "ImGuiTableFlags_BordersInnerH|ImGuiTableFlags_RowBg|"
@@ -2584,9 +2605,19 @@ namespace
             debug,
             "ImGui::Combo(",
             "raw immediate Debug combo mutation");
+        const std::string_view debugRootHeader = ExtractSection(
+            debug,
+            "const bool debugOpen = DrawCollapsingHeader(",
+            "if (debugOpen)",
+            "outer Debug drawer header");
+        RequireAbsent(
+            debugRootHeader,
+            "ImGuiTreeNodeFlags_DefaultOpen",
+            "outer Debug drawer default-open flag");
         Require(
-            CountOccurrences(debug, "ImGuiTreeNodeFlags_DefaultOpen") == 5u,
-            "Debug and all four effect groups must start expanded.");
+            CountOccurrences(debug, "ImGuiTreeNodeFlags_DefaultOpen") == 4u,
+            "the closed-by-default Debug drawer must retain four initially "
+            "open nested effect groups.");
         RequireContains(
             debug,
             "every effect-specific debug view.",
@@ -4418,16 +4449,31 @@ namespace
                 "performanceWindow->Size.y));",
                 "const ImRect performanceContentRect(",
                 "const ImRect performanceRetainedContentRect(",
+                "const float performanceCollapseRange =",
+                "const float performanceCollapseAmount =",
+                "const ImRect performanceExpandedContentRect(",
+                "performanceRetainedContentRect.Max.y",
+                "const ImRect performanceAnimatedContentRect(",
                 "if (performanceBodySubmitted)",
-                "DrawOpaqueRootPanelRetainedContent(",
+                "DrawRootPanelBodySurface(",
+                "performanceAnimatedContentRect,",
+                "performanceRetainedContentRect,",
                 "DrawPerformancePanelContents(",
-                "DrawFilledRoundedInsetFrame(",
                 "DrawRootPanelBodyOutlines(",
+                "performanceAnimatedContentRect,",
                 "else if (performanceCollapsed)",
                 "DrawCompactRootPanelBody("
             },
-            "Performance paints only the permanent retained surface before "
-            "content, then appends its opaque frame and stable outlines");
+            "Performance composes the retained summary over an opaque, "
+            "collapse-morphed top margin before content and stable outlines");
+        RequireAbsent(
+            performanceLateDecoration,
+            "DrawOpaqueRootPanelRetainedContent(",
+            "standalone expanded Performance retained-row fill");
+        RequireAbsent(
+            performanceLateDecoration,
+            "DrawFilledRoundedInsetFrame(",
+            "late expanded Performance inset frame");
         RequireAbsent(
             performanceLateDecoration,
             "performanceWindow->Pos.x + 0.5f",
@@ -6444,13 +6490,13 @@ namespace
                 "constexpr float SettingsWindowWidthInFontHeights = 23.44f;",
                 "const float availableWindowWidth =",
                 "settingsPanelMarginPixels * 2.f",
-                "const float colorPickerMinimumSelectorWidth =",
-                "ImGui::GetFrameHeight() * 4.f;",
+                "const float colorPickerMinimumContentWidth =",
+                "ImGui::GetUvsrAuthoredColorPickerMinimumWidth(",
+                "ImGui::GetFrameHeight());",
                 "const float colorPickerPopupHorizontalPadding =",
                 "style.WindowPadding.x + style.ItemInnerSpacing.x;",
                 "const float colorPickerMinimumLaneWidth =",
-                "(colorPickerMinimumSelectorWidth * 4.f +",
-                "style.ItemInnerSpacing.x) / 3.f) +",
+                "colorPickerMinimumContentWidth +",
                 "colorPickerPopupHorizontalPadding * 2.f;",
                 "const float settingsWindowMaximumWidth =",
                 "availableWindowWidth -",
@@ -6487,6 +6533,10 @@ namespace
             "the 20-percent-narrower Settings width keeps its text-safe content "
             "floor, padded viewport/picker-lane cap, scoped bottom bound, "
             "translucent popup surface, separate opaque rim, and two depth layers");
+        RequireAbsent(
+            colorPickerScope,
+            "colorPickerMinimumSelectorWidth",
+            "duplicated first-party picker minimum-selector heuristic");
         RequireAbsent(
             viewer,
             "SettingsWindowWidthInFontHeights = 29.3f",
@@ -6706,21 +6756,40 @@ namespace
         RequireOrdered(
             imguiTooltipPickerAdded,
             {
-                "static void RenderUvsrHueWheelEdgeOutlines(",
-                "const float fringe = ImMax(1.0f, draw_list->_FringeScale);",
-                "const float radii[2] = { inner_radius, outer_radius };",
-                "draw_list->AddCircle(",
+                "static void ShadeUvsrColorPickerWhiteGradientOutline(",
+                "const float gradient_extent = ImMax(",
                 "const float outline_alpha = ImLerp(",
                 "0.95f,",
                 "0.55f,",
                 "vertex.col = ImGui::GetColorU32(ImVec4(",
                 "outline_alpha * coverage));",
+                "static void RenderUvsrHueWheelEdgeOutlines(",
+                "const float fringe = ImMax(1.0f, draw_list->_FringeScale);",
+                "const float radii[2] = { inner_radius, outer_radius };",
+                "draw_list->AddCircle(",
+                "ShadeUvsrColorPickerWhiteGradientOutline(",
+                "static void RenderUvsrColorPickerBarEdgeOutline(",
+                "const float thickness = ImMax(",
+                "const float outline_inset = ImMax(",
+                "draw_list->_FringeScale) + thickness * 0.5f;",
+                "bounds.Min + ImVec2(outline_inset, outline_inset)",
+                "requested_rounding - outline_inset,",
+                "draw_list->AddRect(",
+                "IM_COL32_WHITE,",
+                "thickness);",
+                "ShadeUvsrColorPickerWhiteGradientOutline(",
                 "RenderUvsrHueWheelEdgeOutlines(",
                 "wheel_r_inner,",
                 "wheel_r_outer);"
             },
-            "the authored hue wheel adds visible one-pixel white transparency "
-            "gradients to both edges before drawing cursors");
+            "the authored hue wheel and inset vertical lanes share one visible "
+            "one-pixel white transparency-gradient implementation");
+        Require(
+            CountOccurrences(
+                imguiTooltipPickerAdded,
+                "RenderUvsrColorPickerBarEdgeOutline(") == 5u,
+            "one shared inset-white helper must serve the authored hue, alpha, "
+            "gated-alpha, Current, and Original lane paths.");
         RequireOrdered(
             wheelPickerRendering,
             {
@@ -7179,6 +7248,11 @@ namespace
             "bool AuthoredBarLayout;",
             "static void AddUvsrRoundedPointerTriangle(",
             "final uniform four-bar picker layout");
+        RequireContains(
+            imguiTooltipPickerAdded,
+            "IMGUI_API float         "
+                "GetUvsrAuthoredColorPickerMinimumWidth(float frame_height);",
+            "shared authored color-picker minimum-width query declaration");
         RequireOrdered(
             finalPickerLayout,
             {
@@ -7190,6 +7264,15 @@ namespace
                 "float FirstBarOffset;",
                 "GetUvsrAuthoredPickerWidthForSelector(",
                 "(selector_size * 4.0f + inner_spacing) / 3.0f",
+                "GetUvsrAuthoredColorPickerMinimumSelectorSize(",
+                "const float thickness = ImMax(1.0f, fringe_scale);",
+                "const float outline_inset =",
+                "const float minimum_bar_width =",
+                "outline_inset * 2.0f + thickness * 2.0f;",
+                "square_size * 5.0f,",
+                "minimum_bar_width * 12.0f + inner_spacing * 11.0f",
+                "float ImGui::GetUvsrAuthoredColorPickerMinimumWidth(",
+                "g.DrawListSharedData.InitialFringeScale",
                 "ResolveUvsrAuthoredColorPickerGeometry(",
                 "picker_width - inner_spacing * 3.0f,",
                 "IM_TRUNC(items_width * 0.75f) + inner_spacing * 3.0f,",
@@ -7202,7 +7285,12 @@ namespace
                 "const float normal_selector_size =",
                 "square_sz * 10.0f - style.ItemInnerSpacing.x * 2.0f;",
                 "GetUvsrAuthoredPickerWidthForSelector(",
-                "const float minimum_selector_size = square_sz * 4.0f;",
+                "const float minimum_picker_width = authored_bar_layout",
+                "ImGui::GetUvsrAuthoredColorPickerMinimumWidth(square_sz)",
+                "const float minimum_selector_size = authored_bar_layout",
+                "ResolveUvsrAuthoredColorPickerGeometry(",
+                "minimum_picker_width,",
+                "style.ItemInnerSpacing.x).SelectorSize",
                 "3.0f * (square_sz + style.ItemSpacing.y)",
                 "if (!authored_bar_layout && has_visible_label)",
                 "const float sv_picker_height = authored_bar_layout",
@@ -7217,8 +7305,13 @@ namespace
                 "ImGui::SetNextWindowPos(popup_position, ImGuiCond_Always);"
             },
             "the authored picker derives four equal lanes from the fourth input "
-            "column, suppresses visible-label height, uses captured popup padding, "
-            "and centers on its source until an allowed edge clamps it");
+            "column, derives one shared scale-safe outlined-lane floor, suppresses "
+            "visible-label height, uses captured popup padding, and centers on "
+            "its source until an allowed edge clamps it");
+        RequireAbsent(
+            finalPickerLayout,
+            "const float minimum_selector_size = square_sz * 5.0f;",
+            "retired scale-dependent picker minimum-selector heuristic");
         RequireAbsent(
             finalPickerLayout,
             "const float requested_y = authored_bar_layout",
@@ -7540,7 +7633,6 @@ namespace
                 "(flags & ImGuiColorEditFlags_NoSmallPreview) != 0;",
                 "const int layout_components =",
                 "authored_hidden_alpha_column ? 4 : components;",
-                "for (int n = 0; n < components; n++)",
                 "w_items * (n + 1) / layout_components);",
                 "const int authored_bar_count = authored_bar_popup ? 4 : 0;",
                 "ImGuiColorEditFlags_NoPicker |",
@@ -7550,11 +7642,13 @@ namespace
                 "disabled_alpha_bounds,",
                 "uvsr_bar_rounding,",
                 "color_control_alpha);",
-                "RenderFrameBorder("
+                "RenderUvsrColorPickerBarEdgeOutline(",
+                "draw_list,",
+                "disabled_alpha_bounds,"
             },
             "authored subordinate RGB/HSV rows remove their preview squares, "
-            "leave their aligned alpha slot empty, and retain a noninteractive "
-            "checkerboard alpha lane without accessing caller alpha");
+            "leave their aligned alpha slot empty, and retain an outlined, "
+            "noninteractive checkerboard alpha lane without caller alpha");
         RequireAbsent(
             imguiTooltipPickerAdded,
             "disabled_alpha_value",
@@ -7652,10 +7746,13 @@ namespace
                 "comparison_original_pos_x",
                 "AddUvsrRoundedCheckerboard(",
                 "AddUvsrRoundedVerticalGradient(",
-                "RenderFrameBorder("
+                "RenderUvsrColorPickerBarEdgeOutline(",
+                "draw_list,",
+                "comparison_bounds,"
             },
             "unlabeled Current and Original values render as two opaque, "
-            "checker-backed comparison bars after hue and optional alpha");
+            "checker-backed comparison bars with inset white perimeters after "
+            "hue and optional alpha");
         for (const std::string_view retiredComparisonControl : {
                 std::string_view("Text(\"Current\")"),
                 std::string_view("Text(\"Original\")"),
