@@ -71,7 +71,7 @@ A failed check, download, build, or candidate health check leaves the active UVS
 and launcher packages unchanged. Details distinguish a stalled connection from
 local storage, access, signature, and permanent HTTP failures.
 
-## Launcher Updates
+## Launcher Updates and Update Source
 
 Launcher releases use immutable versioned packages under the per-user program
 root. Activation records the release sequence, semantic version, exact
@@ -81,9 +81,18 @@ package, and an interrupted combined launcher-plus-UVSR update retains its UVSR
 continuation until the new launcher completes it.
 
 The fixed public feed is
-`installer/launcher-feed-v1.json` on the public `main` branch. It names one
+`installer/launcher-feed-v1.json` on the public `main` branch:
+`https://raw.githubusercontent.com/brockliddicoat/uvsr/main/installer/launcher-feed-v1.json`.
+It names one
 immutable GitHub Release asset and is parsed with strict size, duplicate-field,
 unknown-field, version, sequence, filename, and hash validation.
+
+The launcher reads that feed first, then downloads the launcher package from:
+
+`https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe`
+
+where `<version>` comes from the same `Version` value in the feed (for example,
+`uvsr-launcher-v1.1.1`).
 
 A release artifact must also have a valid Authenticode chain whose signer public
 key matches the SHA-256 SPKI pin compiled into the launcher. Repository control

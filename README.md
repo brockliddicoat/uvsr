@@ -105,14 +105,16 @@ the release asset:
 
 Open that one file to launch immediately. The launcher shortcut is selected by
 default, transient downloads resume or retry safely, and Update lets you choose
-UVSR, UVSR Launcher, or both. The first source build may take several minutes
-and may ask for administrator approval for Microsoft's signed C++ Build Tools
-setup; UVSR source and build commands always remain unelevated. See the
-[launcher guide](installer/README.md) for its exact trust, ownership, recovery,
-and public-release contracts.
-or both. The first source build may take several minutes and may ask for
-administrator approval for Microsoft's signed C++ Build Tools setup; UVSR source
-and build commands always remain unelevated. See the [launcher guide](installer/README.md)
+UVSR, UVSR Launcher, or both.
+
+Update checks come from:
+
+- `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/installer/launcher-feed-v1.json`
+- `https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe`
+
+The first source build may take several minutes and may ask for administrator
+approval for Microsoft's signed C++ Build Tools setup; UVSR source and build
+commands always remain unelevated. See the [launcher guide](installer/README.md)
 for its exact trust, ownership, recovery, and public-release contracts.
 
 ## Build and Run

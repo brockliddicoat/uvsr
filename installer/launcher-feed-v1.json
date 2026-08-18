@@ -1,0 +1,12 @@
+{
+  "SchemaVersion": 1,
+  "ProductId": "0c47a7a8-1ec4-4ffd-b6c4-2f7614181223",
+  "Channel": "stable",
+  "ReleaseSequence": 2,
+  "Version": "1.1.1",
+  "Artifact": {
+    "Name": "UVSR-Launcher-Windows-11-x64.exe",
+    "Size": 58370076,
+    "Sha256": "2b5f092bdf80dcdabca46034f1334f6be374c712400e7bf8d6ae1e672f7a5b36"
+  }
+}
