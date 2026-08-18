@@ -97,8 +97,8 @@ identity before it can be called distribution-ready.
 
 Programs, versioned launcher packages, tool downloads, clean source/build trees,
 and any resumable Microsoft layout live below `%LOCALAPPDATA%\Programs\UVSR`.
-Legacy compatibility state remains under `%LOCALAPPDATA%\UVSR Installer` so
-already-created installations stay recoverable. The hidden name is a compatibility
+Legacy compatibility state remains available so already-created installations stay
+recoverable. The hidden name is a compatibility
 identifier, not visible product branding.
 
 The separate compatibility journal serializes
