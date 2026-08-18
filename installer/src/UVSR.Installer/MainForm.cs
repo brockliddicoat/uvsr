@@ -21,6 +21,14 @@ internal readonly record struct TerminalUiState(
 internal sealed class MainForm : Form
 {
     private const int MaximumDisplayedLogCharacters = 200_000;
+    private static readonly TimeSpan UvsrLaunchPollTimeout = TimeSpan.FromSeconds(6);
+    private static readonly TimeSpan UvsrClosePollTimeout = TimeSpan.FromSeconds(3);
+    private static readonly int UvsrPollDelayMs = 150;
+    private static readonly Color InstalledLaunchColor = Color.FromArgb(24, 114, 78);
+    private static readonly Color InstalledLaunchHover = Color.FromArgb(21, 93, 64);
+    private static readonly Color CloseLaunchColor = Color.FromArgb(186, 35, 35);
+    private static readonly Color CloseLaunchHover = Color.FromArgb(158, 28, 28);
+    private static readonly Color DisabledLaunchColor = Color.FromArgb(232, 236, 241);
 
     private readonly InstallerEngine _engine;
     private readonly bool _startWithUninstall;
@@ -44,6 +52,7 @@ internal sealed class MainForm : Form
     private CancellationTokenSource? _operationCancellation;
     private InstallSnapshot? _snapshot;
     private bool _operationRunning;
+    private bool _launchBusy;
     private bool _allowClose;
     private bool _canCancel = true;
     private bool _detailsVisible;
@@ -62,8 +71,8 @@ internal sealed class MainForm : Form
         _update = LauncherUi.CreateButton("Update");
         _uninstall = LauncherUi.CreateButton("Uninstall", destructive: true);
         _launch = LauncherUi.CreateButton("Launch");
-        _notices = LauncherUi.CreateButton("Third-Party Notices");
-        _detailsToggle = LauncherUi.CreateButton("Show Details");
+        _notices = LauncherUi.CreateButton("Notices");
+        _detailsToggle = LauncherUi.CreateButton("Details");
         _copyDetails = LauncherUi.CreateButton("Copy Details");
 
         Text = "UVSR Launcher";
@@ -150,16 +159,16 @@ internal sealed class MainForm : Form
             Margin = new Padding(0, 0, 0, 18)
         };
         _install.Margin = new Padding(0, 0, 8, 8);
-        foreach (Button button in new[] { _update, _launch, _uninstall, _notices })
+        foreach (Button button in new[] { _launch, _update, _uninstall, _notices })
             button.Margin = new Padding(0, 0, 8, 8);
         _install.Click += async (_, _) => await HandleInstallAsync();
         _update.Click += async (_, _) => await RunUpdateFlowAsync();
-        _launch.Click += (_, _) => Launch();
+        _launch.Click += async (_, _) => await LaunchAsync();
         _uninstall.Click += async (_, _) => await RunOperationAsync(
             InstallerOperation.Uninstall, confirm: true);
         _notices.Click += (_, _) => ShowNotices();
         buttons.Controls.AddRange(new Control[]
-            { _install, _update, _launch, _uninstall, _notices });
+            { _install, _launch, _update, _uninstall, _notices });
 
         _phase.AutoSize = true;
         _phase.Dock = DockStyle.Top;
@@ -335,6 +344,7 @@ internal sealed class MainForm : Form
     {
         (bool install, bool update, bool uninstall, bool launch, bool options) =
             DetermineActionAvailability(snapshot, _operationRunning);
+        bool isUvsrRunning = IsUvsrRunning(snapshot);
         if (_launcherWindowObsolete)
         {
             install = false;
@@ -346,9 +356,10 @@ internal sealed class MainForm : Form
         _install.Enabled = install;
         _update.Enabled = update;
         _uninstall.Enabled = uninstall;
-        _launch.Enabled = launch;
+        _launch.Enabled = launch && !_launchBusy;
         _notices.Enabled = options;
         _desktopShortcut.Enabled = options && !_launcherWindowObsolete;
+        ApplyLaunchButtonStyle(isUvsrRunning, launch);
     }
 
     internal static (bool Install, bool Update, bool Uninstall, bool Launch, bool Options)
@@ -376,7 +387,7 @@ internal sealed class MainForm : Form
                 new DialogAction("reinstall", "Reinstall"),
                 new DialogAction("cancel", "Cancel", Cancel: true));
             if (choice == "launch")
-                Launch();
+                await LaunchAsync();
             else if (choice == "reinstall")
                 await RunOperationAsync(InstallerOperation.Reinstall, confirm: false);
             return;
@@ -707,7 +718,7 @@ internal sealed class MainForm : Form
         _detailsVisible = visible;
         _detailsCard.Visible = visible;
         _copyDetails.Visible = visible;
-        _detailsToggle.Text = visible ? "Hide Details" : "Show Details";
+        _detailsToggle.Text = "Details";
         _detailsToggle.AccessibleName = visible
             ? "Hide operation details"
             : "Show operation details";
@@ -747,15 +758,173 @@ internal sealed class MainForm : Form
         }
     }
 
-    private void Launch()
+    private async Task LaunchAsync()
     {
+        if (_operationRunning || _launchBusy)
+            return;
+        RefreshSnapshot();
+        if (_snapshot is null || !_snapshot.IsInstalled || _snapshot.State is null)
+            return;
+        string? executablePath = _snapshot.ExecutablePath;
+        if (string.IsNullOrWhiteSpace(executablePath))
+        {
+            ShowError(new InstallerException(
+                "The installed UVSR executable path is unavailable."));
+            return;
+        }
+        if (IsUvsrRunning(executablePath))
+        {
+            await CloseUvsrAsync(executablePath);
+            return;
+        }
+        await LaunchUvsrAsync(executablePath);
+    }
+
+    private void SetLaunchBusy(bool launching)
+    {
+        _launchBusy = launching;
+        UseWaitCursor = launching;
+        Cursor = launching ? Cursors.WaitCursor : Cursors.Default;
+        if (!IsDisposed)
+            SetButtons(_snapshot);
+    }
+
+    private async Task LaunchUvsrAsync(string executablePath)
+    {
+        SetLaunchBusy(true);
         try
         {
-            _engine.LaunchInstalled();
+            await Task.Run(_engine.LaunchInstalled);
+            if (!await WaitForUvsrStateAsync(executablePath, true))
+            {
+                ShowError(new InstallerException(
+                    "UVSR was launched, but the process did not appear to start."));
+            }
         }
         catch (Exception ex)
         {
             ShowError(ex);
+        }
+        finally
+        {
+            SetLaunchBusy(false);
+            RefreshSnapshot();
+        }
+    }
+
+    private async Task CloseUvsrAsync(string executablePath)
+    {
+        SetLaunchBusy(true);
+        try
+        {
+            IReadOnlyList<int> running = ProcessInspector.FindProcessesByExecutable(executablePath);
+            foreach (int processId in running)
+            {
+                try
+                {
+                    using Process process = Process.GetProcessById(processId);
+                    if (!process.HasExited)
+                        process.CloseMainWindow();
+                }
+                catch (ArgumentException) { }
+                catch (InvalidOperationException) { }
+            }
+
+            if (!await WaitForUvsrStateAsync(executablePath, false))
+            {
+                foreach (int processId in ProcessInspector.FindProcessesByExecutable(executablePath))
+                {
+                    try
+                    {
+                        using Process process = Process.GetProcessById(processId);
+                        if (!process.HasExited)
+                            process.Kill(entireProcessTree: true);
+                    }
+                    catch (ArgumentException) { }
+                    catch (InvalidOperationException) { }
+                    catch (System.ComponentModel.Win32Exception) { }
+                }
+
+                if (!await WaitForUvsrStateAsync(executablePath, false))
+                {
+                    ShowError(new InstallerException(
+                        "UVSR was requested to close, but still appears to be running."));
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex);
+        }
+        finally
+        {
+            SetLaunchBusy(false);
+            RefreshSnapshot();
+        }
+    }
+
+    private async Task<bool> WaitForUvsrStateAsync(string executablePath, bool runningExpected)
+    {
+        TimeSpan timeout = runningExpected ? UvsrLaunchPollTimeout : UvsrClosePollTimeout;
+        DateTimeOffset end = DateTimeOffset.UtcNow + timeout;
+        while (DateTimeOffset.UtcNow < end)
+        {
+            if (IsUvsrRunning(executablePath) == runningExpected)
+                return true;
+            await Task.Delay(UvsrPollDelayMs);
+        }
+        return IsUvsrRunning(executablePath) == runningExpected;
+    }
+
+    private static bool IsUvsrRunning(string? executablePath) =>
+        !string.IsNullOrWhiteSpace(executablePath) &&
+        ProcessInspector.FindProcessesByExecutable(executablePath!).Count > 0;
+
+    private bool IsUvsrRunning(InstallSnapshot? snapshot) =>
+        IsUvsrRunning(snapshot?.ExecutablePath);
+
+    private void ApplyLaunchButtonStyle(bool isRunning, bool launchAvailable)
+    {
+        if (SystemInformation.HighContrast)
+        {
+            _launch.FlatStyle = FlatStyle.Standard;
+            _launch.UseVisualStyleBackColor = true;
+            _launch.BackColor = DefaultBackColor;
+            _launch.ForeColor = DefaultForeColor;
+            _launch.FlatAppearance.BorderSize = 1;
+            _launch.Text = _launchBusy ? "Launching" : isRunning ? "Close" : "Launch";
+            _launch.Enabled = launchAvailable && !_launchBusy;
+            return;
+        }
+
+        _launch.FlatStyle = FlatStyle.Flat;
+        _launch.UseVisualStyleBackColor = false;
+        _launch.FlatAppearance.BorderSize = 1;
+        if (_launchBusy || !launchAvailable)
+        {
+            _launch.BackColor = DisabledLaunchColor;
+            _launch.ForeColor = LauncherPalette.Muted;
+            _launch.FlatAppearance.BorderColor = LauncherPalette.Border;
+            _launch.FlatAppearance.MouseOverBackColor = DisabledLaunchColor;
+            _launch.Text = _launchBusy ? "Launching" : "Launch";
+            return;
+        }
+
+        if (isRunning)
+        {
+            _launch.BackColor = CloseLaunchColor;
+            _launch.ForeColor = Color.White;
+            _launch.FlatAppearance.BorderColor = CloseLaunchColor;
+            _launch.FlatAppearance.MouseOverBackColor = CloseLaunchHover;
+            _launch.Text = "Close";
+        }
+        else
+        {
+            _launch.BackColor = InstalledLaunchColor;
+            _launch.ForeColor = Color.White;
+            _launch.FlatAppearance.BorderColor = InstalledLaunchColor;
+            _launch.FlatAppearance.MouseOverBackColor = InstalledLaunchHover;
+            _launch.Text = "Launch";
         }
     }
 
@@ -770,7 +939,7 @@ internal sealed class MainForm : Form
                 ReadNotice("UVSR.Installer.Notices.DotNetThirdParty.txt");
             using Form noticeWindow = new()
             {
-                Text = "UVSR Launcher - Licenses and Third-Party Notices",
+                Text = "UVSR Launcher - Notices",
                 StartPosition = FormStartPosition.CenterParent,
                 ClientSize = new Size(900, 700),
                 MinimumSize = new Size(650, 450),
