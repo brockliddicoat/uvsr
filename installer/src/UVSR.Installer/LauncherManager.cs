@@ -1049,6 +1049,8 @@ internal sealed class LauncherManager
             feed.SchemaVersion != ProductConstants.LauncherSchemaVersion ||
             !string.Equals(feed.ProductId, ProductConstants.ProductId,
                 StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrWhiteSpace(feed.Channel) &&
+            !string.Equals(feed.Channel, "stable", StringComparison.OrdinalIgnoreCase) ||
             feed.ReleaseSequence is < 1 or > ProductConstants.MaximumReleaseSequence ||
             string.IsNullOrWhiteSpace(feed.Version) ||
             !ProductConstants.StableVersionRegex().IsMatch(feed.Version) ||
