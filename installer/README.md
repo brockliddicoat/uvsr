@@ -19,7 +19,7 @@ preinstalled copy of .NET, Git, CMake, or Python. The main window offers:
 
 The desktop-shortcut option is selected by default. That shortcut opens UVSR
 Launcher, so the same entry point remains useful for launching, repairing, and
-updating UVSR. Existing owned UVSR and UVSR Installer shortcuts are migrated;
+updating UVSR. Existing owned UVSR and UVSR Launcher shortcuts are migrated;
 unrelated shortcuts are preserved.
 
 ## First Installation
@@ -96,13 +96,12 @@ identity before it can be called distribution-ready.
 ## Ownership and Recovery
 
 Programs, versioned launcher packages, tool downloads, clean source/build trees,
-and any resumable Microsoft layout live below
-`%LOCALAPPDATA%\Programs\UVSR`. State and bounded logs remain below the legacy
-`%LOCALAPPDATA%\UVSR Installer` root so already-created installations stay
-recoverable. The hidden name is a compatibility identifier, not visible product
-branding.
+and any resumable Microsoft layout live below `%LOCALAPPDATA%\Programs\UVSR`.
+Legacy compatibility state remains under `%LOCALAPPDATA%\UVSR Installer` so
+already-created installations stay recoverable. The hidden name is a compatibility
+identifier, not visible product branding.
 
-The separate `%LOCALAPPDATA%\UVSR Installer Operations` journal serializes
+The separate compatibility journal serializes
 self-uninstall after the running launcher closes. UVSR renderer settings,
 snapshots, and scene history live separately in `%LOCALAPPDATA%\UVSR` and are
 never recursively deleted by the launcher.

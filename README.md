@@ -92,16 +92,16 @@ needs, builds the newest public `main`, and provides Install, Update, Launch, an
 Uninstall from one user-facing window. Install also offers Launch or Reinstall
 when UVSR is already present.
 
-## Use the Installer or Launcher (Recommended)
+## Use the Launcher (Recommended)
 
-Most users should use the installer/launcher flow instead of building locally. The
+Most users should use the launcher flow instead of building locally. The
 launcher handles downloading prerequisites, builds the newest public `main`, and
 keeps UVSR updates separate from the renderer installation.
 
-If you want to start immediately, download the latest installer and launch it from
+If you want to start immediately, download the latest launcher and launch it from
 the release page:
 
->[Download UVSR Installer/Launcher](https://github.com/brockliddicoat/uvsr/releases/latest/download/UVSR-Launcher-Windows-11-x64.exe)
+>[Download UVSR Launcher](https://github.com/brockliddicoat/uvsr/releases/latest)
 
 When a GitHub release includes `UVSR-Launcher-Windows-11-x64.exe`, download and
 open that one file. The launcher shortcut is selected by default, transient
