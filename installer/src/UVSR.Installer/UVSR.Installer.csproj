@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.22000.0</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>UVSR-Launcher</AssemblyName>
+    <RootNamespace>UvsrInstaller</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>embedded</DebugType>
+    <Version>1.1.1</Version>
+    <FileVersion>1.1.1.0</FileVersion>
+    <AssemblyVersion>1.1.1.0</AssemblyVersion>
+    <Product>UVSR Launcher</Product>
+    <Description>Installs, launches, updates, and removes UVSR on Windows 11.</Description>
+    <Company>UVSR</Company>
+    <Copyright>Copyright (c) 2026 UVSR contributors</Copyright>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="UVSR.Installer.Tests" />
+    <EmbeddedResource Include="$(NetCoreRoot)LICENSE.txt"
+                      LogicalName="UVSR.Installer.Notices.DotNetLicense.txt" />
+    <EmbeddedResource Include="$(NetCoreRoot)ThirdPartyNotices.txt"
+                      LogicalName="UVSR.Installer.Notices.DotNetThirdParty.txt" />
+    <EmbeddedResource Include="..\..\..\LICENSE.md"
+                      LogicalName="UVSR.Installer.Notices.UvsrLicense.md" />
+  </ItemGroup>
+</Project>

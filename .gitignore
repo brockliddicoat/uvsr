@@ -2,6 +2,9 @@
 /build-*/
 /b/
 /.vs/
+/installer/artifacts/
+/installer/**/bin/
+/installer/**/obj/
 *.user
 *.suo
 *.vcxproj.user

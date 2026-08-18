@@ -84,9 +84,25 @@ with `tools/update_readme_line_counts.cmd --write`.
   records architecture, equations, validation, provenance, negative results,
   and restoration boundaries.
 
+## Install on Windows 11
+
+UVSR Launcher is a self-contained Windows 11 x64 application for people who do
+not have a preconfigured build environment. It downloads and verifies what UVSR
+needs, builds the newest public `main`, and provides Install, Update, Launch, and
+Uninstall from one user-facing window. Install also offers Launch or Reinstall
+when UVSR is already present.
+
+When a GitHub release includes `UVSR-Launcher-Windows-11-x64.exe`, download and
+open that one file. The launcher shortcut is selected by default, transient
+downloads resume or retry safely, and Update lets you choose UVSR, UVSR Launcher,
+or both. The first source build may take several minutes and may ask for
+administrator approval for Microsoft's signed C++ Build Tools setup; UVSR source
+and build commands always remain unelevated. See the [launcher guide](installer/README.md)
+for its exact trust, ownership, recovery, and public-release contracts.
+
 ## Build and Run
 
-Requires Windows with a DirectX 12-capable GPU and current driver, CMake 3.24 or
+Requires Windows with a DirectX 12-capable GPU and current driver, CMake 3.31 or
 newer, Visual Studio with a C++17-capable MSVC toolchain, and Git with submodule
 support. Configure, build every Release target, run the deterministic tests,
 and open the persistent launcher menu from PowerShell:
@@ -106,6 +122,19 @@ again, so it remains available after the renderer closes.
 
 The first configure may download Microsoft's Direct3D 12 Agility SDK. Optional
 build variants and the complete validation workflow are documented below.
+
+## Coming Soon
+
+This section summarizes stable work that is active but not yet merged into
+`main`. Experimental entries are not promises that the work will ship.
+
+- **UVSR Launcher for Windows 11 — Awaiting Release Validation**
+  (`codex/windows-installer`). The local candidate adds a self-contained public
+  launcher that downloads verified prerequisites, builds the newest public
+  `main`, uses the launcher for its default desktop shortcut, checks UVSR and
+  launcher updates independently, and tolerates ordinary connection pauses.
+  Public distribution still requires the permanent code-signing identity and
+  clean Windows 11 release-matrix validation.
 
 ## Engineering Documentation
 
