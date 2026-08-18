@@ -99,13 +99,17 @@ launcher handles downloading prerequisites, builds the newest public `main`, and
 keeps UVSR updates separate from the renderer installation.
 
 If you want to start immediately, download the latest launcher and launch it from
-the release page:
+the release asset:
 
->[Download UVSR Launcher](https://github.com/brockliddicoat/uvsr/releases/latest)
+>[Download UVSR Launcher](https://github.com/brockliddicoat/uvsr/releases/latest/download/UVSR-Launcher-Windows-11-x64.exe)
 
-When a GitHub release includes `UVSR-Launcher-Windows-11-x64.exe`, download and
-open that one file. The launcher shortcut is selected by default, transient
-downloads resume or retry safely, and Update lets you choose UVSR, UVSR Launcher,
+Open that one file to launch immediately. The launcher shortcut is selected by
+default, transient downloads resume or retry safely, and Update lets you choose
+UVSR, UVSR Launcher, or both. The first source build may take several minutes
+and may ask for administrator approval for Microsoft's signed C++ Build Tools
+setup; UVSR source and build commands always remain unelevated. See the
+[launcher guide](installer/README.md) for its exact trust, ownership, recovery,
+and public-release contracts.
 or both. The first source build may take several minutes and may ask for
 administrator approval for Microsoft's signed C++ Build Tools setup; UVSR source
 and build commands always remain unelevated. See the [launcher guide](installer/README.md)
