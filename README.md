@@ -111,6 +111,8 @@ Update checks come from:
 
 - `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/installer/launcher-feed-v1.json`
 - `https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe`
+  and falls back to `uvsr-launcher-latest` if the versioned tag is temporarily
+  unavailable.
 
 The first source build may take several minutes and may ask for administrator
 approval for Microsoft's signed C++ Build Tools setup; UVSR source and build

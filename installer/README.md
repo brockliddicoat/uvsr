@@ -94,6 +94,9 @@ The launcher reads that feed first, then downloads the launcher package from:
 where `<version>` comes from the same `Version` value in the feed (for example,
 `uvsr-launcher-v1.1.1`).
 
+If that exact versioned release tag is not available yet, the launcher also
+supports `uvsr-launcher-latest` as a compatibility fallback for update recovery.
+
 A release artifact must also have a valid Authenticode chain whose signer public
 key matches the SHA-256 SPKI pin compiled into the launcher. Repository control
 and a feed hash alone are not accepted as publisher identity. Local preview

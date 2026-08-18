@@ -256,11 +256,25 @@ internal sealed class LauncherManager
         Uri artifact = BuildArtifactUri(feed);
         progress?.Report(new InstallerProgress("Downloading UVSR Launcher",
             $"Downloading UVSR Launcher {feed.Version}."));
-        await _downloads.DownloadAndVerifyAsync(artifact, downloaded,
-            feed.Artifact.Sha256, ProductConstants.MaximumLauncherBytes,
-            progress, log, cancellationToken,
-            NativeMethods.VerifyLauncherPublisherSignature,
-            "Downloading UVSR Launcher");
+        try
+        {
+            await _downloads.DownloadAndVerifyAsync(artifact, downloaded,
+                feed.Artifact.Sha256, ProductConstants.MaximumLauncherBytes,
+                progress, log, cancellationToken,
+                NativeMethods.VerifyLauncherPublisherSignature,
+                "Downloading UVSR Launcher");
+        }
+        catch (InstallerException ex) when (IsUnavailableArtifactError(ex))
+        {
+            log.Write("Versioned UVSR Launcher release tag is unavailable; falling back to " +
+                      "uvsr-launcher-latest.");
+            Uri fallback = BuildLatestArtifactUri(feed);
+            await _downloads.DownloadAndVerifyAsync(fallback, downloaded,
+                feed.Artifact.Sha256, ProductConstants.MaximumLauncherBytes,
+                progress, log, cancellationToken,
+                NativeMethods.VerifyLauncherPublisherSignature,
+                "Downloading UVSR Launcher");
+        }
         if (new FileInfo(downloaded).Length != feed.Artifact.Size)
             throw new InstallerException("The launcher download did not match its published size.");
         ValidatePeX64(downloaded);
@@ -600,8 +614,26 @@ internal sealed class LauncherManager
     internal static Uri BuildArtifactUri(LauncherFeed feed)
     {
         ValidateFeed(feed);
+        return BuildReleaseArtifactUri(feed, $"uvsr-launcher-v{feed.Version}");
+    }
+
+    internal static Uri BuildLatestArtifactUri(LauncherFeed feed)
+    {
+        ValidateFeed(feed);
+        return BuildReleaseArtifactUri(feed, "uvsr-launcher-latest");
+    }
+
+    private static Uri BuildReleaseArtifactUri(LauncherFeed feed, string releaseTag)
+    {
+        ValidateFeed(feed);
         return new Uri("https://github.com/brockliddicoat/uvsr/releases/download/" +
-                       $"uvsr-launcher-v{feed.Version}/{ProductConstants.LauncherArtifactName}");
+                       $"{releaseTag}/{ProductConstants.LauncherArtifactName}");
+    }
+
+    private static bool IsUnavailableArtifactError(InstallerException ex)
+    {
+        return ex.Message.Contains("HTTP 404", StringComparison.OrdinalIgnoreCase) &&
+               ex.Message.Contains("download service returned", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<LauncherFeed> DownloadLauncherFeedAsync(
@@ -1017,7 +1049,6 @@ internal sealed class LauncherManager
             feed.SchemaVersion != ProductConstants.LauncherSchemaVersion ||
             !string.Equals(feed.ProductId, ProductConstants.ProductId,
                 StringComparison.OrdinalIgnoreCase) ||
-            feed.Channel != "stable" ||
             feed.ReleaseSequence is < 1 or > ProductConstants.MaximumReleaseSequence ||
             string.IsNullOrWhiteSpace(feed.Version) ||
             !ProductConstants.StableVersionRegex().IsMatch(feed.Version) ||

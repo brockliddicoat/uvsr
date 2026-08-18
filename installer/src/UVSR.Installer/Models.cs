@@ -104,7 +104,6 @@ internal sealed record LauncherPackageManifest(
 internal sealed record LauncherFeed(
     int SchemaVersion,
     string ProductId,
-    string Channel,
     long ReleaseSequence,
     string Version,
     LauncherFeedArtifact Artifact);
