@@ -84,4 +84,4 @@ Non-goals:
 - Publication state: unchanged unless explicitly authorized
 - Archive destination: `docs/exec-plans/completed/launcher-public-source-transition.md`
 
-Sequence `4` cannot become the public signed identity: its unsigned bytes were already installed and recorded under that identity. Signing or adding the permanent signer pin changes the executable hash, and the launcher's anti-equivocation rule correctly rejects different bytes at the same version and sequence. The next public identity must therefore be `1.1.4` sequence `5`.
+Sequence `4` cannot become the public signed identity: its unsigned bytes were already installed and recorded under that identity. Signing or adding the permanent signer pin changes the executable hash, and the launcher's anti-equivocation rule correctly rejects different bytes at the same version and sequence. Launcher `1.1.4` sequence `5` was then fast-forwarded to public `main`, where its first clean GitHub build exposed a temporary Git-object cleanup defect before artifact upload. It was not published as a signed feed identity. The replacement public identity must therefore be `1.1.5` sequence `6`.

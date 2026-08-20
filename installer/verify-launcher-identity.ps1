@@ -106,6 +106,13 @@ $changedInputs = @(& git -C $repositoryRoot diff --name-only $base -- $binaryInp
 if ($LASTEXITCODE -ne 0) {
     throw 'Git could not compare launcher binary inputs with the requested base.'
 }
+$untrackedInputs = @(& git -C $repositoryRoot ls-files --others `
+    --exclude-standard -- $binaryInputs)
+if ($LASTEXITCODE -ne 0) {
+    throw 'Git could not enumerate untracked launcher binary inputs.'
+}
+$changedInputs = @($changedInputs + $untrackedInputs |
+    Sort-Object -CaseSensitive -Unique)
 if ($changedInputs.Count -eq 0) {
     Write-Output 'Launcher binary inputs are unchanged; the release identity may remain stable.'
     return

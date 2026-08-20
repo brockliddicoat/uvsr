@@ -71,10 +71,17 @@ function Resolve-LauncherIdentityBase {
     if ($LASTEXITCODE -ne 0 -or $head -notmatch '^[0-9a-fA-F]{40}$') {
         throw 'Git could not resolve the launcher build commit.'
     }
+    $workingChanges = @(& git -C $repositoryRoot status --porcelain=v1 `
+        --untracked-files=all)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Git could not inspect launcher build changes.'
+    }
+    if ($workingChanges.Count -gt 0) {
+        return $head
+    }
     $default = ((& git -C $repositoryRoot rev-parse --verify `
         refs/remotes/origin/main 2>$null) -join '').Trim()
-    if ($LASTEXITCODE -eq 0 -and $default -match '^[0-9a-fA-F]{40}$' -and
-        $default -ne $head) {
+    if ($LASTEXITCODE -eq 0 -and $default -match '^[0-9a-fA-F]{40}$') {
         $mergeBase = ((& git -C $repositoryRoot merge-base $head $default) `
             -join '').Trim()
         if ($LASTEXITCODE -eq 0 -and $mergeBase -match '^[0-9a-fA-F]{40}$' -and

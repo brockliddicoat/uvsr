@@ -2616,11 +2616,11 @@ internal static class Program
             "UVSR.Installer", "app.manifest"));
         Assert(project.Contains($"<Version>{ProductConstants.LauncherVersion}</Version>",
             StringComparison.Ordinal));
-        Assert(project.Contains("<FileVersion>1.1.4.0</FileVersion>",
+        Assert(project.Contains("<FileVersion>1.1.5.0</FileVersion>",
             StringComparison.Ordinal));
-        Assert(manifest.Contains("version=\"1.1.4.0\"", StringComparison.Ordinal));
-        Assert(ProductConstants.LauncherVersion == "1.1.4");
-        Assert(ProductConstants.LauncherReleaseSequence == 5);
+        Assert(manifest.Contains("version=\"1.1.5.0\"", StringComparison.Ordinal));
+        Assert(ProductConstants.LauncherVersion == "1.1.5");
+        Assert(ProductConstants.LauncherReleaseSequence == 6);
         using JsonDocument inputLock = JsonDocument.Parse(File.ReadAllText(
             Path.Combine(root, "installer", "launcher-input-lock-v1.json")));
         JsonElement lockRoot = inputLock.RootElement;

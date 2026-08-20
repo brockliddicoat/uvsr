@@ -21,8 +21,8 @@ internal static partial class ProductConstants
         "uvsr-windows-dx12-stable-619-v1";
     internal const int RendererBuildContractSchemaVersion = 1;
     internal const string PinnedDxcDate = "2026_02_20";
-    internal const string LauncherVersion = "1.1.4";
-    internal const long LauncherReleaseSequence = 5;
+    internal const string LauncherVersion = "1.1.5";
+    internal const long LauncherReleaseSequence = 6;
     internal const int D3D12AgilitySdkVersion = 619;
     internal const string LauncherExecutableName = "UVSR Launcher.exe";
     internal const string LauncherArtifactName = "UVSR-Launcher-Windows-11-x64.exe";

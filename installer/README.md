@@ -58,7 +58,7 @@ are already installed; a few minutes cannot be guaranteed on every computer.
 
 ## Exact Public-Source Compatibility Bridge
 
-Launcher `1.1.4` sequence `5` can install while public `main` is exactly commit
+Launcher `1.1.5` sequence `6` can install while public `main` is exactly commit
 `0c8074848985152ed83f83b4087aaf10013de590`. That public revision predates the
 renderer build contract and stable Direct3D runtime fixes, so simply ignoring
 the missing contract would reproduce the original pipeline-state failure.
@@ -170,7 +170,7 @@ a schema or release-compatibility problem.
 | --- | --- |
 | Running launcher is newer than the published feed | The check succeeded and no launcher update is needed. The displayed versions and sequences identify both sides. |
 | Feed schema or identity failure | The feed was reached but its exact fields or release identity were invalid. Inspect the recorded feed URL and reason; reinstalling the same launcher does not repair the feed. |
-| Exact pre-contract public base | Launcher `1.1.4` sequence `5` verifies its embedded compatibility bridge and can install or repair the corrected renderer immediately. No launcher update or source publication is required for that exact base. |
+| Exact pre-contract public base | Launcher `1.1.5` sequence `6` verifies its embedded compatibility bridge and can install or repair the corrected renderer immediately. No launcher update or source publication is required for that exact base. |
 | Launcher and renderer source are not a compatible release pair | Public `main` is neither the exact supported bridge base nor a contract-bearing revision supported by that launcher. The launcher disables the unsafe renderer update and preserves the installed copy. Use the complete logged source and contract identities to correct the release pairing. |
 | Transport or HTTP failure | The complete failing URL and HTTP or connection reason are shown. **Check Again** retries both component checks independently. |
 

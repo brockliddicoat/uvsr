@@ -141,10 +141,172 @@ function Read-CSharpLongConstant {
         [Globalization.CultureInfo]::InvariantCulture)
 }
 
-$temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) `
-    "uvsr-renderer-bridge-$([Guid]::NewGuid().ToString('N'))"
+function New-RendererBridgeTemporaryRoot {
+    $path = Join-Path ([IO.Path]::GetTempPath()) `
+        "uvsr-renderer-bridge-$([Guid]::NewGuid().ToString('N'))"
+    [IO.Directory]::CreateDirectory($path) | Out-Null
+    return [IO.Path]::GetFullPath($path)
+}
+
+function Assert-RendererBridgeTemporaryRoot {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $separators = [char[]]@(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar)
+    $temporaryParent = [IO.Path]::GetFullPath(
+        [IO.Path]::GetTempPath()).TrimEnd($separators)
+    $actualParent = [IO.Path]::GetFullPath(
+        [IO.Path]::GetDirectoryName($fullPath)).TrimEnd($separators)
+    $leaf = [IO.Path]::GetFileName($fullPath)
+    if (-not [string]::Equals($actualParent, $temporaryParent,
+            [StringComparison]::OrdinalIgnoreCase) -or
+        $leaf -cnotmatch '^uvsr-renderer-bridge-[0-9a-f]{32}$') {
+        throw "Refusing to remove unexpected renderer bridge path '$fullPath'."
+    }
+    return $fullPath
+}
+
+function Clear-RendererBridgeTemporaryAttributes {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $rootAttributes = [IO.File]::GetAttributes($Path)
+    if (($rootAttributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Refusing to traverse reparse point '$Path' during renderer bridge cleanup."
+    }
+    $directories = [Collections.Generic.Stack[string]]::new()
+    $entries = [Collections.Generic.List[string]]::new()
+    $directories.Push($Path)
+    while ($directories.Count -gt 0) {
+        $directory = $directories.Pop()
+        foreach ($entry in [IO.Directory]::EnumerateFileSystemEntries($directory)) {
+            $attributes = [IO.File]::GetAttributes($entry)
+            if (($attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Refusing to traverse reparse point '$entry' during renderer bridge cleanup."
+            }
+            $entries.Add($entry)
+            if (($attributes -band [IO.FileAttributes]::Directory) -ne 0) {
+                $directories.Push($entry)
+            }
+        }
+    }
+
+    $clearMask = [int]([IO.FileAttributes]::ReadOnly -bor
+        [IO.FileAttributes]::Hidden -bor [IO.FileAttributes]::System)
+    foreach ($entry in ($entries | Sort-Object Length -Descending)) {
+        $attributes = [IO.File]::GetAttributes($entry)
+        $updated = [IO.FileAttributes]([int]$attributes -band (-bnot $clearMask))
+        if ($updated -ne $attributes) {
+            [IO.File]::SetAttributes($entry, $updated)
+        }
+    }
+    $rootAttributes = [IO.File]::GetAttributes($Path)
+    $updatedRoot = [IO.FileAttributes]([int]$rootAttributes -band (-bnot $clearMask))
+    if ($updatedRoot -ne $rootAttributes) {
+        [IO.File]::SetAttributes($Path, $updatedRoot)
+    }
+}
+
+function Remove-RendererBridgeTemporaryRoot {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $ownedPath = Assert-RendererBridgeTemporaryRoot -Path $Path
+    $retryDelaysMilliseconds = @(0, 100, 250, 500, 1000, 2000)
+    for ($attempt = 0; $attempt -lt $retryDelaysMilliseconds.Count; $attempt++) {
+        if (-not [IO.Directory]::Exists($ownedPath)) {
+            return
+        }
+        if ($retryDelaysMilliseconds[$attempt] -gt 0) {
+            Start-Sleep -Milliseconds $retryDelaysMilliseconds[$attempt]
+        }
+        try {
+            Clear-RendererBridgeTemporaryAttributes -Path $ownedPath
+            [IO.Directory]::Delete($ownedPath, $true)
+            return
+        }
+        catch {
+            $cause = $_.Exception.GetBaseException()
+            $retryable = $cause -is [IO.IOException] -or
+                $cause -is [UnauthorizedAccessException]
+            if (-not $retryable -or
+                $attempt -eq $retryDelaysMilliseconds.Count - 1) {
+                throw
+            }
+        }
+    }
+}
+
+function Test-RendererBridgeTemporaryCleanup {
+    $probeRoot = New-RendererBridgeTemporaryRoot
+    $fanout = Join-Path $probeRoot 'objects\aa'
+    [IO.Directory]::CreateDirectory($fanout) | Out-Null
+    $looseObject = Join-Path $fanout '0123456789abcdef'
+    [IO.File]::WriteAllBytes($looseObject, [byte[]](1, 2, 3))
+    [IO.File]::SetAttributes($looseObject,
+        [IO.File]::GetAttributes($looseObject) -bor [IO.FileAttributes]::ReadOnly)
+    [IO.File]::SetAttributes($fanout,
+        [IO.File]::GetAttributes($fanout) -bor [IO.FileAttributes]::ReadOnly)
+    [IO.File]::SetAttributes($probeRoot,
+        [IO.File]::GetAttributes($probeRoot) -bor [IO.FileAttributes]::ReadOnly)
+    Remove-RendererBridgeTemporaryRoot -Path $probeRoot
+    if ([IO.Directory]::Exists($probeRoot)) {
+        throw "Renderer bridge cleanup regression left '$probeRoot' behind."
+    }
+}
+
+function Test-RendererBridgeRootReparseRejection {
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        return
+    }
+
+    $externalRoot = Join-Path ([IO.Path]::GetTempPath()) `
+        "uvsr-renderer-bridge-external-$([Guid]::NewGuid().ToString('N'))"
+    $linkRoot = New-RendererBridgeTemporaryRoot
+    [IO.Directory]::Delete($linkRoot)
+    [IO.Directory]::CreateDirectory($externalRoot) | Out-Null
+    $sentinel = Join-Path $externalRoot 'sentinel.bin'
+    [IO.File]::WriteAllBytes($sentinel, [byte[]](4, 5, 6))
+    [IO.File]::SetAttributes($sentinel,
+        [IO.File]::GetAttributes($sentinel) -bor [IO.FileAttributes]::ReadOnly)
+    try {
+        New-Item -ItemType Junction -Path $linkRoot -Target $externalRoot |
+            Out-Null
+        $rejected = $false
+        try {
+            Remove-RendererBridgeTemporaryRoot -Path $linkRoot
+        }
+        catch {
+            if ($_.Exception.GetBaseException().Message -notlike
+                    'Refusing to traverse reparse point*') {
+                throw
+            }
+            $rejected = $true
+        }
+        if (-not $rejected -or -not [IO.File]::Exists($sentinel) -or
+            ([IO.File]::GetAttributes($sentinel) -band
+                [IO.FileAttributes]::ReadOnly) -eq 0) {
+            throw 'Renderer bridge cleanup did not safely reject a root reparse point.'
+        }
+    }
+    finally {
+        if ([IO.Directory]::Exists($linkRoot)) {
+            [IO.Directory]::Delete($linkRoot)
+        }
+        if ([IO.File]::Exists($sentinel)) {
+            [IO.File]::SetAttributes($sentinel, [IO.FileAttributes]::Normal)
+        }
+        if ([IO.Directory]::Exists($externalRoot)) {
+            [IO.Directory]::Delete($externalRoot, $true)
+        }
+    }
+}
+
+Test-RendererBridgeTemporaryCleanup
+Test-RendererBridgeRootReparseRejection
+$temporaryRoot = New-RendererBridgeTemporaryRoot
 $temporaryIndex = Join-Path $temporaryRoot 'index'
-[IO.Directory]::CreateDirectory($temporaryRoot) | Out-Null
+$generationError = $null
 try {
     $bridgeSourcePath = Join-Path $PSScriptRoot `
         'src\UVSR.Installer\RendererSourceBridge.cs'
@@ -275,8 +437,21 @@ try {
         Write-Output "Renderer bridge: $expectedSize bytes, SHA-256 $expectedSha256, tree $expectedTree."
     }
 }
+catch {
+    $generationError = $_
+}
 finally {
-    if ([IO.Directory]::Exists($temporaryRoot)) {
-        [IO.Directory]::Delete($temporaryRoot, $true)
+    try {
+        Remove-RendererBridgeTemporaryRoot -Path $temporaryRoot
     }
+    catch {
+        if ($null -eq $generationError) {
+            throw
+        }
+        Write-Error ("Renderer bridge cleanup also failed: " +
+            $_.Exception.GetBaseException().Message) -ErrorAction Continue
+    }
+}
+if ($null -ne $generationError) {
+    throw $generationError
 }
