@@ -13,20 +13,38 @@ internal sealed class OwnershipManager
         if (!programExists && !stateExists)
             return null;
 
-        if (programExists)
-            SafePaths.RejectReparsePathChain(_paths.ProgramRoot, "UVSR program directory");
-        if (stateExists)
-            SafePaths.RejectReparsePathChain(_paths.StateRoot, "UVSR installer-state directory");
-
-        OwnerMarker? program = programExists ? ReadMarker(_paths.ProgramMarker) : null;
-        OwnerMarker? state = stateExists ? ReadMarker(_paths.StateMarker) : null;
-        OwnerMarker marker = program ?? state
-            ?? throw new InstallerException(
-                "An existing UVSR directory is not owned by UVSR Launcher. It was preserved.");
+        OwnerMarker? program = programExists
+            ? InspectRoot(_paths.ProgramRoot, _paths.ProgramMarker,
+                "UVSR program directory")
+            : null;
+        OwnerMarker? state = stateExists
+            ? InspectRoot(_paths.StateRoot, _paths.StateMarker,
+                "UVSR installer-state directory")
+            : null;
+        OwnerMarker? marker = program ?? state;
+        if (marker is null)
+            return null;
         ValidateMarker(marker);
         if (program is not null && state is not null && program != state)
             throw new InstallerException("UVSR ownership records do not match. No files were changed.");
         return marker;
+    }
+
+    private static OwnerMarker? InspectRoot(
+        string root,
+        string markerPath,
+        string description)
+    {
+        SafePaths.RejectReparsePathChain(root, description);
+        if (File.Exists(markerPath))
+            return ReadMarker(markerPath);
+        if (Directory.EnumerateFileSystemEntries(root).Any())
+            throw new InstallerException(
+                $"The existing directory '{root}' is not owned by UVSR Launcher. It was preserved.");
+        // An empty root can only contain no user or launcher data. Treat it as
+        // an interrupted first-run directory creation and finish ownership
+        // initialization automatically in EnsureRoots.
+        return null;
     }
 
     internal OwnerMarker EnsureRoots()

@@ -13,8 +13,17 @@ internal static partial class ProductConstants
         "https://api.github.com/repos/brockliddicoat/uvsr/git/ref/heads/main";
     internal const string LauncherFeedUrl =
         "https://raw.githubusercontent.com/brockliddicoat/uvsr/main/installer/launcher-feed-v1.json";
-    internal const string LauncherVersion = "1.1.1";
-    internal const long LauncherReleaseSequence = 2;
+    internal const string RepositoryRawUrl =
+        "https://raw.githubusercontent.com/brockliddicoat/uvsr";
+    internal const string RendererBuildContractRelativePath =
+        "cmake/uvsr-launcher-build-contract-v1.json";
+    internal const string RendererBuildContractId =
+        "uvsr-windows-dx12-stable-619-v1";
+    internal const int RendererBuildContractSchemaVersion = 1;
+    internal const string PinnedDxcDate = "2026_02_20";
+    internal const string LauncherVersion = "1.1.4";
+    internal const long LauncherReleaseSequence = 5;
+    internal const int D3D12AgilitySdkVersion = 619;
     internal const string LauncherExecutableName = "UVSR Launcher.exe";
     internal const string LauncherArtifactName = "UVSR-Launcher-Windows-11-x64.exe";
     internal const string LegacyInstalledManagerName = "UVSR Installer.exe";
@@ -24,6 +33,7 @@ internal static partial class ProductConstants
     internal const long MaximumStateBytes = 64 * 1024;
     internal const long MaximumPackageManifestBytes = 16L * 1024 * 1024;
     internal const long MaximumLauncherFeedBytes = 16L * 1024;
+    internal const long MaximumRendererBuildContractBytes = 16L * 1024;
     internal const long MaximumLauncherBytes = 256L * 1024 * 1024;
     internal const long MaximumReleaseSequence = 9_007_199_254_740_991L;
     // A public release must replace this empty value with the SHA-256 of
@@ -60,10 +70,10 @@ internal static partial class ProductConstants
 
     internal static readonly PinnedArchivePackage AgilitySdk = new(
         "Microsoft Direct3D Agility SDK",
-        "1.717.1-preview",
-        "agility-sdk-1.717.1-preview",
-        new Uri("https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.d3d12/1.717.1-preview/microsoft.direct3d.d3d12.1.717.1-preview.nupkg"),
-        "f052df9437c7e47cdb428ffb597481fe55a480c8968b0056159fe3a195c277e4",
+        "1.619.5",
+        "agility-sdk-1.619.5",
+        new Uri("https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.d3d12/1.619.5/microsoft.direct3d.d3d12.1.619.5.nupkg"),
+        "0e9bcf32aac9a79343ede9b21e4864950ee54577e3d8e19bfcdf002bb4e9bfd6",
         64L * 1024 * 1024,
         string.Empty,
         new[]
@@ -76,12 +86,12 @@ internal static partial class ProductConstants
 
     internal static readonly PinnedArchivePackage DirectXHeaders = new(
         "Microsoft DirectX Headers",
-        "1.717.0-preview",
-        "directx-headers-1.717.0-preview",
-        new Uri("https://github.com/microsoft/DirectX-Headers/archive/refs/tags/v1.717.0-preview.zip"),
-        "4f7067352a533536715d71cb0ff4a6fa3025dfbd930c5a397a9f909970c44b82",
+        "1.619.5",
+        "directx-headers-1.619.5",
+        new Uri("https://github.com/microsoft/DirectX-Headers/archive/refs/tags/v1.619.5.zip"),
+        "e839554c5c14e2fcce85ca99085ffa255626f054b44c2c10683f1062bc30401b",
         8L * 1024 * 1024,
-        "DirectX-Headers-1.717.0-preview",
+        "DirectX-Headers-1.619.5",
         new[] { "CMakeLists.txt", "include/directx/d3d12.h", "src/dxguids.cpp", "LICENSE" });
 
     internal static readonly PinnedArchivePackage Dxc = new(

@@ -15,6 +15,14 @@ option(UVSR_WITH_NRD
 option(UVSR_ACCEPT_NRD_LICENSE
     "Acknowledge acceptance of NVIDIA's RTX SDK license for NRD" OFF)
 
+set(UVSR_SHADER_MODEL "6_5")
+if (NOT UVSR_SHADER_MODEL MATCHES "^([0-9]+)_([0-9]+)$")
+    message(FATAL_ERROR "UVSR_SHADER_MODEL must use ShaderMake's major_minor form")
+endif()
+math(EXPR UVSR_SHADER_MODEL_ENCODED
+    "${CMAKE_MATCH_1} * 16 + ${CMAKE_MATCH_2}"
+    OUTPUT_FORMAT HEXADECIMAL)
+
 if (UVSR_WITH_NRD AND NOT UVSR_ACCEPT_NRD_LICENSE)
     message(FATAL_ERROR
         "UVSR_WITH_NRD requires UVSR_ACCEPT_NRD_LICENSE=ON after reviewing "
@@ -200,7 +208,28 @@ uvsr_stage_patched_sources(
     imgui_tables.cpp
     imgui_widgets.cpp)
 
+set(UVSR_NVRHI_D3D12_OVERRIDE_DIR
+    "${CMAKE_BINARY_DIR}/uvsr_nvrhi_d3d12_overrides")
+set(UVSR_NVRHI_D3D12_PATCH_FILES
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/nvrhi-stable-directx-headers.patch")
+uvsr_stage_patched_sources(
+    "${CMAKE_CURRENT_SOURCE_DIR}/donut/nvrhi"
+    "${UVSR_NVRHI_D3D12_PATCH_FILES}"
+    "${UVSR_NVRHI_D3D12_OVERRIDE_DIR}"
+    src/d3d12/d3d12-constants.cpp)
+
+# Keep NVRHI's headers on the same stable DirectX release line as UVSR's
+# app-local Agility runtime. The pinned dependency remains pristine; this
+# first-party cache override is also honored by offline launcher builds.
+set(NVRHI_DIRECTX_HEADERS_GIT_TAG "v1.619.5" CACHE STRING "Pinned DirectX-Headers release used by UVSR" FORCE)
 add_subdirectory(donut)
+uvsr_replace_target_sources(
+    nvrhi_d3d12
+    "${CMAKE_CURRENT_SOURCE_DIR}/donut/nvrhi"
+    "${UVSR_NVRHI_D3D12_OVERRIDE_DIR}"
+    src/d3d12/d3d12-constants.cpp)
+target_include_directories(nvrhi_d3d12 PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/donut/nvrhi/src/d3d12")
 uvsr_replace_target_sources(
     donut_app
     "${CMAKE_CURRENT_SOURCE_DIR}/donut"
@@ -278,13 +307,22 @@ if (UVSR_WITH_NRD)
 endif()
 
 if (NVRHI_WITH_DX12)
-    set(DONUT_D3D_AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.717.1-preview")
+    set(UVSR_D3D12_AGILITY_PACKAGE_VERSION "1.619.5")
+    set(UVSR_D3D12_AGILITY_SDK_VERSION 619)
+    set(DONUT_D3D_AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.619.5")
     set(DONUT_D3D_AGILITY_SDK_FETCH_DIR "" CACHE PATH
         "Optional existing or shared D3D12 Agility SDK extraction")
     include("${CMAKE_CURRENT_SOURCE_DIR}/donut/cmake/FetchAgilitySDK.cmake")
+    if (NOT DONUT_D3D_AGILITY_SDK_ENABLED OR
+        NOT DONUT_D3D_AGILITY_SDK_VERSION EQUAL UVSR_D3D12_AGILITY_SDK_VERSION)
+        message(FATAL_ERROR
+            "UVSR requires the complete Direct3D Agility SDK "
+            "${UVSR_D3D12_AGILITY_PACKAGE_VERSION} runtime contract "
+            "(D3D12SDKVersion ${UVSR_D3D12_AGILITY_SDK_VERSION})")
+    endif()
     file(COPY
-        "${DONUT_D3D_AGILITY_SDK_PATH}/build/native/bin/x64/D3D12Core.dll"
-        "${DONUT_D3D_AGILITY_SDK_PATH}/build/native/bin/x64/D3D12SDKLayers.dll"
+        "${DONUT_D3D_AGILITY_SDK_CORE_DLL}"
+        "${DONUT_D3D_AGILITY_SDK_LAYERS_DLL}"
         DESTINATION "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/D3D12/"
     )
 endif()
@@ -313,7 +351,7 @@ set(UVSR_SHADER_CONFIGURATION_STAMP
     "${CMAKE_CURRENT_BINARY_DIR}/uvsr_shader_configuration.txt")
 file(GENERATE
     OUTPUT "${UVSR_SHADER_CONFIGURATION_STAMP}"
-    CONTENT "${UVSR_SHADER_CONFIG}\n"
+    CONTENT "${UVSR_SHADER_CONFIG}\nshaderModel=${UVSR_SHADER_MODEL}\n"
 )
 
 # Donut's Visual Studio shader helper otherwise tracks only ShaderMake and does
@@ -343,7 +381,7 @@ function(uvsr_add_shader_bundle
             -I "${CMAKE_CURRENT_SOURCE_DIR}"
             -D TARGET_D3D12
             --compiler "${SHADERMAKE_DXC_PATH}"
-            --shaderModel 6_5
+            --shaderModel "${UVSR_SHADER_MODEL}"
             --project "${project_name}"
             --compactProgress
         COMMAND ${CMAKE_COMMAND} -E touch
@@ -375,6 +413,7 @@ if (UVSR_BUILD_APPLICATION)
     add_executable(uvsr WIN32
         src/auto_exposure.cpp
         src/camera_collision.cpp
+        src/d3d12_agility_exports.cpp
         src/denoising_pass.cpp
         src/fast_approximate_aa.cpp
         src/heitz_ratio_estimator_shadows.cpp
@@ -408,7 +447,19 @@ if (UVSR_BUILD_APPLICATION)
         donut_engine
         dwmapi)
     target_compile_definitions(uvsr PRIVATE
-        "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\"")
+        "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\""
+        "UVSR_D3D12_AGILITY_SDK_VERSION=${UVSR_D3D12_AGILITY_SDK_VERSION}"
+        "UVSR_REQUIRED_SHADER_MODEL=${UVSR_SHADER_MODEL_ENCODED}")
+    add_custom_command(TARGET uvsr POST_BUILD
+        COMMAND "${CMAKE_COMMAND}"
+            "-DUVSR_EXECUTABLE=$<TARGET_FILE:uvsr>"
+            "-DUVSR_D3D12_CORE=${DONUT_D3D_AGILITY_SDK_CORE_DLL}"
+            "-DUVSR_D3D12_RUNTIME_DIRECTORY=$<TARGET_FILE_DIR:uvsr>/D3D12"
+            "-DUVSR_EXPECTED_SDK_VERSION=${UVSR_D3D12_AGILITY_SDK_VERSION}"
+            "-DUVSR_LINKER=${CMAKE_LINKER}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyD3D12Runtime.cmake"
+        COMMENT "Verifying UVSR's app-local Direct3D 12 runtime contract"
+        VERBATIM)
     set(UVSR_ENVIRONMENT_SOURCE_DIR
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/environments")
     set(UVSR_ENVIRONMENT_STAGE_DIR
@@ -677,6 +728,27 @@ target_include_directories(
 add_test(
     NAME uvsr_command_line_options_reference
     COMMAND uvsr_command_line_options_tests)
+
+add_executable(uvsr_gpu_capabilities_tests
+    tests/gpu_capabilities_tests.cpp)
+target_include_directories(
+    uvsr_gpu_capabilities_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(
+    uvsr_gpu_capabilities_tests
+    PRIVATE "UVSR_REQUIRED_SHADER_MODEL=${UVSR_SHADER_MODEL_ENCODED}")
+add_test(
+    NAME uvsr_gpu_capabilities_reference
+    COMMAND uvsr_gpu_capabilities_tests)
+
+add_executable(uvsr_windows_executable_path_tests
+    tests/windows_executable_path_tests.cpp)
+target_include_directories(
+    uvsr_windows_executable_path_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+add_test(
+    NAME uvsr_windows_executable_path_reference
+    COMMAND uvsr_windows_executable_path_tests)
 
 add_executable(uvsr_adaptive_sync_tests
     tests/adaptive_sync_tests.cpp)

@@ -60,10 +60,14 @@ internal static class SelfCleanup
 
             string programTombstone = ProgramTombstone(paths, transactionId);
             string stateTombstone = StateTombstone(paths, transactionId);
-            if (ProcessInspector.FindManagedUvsrProcesses(paths.ProgramRoot).Count > 0 ||
-                ProcessInspector.FindManagedUvsrProcesses(programTombstone).Count > 0 ||
-                ProcessInspector.FindManagedLauncherProcesses(paths.ProgramRoot).Count > 0 ||
-                ProcessInspector.FindManagedLauncherProcesses(programTombstone).Count > 0)
+            if (!ProcessInspector.IsConfirmedNotRunning(
+                    ProcessInspector.InspectManagedUvsrProcesses(paths.ProgramRoot)) ||
+                !ProcessInspector.IsConfirmedNotRunning(
+                    ProcessInspector.InspectManagedUvsrProcesses(programTombstone)) ||
+                !ProcessInspector.IsConfirmedNotRunning(
+                    ProcessInspector.InspectManagedLauncherProcesses(paths.ProgramRoot)) ||
+                !ProcessInspector.IsConfirmedNotRunning(
+                    ProcessInspector.InspectManagedLauncherProcesses(programTombstone)))
                 return 4;
 
             string cleanupLogRoot = Path.Combine(paths.OperationsRoot, "logs",
@@ -359,12 +363,21 @@ internal static class SelfCleanup
         }
     }
 
-    private static void EnsureOperationsRoot(InstallerPaths paths, Guid installationId)
+    internal static void EnsureOperationsRoot(InstallerPaths paths, Guid installationId)
     {
         SafePaths.RejectReparsePathChain(paths.OperationsRoot,
             "UVSR cleanup-coordination directory");
         if (Directory.Exists(paths.OperationsRoot))
         {
+            if (!File.Exists(paths.OperationsMarker))
+            {
+                if (Directory.EnumerateFileSystemEntries(paths.OperationsRoot).Any())
+                    throw new InstallerException(
+                        "The UVSR cleanup-coordination directory has an unknown owner. It was preserved.");
+                JsonStore.WriteAtomic(paths.OperationsMarker, new OwnerMarker(
+                    ProductConstants.SchemaVersion, ProductConstants.ProductId,
+                    installationId));
+            }
             OwnerMarker existing = ReadOperationsMarker(paths);
             if (File.Exists(paths.UninstallRecordFile))
                 throw new InstallerException(

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace UvsrInstaller;
 
 internal enum InstallerOperation
@@ -114,6 +116,17 @@ internal sealed record LauncherFeedArtifact(
     long Size,
     string Sha256);
 
+internal sealed record RendererBuildContract(
+    int SchemaVersion,
+    string ProductId,
+    string ContractId,
+    long MinimumLauncherReleaseSequence,
+    [property: JsonPropertyName("d3d12AgilitySdkVersion")]
+    string D3D12AgilitySdkVersion,
+    string DirectXHeadersVersion,
+    string DxcVersion,
+    string DxcDate);
+
 internal sealed record LauncherActivationRecord(
     int SchemaVersion,
     string ProductId,
@@ -128,6 +141,7 @@ internal sealed record LauncherActivationRecord(
 internal sealed record LauncherActivationInspection(
     bool StateFileExists,
     bool StateRecordMalformed,
+    bool StateRecordUnverifiable,
     LauncherState? RecordedState,
     LauncherState? ValidState,
     long HighestDefensibleSequence,
@@ -236,6 +250,13 @@ internal class InstallerException : Exception
 {
     internal InstallerException(string message) : base(message) { }
     internal InstallerException(string message, Exception inner) : base(message, inner) { }
+}
+
+internal sealed class SourceLauncherCompatibilityException : InstallerException
+{
+    internal SourceLauncherCompatibilityException(string message) : base(message) { }
+    internal SourceLauncherCompatibilityException(string message, Exception inner) :
+        base(message, inner) { }
 }
 
 internal sealed class ShellRollbackException : InstallerException

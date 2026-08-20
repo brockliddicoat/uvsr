@@ -53,8 +53,6 @@ internal sealed record InstallerPaths(
         desktop = Path.GetFullPath(desktop);
         programs = Path.GetFullPath(programs);
         SafePaths.RejectReparsePathChain(local, "local application-data directory");
-        SafePaths.RejectReparsePathChain(desktop, "desktop directory");
-        SafePaths.RejectReparsePathChain(programs, "Start menu directory");
         string programRoot = Path.GetFullPath(Path.Combine(local, "Programs", "UVSR"));
         string stateRoot = Path.GetFullPath(Path.Combine(local, "UVSR Installer"));
         string operationsRoot = Path.GetFullPath(Path.Combine(local,
@@ -74,6 +72,28 @@ internal sealed record InstallerPaths(
             "UVSR cleanup-coordination directory");
 
         return new InstallerPaths(local, programRoot, stateRoot, desktop, programs);
+    }
+
+    internal void ValidateShellPath(string path, string description)
+    {
+        if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(DesktopDirectory),
+                StringComparison.OrdinalIgnoreCase) ||
+            SafePaths.IsStrictDescendant(path, DesktopDirectory))
+        {
+            SafePaths.RejectReparsePathBelowTrustedRoot(
+                DesktopDirectory, path, description);
+            return;
+        }
+        if (string.Equals(Path.GetFullPath(path), Path.GetFullPath(ProgramsDirectory),
+                StringComparison.OrdinalIgnoreCase) ||
+            SafePaths.IsStrictDescendant(path, ProgramsDirectory))
+        {
+            SafePaths.RejectReparsePathBelowTrustedRoot(
+                ProgramsDirectory, path, description);
+            return;
+        }
+        throw new InstallerException(
+            $"The {description} escaped its Windows known-folder boundary.");
     }
 
     internal string VersionRoot(string versionId)

@@ -13,11 +13,11 @@ production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 128,617 non-blank source lines.
+**First-Party Lines of Code:** 128,918 non-blank source lines.
 
 **Third-Party Lines of Code:** 386,164 non-blank source lines.
 
-**Total Lines of Code:** 514,781 non-blank source lines.
+**Total Lines of Code:** 515,082 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -110,9 +110,17 @@ UVSR, UVSR Launcher, or both.
 Update checks come from:
 
 - `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/installer/launcher-feed-v1.json`
+- `https://api.github.com/repos/brockliddicoat/uvsr/git/ref/heads/main`
+- `https://raw.githubusercontent.com/brockliddicoat/uvsr/<commit>/cmake/uvsr-launcher-build-contract-v1.json`
 - `https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe`
   and falls back to `uvsr-launcher-latest` if the versioned tag is temporarily
   unavailable.
+
+The update dialog and copied details include the exact checked URL, launcher
+versions and release sequences, and the specific schema, identity, HTTP, or
+connection failure. Persistent logs are under
+`%LOCALAPPDATA%\UVSR Installer\logs`; the [launcher guide](installer/README.md#update-check-diagnostics)
+explains each result and recovery path.
 
 The first source build may take several minutes and may ask for administrator
 approval for Microsoft's signed C++ Build Tools setup; UVSR source and build
@@ -121,10 +129,12 @@ for its exact trust, ownership, recovery, and public-release contracts.
 
 ## Build and Run
 
-Requires Windows with a DirectX 12-capable GPU and current driver, CMake 3.31 or
-newer, Visual Studio with a C++17-capable MSVC toolchain, and Git with submodule
-support. Configure, build every Release target, run the deterministic tests,
-and open the persistent launcher menu from PowerShell:
+Requires Windows with a hardware DirectX 12 Shader Model 6.5-capable GPU and
+current driver, CMake 3.31 or newer, Visual Studio with a C++17-capable MSVC
+toolchain, and Git with submodule support. UVSR activates and verifies its
+packaged stable Direct3D Agility runtime rather than depending on the machine's
+inbox runtime. Configure, build every Release target, run the deterministic
+tests, and open the persistent launcher menu from PowerShell:
 
 ```powershell
 git clone --recurse-submodules https://github.com/brockliddicoat/uvsr.git

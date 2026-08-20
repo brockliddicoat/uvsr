@@ -103,6 +103,7 @@
 #include "denoising_settings.h"
 #include "fast_approximate_aa.h"
 #include "flashlight.h"
+#include "gpu_capabilities.h"
 #include "heitz_ratio_estimator_shadows.h"
 #include "noise_texture_library.h"
 #include "path_tracing_pass.h"
@@ -127,6 +128,7 @@
 #include "ui_skin.h"
 #include "ui_performance_timing_rows.h"
 #include "world_space_representation.h"
+#include "windows_executable_path.h"
 
 using namespace donut;
 using namespace donut::math;
@@ -165,6 +167,7 @@ struct GpuAdapterChoice
     uint32_t vendorId = 0;
     uint32_t deviceId = 0;
     bool usesSharedSystemMemory = false;
+    uint32_t highestShaderModel = 0;
 };
 
 constexpr float UiBackgroundBlurPixels = 4.f;
@@ -1698,9 +1701,11 @@ public:
     {
         m_RootFs = std::make_shared<RootFileSystem>();
 
-        std::filesystem::path mediaDir = app::GetDirectoryWithExecutable().parent_path() / "media";
-        std::filesystem::path frameworkShaderDir = app::GetDirectoryWithExecutable() / "shaders/framework" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
-        std::filesystem::path appShaderDir = app::GetDirectoryWithExecutable() / "shaders/uvsr" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
+        const std::filesystem::path executableDirectory =
+            GetExecutableDirectoryWide();
+        std::filesystem::path mediaDir = executableDirectory.parent_path() / "media";
+        std::filesystem::path frameworkShaderDir = executableDirectory / "shaders/framework" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
+        std::filesystem::path appShaderDir = executableDirectory / "shaders/uvsr" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
 
         m_RootFs->mount("/media", mediaDir);
         m_RootFs->mount("/shaders/donut", frameworkShaderDir);
@@ -4425,7 +4430,7 @@ public:
                         GetDevice(),
                         m_ShaderFactory,
                         m_CommonPasses,
-                        app::GetDirectoryWithExecutable().parent_path() /
+                        GetExecutableDirectoryWide().parent_path() /
                             "media/environments");
                 needNewPasses = true;
             }
@@ -25566,6 +25571,15 @@ bool ProcessCommandLine(
     }
     return true;
 }
+static void ShowGraphicsStartupError(const wchar_t* message)
+{
+    MessageBoxW(
+        nullptr,
+        message,
+        L"UVSR Graphics Startup",
+        MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+}
+
 bool SelectGraphicsAdapter(
     DeviceManager* deviceManager,
     DeviceCreationParameters& deviceParams,
@@ -25612,6 +25626,38 @@ bool SelectGraphicsAdapter(
                 deviceParams.featureLevel,
                 IID_PPV_ARGS(&testDevice))))
         {
+            log::warning(
+                "Rejected graphics adapter %zu: %s (PCI %04X:%04X) "
+                "because it could not create the required Direct3D 12 device",
+                index,
+                adapter.name.c_str(),
+                adapterDescription.VendorId,
+                adapterDescription.DeviceId);
+            continue;
+        }
+
+        D3D12_FEATURE_DATA_SHADER_MODEL shaderModel{};
+        shaderModel.HighestShaderModel = D3D_SHADER_MODEL_6_5;
+        const HRESULT shaderModelResult = testDevice->CheckFeatureSupport(
+            D3D12_FEATURE_SHADER_MODEL,
+            &shaderModel,
+            sizeof(shaderModel));
+        const uint32_t highestShaderModel = SUCCEEDED(shaderModelResult)
+            ? static_cast<uint32_t>(shaderModel.HighestShaderModel)
+            : 0u;
+        if (!SupportsRequiredShaderModel(highestShaderModel))
+        {
+            log::warning(
+                "Rejected graphics adapter %zu: %s (PCI %04X:%04X) "
+                "because UVSR requires Shader Model 6.5; reported %u.%u "
+                "(HRESULT 0x%08lX)",
+                index,
+                adapter.name.c_str(),
+                adapterDescription.VendorId,
+                adapterDescription.DeviceId,
+                (highestShaderModel >> 4u) & 0xFu,
+                highestShaderModel & 0xFu,
+                static_cast<unsigned long>(shaderModelResult));
             continue;
         }
 
@@ -25644,7 +25690,8 @@ bool SelectGraphicsAdapter(
             adapter.dedicatedVideoMemory,
             adapterDescription.VendorId,
             adapterDescription.DeviceId,
-            usesSharedSystemMemory
+            usesSharedSystemMemory,
+            highestShaderModel
         });
 
         if (automaticSelection &&
@@ -25657,7 +25704,14 @@ bool SelectGraphicsAdapter(
 
     if (adapterChoices.empty())
     {
-        log::error("No enumerated adapter supports the requested D3D12 feature level");
+        log::error(
+            "No hardware graphics adapter supports UVSR's Direct3D 12 "
+            "Shader Model 6.5 requirement");
+        ShowGraphicsStartupError(
+            L"UVSR requires a hardware DirectX 12 graphics adapter with "
+            L"Shader Model 6.5 or newer. Update the graphics driver and try "
+            L"again. If the adapter cannot support Shader Model 6.5, it is "
+            L"not compatible with this UVSR build.");
         return false;
     }
 
@@ -25674,31 +25728,103 @@ bool SelectGraphicsAdapter(
     if (selectedChoice == adapterChoices.end())
     {
         log::error(
-            "Requested DXGI adapter %d is unavailable or does not support the requested D3D12 feature level",
+            "Requested DXGI adapter %d is unavailable or does not meet "
+            "UVSR's Direct3D 12 Shader Model 6.5 requirement",
             deviceParams.adapterIndex);
+        ShowGraphicsStartupError(
+            L"The requested graphics adapter is unavailable or does not meet "
+            L"UVSR's DirectX 12 Shader Model 6.5 requirement. Remove the "
+            L"-adapter option or choose a compatible adapter.");
         return false;
     }
 
     if (selectedChoice->usesSharedSystemMemory)
     {
         log::info(
-            "Selected graphics adapter %d: %s (PCI %04X:%04X, shared / UMA)",
+            "Selected graphics adapter %d: %s "
+            "(PCI %04X:%04X, shared / UMA, Shader Model %u.%u)",
             selectedChoice->adapterIndex,
             selectedChoice->name.c_str(),
             selectedChoice->vendorId,
-            selectedChoice->deviceId);
+            selectedChoice->deviceId,
+            (selectedChoice->highestShaderModel >> 4u) & 0xFu,
+            selectedChoice->highestShaderModel & 0xFu);
     }
     else
     {
         log::info(
             "Selected graphics adapter %d: %s "
-            "(PCI %04X:%04X, %llu MiB dedicated VRAM)",
+            "(PCI %04X:%04X, %llu MiB dedicated VRAM, Shader Model %u.%u)",
             selectedChoice->adapterIndex,
             selectedChoice->name.c_str(),
             selectedChoice->vendorId,
             selectedChoice->deviceId,
-            static_cast<unsigned long long>(selectedChoice->dedicatedVideoMemory / (1024ull * 1024ull)));
+            static_cast<unsigned long long>(selectedChoice->dedicatedVideoMemory / (1024ull * 1024ull)),
+            (selectedChoice->highestShaderModel >> 4u) & 0xFu,
+            selectedChoice->highestShaderModel & 0xFu);
     }
+    return true;
+}
+
+bool ValidateLoadedD3D12Runtime()
+{
+    HMODULE runtimeModule = GetModuleHandleW(L"D3D12Core.dll");
+    if (!runtimeModule)
+    {
+        log::error(
+            "UVSR did not load its packaged D3D12Core.dll (Win32 error %lu)",
+            GetLastError());
+        ShowGraphicsStartupError(
+            L"UVSR could not load its packaged DirectX 12 runtime. Reinstall "
+            L"UVSR with UVSR Launcher, then try again.");
+        return false;
+    }
+
+    std::wstring loadedPath(32768, L'\0');
+    const DWORD loadedLength = GetModuleFileNameW(
+        runtimeModule,
+        loadedPath.data(),
+        static_cast<DWORD>(loadedPath.size()));
+    if (loadedLength == 0 || loadedLength >= loadedPath.size())
+    {
+        log::error(
+            "UVSR could not identify the loaded DirectX 12 runtime "
+            "(Win32 error %lu)",
+            GetLastError());
+        ShowGraphicsStartupError(
+            L"UVSR could not verify its packaged DirectX 12 runtime. Reinstall "
+            L"UVSR with UVSR Launcher, then try again.");
+        return false;
+    }
+    loadedPath.resize(loadedLength);
+
+    std::error_code actualPathError;
+    std::error_code expectedPathError;
+    std::error_code equivalentPathError;
+    const std::filesystem::path actual = std::filesystem::weakly_canonical(
+        std::filesystem::path(loadedPath),
+        actualPathError);
+    const std::filesystem::path expected = std::filesystem::weakly_canonical(
+        GetExecutableDirectoryWide() / "D3D12" / "D3D12Core.dll",
+        expectedPathError);
+    const bool matchesPackage = !actualPathError && !expectedPathError &&
+        std::filesystem::equivalent(actual, expected, equivalentPathError) &&
+        !equivalentPathError;
+    if (!matchesPackage)
+    {
+        log::error(
+            "UVSR loaded an unexpected DirectX 12 runtime: %s",
+            actual.u8string().c_str());
+        ShowGraphicsStartupError(
+            L"UVSR did not load the DirectX 12 runtime that belongs to this "
+            L"installation. Reinstall UVSR with UVSR Launcher, then try again.");
+        return false;
+    }
+
+    log::info(
+        "Loaded packaged DirectX 12 runtime: %s (D3D12SDKVersion %u)",
+        actual.u8string().c_str(),
+        UVSR_D3D12_AGILITY_SDK_VERSION);
     return true;
 }
 
@@ -25844,6 +25970,12 @@ int WINAPI WinMain(
         log::error(
             "Cannot initialize a %s graphics device",
             apiName);
+        delete deviceManager;
+        return 1;
+    }
+    if (!ValidateLoadedD3D12Runtime())
+    {
+        deviceManager->Shutdown();
         delete deviceManager;
         return 1;
     }

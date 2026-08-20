@@ -95,6 +95,12 @@ OVERRIDE_GROUPS = (
             ROOT / "overrides" / "imgui-tooltip-picker.patch",
         ),
     ),
+    OverrideGroup(
+        ROOT / "donut" / "nvrhi",
+        (
+            ROOT / "overrides" / "nvrhi-stable-directx-headers.patch",
+        ),
+    ),
 )
 
 

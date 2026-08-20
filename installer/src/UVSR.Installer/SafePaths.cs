@@ -52,6 +52,31 @@ internal static class SafePaths
         }
     }
 
+    internal static void RejectReparsePathBelowTrustedRoot(
+        string trustedRoot,
+        string path,
+        string description)
+    {
+        string root = Path.TrimEndingDirectorySeparator(
+            Path.GetFullPath(trustedRoot));
+        string full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        if (!string.Equals(full, root, StringComparison.OrdinalIgnoreCase) &&
+            !IsStrictDescendant(full, root))
+            throw new InstallerException(
+                $"The {description} escaped its Windows known-folder boundary.");
+
+        string current = root;
+        string remainder = full[root.Length..];
+        foreach (string component in remainder.Split(
+                     new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, component);
+            if (File.Exists(current) || Directory.Exists(current))
+                RejectReparsePoint(current, description);
+        }
+    }
+
     internal static void RejectReparseTree(string root, string description)
     {
         RejectReparsePathChain(root, description);

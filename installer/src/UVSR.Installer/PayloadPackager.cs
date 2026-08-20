@@ -15,9 +15,9 @@ internal sealed class PayloadPackager
         string commit,
         InstallLog log)
     {
+        ValidateBuildOutput(_paths.SourceDirectory, _paths.BuildDirectory);
         string sourceBin = Path.Combine(_paths.BuildDirectory, "bin");
         string sourceMedia = Path.Combine(_paths.BuildDirectory, "media");
-        ValidateBuildOutput(sourceBin, sourceMedia);
         string transactionRoot = Path.Combine(_paths.StagingDirectory, transactionId.ToString("N"));
         string packageRoot = Path.Combine(transactionRoot, "package");
         if (Directory.Exists(transactionRoot))
@@ -82,6 +82,7 @@ internal sealed class PayloadPackager
             "bin/uvsr.exe",
             "bin/D3D12/D3D12Core.dll",
             "bin/D3D12/D3D12SDKLayers.dll",
+            "bin/D3D12/uvsr-runtime-contract.txt",
             "bin/third-party-notices.md",
             "media/fonts/System/CodexUI.ttf",
             "media/fonts/System/CodexUI-Semibold.ttf",
@@ -120,6 +121,7 @@ internal sealed class PayloadPackager
         if (!recorded.TryGetValue("bin/uvsr.exe", out PackageFile? executable) ||
             !string.Equals(executable.Sha256, manifest.ExecutableSha256, StringComparison.Ordinal))
             throw new InstallerException("The staged UVSR executable failed its integrity check.");
+        ValidateD3D12RuntimeContract(packageRoot);
     }
 
     internal static string ComputeSha256(string path)
@@ -128,13 +130,20 @@ internal sealed class PayloadPackager
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
-    private void ValidateBuildOutput(string bin, string media)
+    internal static void ValidateBuildOutput(
+        string sourceDirectory,
+        string buildDirectory)
     {
+        string sourceRoot = Path.GetFullPath(sourceDirectory);
+        string buildRoot = Path.GetFullPath(buildDirectory);
+        string bin = Path.Combine(buildRoot, "bin");
+        string media = Path.Combine(buildRoot, "media");
         string[] fixedFiles =
         {
             Path.Combine(bin, "uvsr.exe"),
             Path.Combine(bin, "D3D12", "D3D12Core.dll"),
             Path.Combine(bin, "D3D12", "D3D12SDKLayers.dll"),
+            Path.Combine(bin, "D3D12", "uvsr-runtime-contract.txt"),
             Path.Combine(bin, "third-party-notices.md"),
             Path.Combine(media, "fonts", "System", "CodexUI.ttf"),
             Path.Combine(media, "fonts", "System", "CodexUI-Semibold.ttf"),
@@ -162,20 +171,53 @@ internal sealed class PayloadPackager
         }
 
         ValidateRelativeManifest(
-            Path.Combine(_paths.BuildDirectory, "uvsr_runtime_shader_paths.manifest"),
+            Path.Combine(buildRoot, "uvsr_runtime_shader_paths.manifest"),
             Path.Combine(bin, "shaders"));
         ValidateSourceManifest(
-            Path.Combine(_paths.BuildDirectory, "uvsr_environment_assets.manifest"),
-            Path.Combine(_paths.SourceDirectory, "assets", "environments"),
+            Path.Combine(buildRoot, "uvsr_environment_assets.manifest"),
+            Path.Combine(sourceRoot, "assets", "environments"),
             Path.Combine(media, "environments"));
         ValidateSourceManifest(
-            Path.Combine(_paths.BuildDirectory, "uvsr_noise_assets.manifest"),
-            Path.Combine(_paths.SourceDirectory, "assets", "noise"),
+            Path.Combine(buildRoot, "uvsr_noise_assets.manifest"),
+            Path.Combine(sourceRoot, "assets", "noise"),
             Path.Combine(media, "uvsr", "noise"));
         ValidateSourceManifest(
-            Path.Combine(_paths.BuildDirectory, "scene_runtime_assets.manifest"),
-            Path.Combine(_paths.SourceDirectory, "assets", "scenes"),
+            Path.Combine(buildRoot, "scene_runtime_assets.manifest"),
+            Path.Combine(sourceRoot, "assets", "scenes"),
             Path.Combine(media, "glTF-Sample-Assets", "Models"));
+        ValidateD3D12RuntimeContract(buildRoot);
+    }
+
+    internal static void ValidateD3D12RuntimeContract(string packageRoot)
+    {
+        string runtimeRoot = Path.Combine(packageRoot, "bin", "D3D12");
+        string contractPath = Path.Combine(runtimeRoot, "uvsr-runtime-contract.txt");
+        string corePath = Path.Combine(runtimeRoot, "D3D12Core.dll");
+        SafePaths.RejectReparsePathChain(contractPath,
+            "UVSR Direct3D runtime contract");
+        FileInfo contractInfo = new(contractPath);
+        if (!contractInfo.Exists || contractInfo.Length is <= 0 or > 4096 ||
+            !File.Exists(corePath))
+            throw new InstallerException(
+                "The completed build is missing its DirectX 12 runtime contract.");
+
+        string[] lines = File.ReadAllText(contractPath)
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n', StringSplitOptions.None);
+        if (lines.Length != 5 || lines[4].Length != 0 ||
+            lines[0] != "schemaVersion=1" ||
+            lines[1] != $"sdkVersion={ProductConstants.D3D12AgilitySdkVersion}" ||
+            lines[2] != @"sdkPath=.\D3D12\" ||
+            !lines[3].StartsWith("coreSha256=", StringComparison.Ordinal))
+            throw new InstallerException(
+                "The completed build has an invalid DirectX 12 runtime contract.");
+
+        string recordedHash = lines[3]["coreSha256=".Length..];
+        if (!ProductConstants.HashRegex().IsMatch(recordedHash) ||
+            !string.Equals(recordedHash, ComputeSha256(corePath),
+                StringComparison.Ordinal))
+            throw new InstallerException(
+                "The packaged DirectX 12 runtime does not match the verified build.");
     }
 
     private static void ValidateRelativeManifest(string manifestPath, string outputRoot)

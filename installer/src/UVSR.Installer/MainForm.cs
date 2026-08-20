@@ -12,6 +12,27 @@ internal enum UpdateFlowExit
     OperationCancelled
 }
 
+internal enum RendererButtonIntent
+{
+    None,
+    Launch,
+    Close
+}
+
+internal enum RendererBusyAction
+{
+    None,
+    Launching,
+    Closing
+}
+
+internal enum RendererClickAction
+{
+    None,
+    Launch,
+    Close
+}
+
 internal readonly record struct TerminalUiState(
     string Phase,
     string Detail,
@@ -49,10 +70,12 @@ internal sealed class MainForm : Form
     private readonly LauncherCard _detailsCard = new();
     private readonly ConcurrentQueue<string> _pendingLog = new();
     private readonly System.Windows.Forms.Timer _logTimer = new() { Interval = 150 };
+    private readonly System.Windows.Forms.Timer _processTimer = new() { Interval = 750 };
     private CancellationTokenSource? _operationCancellation;
     private InstallSnapshot? _snapshot;
     private bool _operationRunning;
-    private bool _launchBusy;
+    private RendererBusyAction _rendererBusy;
+    private RendererButtonIntent _renderedIntent;
     private bool _allowClose;
     private bool _canCancel = true;
     private bool _detailsVisible;
@@ -73,7 +96,8 @@ internal sealed class MainForm : Form
         _launch = LauncherUi.CreateButton("Launch");
         _notices = LauncherUi.CreateButton("Notices");
         _detailsToggle = LauncherUi.CreateButton("Details");
-        _copyDetails = LauncherUi.CreateButton("Copy Details");
+        _copyDetails = LauncherUi.CreateButton("Copy");
+        _copyDetails.AccessibleName = "Copy operation details";
 
         Text = "UVSR Launcher";
         StartPosition = FormStartPosition.CenterScreen;
@@ -94,6 +118,8 @@ internal sealed class MainForm : Form
         };
         _logTimer.Tick += (_, _) => FlushPendingLog();
         _logTimer.Start();
+        _processTimer.Tick += (_, _) => RefreshRendererState();
+        _processTimer.Start();
     }
 
     private void BuildInterface()
@@ -344,7 +370,12 @@ internal sealed class MainForm : Form
     {
         (bool install, bool update, bool uninstall, bool launch, bool options) =
             DetermineActionAvailability(snapshot, _operationRunning);
-        bool isUvsrRunning = IsUvsrRunning(snapshot);
+        ExactProcessInspection rendererProcesses = snapshot?.IsInstalled == true
+            ? _engine.InspectRendererProcesses()
+            : new ExactProcessInspection(TrackedProcessState.NotRunning,
+                Array.Empty<ExactProcessIdentity>());
+        if (rendererProcesses.State == TrackedProcessState.Unverifiable)
+            launch = false;
         if (_launcherWindowObsolete)
         {
             install = false;
@@ -356,10 +387,16 @@ internal sealed class MainForm : Form
         _install.Enabled = install;
         _update.Enabled = update;
         _uninstall.Enabled = uninstall;
-        _launch.Enabled = launch && !_launchBusy;
+        _launch.Enabled = launch && _rendererBusy == RendererBusyAction.None;
         _notices.Enabled = options;
         _desktopShortcut.Enabled = options && !_launcherWindowObsolete;
-        ApplyLaunchButtonStyle(isUvsrRunning, launch);
+        ApplyLaunchButtonStyle(rendererProcesses.State, launch);
+    }
+
+    private void RefreshRendererState()
+    {
+        if (!IsDisposed && IsHandleCreated)
+            SetButtons(_snapshot);
     }
 
     internal static (bool Install, bool Update, bool Uninstall, bool Launch, bool Options)
@@ -370,6 +407,19 @@ internal sealed class MainForm : Form
             available && snapshot!.IsInitialized,
             available && snapshot!.IsInstalled && !snapshot.IsDamaged,
             !operationRunning);
+    }
+
+    internal static RendererClickAction ReconcileRendererClick(
+        RendererButtonIntent renderedIntent,
+        TrackedProcessState freshState)
+    {
+        if (renderedIntent == RendererButtonIntent.Close &&
+            freshState == TrackedProcessState.Running)
+            return RendererClickAction.Close;
+        if (renderedIntent == RendererButtonIntent.Launch &&
+            freshState == TrackedProcessState.NotRunning)
+            return RendererClickAction.Launch;
+        return RendererClickAction.None;
     }
 
     private async Task HandleInstallAsync()
@@ -752,7 +802,7 @@ internal sealed class MainForm : Form
         }
         catch (Exception ex) when (ex is System.Runtime.InteropServices.ExternalException or ThreadStateException)
         {
-            LauncherDialog.Show(this, "Copy Details",
+            LauncherDialog.Show(this, "Copy",
                 "Windows could not access the clipboard right now. Try again in a moment.",
                 new DialogAction("ok", "OK", Primary: true, Cancel: true));
         }
@@ -760,11 +810,20 @@ internal sealed class MainForm : Form
 
     private async Task LaunchAsync()
     {
-        if (_operationRunning || _launchBusy)
+        if (_operationRunning || _rendererBusy != RendererBusyAction.None)
             return;
+        RendererButtonIntent renderedIntent = _renderedIntent;
         RefreshSnapshot();
         if (_snapshot is null || !_snapshot.IsInstalled || _snapshot.State is null)
             return;
+        ExactProcessInspection freshProcesses = _engine.InspectRendererProcesses();
+        RendererClickAction action = ReconcileRendererClick(
+            renderedIntent, freshProcesses.State);
+        if (action == RendererClickAction.None)
+        {
+            SetButtons(_snapshot);
+            return;
+        }
         string? executablePath = _snapshot.ExecutablePath;
         if (string.IsNullOrWhiteSpace(executablePath))
         {
@@ -772,26 +831,27 @@ internal sealed class MainForm : Form
                 "The installed UVSR executable path is unavailable."));
             return;
         }
-        if (IsUvsrRunning(executablePath))
+        if (action == RendererClickAction.Close)
         {
-            await CloseUvsrAsync(executablePath);
+            await CloseUvsrAsync(freshProcesses.Matches);
             return;
         }
         await LaunchUvsrAsync(executablePath);
     }
 
-    private void SetLaunchBusy(bool launching)
+    private void SetRendererBusy(RendererBusyAction action)
     {
-        _launchBusy = launching;
-        UseWaitCursor = launching;
-        Cursor = launching ? Cursors.WaitCursor : Cursors.Default;
+        _rendererBusy = action;
+        bool busy = action != RendererBusyAction.None;
+        UseWaitCursor = busy;
+        Cursor = busy ? Cursors.WaitCursor : Cursors.Default;
         if (!IsDisposed)
             SetButtons(_snapshot);
     }
 
     private async Task LaunchUvsrAsync(string executablePath)
     {
-        SetLaunchBusy(true);
+        SetRendererBusy(RendererBusyAction.Launching);
         try
         {
             await Task.Run(_engine.LaunchInstalled);
@@ -807,48 +867,39 @@ internal sealed class MainForm : Form
         }
         finally
         {
-            SetLaunchBusy(false);
+            SetRendererBusy(RendererBusyAction.None);
             RefreshSnapshot();
         }
     }
 
-    private async Task CloseUvsrAsync(string executablePath)
+    private async Task CloseUvsrAsync(
+        IReadOnlyList<ExactProcessIdentity> targets)
     {
-        SetLaunchBusy(true);
+        SetRendererBusy(RendererBusyAction.Closing);
         try
         {
-            IReadOnlyList<int> running = ProcessInspector.FindProcessesByExecutable(executablePath);
-            foreach (int processId in running)
-            {
-                try
-                {
-                    using Process process = Process.GetProcessById(processId);
-                    if (!process.HasExited)
-                        process.CloseMainWindow();
-                }
-                catch (ArgumentException) { }
-                catch (InvalidOperationException) { }
-            }
+            foreach (ExactProcessIdentity target in targets)
+                ProcessInspector.TryCloseMainWindow(target);
 
-            if (!await WaitForUvsrStateAsync(executablePath, false))
+            while (!await WaitForExactProcessesStoppedAsync(
+                       targets, UvsrClosePollTimeout))
             {
-                foreach (int processId in ProcessInspector.FindProcessesByExecutable(executablePath))
+                string choice = LauncherDialog.Show(this, "UVSR Is Still Running",
+                    "UVSR did not close within three seconds. Keep waiting to preserve its work, or force close only the exact processes that were running when you clicked Close.",
+                    new DialogAction("wait", "Keep Waiting", Primary: true),
+                    new DialogAction("force", "Force Close", Destructive: true),
+                    new DialogAction("cancel", "Cancel", Cancel: true));
+                if (choice == "cancel")
+                    return;
+                if (choice == "force")
                 {
-                    try
-                    {
-                        using Process process = Process.GetProcessById(processId);
-                        if (!process.HasExited)
-                            process.Kill(entireProcessTree: true);
-                    }
-                    catch (ArgumentException) { }
-                    catch (InvalidOperationException) { }
-                    catch (System.ComponentModel.Win32Exception) { }
-                }
-
-                if (!await WaitForUvsrStateAsync(executablePath, false))
-                {
-                    ShowError(new InstallerException(
-                        "UVSR was requested to close, but still appears to be running."));
+                    foreach (ExactProcessIdentity target in targets)
+                        ProcessInspector.TryTerminate(target);
+                    if (!await WaitForExactProcessesStoppedAsync(
+                            targets, UvsrClosePollTimeout))
+                        ShowError(new InstallerException(
+                            "The exact UVSR processes selected for force close still appear to be running."));
+                    return;
                 }
             }
         }
@@ -858,9 +909,25 @@ internal sealed class MainForm : Form
         }
         finally
         {
-            SetLaunchBusy(false);
+            SetRendererBusy(RendererBusyAction.None);
             RefreshSnapshot();
         }
+    }
+
+    private static async Task<bool> WaitForExactProcessesStoppedAsync(
+        IReadOnlyList<ExactProcessIdentity> targets,
+        TimeSpan timeout)
+    {
+        DateTimeOffset end = DateTimeOffset.UtcNow + timeout;
+        while (DateTimeOffset.UtcNow < end)
+        {
+            if (targets.All(target => ProcessInspector.InspectExactProcess(target) ==
+                                      TrackedProcessState.NotRunning))
+                return true;
+            await Task.Delay(UvsrPollDelayMs);
+        }
+        return targets.All(target => ProcessInspector.InspectExactProcess(target) ==
+                                     TrackedProcessState.NotRunning);
     }
 
     private async Task<bool> WaitForUvsrStateAsync(string executablePath, bool runningExpected)
@@ -869,22 +936,47 @@ internal sealed class MainForm : Form
         DateTimeOffset end = DateTimeOffset.UtcNow + timeout;
         while (DateTimeOffset.UtcNow < end)
         {
-            if (IsUvsrRunning(executablePath) == runningExpected)
+            if (RendererPathMatchesState(executablePath, runningExpected))
                 return true;
             await Task.Delay(UvsrPollDelayMs);
         }
-        return IsUvsrRunning(executablePath) == runningExpected;
+        return RendererPathMatchesState(executablePath, runningExpected);
     }
 
-    private static bool IsUvsrRunning(string? executablePath) =>
-        !string.IsNullOrWhiteSpace(executablePath) &&
-        ProcessInspector.FindProcessesByExecutable(executablePath!).Count > 0;
-
-    private bool IsUvsrRunning(InstallSnapshot? snapshot) =>
-        IsUvsrRunning(snapshot?.ExecutablePath);
-
-    private void ApplyLaunchButtonStyle(bool isRunning, bool launchAvailable)
+    private static bool RendererPathMatchesState(
+        string executablePath,
+        bool runningExpected)
     {
+        TrackedProcessState state = ProcessInspector
+            .InspectProcessesByExecutable(executablePath).State;
+        return runningExpected
+            ? state == TrackedProcessState.Running
+            : state == TrackedProcessState.NotRunning;
+    }
+
+    private void ApplyLaunchButtonStyle(
+        TrackedProcessState processState,
+        bool launchAvailable)
+    {
+        bool isRunning = processState == TrackedProcessState.Running;
+        bool busy = _rendererBusy != RendererBusyAction.None;
+        string busyText = _rendererBusy == RendererBusyAction.Closing
+            ? "Closing"
+            : "Launching";
+        _renderedIntent = busy || !launchAvailable ||
+                          processState == TrackedProcessState.Unverifiable
+            ? RendererButtonIntent.None
+            : isRunning
+                ? RendererButtonIntent.Close
+                : RendererButtonIntent.Launch;
+        string buttonText = busy
+            ? busyText
+            : processState == TrackedProcessState.Unverifiable
+                ? "Checking"
+                : isRunning
+                    ? "Close"
+                    : "Launch";
+        _launch.AccessibleName = buttonText + " UVSR";
         if (SystemInformation.HighContrast)
         {
             _launch.FlatStyle = FlatStyle.Standard;
@@ -892,21 +984,21 @@ internal sealed class MainForm : Form
             _launch.BackColor = DefaultBackColor;
             _launch.ForeColor = DefaultForeColor;
             _launch.FlatAppearance.BorderSize = 1;
-            _launch.Text = _launchBusy ? "Launching" : isRunning ? "Close" : "Launch";
-            _launch.Enabled = launchAvailable && !_launchBusy;
+            _launch.Text = buttonText;
+            _launch.Enabled = launchAvailable && !busy;
             return;
         }
 
         _launch.FlatStyle = FlatStyle.Flat;
         _launch.UseVisualStyleBackColor = false;
         _launch.FlatAppearance.BorderSize = 1;
-        if (_launchBusy || !launchAvailable)
+        if (busy || !launchAvailable)
         {
             _launch.BackColor = DisabledLaunchColor;
             _launch.ForeColor = LauncherPalette.Muted;
             _launch.FlatAppearance.BorderColor = LauncherPalette.Border;
             _launch.FlatAppearance.MouseOverBackColor = DisabledLaunchColor;
-            _launch.Text = _launchBusy ? "Launching" : "Launch";
+            _launch.Text = buttonText;
             return;
         }
 
@@ -1081,6 +1173,8 @@ internal sealed class MainForm : Form
         {
             _logTimer.Stop();
             _logTimer.Dispose();
+            _processTimer.Stop();
+            _processTimer.Dispose();
             _operationCancellation?.Dispose();
         }
         base.Dispose(disposing);

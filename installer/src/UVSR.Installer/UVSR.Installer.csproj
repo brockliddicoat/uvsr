@@ -17,9 +17,9 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <DebugType>embedded</DebugType>
-    <Version>1.1.1</Version>
-    <FileVersion>1.1.1.0</FileVersion>
-    <AssemblyVersion>1.1.1.0</AssemblyVersion>
+    <Version>1.1.4</Version>
+    <FileVersion>1.1.4.0</FileVersion>
+    <AssemblyVersion>1.1.4.0</AssemblyVersion>
     <Product>UVSR Launcher</Product>
     <Description>Installs, launches, updates, and removes UVSR on Windows 11.</Description>
     <Company>UVSR</Company>
@@ -33,5 +33,7 @@
                       LogicalName="UVSR.Installer.Notices.DotNetThirdParty.txt" />
     <EmbeddedResource Include="..\..\..\LICENSE.md"
                       LogicalName="UVSR.Installer.Notices.UvsrLicense.md" />
+    <EmbeddedResource Include="RendererBridges\uvsr-public-main-0c807484.patch"
+                      LogicalName="UVSR.Installer.RendererBridges.uvsr-public-main-0c807484.patch" />
   </ItemGroup>
 </Project>

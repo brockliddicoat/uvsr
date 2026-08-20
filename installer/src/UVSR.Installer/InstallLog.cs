@@ -55,6 +55,37 @@ internal sealed class InstallLog
             Write($"[{label}] {line}");
     }
 
+    internal static string DescribeException(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        Queue<Exception> pending = new();
+        pending.Enqueue(exception);
+        List<string> messages = new();
+        HashSet<string> seen = new(StringComparer.Ordinal);
+        while (pending.Count > 0 && messages.Count < 6)
+        {
+            Exception current = pending.Dequeue();
+            if (current is AggregateException aggregate)
+            {
+                foreach (Exception inner in aggregate.InnerExceptions)
+                    pending.Enqueue(inner);
+                continue;
+            }
+
+            string message = current.Message.Replace('\r', ' ').Replace('\n', ' ').Trim();
+            if (!string.IsNullOrWhiteSpace(message) && seen.Add(message))
+                messages.Add(message);
+            if (current.InnerException is not null)
+                pending.Enqueue(current.InnerException);
+        }
+        string detail = string.Join(" Cause: ", messages);
+        if (detail.Length > 1800)
+            detail = detail[..1800] + "…";
+        return string.IsNullOrWhiteSpace(detail)
+            ? exception.GetType().Name
+            : detail;
+    }
+
     private static string Sanitize(string value)
     {
         string singleLine = value.Replace('\r', ' ').Replace('\n', ' ');

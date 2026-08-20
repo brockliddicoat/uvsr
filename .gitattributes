@@ -1,5 +1,6 @@
 docs/postmortem/archive/*.restore.patch -diff -text
 overrides/*.patch -diff -text
+installer/src/UVSR.Installer/RendererBridges/*.patch -diff -text
 legal/licenses/Apache-2.0.txt -text -whitespace
 legal/licenses/BSD-2-Clause.txt -text -whitespace
 assets/scenes/bistro_interior_retextured/LICENSE.txt -diff -text
@@ -14,3 +15,14 @@ assets/scenes/blender_classroom/components/blender-export-report.json -diff -tex
 assets/scenes/blender_classroom/components/buffer-repack-report.json -diff -text
 tools/export_blender_classroom.py -diff -text
 assets/noise/*.bin -diff -text
+
+# Launcher release inputs use checkout-invariant bytes so embedded source
+# checksums and the immutable input lock are reproducible on every Windows host.
+/.gitattributes text eol=lf
+/LICENSE.md text eol=lf
+/installer/build.ps1 text eol=lf
+/installer/generate-renderer-source-bridge.ps1 text eol=lf
+/installer/global.json text eol=lf
+/installer/src/UVSR.Installer/** text eol=lf
+/installer/verify-launcher-identity.ps1 text eol=lf
+/cmake/uvsr-launcher-build-contract-v1.json text eol=lf

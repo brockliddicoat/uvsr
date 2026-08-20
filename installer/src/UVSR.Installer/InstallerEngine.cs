@@ -72,6 +72,9 @@ internal sealed class InstallerEngine : IDisposable
         }
     }
 
+    internal ExactProcessInspection InspectRendererProcesses() =>
+        ProcessInspector.InspectManagedUvsrProcesses(_paths.VersionsDirectory);
+
     internal async Task EnsureLauncherReadyAsync(
         bool desktopShortcut,
         IProgress<InstallerProgress>? progress,
@@ -274,15 +277,18 @@ internal sealed class InstallerEngine : IDisposable
                 if (shellJournalCleared)
                     TryPostCommitCleanup(() => SweepOrphanedVersions(updated, log), log);
                 return new OperationResult(
-                    "UVSR is already up to date with the newest public main branch.", updated,
+                    "UVSR is already up to date with the newest compatible renderer source.", updated,
                     _paths.VersionExecutable(updated.ActiveVersionId));
             }
             if (resolution.IsNonFastForward)
             {
+                string installedPublicCommit =
+                    RendererSourceBridgeRegistry.MapSourceToPublicBase(
+                        previousState!.Commit);
                 bool accepted = await prompt(new PromptRequest(
                     "Public Main History Changed",
-                    $"The public main branch is no longer a direct continuation of installed {previousState!.Commit[..7]}. " +
-                    $"Replace it with current public main {resolution.Commit[..7]}? The installed version remains available unless the replacement builds successfully."));
+                    $"The public main branch is no longer a direct continuation of installed public source {installedPublicCommit[..7]}. " +
+                    $"Replace it with current public main {resolution.PublicBaseCommit[..7]}? The installed version remains available unless the replacement builds successfully."));
                 if (!accepted)
                     throw new InstallerException("The update was cancelled. The installed UVSR version was preserved.");
             }
@@ -296,17 +302,20 @@ internal sealed class InstallerEngine : IDisposable
             bool activated = false;
             try
             {
-                await _source.PrepareExactSourceAsync(tools, resolution.Commit,
+                await _source.PrepareExactSourceAsync(tools, resolution,
                     progress, log, cancellationToken);
                 transaction = transaction with { Phase = "build" };
                 JsonStore.WriteAtomic(_paths.TransactionFile, transaction);
-                await _source.BuildAsync(tools, progress, log, cancellationToken);
+                await _source.BuildAsync(tools, resolution, progress, log,
+                    cancellationToken);
 
                 string versionId = CreateVersionId(resolution.Commit);
                 transaction = transaction with { Phase = "package", CandidateVersionId = versionId };
                 JsonStore.WriteAtomic(_paths.TransactionFile, transaction);
                 progress?.Report(new InstallerProgress("Packaging UVSR",
                     "Copying only the renderer's required runtime files."));
+                await _source.ValidatePreparedSourceAsync(tools, resolution, log,
+                    cancellationToken);
                 manifest = _packager.Stage(marker.InstallationId, transactionId,
                     versionId, resolution.Commit, log);
                 _packager.Activate(transactionId, manifest);
@@ -379,7 +388,8 @@ internal sealed class InstallerEngine : IDisposable
                     {
                         string candidate = _paths.VersionRoot(manifest.VersionId);
                         if (Directory.Exists(candidate) &&
-                            ProcessInspector.FindManagedUvsrProcesses(candidate).Count == 0)
+                            ProcessInspector.IsConfirmedNotRunning(
+                                ProcessInspector.InspectManagedUvsrProcesses(candidate)))
                             SafePaths.DeleteOwnedTree(candidate, _paths.VersionsDirectory);
                     }
                     catch (Exception cleanupFailure)
@@ -427,7 +437,7 @@ internal sealed class InstallerEngine : IDisposable
         }
         catch (Exception ex)
         {
-            log.Write($"Failure: {ex.Message}");
+            log.Write($"Failure: {InstallLog.DescribeException(ex)}");
             if (ex is InstallerException)
                 throw;
             throw new InstallerException(
@@ -450,12 +460,13 @@ internal sealed class InstallerEngine : IDisposable
         InstallLog log)
     {
         _ownership.ValidateBoth(marker.InstallationId);
-        IReadOnlyList<int> running = ProcessInspector.FindManagedUvsrProcesses(_paths.ProgramRoot);
-        if (running.Count > 0)
+        ExactProcessInspection running =
+            ProcessInspector.InspectManagedUvsrProcesses(_paths.ProgramRoot);
+        if (!ProcessInspector.IsConfirmedNotRunning(running))
             throw new InstallerException("UVSR is currently running. Close its window, then choose Uninstall again.");
-        IReadOnlyList<int> launchers = ProcessInspector.FindManagedLauncherProcesses(
+        ExactProcessInspection launchers = ProcessInspector.InspectManagedLauncherProcesses(
             _paths.ProgramRoot, excludeCurrentProcess: true);
-        if (launchers.Count > 0)
+        if (!ProcessInspector.IsConfirmedNotRunning(launchers))
             throw new InstallerException(
                 "Another UVSR Launcher window is open. Close it, then choose Uninstall again.");
         progress?.Report(new InstallerProgress("Removing UVSR",
@@ -548,7 +559,8 @@ internal sealed class InstallerEngine : IDisposable
             {
                 string inactiveCandidate = _paths.VersionRoot(transaction.CandidateVersionId);
                 if (Directory.Exists(inactiveCandidate) &&
-                    ProcessInspector.FindManagedUvsrProcesses(inactiveCandidate).Count == 0)
+                    ProcessInspector.IsConfirmedNotRunning(
+                        ProcessInspector.InspectManagedUvsrProcesses(inactiveCandidate)))
                     SafePaths.DeleteOwnedTree(inactiveCandidate, _paths.VersionsDirectory);
             }
             CleanupTransactionStaging(transaction.TransactionId, log);
@@ -606,7 +618,8 @@ internal sealed class InstallerEngine : IDisposable
                     transaction.TransactionId, log);
             }
             if (!candidateRemainsActive && Directory.Exists(candidate) &&
-                ProcessInspector.FindManagedUvsrProcesses(candidate).Count == 0)
+                ProcessInspector.IsConfirmedNotRunning(
+                    ProcessInspector.InspectManagedUvsrProcesses(candidate)))
                 SafePaths.DeleteOwnedTree(candidate, _paths.VersionsDirectory);
         }
         else
@@ -680,11 +693,14 @@ internal sealed class InstallerEngine : IDisposable
     {
         LauncherActivationInspection inspection = _launcher.InspectActivation(
             marker.InstallationId, desktopShortcut, log);
+        if (inspection.StateRecordUnverifiable)
+            throw new InstallerException(
+                "The installed launcher record is temporarily unavailable. No launcher files were changed; close other launcher copies or security scans, then try again.");
         LauncherState? existing = inspection.ValidState;
         if (inspection.Problem is not null)
             log.Write($"The installed launcher state needs repair: {inspection.Problem}");
         if (existing is not null &&
-            existing.ReleaseSequence > ProductConstants.LauncherReleaseSequence)
+            existing.ReleaseSequence >= ProductConstants.LauncherReleaseSequence)
         {
             bool pointerMatches = inspection.RecordedState is not null &&
                 inspection.RecordedState.ExecutableSha256 == existing.ExecutableSha256;
@@ -737,7 +753,8 @@ internal sealed class InstallerEngine : IDisposable
         string prior = _paths.VersionRoot(previous.ActiveVersionId);
         if (!Directory.Exists(prior))
             return;
-        if (ProcessInspector.FindManagedUvsrProcesses(prior).Count > 0)
+        if (!ProcessInspector.IsConfirmedNotRunning(
+                ProcessInspector.InspectManagedUvsrProcesses(prior)))
         {
             log.Write("The previous UVSR version is still running; its package will be retained for later cleanup.");
             return;
@@ -757,7 +774,8 @@ internal sealed class InstallerEngine : IDisposable
             string versionId = Path.GetFileName(directory);
             if (versionId == active.ActiveVersionId ||
                 !ProductConstants.VersionIdRegex().IsMatch(versionId) ||
-                ProcessInspector.FindManagedUvsrProcesses(directory).Count > 0)
+                !ProcessInspector.IsConfirmedNotRunning(
+                    ProcessInspector.InspectManagedUvsrProcesses(directory)))
                 continue;
             SafePaths.DeleteOwnedTree(directory, _paths.VersionsDirectory);
             log.Write($"Removed superseded UVSR package {versionId}.");

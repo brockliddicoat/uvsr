@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Drawing;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -7,6 +8,8 @@ using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using UvsrInstaller;
 
 internal static class Program
@@ -14,6 +17,7 @@ internal static class Program
     private static readonly List<(string Name, Action Test)> Tests = new()
     {
         ("installer roots do not overlap renderer user data", PathsPreserveRendererData),
+        ("redirected Windows known folders retain a safe shortcut boundary", RedirectedKnownFoldersAreSupported),
         ("strict descendant checks reject traversal", StrictDescendantRejectsTraversal),
         ("state validation rejects arbitrary version paths", StateRejectsArbitraryPaths),
         ("state validation rejects null JSON fields", StateRejectsNullFields),
@@ -23,13 +27,20 @@ internal static class Program
         ("owned deletion preserves an outside sibling", OwnedDeletionPreservesSibling),
         ("owned deletion rejects an intermediate directory link", OwnedDeletionRejectsLinkedAncestor),
         ("ownership refuses a pre-existing unmarked root", OwnershipRejectsCollision),
+        ("ownership recovers an interrupted empty first-run root", OwnershipRecoversEmptyRoot),
         ("ownership markers recover a missing companion root", OwnershipRecoversCompanionRoot),
+        ("cleanup ownership recovers an interrupted empty operations root", OperationsOwnershipRecoversEmptyRoot),
         ("runtime package validation requires exact executable hash", PackageHashIsVerified),
         ("runtime package validation requires every recorded file", PackageInventoryIsVerified),
         ("runtime package validation rejects null inventory data", PackageNullInventoryIsRejected),
+        ("DirectX runtime contract binds the packaged core", D3D12RuntimeContractIsBound),
         ("pinned prerequisite metadata is HTTPS and hashed", ToolMetadataIsPinned),
         ("pinned build dependencies are offline-configured", BuildDependenciesArePinnedAndOffline),
-        ("CMake dependency pins ignore commented assignments", CMakePinParserIsExact),
+        ("renderer build contract is strict and launcher-bound", RendererBuildContractIsStrict),
+        ("renderer source bridge registry and resource are exact", RendererSourceBridgeIsExact),
+        ("renderer source bridge identity rejects mutation", RendererSourceBridgeRejectsMutation),
+        ("renderer source bridge applies to its exact Git base", RendererSourceBridgeGitApplicationWorks),
+        ("sequence-4 persisted schemas accept bridged renderer identity", SequenceFourLauncherStateIsReadable),
         ("Visual Studio layout acquisition is narrowly resumable", VisualStudioLayoutContractIsBounded),
         ("Visual Studio crash recovery is fail-closed and explicit", VisualStudioRecoveryIsExplicit),
         ("fresh downloads promote the closed verified file", DownloadPromotionWorks),
@@ -61,6 +72,7 @@ internal static class Program
         ("managed Git configuration removes URL rewrites", GitConfigurationIsReplaced),
         ("managed source recreation discards poisoned Git metadata", SourceCachePoisonIsDiscarded),
         ("Git retry classification separates transient failures", GitRetryClassificationIsNarrow),
+        ("Git ancestry classification preserves operational failures", GitAncestryClassificationIsExact),
         ("cross-session operation lock rejects a concurrent owner", OperationLockRejectsConcurrency),
         ("launch honors the lifecycle operation lock", LaunchHonorsLifecycleLock),
         ("standard-user cleanup watcher retries and self-deletes", CleanupWatcherRetriesAndSelfDeletes),
@@ -68,12 +80,20 @@ internal static class Program
         ("renderer and launcher product paths remain distinct", ProductRootsAreDistinct),
         ("legacy installer operation values remain stable", LegacyOperationValuesRemainStable),
         ("launcher actions remain available for repair states", LauncherActionStatesSupportRepair),
+        ("renderer button intent never inverts a stale click", RendererButtonIntentIsStable),
+        ("exact renderer process identity observes process exit", ExactRendererIdentityObservesExit),
+        ("exact force-close terminates only the verified process handle", ExactTerminationUsesVerifiedHandle),
         ("update exits always stop indeterminate progress", UpdateExitStatesAreTerminal),
+        ("update selection copy distinguishes failed checks", UpdateSelectionCopyIsAccurate),
         ("launcher windows stay inside small high-DPI work areas", LauncherLayoutsAreBounded),
         ("launcher feed parsing is strict and deterministic", LauncherFeedParsingIsStrict),
+        ("checked-in launcher feed matches the strict production schema", CheckedInLauncherFeedIsValid),
+        ("update checks identify live feed and source release skew", UpdateCheckDiagnosticsAreExact),
         ("GitHub main reference parsing is strict", MainReferenceParsingIsStrict),
         ("launcher state rejects rollback and path data", LauncherStateValidationIsStrict),
         ("launcher release identities reject equivocation", LauncherReleaseIdentityIsUnique),
+        ("verified installed launchers converge startup automatically", LauncherStartupConverges),
+        ("launcher activation recovery selects a valid package", LauncherRecoveryConverges),
         ("pending UVSR continuation keeps its transaction", LauncherContinuationIsPreserved),
         ("launcher package markers bind to their hash directory", LauncherMarkerBindingIsStrict),
         ("launcher shortcut ownership is structural and contained", LauncherShortcutLayoutIsContained),
@@ -81,15 +101,25 @@ internal static class Program
         ("launcher release sequences have a safe upper bound", LauncherSequenceHasUpperBound),
         ("damaged launcher state preserves downgrade knowledge", LauncherInspectionPreventsSilentDowngrade),
         ("retained launcher packages recover a damaged pointer", LauncherInspectionFindsRecoveryPackage),
+        ("locked launcher state blocks activation without mutation", LockedLauncherStateBlocksActivation),
         ("launcher cleanup preserves unverified packages", LauncherCleanupPreservesUnverifiedPackages),
         ("launcher publisher configuration is fail-closed or pinned", LauncherPublisherConfigurationIsValid),
+        ("launcher copy wording is concise and accessible", LauncherCopyWordingIsConcise),
         ("launcher version metadata agrees across build inputs", LauncherVersionMetadataAgrees)
     };
 
     private static int Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--validate-build-output")
+        {
+            PayloadPackager.ValidateBuildOutput(args[1], args[2]);
+            Console.WriteLine("Validated the exact UVSR renderer package inputs.");
+            return 0;
+        }
         if (args.Length == 2 && args[0] == "--source-build-smoke")
             return RunSourceBuildSmokeAsync(args[1]).GetAwaiter().GetResult();
+        if (args.Length == 2 && args[0] == "--source-bridge-prepare-smoke")
+            return RunSourceBridgePrepareSmokeAsync(args[1]).GetAwaiter().GetResult();
         if (args.Length == 2 && args[0] == "--job-child")
         {
             Thread.Sleep(1500);
@@ -156,9 +186,10 @@ internal static class Program
         SourceManager source = new(paths, runner);
         SourceResolution resolution = await source.ResolveMainAsync(tools, null,
             progress, log, CancellationToken.None);
-        await source.PrepareExactSourceAsync(tools, resolution.Commit,
+        await source.PrepareExactSourceAsync(tools, resolution,
             progress, log, CancellationToken.None);
-        await source.BuildAsync(tools, progress, log, CancellationToken.None);
+        await source.BuildAsync(tools, resolution, progress, log,
+            CancellationToken.None);
 
         Guid transactionId = Guid.NewGuid();
         string versionId = $"{resolution.Commit}-{DateTime.UtcNow:yyyyMMddHHmmss}-" +
@@ -178,6 +209,42 @@ internal static class Program
         return 0;
     }
 
+    private static async Task<int> RunSourceBridgePrepareSmokeAsync(
+        string requestedRoot)
+    {
+        string root = Path.GetFullPath(requestedRoot);
+        if (Directory.Exists(root) && Directory.EnumerateFileSystemEntries(root).Any())
+            throw new InvalidOperationException(
+                "The source-bridge smoke root must be new or empty; existing data was preserved.");
+        Directory.CreateDirectory(root);
+        InstallerPaths paths = InstallerPaths.Create(root,
+            Path.Combine(root, "Desktop"), Path.Combine(root, "ProgramsMenu"));
+        Directory.CreateDirectory(paths.CacheDirectory);
+        RunGit(RepositoryRoot(), null, "clone", "--no-checkout", "--no-hardlinks",
+            "--local", RepositoryRoot(), paths.SourceDirectory);
+
+        string git = GetGitExecutable();
+        ToolPaths tools = new(git, git, git, string.Empty, string.Empty,
+            string.Empty, string.Empty);
+        ProcessRunner runner = new();
+        SourceManager source = new(paths, runner);
+        source.WriteSafeRepositoryConfig();
+        InstallLog log = new(paths.LogsDirectory, Console.WriteLine);
+        SourceResolution resolution = new(RendererSourceBridge.SourceCommit,
+            RendererSourceBridge.PublicBaseCommit, false, false,
+            RendererSourceBridge.Instance);
+        InlineProgress progress = new(update => Console.WriteLine(
+            $"BRIDGE_PROGRESS={update.Phase}|{update.Detail}"));
+        await source.PrepareExactSourceAsync(tools, resolution, progress, log,
+            CancellationToken.None);
+        await source.ValidatePreparedSourceAsync(tools, resolution, log,
+            CancellationToken.None);
+        Console.WriteLine($"BRIDGE_BASE={resolution.PublicBaseCommit}");
+        Console.WriteLine($"BRIDGE_COMMIT={resolution.SourceCommit}");
+        Console.WriteLine($"BRIDGE_TREE={RendererSourceBridge.SourceTree}");
+        return 0;
+    }
+
     private static void PathsPreserveRendererData()
     {
         using TestDirectory test = new();
@@ -188,6 +255,47 @@ internal static class Program
         Assert(!string.Equals(paths.StateRoot, rendererData, StringComparison.OrdinalIgnoreCase));
         Assert(paths.ProgramRoot.EndsWith(Path.Combine("Programs", "UVSR"), StringComparison.OrdinalIgnoreCase));
         Assert(paths.StateRoot.EndsWith("UVSR Installer", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void RedirectedKnownFoldersAreSupported()
+    {
+        using TestDirectory test = new();
+        string desktopTarget = Path.Combine(test.Root, "RedirectedDesktopTarget");
+        string programsTarget = Path.Combine(test.Root, "RedirectedProgramsTarget");
+        string desktopLink = Path.Combine(test.Root, "RedirectedDesktop");
+        string programsLink = Path.Combine(test.Root, "RedirectedPrograms");
+        string hostileTarget = Path.Combine(test.Root, "HostileShortcutTarget");
+        Directory.CreateDirectory(desktopTarget);
+        Directory.CreateDirectory(programsTarget);
+        Directory.CreateDirectory(hostileTarget);
+        CreateJunction(desktopLink, desktopTarget);
+        CreateJunction(programsLink, programsTarget);
+        try
+        {
+            InstallerPaths paths = InstallerPaths.Create(
+                test.Root, desktopLink, programsLink);
+            paths.ValidateShellPath(paths.DesktopShortcut,
+                "redirected desktop shortcut fixture");
+            paths.ValidateShellPath(paths.StartMenuDirectory,
+                "redirected Start menu fixture");
+
+            Directory.CreateDirectory(paths.StartMenuDirectory);
+            paths.ValidateShellPath(paths.StartMenuShortcut,
+                "redirected Start menu shortcut fixture");
+            Directory.Delete(paths.StartMenuDirectory);
+
+            CreateJunction(paths.StartMenuDirectory, hostileTarget);
+            Expect<InstallerException>(() => paths.ValidateShellPath(
+                paths.StartMenuShortcut, "linked Start menu child fixture"));
+            Directory.Delete(paths.StartMenuDirectory);
+        }
+        finally
+        {
+            if (Directory.Exists(desktopLink))
+                Directory.Delete(desktopLink);
+            if (Directory.Exists(programsLink))
+                Directory.Delete(programsLink);
+        }
     }
 
     private static void StrictDescendantRejectsTraversal()
@@ -336,6 +444,31 @@ internal static class Program
         ownership.ValidateBoth(marker.InstallationId);
     }
 
+    private static void OwnershipRecoversEmptyRoot()
+    {
+        using TestDirectory test = new();
+        InstallerPaths paths = InstallerPaths.Create(test.Root,
+            Path.Combine(test.Root, "Desktop"), Path.Combine(test.Root, "ProgramsMenu"));
+        Directory.CreateDirectory(paths.ProgramRoot);
+        OwnershipManager ownership = new(paths);
+        Assert(ownership.Inspect() is null);
+        OwnerMarker marker = ownership.EnsureRoots();
+        ownership.ValidateBoth(marker.InstallationId);
+    }
+
+    private static void OperationsOwnershipRecoversEmptyRoot()
+    {
+        using TestDirectory test = new();
+        InstallerPaths paths = InstallerPaths.Create(test.Root,
+            Path.Combine(test.Root, "Desktop"), Path.Combine(test.Root, "ProgramsMenu"));
+        Directory.CreateDirectory(paths.OperationsRoot);
+        Guid installationId = Guid.NewGuid();
+        SelfCleanup.EnsureOperationsRoot(paths, installationId);
+        OwnerMarker marker = JsonStore.Read<OwnerMarker>(paths.OperationsMarker);
+        Assert(marker.InstallationId == installationId);
+        Assert(Directory.Exists(paths.HelpersDirectory));
+    }
+
     private static void PackageHashIsVerified()
     {
         using TestDirectory test = new();
@@ -382,6 +515,27 @@ internal static class Program
         Expect<InstallerException>(() => PayloadPackager.ValidatePackage(package, manifest));
     }
 
+    private static void D3D12RuntimeContractIsBound()
+    {
+        using TestDirectory test = new();
+        string hashMismatch = Path.Combine(test.Root, "hash-mismatch");
+        WritePackageFixture(hashMismatch);
+        File.AppendAllText(Path.Combine(hashMismatch, "bin", "D3D12",
+            "D3D12Core.dll"), "changed");
+        Expect<InstallerException>(() =>
+            PayloadPackager.ValidateD3D12RuntimeContract(hashMismatch));
+
+        string versionMismatch = Path.Combine(test.Root, "version-mismatch");
+        WritePackageFixture(versionMismatch);
+        string contract = Path.Combine(versionMismatch, "bin", "D3D12",
+            "uvsr-runtime-contract.txt");
+        File.WriteAllText(contract, File.ReadAllText(contract).Replace(
+            $"sdkVersion={ProductConstants.D3D12AgilitySdkVersion}",
+            "sdkVersion=1", StringComparison.Ordinal));
+        Expect<InstallerException>(() =>
+            PayloadPackager.ValidateD3D12RuntimeContract(versionMismatch));
+    }
+
     private static void ToolMetadataIsPinned()
     {
         foreach (ToolPackage package in new[]
@@ -422,24 +576,202 @@ internal static class Program
         Assert(arguments.Contains($"-DFETCHCONTENT_SOURCE_DIR_DXC={tools.Dxc}"));
     }
 
-    private static void CMakePinParserIsExact()
+    private static void RendererBuildContractIsStrict()
     {
-        const string variable = "SHADERMAKE_DXC_VERSION";
-        string source = "# set(SHADERMAKE_DXC_VERSION \"v0.0.1\")\n" +
-            "#[=[\nset(SHADERMAKE_DXC_VERSION v0.0.2)\n]=]\n" +
-            "set(SHADERMAKE_DXC_VERSION \"v1.9.2602\") # active\n";
-        Assert(SourceManager.ParseExactCMakeSetAssignment(source, variable) ==
-               "v1.9.2602");
-        Assert(SourceManager.ParseExactCMakeSetAssignment(
-            "set(SHADERMAKE_DXC_VERSION \"https://example.invalid/#pin\")\n",
-            variable) == "https://example.invalid/#pin");
-        Expect<InstallerException>(() => SourceManager.ParseExactCMakeSetAssignment(
-            "# set(SHADERMAKE_DXC_VERSION v1.9.2602)\n", variable));
-        Expect<InstallerException>(() => SourceManager.ParseExactCMakeSetAssignment(
-            "set(SHADERMAKE_DXC_VERSION v1.9.2602)\n" +
-            "set(SHADERMAKE_DXC_VERSION v2.0.0)\n", variable));
-        Expect<InstallerException>(() => SourceManager.ParseExactCMakeSetAssignment(
-            "set(shadermake_dxc_version v1.9.2602)\n", variable));
+        string path = Path.Combine(RepositoryRoot(),
+            ProductConstants.RendererBuildContractRelativePath.Replace('/',
+                Path.DirectorySeparatorChar));
+        byte[] valid = File.ReadAllBytes(path);
+        RendererBuildContract contract = SourceManager.ParseRendererBuildContract(valid);
+        string commit = new('a', 40);
+        SourceManager.ValidateSupportedRendererBuildContract(contract, commit);
+        Assert(contract.ContractId == ProductConstants.RendererBuildContractId);
+        Assert(contract.MinimumLauncherReleaseSequence <=
+               ProductConstants.LauncherReleaseSequence);
+        Assert(contract.D3D12AgilitySdkVersion == ProductConstants.AgilitySdk.Version);
+        Assert(contract.DirectXHeadersVersion == ProductConstants.DirectXHeaders.Version);
+        Assert(contract.DxcVersion == ProductConstants.Dxc.Version);
+        Assert(contract.DxcDate == ProductConstants.PinnedDxcDate);
+        Assert(SourceManager.BuildRendererBuildContractUri(commit).AbsoluteUri ==
+               $"{ProductConstants.RepositoryRawUrl}/{commit}/" +
+               ProductConstants.RendererBuildContractRelativePath);
+
+        string json = Encoding.UTF8.GetString(valid);
+        Expect<InstallerException>(() => SourceManager.ParseRendererBuildContract(
+            Encoding.UTF8.GetBytes(json.Replace("\"schemaVersion\": 1",
+                "\"schemaVersion\": 1,\n  \"schemaVersion\": 1"))));
+        Expect<InstallerException>(() => SourceManager.ParseRendererBuildContract(
+            Encoding.UTF8.GetBytes(json.Replace("\"contractId\":",
+                "\"unknown\": true,\n  \"contractId\":"))));
+        Expect<InstallerException>(() => SourceManager.ParseRendererBuildContract(
+            Encoding.UTF8.GetBytes(json.Replace(
+                $"\"contractId\": \"{ProductConstants.RendererBuildContractId}\"",
+                "\"contractId\": null"))));
+        Expect<InstallerException>(() => SourceManager.ParseRendererBuildContract(
+            new byte[ProductConstants.MaximumRendererBuildContractBytes + 1]));
+
+        Expect<SourceLauncherCompatibilityException>(() =>
+            SourceManager.ValidateSupportedRendererBuildContract(
+                contract with { ContractId = "unknown-contract" }, commit));
+        Expect<SourceLauncherCompatibilityException>(() =>
+            SourceManager.ValidateSupportedRendererBuildContract(
+                contract with
+                {
+                    MinimumLauncherReleaseSequence =
+                        ProductConstants.LauncherReleaseSequence + 1
+                }, commit));
+        Expect<SourceLauncherCompatibilityException>(() =>
+            SourceManager.ValidateSupportedRendererBuildContract(
+                contract with { DirectXHeadersVersion = "1.0.0" }, commit));
+    }
+
+    private static void RendererSourceBridgeIsExact()
+    {
+        RendererSourceBridge bridge = RendererSourceBridgeRegistry.FindForPublicBase(
+            RendererSourceBridge.PublicBaseCommit)
+            ?? throw new InvalidOperationException("Expected the exact renderer bridge.");
+        Assert(RendererSourceBridgeRegistry.FindForPublicBase(new string('a', 40)) is null);
+        Assert(RendererSourceBridgeRegistry.MapSourceToPublicBase(
+                   RendererSourceBridge.SourceCommit) ==
+               RendererSourceBridge.PublicBaseCommit);
+        string ordinary = new string('b', 40);
+        Assert(RendererSourceBridgeRegistry.MapSourceToPublicBase(ordinary) == ordinary);
+        byte[] patch = bridge.LoadVerifiedPatch();
+        Assert(patch.LongLength == RendererSourceBridge.PatchSize);
+        Assert(Hash(patch) == RendererSourceBridge.PatchSha256);
+        Assert(bridge.StagedBlobs.Count == 10);
+        Assert(bridge.Contract.ContractId == ProductConstants.RendererBuildContractId);
+        Assert(bridge.Contract.MinimumLauncherReleaseSequence == 4);
+        Assert(bridge.Contract.DirectXHeadersVersion ==
+               ProductConstants.DirectXHeaders.Version);
+    }
+
+    private static void RendererSourceBridgeRejectsMutation()
+    {
+        RendererSourceBridge bridge = RendererSourceBridge.Instance;
+        string validEntries = string.Join("\n", bridge.StagedBlobs.Select(entry =>
+            $"100644 {entry.Value} 0\t{entry.Key}")) + "\n";
+        bridge.ValidateStagedEntries(validEntries);
+        Expect<InstallerException>(() => bridge.ValidateStagedEntries(
+            validEntries.Replace(bridge.StagedBlobs.First().Value,
+                new string('f', 40), StringComparison.Ordinal)));
+        Expect<InstallerException>(() => bridge.ValidateStagedEntries(
+            validEntries + $"100644 {new string('a', 40)} 0\tsrc/extra.cpp\n"));
+
+        string validParents = $"{RendererSourceBridge.SourceCommit} " +
+                              RendererSourceBridge.PublicBaseCommit;
+        bridge.ValidatePreparedIdentityValues(RendererSourceBridge.SourceCommit,
+            RendererSourceBridge.SourceTree, validParents, string.Empty);
+        Expect<InstallerException>(() => bridge.ValidatePreparedIdentityValues(
+            new string('a', 40), RendererSourceBridge.SourceTree, validParents,
+            string.Empty));
+        Expect<InstallerException>(() => bridge.ValidatePreparedIdentityValues(
+            RendererSourceBridge.SourceCommit, new string('a', 40), validParents,
+            string.Empty));
+        Expect<InstallerException>(() => bridge.ValidatePreparedIdentityValues(
+            RendererSourceBridge.SourceCommit, RendererSourceBridge.SourceTree,
+            $"{RendererSourceBridge.SourceCommit} {new string('a', 40)}",
+            string.Empty));
+        Expect<InstallerException>(() => bridge.ValidatePreparedIdentityValues(
+            RendererSourceBridge.SourceCommit, RendererSourceBridge.SourceTree,
+            validParents, " M src/uvsr.cpp"));
+    }
+
+    private static void RendererSourceBridgeGitApplicationWorks()
+    {
+        using TestDirectory test = new();
+        string source = Path.Combine(test.Root, "source");
+        RunGit(RepositoryRoot(), null, "clone", "--no-checkout", "--no-hardlinks",
+            "--local", RepositoryRoot(), source);
+        RunGit(source, null, "checkout", "--detach", "--force",
+            RendererSourceBridge.PublicBaseCommit);
+        Assert(RunGit(source, null, "rev-parse", "HEAD^{tree}").Trim() ==
+               RendererSourceBridge.PublicBaseTree);
+
+        string patchPath = Path.Combine(source, ".git", "bridge.patch");
+        File.WriteAllBytes(patchPath,
+            RendererSourceBridge.Instance.LoadVerifiedPatch());
+        using (FileStream bridgeLock = new(patchPath, FileMode.Open,
+                   FileAccess.Read, FileShare.Read))
+        {
+            RunGit(source, null, "apply", "--check", "--index", "--binary",
+                patchPath);
+            RunGit(source, null, "apply", "--index", "--binary", patchPath);
+        }
+        List<string> stagedEntryArguments = new() { "ls-files", "--stage", "--" };
+        stagedEntryArguments.AddRange(RendererSourceBridge.Instance.StagedBlobs.Keys);
+        RendererSourceBridge.Instance.ValidateStagedEntries(
+            RunGit(source, null, stagedEntryArguments.ToArray()));
+        Assert(RunGit(source, null, "write-tree").Trim() ==
+               RendererSourceBridge.SourceTree);
+
+        Dictionary<string, string> identity = new(StringComparer.Ordinal)
+        {
+            ["GIT_AUTHOR_NAME"] = RendererSourceBridge.CommitIdentityName,
+            ["GIT_AUTHOR_EMAIL"] = RendererSourceBridge.CommitIdentityEmail,
+            ["GIT_AUTHOR_DATE"] = RendererSourceBridge.CommitIdentityDate,
+            ["GIT_COMMITTER_NAME"] = RendererSourceBridge.CommitIdentityName,
+            ["GIT_COMMITTER_EMAIL"] = RendererSourceBridge.CommitIdentityEmail,
+            ["GIT_COMMITTER_DATE"] = RendererSourceBridge.CommitIdentityDate
+        };
+        string commit = RunGit(source, identity, "commit-tree",
+            RendererSourceBridge.SourceTree, "-p",
+            RendererSourceBridge.PublicBaseCommit, "-m",
+            RendererSourceBridge.CommitMessage).Trim();
+        Assert(commit == RendererSourceBridge.SourceCommit);
+        RunGit(source, null, "reset", "--hard", commit);
+        Assert(string.IsNullOrWhiteSpace(RunGit(source, null, "status",
+            "--porcelain=v1", "--untracked-files=all")));
+        Assert(RunGit(source, null, "rev-list", "--parents", "-n", "1",
+                   "HEAD").Trim() ==
+               $"{RendererSourceBridge.SourceCommit} " +
+               RendererSourceBridge.PublicBaseCommit);
+    }
+
+    private static void SequenceFourLauncherStateIsReadable()
+    {
+        Guid installationId = Guid.NewGuid();
+        LauncherState sequenceFour = new(ProductConstants.LauncherSchemaVersion,
+            ProductConstants.ProductId, installationId, 4, "1.1.3",
+            new string('a', 64), true, DateTimeOffset.UtcNow);
+        byte[] json = JsonSerializer.SerializeToUtf8Bytes(sequenceFour,
+            JsonStore.Options);
+        LauncherState roundTrip = JsonSerializer.Deserialize<LauncherState>(json,
+            JsonStore.Options) ?? throw new InvalidOperationException(
+                "Sequence-4 launcher state did not deserialize.");
+        roundTrip.Validate(installationId);
+        Assert(roundTrip.ReleaseSequence == 4 && roundTrip.Version == "1.1.3");
+
+        string versionId = $"{RendererSourceBridge.SourceCommit}-20260820000000-12345678";
+        InstallState bridgedState = new(ProductConstants.SchemaVersion,
+            installationId, versionId, RendererSourceBridge.SourceCommit,
+            new string('b', 64), true, DateTimeOffset.UtcNow);
+        byte[] stateJson = JsonSerializer.SerializeToUtf8Bytes(bridgedState,
+            JsonStore.Options);
+        AssertJsonPropertySet(stateJson, "schemaVersion", "installationId",
+            "activeVersionId", "commit", "executableSha256", "desktopShortcut",
+            "installedUtc");
+        InstallState strictState = JsonSerializer.Deserialize<InstallState>(stateJson,
+            JsonStore.Options) ?? throw new InvalidOperationException(
+                "Bridged renderer state did not deserialize.");
+        strictState.Validate(installationId);
+        Assert(strictState.Commit == RendererSourceBridge.SourceCommit);
+
+        PackageManifest bridgedManifest = new(ProductConstants.SchemaVersion,
+            installationId, versionId, RendererSourceBridge.SourceCommit,
+            new string('b', 64), new[]
+            {
+                new PackageFile("bin/uvsr.exe", 1, new string('b', 64))
+            }, DateTimeOffset.UtcNow);
+        byte[] manifestJson = JsonSerializer.SerializeToUtf8Bytes(bridgedManifest,
+            JsonStore.Options);
+        AssertJsonPropertySet(manifestJson, "schemaVersion", "installationId",
+            "versionId", "commit", "executableSha256", "files", "builtUtc");
+        PackageManifest strictManifest =
+            JsonSerializer.Deserialize<PackageManifest>(manifestJson,
+                JsonStore.Options) ?? throw new InvalidOperationException(
+                    "Bridged renderer manifest did not deserialize.");
+        Assert(strictManifest.Commit == RendererSourceBridge.SourceCommit);
     }
 
     private static void VisualStudioLayoutContractIsBounded()
@@ -1349,6 +1681,14 @@ internal static class Program
             "error: pathspec did not match")));
     }
 
+    private static void GitAncestryClassificationIsExact()
+    {
+        Assert(!SourceManager.ClassifyAncestryExitCode(0));
+        Assert(SourceManager.ClassifyAncestryExitCode(1));
+        Expect<InstallerException>(() => SourceManager.ClassifyAncestryExitCode(2));
+        Expect<InstallerException>(() => SourceManager.ClassifyAncestryExitCode(128));
+    }
+
     private static void OperationLockRejectsConcurrency()
     {
         using OperationLock first = OperationLock.Acquire();
@@ -1490,6 +1830,119 @@ internal static class Program
         Assert(!busy.Install && !busy.Update && !busy.Uninstall && !busy.Launch && !busy.Options);
     }
 
+    private static void RendererButtonIntentIsStable()
+    {
+        Assert(MainForm.ReconcileRendererClick(RendererButtonIntent.Close,
+                   TrackedProcessState.Running) == RendererClickAction.Close);
+        Assert(MainForm.ReconcileRendererClick(RendererButtonIntent.Launch,
+                   TrackedProcessState.NotRunning) == RendererClickAction.Launch);
+        Assert(MainForm.ReconcileRendererClick(RendererButtonIntent.Close,
+                   TrackedProcessState.NotRunning) == RendererClickAction.None);
+        Assert(MainForm.ReconcileRendererClick(RendererButtonIntent.Launch,
+                   TrackedProcessState.Running) == RendererClickAction.None);
+        Assert(MainForm.ReconcileRendererClick(RendererButtonIntent.Close,
+                   TrackedProcessState.Unverifiable) == RendererClickAction.None);
+    }
+
+    private static void ExactRendererIdentityObservesExit()
+    {
+        using TestDirectory test = new();
+        string appHost = Path.ChangeExtension(typeof(Program).Assembly.Location, ".exe");
+        string marker = Path.Combine(test.Root, "child-finished.txt");
+        ExactProcessIdentity? identity = null;
+        using (System.Diagnostics.Process process =
+               System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+               {
+                   FileName = appHost,
+                   UseShellExecute = false,
+                   CreateNoWindow = true,
+                   ArgumentList = { "--job-child", marker }
+               }) ?? throw new InvalidOperationException("Could not start the identity fixture."))
+        {
+            DateTimeOffset captureDeadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(1);
+            while (identity is null && DateTimeOffset.UtcNow < captureDeadline)
+            {
+                identity = ProcessInspector.TryCaptureExactProcess(process.Id);
+                if (identity is null)
+                    Thread.Sleep(10);
+            }
+            Assert(identity is not null);
+            Assert(ProcessInspector.InspectExactProcess(identity!) ==
+                   TrackedProcessState.Running);
+            Assert(!ProcessInspector.MatchesExactProcess(identity!, identity!.ProcessId,
+                identity.ExecutablePath, identity.CreationTimeUtcFileTime + 1));
+            Assert(process.WaitForExit(10_000));
+            Assert(File.Exists(marker));
+            Assert(ProcessInspector.InspectExactProcess(identity!) ==
+                   TrackedProcessState.NotRunning);
+        }
+        Assert(ProcessInspector.InspectExactProcess(identity!) ==
+               TrackedProcessState.NotRunning);
+        Assert(ProcessInspector.ClassifyProcessHandleWait(0) ==
+               TrackedProcessState.NotRunning);
+        Assert(ProcessInspector.ClassifyProcessHandleWait(0x102) ==
+               TrackedProcessState.Running);
+        Assert(ProcessInspector.ClassifyProcessHandleWait(uint.MaxValue) ==
+               TrackedProcessState.Unverifiable);
+        Assert(ProcessInspector.IsConfirmedNotRunning(
+            new ExactProcessInspection(TrackedProcessState.NotRunning,
+                Array.Empty<ExactProcessIdentity>())));
+        Assert(!ProcessInspector.IsConfirmedNotRunning(
+            new ExactProcessInspection(TrackedProcessState.Unverifiable,
+                Array.Empty<ExactProcessIdentity>())));
+    }
+
+    private static void ExactTerminationUsesVerifiedHandle()
+    {
+        using TestDirectory test = new();
+        string sentinel = Path.Combine(test.Root, "escaped.txt");
+        string appHost = Path.ChangeExtension(typeof(Program).Assembly.Location, ".exe");
+        ProcessStartInfo start = new()
+        {
+            FileName = appHost,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        start.ArgumentList.Add("--job-child");
+        start.ArgumentList.Add(sentinel);
+        using Process process = Process.Start(start)
+            ?? throw new InvalidOperationException("Could not start force-close fixture.");
+        try
+        {
+            ExactProcessIdentity? identity = null;
+            for (int attempt = 0; attempt < 20 && identity is null; ++attempt)
+            {
+                identity = ProcessInspector.TryCaptureExactProcess(process.Id);
+                if (identity is null)
+                    Thread.Sleep(25);
+            }
+            Assert(identity is not null);
+            Assert(ProcessInspector.TryTerminate(identity!));
+            Assert(process.WaitForExit(5000));
+            Assert(ProcessInspector.InspectExactProcess(identity!) ==
+                   TrackedProcessState.NotRunning);
+            Assert(!File.Exists(sentinel));
+        }
+        finally
+        {
+            if (!process.HasExited)
+                process.Kill(entireProcessTree: true);
+        }
+
+        string source = File.ReadAllText(Path.Combine(RepositoryRoot(), "installer",
+            "src", "UVSR.Installer", "ProcessInspector.cs"));
+        int startIndex = source.IndexOf("internal static bool TryTerminate",
+            StringComparison.Ordinal);
+        int endIndex = source.IndexOf("private static Process? TryOpenExactProcess",
+            startIndex, StringComparison.Ordinal);
+        Assert(startIndex >= 0 && endIndex > startIndex);
+        string terminationBody = source[startIndex..endIndex];
+        Assert(terminationBody.Contains("TerminateProcess(process, 1)",
+            StringComparison.Ordinal));
+        Assert(!terminationBody.Contains("GetProcessById", StringComparison.Ordinal));
+        Assert(!terminationBody.Contains(".Kill(", StringComparison.Ordinal));
+    }
+
     private static void UpdateExitStatesAreTerminal()
     {
         foreach (UpdateFlowExit exit in Enum.GetValues<UpdateFlowExit>())
@@ -1528,6 +1981,27 @@ internal static class Program
         Assert(available.Width > 0 && available.Height > 0);
     }
 
+    private static void UpdateSelectionCopyIsAccurate()
+    {
+        ComponentUpdateStatus failed = new(UpdateComponent.Uvsr,
+            ComponentUpdateState.CheckFailed, null, null, "fixture failure");
+        ComponentUpdateStatus current = new(UpdateComponent.Launcher,
+            ComponentUpdateState.Current, "1.1.3", "1.1.1", "fixture current");
+        UpdateCheckResult failureOnly = new(failed, current);
+        Assert(UpdateSelectionDialog.GetTitle(failureOnly) == "Update Check Results");
+        Assert(UpdateSelectionDialog.GetIntro(failureOnly) ==
+               "One or more update checks failed. Review the details or check again.");
+
+        ComponentUpdateStatus available = new(UpdateComponent.Launcher,
+            ComponentUpdateState.UpdateAvailable, "1.1.3", "1.1.4",
+            "fixture update");
+        UpdateCheckResult partialFailure = new(failed, available);
+        Assert(UpdateSelectionDialog.GetTitle(partialFailure) ==
+               "Choose What to Update");
+        Assert(UpdateSelectionDialog.GetIntro(partialFailure).Contains(
+            "One or more checks failed", StringComparison.Ordinal));
+    }
+
     private static void LauncherFeedParsingIsStrict()
     {
         string valid = ValidLauncherFeedJson();
@@ -1539,20 +2013,264 @@ internal static class Program
                "https://github.com/brockliddicoat/uvsr/releases/download/" +
                "uvsr-launcher-v1.1.0/UVSR-Launcher-Windows-11-x64.exe");
 
+        string legacyPath = Path.Combine(RepositoryRoot(), "installer", "tests",
+            "fixtures", "launcher-feed-public-legacy-v1.json");
+        string legacy = File.ReadAllText(legacyPath);
+        LauncherFeed legacyFeed = LauncherManager.ParseAndValidateFeed(
+            Encoding.UTF8.GetBytes(legacy));
+        Assert(legacyFeed.Version == "1.1.1");
+        Assert(legacyFeed.ReleaseSequence == 2);
+
         Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
             System.Text.Encoding.UTF8.GetBytes(valid.Replace(
                 "\"schemaVersion\":1", "\"schemaVersion\":1,\"schemaVersion\":1"))));
         Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
             System.Text.Encoding.UTF8.GetBytes(valid.Replace(
                 "\"channel\":\"stable\"", "\"channel\":\"stable\",\"unknown\":true"))));
-        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
-            System.Text.Encoding.UTF8.GetBytes(valid.Replace(new string('a', 64),
-                new string('A', 64)))));
+        InstallerException identityFailure = Capture<InstallerException>(() =>
+            LauncherManager.ParseAndValidateFeed(
+                System.Text.Encoding.UTF8.GetBytes(valid.Replace(new string('a', 64),
+                    new string('A', 64)))));
+        Assert(identityFailure.Message.Contains("artifact SHA-256",
+            StringComparison.Ordinal));
+        Assert(!identityFailure.Message.Contains("camelCase", StringComparison.Ordinal));
+        InstallerException legacyIdentityFailure = Capture<InstallerException>(() =>
+            LauncherManager.ParseAndValidateFeed(Encoding.UTF8.GetBytes(
+                legacy.Replace("2b5f092bdf80dcdabca46034f1334f6be374c712400e7bf8d6ae1e672f7a5b36",
+                    new string('A', 64)))));
+        Assert(legacyIdentityFailure.Message.Contains("artifact SHA-256",
+            StringComparison.Ordinal));
+        Assert(!legacyIdentityFailure.Message.Contains("camelCase",
+            StringComparison.Ordinal));
         Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
             System.Text.Encoding.UTF8.GetBytes(valid.Replace("\"version\":\"1.1.0\"",
                 "\"version\":\"01.1.0\""))));
         Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+            Encoding.UTF8.GetBytes(legacy.Replace("\"Artifact\"", "\"artifact\""))));
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+            Encoding.UTF8.GetBytes(legacy.Replace("\"SchemaVersion\": 1",
+                "\"SchemaVersion\": 1,\n  \"schemaVersion\": 1"))));
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
             new byte[ProductConstants.MaximumLauncherFeedBytes + 1]));
+    }
+
+    private static void CheckedInLauncherFeedIsValid()
+    {
+        string feedPath = Path.Combine(RepositoryRoot(), "installer",
+            "launcher-feed-v1.json");
+        LauncherFeed feed = LauncherManager.ParseAndValidateFeed(
+            File.ReadAllBytes(feedPath));
+        Assert(feed.ProductId == ProductConstants.ProductId);
+        Assert(feed.Channel == "stable");
+        Assert(feed.ReleaseSequence == 2);
+        Assert(feed.Version == "1.1.1");
+        Assert(feed.Artifact.Name == ProductConstants.LauncherArtifactName);
+        Assert(feed.Artifact.Size == 58_370_076);
+        Assert(feed.Artifact.Sha256 ==
+               "2b5f092bdf80dcdabca46034f1334f6be374c712400e7bf8d6ae1e672f7a5b36");
+        Assert(ProductConstants.LauncherReleaseSequence > feed.ReleaseSequence);
+    }
+
+    private static void UpdateCheckDiagnosticsAreExact()
+    {
+        string legacyPath = Path.Combine(RepositoryRoot(), "installer", "tests",
+            "fixtures", "launcher-feed-public-legacy-v1.json");
+        byte[] legacyFeed = File.ReadAllBytes(legacyPath);
+        byte[] bridgeMainReference = Encoding.UTF8.GetBytes(
+            "{\"ref\":\"refs/heads/main\",\"object\":{" +
+            "\"type\":\"commit\",\"sha\":\"" +
+            RendererSourceBridge.PublicBaseCommit + "\"}}");
+        string nonBridgeCommit = new('c', 40);
+        byte[] nonBridgeMainReference = Encoding.UTF8.GetBytes(
+            "{\"ref\":\"refs/heads/main\",\"object\":{" +
+            "\"type\":\"commit\",\"sha\":\"" + nonBridgeCommit + "\"}}");
+        string contractSource =
+            SourceManager.BuildRendererBuildContractUri(nonBridgeCommit).AbsoluteUri;
+
+        using TestDirectory test = new();
+        InstallerPaths paths = InstallerPaths.Create(test.Root,
+            Path.Combine(test.Root, "Desktop"), Path.Combine(test.Root, "Programs"));
+        List<string> requestedSources = new();
+        using DownloadManager downloads = new(new SequenceResponseHandler(
+            (request, _) =>
+            {
+                string source = request.RequestUri!.AbsoluteUri;
+                requestedSources.Add(source);
+                return source switch
+                {
+                    ProductConstants.LauncherFeedUrl =>
+                        Response(request, HttpStatusCode.OK, legacyFeed),
+                    ProductConstants.RepositoryMainApi =>
+                        Response(request, HttpStatusCode.OK, bridgeMainReference),
+                    _ => throw new InvalidOperationException(
+                        $"Unexpected update-check source '{source}'.")
+                };
+            }), FastDownloadPolicy(1));
+        LauncherManager manager = new(paths, new ProcessRunner(), downloads);
+        InstallLog log = new(paths.LogsDirectory);
+        UpdateCheckResult result = manager.CheckForUpdatesAsync(
+            new OwnerMarker(ProductConstants.SchemaVersion, ProductConstants.ProductId,
+                Guid.NewGuid()),
+            new InstallSnapshot(false, false, null, null, null, "Not installed"),
+            progress: null, log, CancellationToken.None).GetAwaiter().GetResult();
+
+        Assert(result.Launcher.State == ComponentUpdateState.Current);
+        Assert(result.Launcher.Detail.Contains(ProductConstants.LauncherFeedUrl,
+            StringComparison.Ordinal));
+        Assert(result.Launcher.Detail.Contains("No launcher update is needed",
+            StringComparison.Ordinal));
+        Assert(result.Launcher.Detail.Contains("1.1.1 (sequence 2)",
+            StringComparison.Ordinal));
+        Assert(result.Uvsr.State == ComponentUpdateState.NotInstalled);
+        Assert(result.Uvsr.UvsrCommit == RendererSourceBridge.SourceCommit);
+        Assert(result.Uvsr.Detail.Contains(RendererSourceBridge.BridgeId,
+            StringComparison.Ordinal));
+        Assert(result.Uvsr.Detail.Contains(
+            RendererSourceBridge.PublicBaseCommit[..7],
+            StringComparison.Ordinal));
+        Assert(result.Uvsr.Detail.Contains(RendererSourceBridge.SourceCommit[..7],
+            StringComparison.Ordinal));
+        Assert(requestedSources.SequenceEqual(new[]
+        {
+            ProductConstants.LauncherFeedUrl,
+            ProductConstants.RepositoryMainApi
+        }));
+
+        Guid rendererInstallationId = Guid.NewGuid();
+        InstallState bridgedState = new(ProductConstants.SchemaVersion,
+            rendererInstallationId,
+            $"{RendererSourceBridge.SourceCommit}-20260820000000-12345678",
+            RendererSourceBridge.SourceCommit, new string('a', 64), true,
+            DateTimeOffset.UtcNow);
+        UpdateCheckResult currentBridge = manager.CheckForUpdatesAsync(
+            new OwnerMarker(ProductConstants.SchemaVersion,
+                ProductConstants.ProductId, rendererInstallationId),
+            new InstallSnapshot(true, true, rendererInstallationId, bridgedState,
+                @"C:\fixture\uvsr.exe", "Installed"), null, log,
+            CancellationToken.None).GetAwaiter().GetResult();
+        Assert(currentBridge.Uvsr.State == ComponentUpdateState.Current);
+
+        InstallState unbridgedState = bridgedState with
+        {
+            ActiveVersionId =
+                $"{RendererSourceBridge.PublicBaseCommit}-20260820000000-12345678",
+            Commit = RendererSourceBridge.PublicBaseCommit
+        };
+        UpdateCheckResult bridgeUpdate = manager.CheckForUpdatesAsync(
+            new OwnerMarker(ProductConstants.SchemaVersion,
+                ProductConstants.ProductId, rendererInstallationId),
+            new InstallSnapshot(true, true, rendererInstallationId, unbridgedState,
+                @"C:\fixture\uvsr.exe", "Installed"), null, log,
+            CancellationToken.None).GetAwaiter().GetResult();
+        Assert(bridgeUpdate.Uvsr.State == ComponentUpdateState.UpdateAvailable);
+        Assert(bridgeUpdate.Uvsr.UvsrCommit == RendererSourceBridge.SourceCommit);
+
+        string details = File.ReadAllText(log.Path);
+        Assert(details.Contains($"Checking UVSR Launcher update source: " +
+            ProductConstants.LauncherFeedUrl, StringComparison.Ordinal));
+        Assert(details.Contains($"published 1.1.1 sequence 2; result Current",
+            StringComparison.Ordinal));
+        Assert(details.Contains(ProductConstants.RepositoryMainApi,
+            StringComparison.Ordinal));
+        Assert(details.Contains("No remote renderer contract request was required",
+            StringComparison.Ordinal));
+        Assert(details.Contains(RendererSourceBridge.PatchSha256,
+            StringComparison.Ordinal));
+
+        byte[] malformedFeed = Encoding.UTF8.GetBytes(
+            Encoding.UTF8.GetString(legacyFeed).Replace("\"Artifact\"", "\"artifact\""));
+        using TestDirectory failureTest = new();
+        InstallerPaths failurePaths = InstallerPaths.Create(failureTest.Root,
+            Path.Combine(failureTest.Root, "Desktop"),
+            Path.Combine(failureTest.Root, "Programs"));
+        using DownloadManager failureDownloads = new(new SequenceResponseHandler(
+            (request, _) => request.RequestUri!.AbsoluteUri switch
+            {
+                ProductConstants.LauncherFeedUrl =>
+                    Response(request, HttpStatusCode.OK, malformedFeed),
+                ProductConstants.RepositoryMainApi =>
+                    Response(request, HttpStatusCode.OK, bridgeMainReference),
+                var unexpected => throw new InvalidOperationException(
+                    $"Unexpected update-check source '{unexpected}'.")
+            }), FastDownloadPolicy(1));
+        LauncherManager failureManager = new(failurePaths, new ProcessRunner(),
+            failureDownloads);
+        InstallLog failureLog = new(failurePaths.LogsDirectory);
+        UpdateCheckResult failed = failureManager.CheckForUpdatesAsync(
+            new OwnerMarker(ProductConstants.SchemaVersion, ProductConstants.ProductId,
+                Guid.NewGuid()),
+            new InstallSnapshot(false, false, null, null, null, "Not installed"),
+            progress: null, failureLog, CancellationToken.None).GetAwaiter().GetResult();
+        Assert(failed.Launcher.State == ComponentUpdateState.CheckFailed);
+        Assert(failed.Launcher.Detail.Contains(ProductConstants.LauncherFeedUrl,
+            StringComparison.Ordinal));
+        Assert(failed.Launcher.Detail.Contains("required canonical camelCase",
+            StringComparison.Ordinal));
+        Assert(File.ReadAllText(failureLog.Path).Contains(
+            $"Launcher update check failed at {ProductConstants.LauncherFeedUrl}",
+            StringComparison.Ordinal));
+
+        UpdateCheckResult httpFailure = RunUpdateCheckFixture(legacyFeed,
+            nonBridgeMainReference, contractSource,
+            request => Response(request, HttpStatusCode.InternalServerError,
+                Array.Empty<byte>()), out string httpFailureLog);
+        Assert(httpFailure.Launcher.State == ComponentUpdateState.Current);
+        Assert(httpFailure.Uvsr.State == ComponentUpdateState.CheckFailed);
+        Assert(httpFailure.Uvsr.Detail.StartsWith(
+            $"UVSR update check failed at {contractSource}",
+            StringComparison.Ordinal));
+        Assert(httpFailure.Uvsr.Detail.Contains("HTTP 500", StringComparison.Ordinal));
+        Assert(httpFailureLog.Contains($"UVSR update check failed at {contractSource}",
+            StringComparison.Ordinal));
+
+        UpdateCheckResult tlsFailure = RunUpdateCheckFixture(legacyFeed,
+            nonBridgeMainReference, contractSource,
+            _ => throw new HttpRequestException("fixture TLS rejection",
+                new AuthenticationException("fixture certificate rejected")),
+            out string tlsFailureLog);
+        Assert(tlsFailure.Launcher.State == ComponentUpdateState.Current);
+        Assert(tlsFailure.Uvsr.State == ComponentUpdateState.CheckFailed);
+        Assert(tlsFailure.Uvsr.Detail.StartsWith(
+            $"UVSR update check failed at {contractSource}",
+            StringComparison.Ordinal));
+        Assert(tlsFailure.Uvsr.Detail.Contains("secure download",
+            StringComparison.OrdinalIgnoreCase));
+        Assert(tlsFailure.Uvsr.Detail.Contains("fixture certificate rejected",
+            StringComparison.Ordinal));
+        Assert(tlsFailureLog.Contains($"UVSR update check failed at {contractSource}",
+            StringComparison.Ordinal));
+    }
+
+    private static UpdateCheckResult RunUpdateCheckFixture(
+        byte[] launcherFeed,
+        byte[] mainReference,
+        string contractSource,
+        Func<HttpRequestMessage, HttpResponseMessage> contractResponse,
+        out string logText)
+    {
+        using TestDirectory test = new();
+        InstallerPaths paths = InstallerPaths.Create(test.Root,
+            Path.Combine(test.Root, "Desktop"), Path.Combine(test.Root, "Programs"));
+        using DownloadManager downloads = new(new SequenceResponseHandler(
+            (request, _) => request.RequestUri!.AbsoluteUri switch
+            {
+                ProductConstants.LauncherFeedUrl =>
+                    Response(request, HttpStatusCode.OK, launcherFeed),
+                ProductConstants.RepositoryMainApi =>
+                    Response(request, HttpStatusCode.OK, mainReference),
+                var source when source == contractSource => contractResponse(request),
+                var unexpected => throw new InvalidOperationException(
+                    $"Unexpected update-check source '{unexpected}'.")
+            }), FastDownloadPolicy(1));
+        LauncherManager manager = new(paths, new ProcessRunner(), downloads);
+        InstallLog log = new(paths.LogsDirectory);
+        UpdateCheckResult result = manager.CheckForUpdatesAsync(
+            new OwnerMarker(ProductConstants.SchemaVersion, ProductConstants.ProductId,
+                Guid.NewGuid()),
+            new InstallSnapshot(false, false, null, null, null, "Not installed"),
+            progress: null, log, CancellationToken.None).GetAwaiter().GetResult();
+        logText = File.ReadAllText(log.Path);
+        return result;
     }
 
     private static void MainReferenceParsingIsStrict()
@@ -1607,6 +2325,65 @@ internal static class Program
         Assert(highest == current);
         Expect<InstallerException>(() => LauncherManager.ResolveHighestDefensibleIdentity(
             new[] { current, conflict }));
+    }
+
+    private static void LauncherStartupConverges()
+    {
+        string external = Path.Combine(Path.GetTempPath(), "external-launcher.exe");
+        string installed = Path.Combine(Path.GetTempPath(), "installed-launcher.exe");
+        Assert(LauncherManager.DecideLauncherStartup(3, external, 3, installed,
+                   redirectSafeArguments: true) ==
+               LauncherStartupAction.RedirectToVerifiedInstalled);
+        Assert(LauncherManager.DecideLauncherStartup(3, external, 4, installed,
+                   redirectSafeArguments: true) ==
+               LauncherStartupAction.RedirectToVerifiedInstalled);
+        Assert(LauncherManager.DecideLauncherStartup(3, external, 2, installed,
+                   redirectSafeArguments: true) == LauncherStartupAction.ContinueCurrent);
+        Assert(LauncherManager.DecideLauncherStartup(3, installed, 3, installed,
+                   redirectSafeArguments: true) == LauncherStartupAction.ContinueCurrent);
+        Assert(LauncherManager.DecideLauncherStartup(3, external, 3, installed,
+                   redirectSafeArguments: false) == LauncherStartupAction.ContinueCurrent);
+        Assert(LauncherManager.AreRedirectSafeArguments(Array.Empty<string>()));
+        Assert(LauncherManager.AreRedirectSafeArguments(new[] { "--launch" }));
+        Assert(LauncherManager.AreRedirectSafeArguments(new[] { "--uninstall" }));
+        Assert(!LauncherManager.AreRedirectSafeArguments(
+            new[] { "--continue-uvsr-update", Guid.NewGuid().ToString("D") }));
+    }
+
+    private static void LauncherRecoveryConverges()
+    {
+        Assert(LauncherManager.DecideLauncherRecovery("prepared",
+                   LauncherRecoveryPackageStatus.Missing,
+                   LauncherRecoveryPackageStatus.Valid) ==
+               LauncherRecoveryAction.RollBack);
+        Assert(LauncherManager.DecideLauncherRecovery("prepared",
+                   LauncherRecoveryPackageStatus.Valid,
+                   LauncherRecoveryPackageStatus.Invalid) ==
+               LauncherRecoveryAction.RollBack);
+        Assert(LauncherManager.DecideLauncherRecovery("prepared",
+                   LauncherRecoveryPackageStatus.Invalid,
+                   LauncherRecoveryPackageStatus.Valid) ==
+               LauncherRecoveryAction.RollForward);
+        Assert(LauncherManager.DecideLauncherRecovery("state-activated",
+                   LauncherRecoveryPackageStatus.Valid,
+                   LauncherRecoveryPackageStatus.Invalid) ==
+               LauncherRecoveryAction.RollBack);
+        Assert(LauncherManager.DecideLauncherRecovery("shell-committed",
+                   LauncherRecoveryPackageStatus.Invalid,
+                   LauncherRecoveryPackageStatus.Valid) ==
+               LauncherRecoveryAction.RollForward);
+        Assert(LauncherManager.DecideLauncherRecovery("awaiting-continuation",
+                   LauncherRecoveryPackageStatus.Invalid,
+                   LauncherRecoveryPackageStatus.Invalid) ==
+               LauncherRecoveryAction.ClearBrokenJournal);
+        Assert(LauncherManager.DecideLauncherRecovery("state-activated",
+                   LauncherRecoveryPackageStatus.Unverifiable,
+                   LauncherRecoveryPackageStatus.Invalid) ==
+               LauncherRecoveryAction.RetryLater);
+        Assert(LauncherManager.DecideLauncherRecovery("prepared",
+                   LauncherRecoveryPackageStatus.Invalid,
+                   LauncherRecoveryPackageStatus.Unverifiable) ==
+               LauncherRecoveryAction.RetryLater);
     }
 
     private static void LauncherContinuationIsPreserved()
@@ -1738,6 +2515,42 @@ internal static class Program
         Assert(inspection.ValidState!.DesktopShortcut);
     }
 
+    private static void LockedLauncherStateBlocksActivation()
+    {
+        using TestDirectory test = new();
+        InstallerPaths paths = InstallerPaths.Create(test.Root,
+            Path.Combine(test.Root, "Desktop"), Path.Combine(test.Root, "Programs"));
+        OwnerMarker owner = new OwnershipManager(paths).EnsureRoots();
+        LauncherState fallback = CreateLauncherPackage(paths, owner.InstallationId,
+            1, "1.1.0", "fallback-v1", true);
+        LauncherState newerRecord = new(ProductConstants.LauncherSchemaVersion,
+            ProductConstants.ProductId, owner.InstallationId, 5, "5.0.0",
+            new string('f', 64), false, DateTimeOffset.UtcNow);
+        JsonStore.WriteAtomic(paths.LauncherStateFile, newerRecord);
+        byte[] originalState = File.ReadAllBytes(paths.LauncherStateFile);
+        using DownloadManager downloads = new(new StaticResponseHandler(Array.Empty<byte>()));
+        LauncherManager manager = new(paths, new ProcessRunner(), downloads);
+        InstallLog log = new(paths.LogsDirectory);
+
+        using (FileStream locked = new(paths.LauncherStateFile, FileMode.Open,
+                   FileAccess.ReadWrite, FileShare.None))
+        {
+            LauncherActivationInspection inspection = manager.InspectActivation(
+                owner.InstallationId, true, log);
+            Assert(inspection.StateRecordUnverifiable);
+            Assert(!inspection.StateRecordMalformed);
+            Expect<InstallerException>(() => manager.Activate(owner.InstallationId,
+                fallback, null, new ShellIntegration(paths),
+                continueUvsrUpdate: false, log));
+            Assert(!File.Exists(paths.LauncherTransactionFile));
+            Assert(!File.Exists(paths.StartMenuShortcut));
+            Assert(!File.Exists(paths.DesktopShortcut));
+        }
+
+        Assert(File.ReadAllBytes(paths.LauncherStateFile)
+            .SequenceEqual(originalState));
+    }
+
     private static void LauncherCleanupPreservesUnverifiedPackages()
     {
         using TestDirectory test = new();
@@ -1782,21 +2595,59 @@ internal static class Program
         }
     }
 
+    private static void LauncherCopyWordingIsConcise()
+    {
+        string source = File.ReadAllText(Path.Combine(RepositoryRoot(), "installer",
+            "src", "UVSR.Installer", "MainForm.cs"));
+        Assert(source.Contains("LauncherUi.CreateButton(\"Copy\")",
+            StringComparison.Ordinal));
+        Assert(source.Contains("AccessibleName = \"Copy operation details\"",
+            StringComparison.Ordinal));
+        Assert(!source.Contains("Copy Details", StringComparison.Ordinal));
+        Assert(source.Contains("RendererBusyAction.Closing", StringComparison.Ordinal));
+    }
+
     private static void LauncherVersionMetadataAgrees()
     {
-        string current = Directory.GetCurrentDirectory();
-        string root = File.Exists(Path.Combine(current, "installer", "src",
-            "UVSR.Installer", "UVSR.Installer.csproj"))
-            ? current
-            : Directory.GetParent(current)?.FullName ?? current;
+        string root = RepositoryRoot();
         string project = File.ReadAllText(Path.Combine(root, "installer", "src",
             "UVSR.Installer", "UVSR.Installer.csproj"));
         string manifest = File.ReadAllText(Path.Combine(root, "installer", "src",
             "UVSR.Installer", "app.manifest"));
         Assert(project.Contains($"<Version>{ProductConstants.LauncherVersion}</Version>",
             StringComparison.Ordinal));
-        Assert(manifest.Contains("version=\"1.1.1.0\"", StringComparison.Ordinal));
-        Assert(ProductConstants.LauncherReleaseSequence == 2);
+        Assert(project.Contains("<FileVersion>1.1.4.0</FileVersion>",
+            StringComparison.Ordinal));
+        Assert(manifest.Contains("version=\"1.1.4.0\"", StringComparison.Ordinal));
+        Assert(ProductConstants.LauncherVersion == "1.1.4");
+        Assert(ProductConstants.LauncherReleaseSequence == 5);
+        using JsonDocument inputLock = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(root, "installer", "launcher-input-lock-v1.json")));
+        JsonElement lockRoot = inputLock.RootElement;
+        Assert(lockRoot.GetProperty("schemaVersion").GetInt32() == 1);
+        Assert(lockRoot.GetProperty("version").GetString() ==
+               ProductConstants.LauncherVersion);
+        Assert(lockRoot.GetProperty("releaseSequence").GetInt64() ==
+               ProductConstants.LauncherReleaseSequence);
+        Assert(ProductConstants.HashRegex().IsMatch(
+            lockRoot.GetProperty("inputsSha256").GetString()!));
+        string workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows",
+            "windows-launcher.yml"));
+        Assert(Regex.Matches(workflow, "- \\\"\\.gitattributes\\\"").Count == 2);
+        Assert(Regex.Matches(workflow, "- \\\"tests/\\*\\*\\\"").Count == 2);
+    }
+
+    private static string RepositoryRoot()
+    {
+        DirectoryInfo? directory = new(Directory.GetCurrentDirectory());
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "installer", "src",
+                    "UVSR.Installer", "UVSR.Installer.csproj")))
+                return directory.FullName;
+            directory = directory.Parent;
+        }
+        throw new InvalidOperationException("Could not locate the UVSR repository root.");
     }
 
     private static LauncherState CreateLauncherPackage(
@@ -1838,8 +2689,15 @@ internal static class Program
         foreach (string directory in directories)
             Directory.CreateDirectory(directory);
         File.WriteAllText(Path.Combine(package, "bin", "uvsr.exe"), "binary");
-        File.WriteAllText(Path.Combine(package, "bin", "D3D12", "D3D12Core.dll"), "dll");
+        string core = Path.Combine(package, "bin", "D3D12", "D3D12Core.dll");
+        File.WriteAllText(core, "dll");
         File.WriteAllText(Path.Combine(package, "bin", "D3D12", "D3D12SDKLayers.dll"), "layers");
+        File.WriteAllText(Path.Combine(package, "bin", "D3D12",
+                "uvsr-runtime-contract.txt"),
+            "schemaVersion=1\n" +
+            $"sdkVersion={ProductConstants.D3D12AgilitySdkVersion}\n" +
+            "sdkPath=.\\D3D12\\\n" +
+            $"coreSha256={PayloadPackager.ComputeSha256(core)}\n");
         File.WriteAllText(Path.Combine(package, "bin", "third-party-notices.md"), "notice");
         File.WriteAllText(Path.Combine(package, "media", "fonts", "System", "CodexUI.ttf"), "font");
         File.WriteAllText(Path.Combine(package, "media", "fonts", "System", "CodexUI-Semibold.ttf"), "font");
@@ -1869,6 +2727,58 @@ internal static class Program
         TimeSpan.FromSeconds(1),
         TimeSpan.FromSeconds(10),
         Enumerable.Repeat(TimeSpan.Zero, Math.Max(0, maximumAttempts - 1)).ToArray());
+
+    private static string RunGit(
+        string workingDirectory,
+        IReadOnlyDictionary<string, string>? additionalEnvironment,
+        params string[] arguments)
+    {
+        ProcessStartInfo start = new()
+        {
+            FileName = (GetGitExecutable()),
+            WorkingDirectory = workingDirectory,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        start.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+        start.Environment["GIT_CONFIG_GLOBAL"] = "NUL";
+        start.Environment["GIT_NO_REPLACE_OBJECTS"] = "1";
+        start.Environment["LC_ALL"] = "C";
+        start.Environment["LANG"] = "C";
+        if (additionalEnvironment is not null)
+        {
+            foreach ((string name, string value) in additionalEnvironment)
+                start.Environment[name] = value;
+        }
+        foreach (string argument in arguments)
+            start.ArgumentList.Add(argument);
+        using Process process = Process.Start(start)
+            ?? throw new InvalidOperationException("Could not start Git fixture.");
+        string output = process.StandardOutput.ReadToEnd();
+        string error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException(
+                $"Git fixture failed ({process.ExitCode}): {error}");
+        return output;
+    }
+
+    private static string GetGitExecutable()
+    {
+        string installed = Path.Combine(Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData), "Programs", "UVSR",
+            "tools", "git", "cmd", "git.exe");
+        if (File.Exists(installed))
+            return installed;
+        string? path = Environment.GetEnvironmentVariable("PATH");
+        string? discovered = path?.Split(Path.PathSeparator,
+                StringSplitOptions.RemoveEmptyEntries)
+            .Select(directory => Path.Combine(directory.Trim('"'), "git.exe"))
+            .FirstOrDefault(File.Exists);
+        return discovered ?? "git.exe";
+    }
 
     private static HttpResponseMessage Response(
         HttpRequestMessage request,
@@ -1951,15 +2861,29 @@ internal static class Program
 
     private static void Expect<T>(Action action) where T : Exception
     {
+        _ = Capture<T>(action);
+    }
+
+    private static T Capture<T>(Action action) where T : Exception
+    {
         try
         {
             action();
         }
-        catch (T)
+        catch (T exception)
         {
-            return;
+            return exception;
         }
         throw new InvalidOperationException($"Expected {typeof(T).Name}.");
+    }
+
+    private static void AssertJsonPropertySet(byte[] json, params string[] expected)
+    {
+        using JsonDocument document = JsonDocument.Parse(json);
+        HashSet<string> actual = document.RootElement.EnumerateObject()
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert(actual.Count == expected.Length && actual.SetEquals(expected));
     }
 
     private static void Assert(bool condition)

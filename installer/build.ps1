@@ -2,6 +2,8 @@
 param(
     [string] $OutputDirectory,
     [string] $DotNetPath,
+    [string] $PublishedArtifactPath,
+    [string] $IdentityBaseCommit,
     [switch] $SkipTests
 )
 
@@ -58,6 +60,35 @@ function Assert-NoReparseTree {
     }
 }
 
+function Resolve-LauncherIdentityBase {
+    param([string] $RequestedBase)
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedBase)) {
+        return $RequestedBase.Trim()
+    }
+    $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+    $head = ((& git -C $repositoryRoot rev-parse HEAD) -join '').Trim()
+    if ($LASTEXITCODE -ne 0 -or $head -notmatch '^[0-9a-fA-F]{40}$') {
+        throw 'Git could not resolve the launcher build commit.'
+    }
+    $default = ((& git -C $repositoryRoot rev-parse --verify `
+        refs/remotes/origin/main 2>$null) -join '').Trim()
+    if ($LASTEXITCODE -eq 0 -and $default -match '^[0-9a-fA-F]{40}$' -and
+        $default -ne $head) {
+        $mergeBase = ((& git -C $repositoryRoot merge-base $head $default) `
+            -join '').Trim()
+        if ($LASTEXITCODE -eq 0 -and $mergeBase -match '^[0-9a-fA-F]{40}$' -and
+            $mergeBase -ne $head) {
+            return $mergeBase
+        }
+    }
+    $parent = ((& git -C $repositoryRoot rev-parse 'HEAD^') -join '').Trim()
+    if ($LASTEXITCODE -ne 0 -or $parent -notmatch '^[0-9a-fA-F]{40}$') {
+        throw 'A launcher identity comparison base is required for this repository history.'
+    }
+    return $parent
+}
+
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $PSScriptRoot 'artifacts'
 }
@@ -92,8 +123,14 @@ if (-not $publish.StartsWith($outputPrefix, [StringComparison]::OrdinalIgnoreCas
 }
 $locationPushed = $false
 try {
+    & (Join-Path $PSScriptRoot 'generate-renderer-source-bridge.ps1') -Check
+    $resolvedIdentityBase = Resolve-LauncherIdentityBase $IdentityBaseCommit
+    & (Join-Path $PSScriptRoot 'verify-launcher-identity.ps1') `
+        -BaseCommit $resolvedIdentityBase
     foreach ($legacyName in @('UVSR-Installer-Windows-11-x64.exe',
-            'UVSR-Installer-Windows-11-x64.exe.sha256')) {
+            'UVSR-Installer-Windows-11-x64.exe.sha256',
+            'UVSR-Launcher-Windows-11-x64.exe',
+            'UVSR-Launcher-Windows-11-x64.exe.sha256')) {
         $legacyPath = Join-Path $output $legacyName
         if (Test-Path -LiteralPath $legacyPath -PathType Leaf) {
             Remove-Item -LiteralPath $legacyPath -Force
@@ -144,9 +181,80 @@ if ($unexpected) {
     throw "The publish output is not a single executable: $($unexpected.Name -join ', ')."
 }
 
+$hash = (Get-FileHash -LiteralPath $publishedExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+$publishedSize = (Get-Item -LiteralPath $publishedExecutable).Length
+$constantsPath = Join-Path $PSScriptRoot 'src\UVSR.Installer\ProductConstants.cs'
+$constants = [IO.File]::ReadAllText($constantsPath)
+$versionMatch = [regex]::Match($constants,
+    'internal const string LauncherVersion = "(?<value>[0-9]+\.[0-9]+\.[0-9]+)";')
+$sequenceMatch = [regex]::Match($constants,
+    'internal const long LauncherReleaseSequence = (?<value>[0-9]+);')
+if (-not $versionMatch.Success -or -not $sequenceMatch.Success) {
+    throw 'The launcher release identity could not be read from ProductConstants.cs.'
+}
+$currentVersion = $versionMatch.Groups['value'].Value
+$currentSequence = [long]::Parse($sequenceMatch.Groups['value'].Value,
+    [Globalization.CultureInfo]::InvariantCulture)
+$feedPath = Join-Path $PSScriptRoot 'launcher-feed-v1.json'
+$feed = [IO.File]::ReadAllText($feedPath) | ConvertFrom-Json
+$feedSequence = [long]$feed.releaseSequence
+$feedVersion = [version]([string]$feed.version)
+$parsedCurrentVersion = [version]$currentVersion
+if ($currentSequence -lt $feedSequence -or $parsedCurrentVersion -lt $feedVersion) {
+    throw "Launcher identity $currentVersion sequence $currentSequence is older than published identity $feedVersion sequence $feedSequence."
+}
+if (($currentSequence -eq $feedSequence) -ne
+    ($parsedCurrentVersion -eq $feedVersion)) {
+    throw 'Launcher version and release sequence must advance together.'
+}
+if ($currentSequence -gt $feedSequence -and
+    $parsedCurrentVersion -le $feedVersion) {
+    throw 'A new launcher release sequence requires a newer semantic version.'
+}
+if (-not [string]::IsNullOrWhiteSpace($PublishedArtifactPath)) {
+    if ($currentSequence -ne $feedSequence -or
+        $parsedCurrentVersion -ne $feedVersion) {
+        throw 'Final launcher artifact verification requires the checked-in public feed to record the current release identity.'
+    }
+    $finalArtifact = [IO.Path]::GetFullPath($PublishedArtifactPath)
+    if (-not (Test-Path -LiteralPath $finalArtifact -PathType Leaf)) {
+        throw "The final signed launcher artifact was not found at '$finalArtifact'."
+    }
+    $finalHash = (Get-FileHash -LiteralPath $finalArtifact -Algorithm SHA256).Hash.ToLowerInvariant()
+    $finalSize = (Get-Item -LiteralPath $finalArtifact).Length
+    if ($finalSize -ne [long]$feed.artifact.size -or
+        $finalHash -ne [string]$feed.artifact.sha256) {
+        throw 'The supplied final launcher artifact does not match the checked-in public feed.'
+    }
+    $finalMetadata = [Diagnostics.FileVersionInfo]::GetVersionInfo($finalArtifact)
+    $versionWithBuild = "$currentVersion+"
+    if ($finalMetadata.ProductName -ne 'UVSR Launcher' -or
+        [string]::IsNullOrWhiteSpace($finalMetadata.ProductVersion) -or
+        ($finalMetadata.ProductVersion -ne $currentVersion -and
+         -not $finalMetadata.ProductVersion.StartsWith(
+             $versionWithBuild, [StringComparison]::Ordinal))) {
+        throw 'The supplied final launcher artifact does not contain the current launcher product metadata.'
+    }
+    $health = Start-Process -FilePath $finalArtifact `
+        -ArgumentList @('--launcher-health-check', "$currentSequence", $currentVersion) `
+        -PassThru -WindowStyle Hidden
+    try {
+        if (-not $health.WaitForExit(15000)) {
+            $health.Kill($true)
+            $health.WaitForExit()
+            throw 'The supplied final launcher artifact did not finish its identity health check.'
+        }
+        if ($health.ExitCode -ne 0) {
+            throw 'The supplied final launcher artifact rejected the current release identity.'
+        }
+    }
+    finally {
+        $health.Dispose()
+    }
+}
+
 $artifact = Join-Path $output 'UVSR-Launcher-Windows-11-x64.exe'
-Copy-Item -LiteralPath $publishedExecutable -Destination $artifact -Force
-$hash = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
+Copy-Item -LiteralPath $publishedExecutable -Destination $artifact
 $checksum = Join-Path $output 'UVSR-Launcher-Windows-11-x64.exe.sha256'
 [IO.File]::WriteAllText($checksum, "$hash  UVSR-Launcher-Windows-11-x64.exe`n",
     [Text.UTF8Encoding]::new($false))

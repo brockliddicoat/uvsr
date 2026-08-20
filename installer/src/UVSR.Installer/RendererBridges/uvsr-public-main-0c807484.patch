@@ -1,0 +1,631 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 607614f3b2396f39d5ec679bb540e46f694c5d96..bf37c7807f7db7b4aaa9cc7e89cd0998690ce027 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -15,6 +15,14 @@ option(UVSR_WITH_NRD
+ option(UVSR_ACCEPT_NRD_LICENSE
+     "Acknowledge acceptance of NVIDIA's RTX SDK license for NRD" OFF)
+ 
++set(UVSR_SHADER_MODEL "6_5")
++if (NOT UVSR_SHADER_MODEL MATCHES "^([0-9]+)_([0-9]+)$")
++    message(FATAL_ERROR "UVSR_SHADER_MODEL must use ShaderMake's major_minor form")
++endif()
++math(EXPR UVSR_SHADER_MODEL_ENCODED
++    "${CMAKE_MATCH_1} * 16 + ${CMAKE_MATCH_2}"
++    OUTPUT_FORMAT HEXADECIMAL)
++
+ if (UVSR_WITH_NRD AND NOT UVSR_ACCEPT_NRD_LICENSE)
+     message(FATAL_ERROR
+         "UVSR_WITH_NRD requires UVSR_ACCEPT_NRD_LICENSE=ON after reviewing "
+@@ -200,7 +208,28 @@ uvsr_stage_patched_sources(
+     imgui_tables.cpp
+     imgui_widgets.cpp)
+ 
++set(UVSR_NVRHI_D3D12_OVERRIDE_DIR
++    "${CMAKE_BINARY_DIR}/uvsr_nvrhi_d3d12_overrides")
++set(UVSR_NVRHI_D3D12_PATCH_FILES
++    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/nvrhi-stable-directx-headers.patch")
++uvsr_stage_patched_sources(
++    "${CMAKE_CURRENT_SOURCE_DIR}/donut/nvrhi"
++    "${UVSR_NVRHI_D3D12_PATCH_FILES}"
++    "${UVSR_NVRHI_D3D12_OVERRIDE_DIR}"
++    src/d3d12/d3d12-constants.cpp)
++
++# Keep NVRHI's headers on the same stable DirectX release line as UVSR's
++# app-local Agility runtime. The pinned dependency remains pristine; this
++# first-party cache override is also honored by offline launcher builds.
++set(NVRHI_DIRECTX_HEADERS_GIT_TAG "v1.619.5" CACHE STRING "Pinned DirectX-Headers release used by UVSR" FORCE)
+ add_subdirectory(donut)
++uvsr_replace_target_sources(
++    nvrhi_d3d12
++    "${CMAKE_CURRENT_SOURCE_DIR}/donut/nvrhi"
++    "${UVSR_NVRHI_D3D12_OVERRIDE_DIR}"
++    src/d3d12/d3d12-constants.cpp)
++target_include_directories(nvrhi_d3d12 PRIVATE
++    "${CMAKE_CURRENT_SOURCE_DIR}/donut/nvrhi/src/d3d12")
+ uvsr_replace_target_sources(
+     donut_app
+     "${CMAKE_CURRENT_SOURCE_DIR}/donut"
+@@ -278,13 +307,22 @@ if (UVSR_WITH_NRD)
+ endif()
+ 
+ if (NVRHI_WITH_DX12)
+-    set(DONUT_D3D_AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.717.1-preview")
++    set(UVSR_D3D12_AGILITY_PACKAGE_VERSION "1.619.5")
++    set(UVSR_D3D12_AGILITY_SDK_VERSION 619)
++    set(DONUT_D3D_AGILITY_SDK_URL "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/1.619.5")
+     set(DONUT_D3D_AGILITY_SDK_FETCH_DIR "" CACHE PATH
+         "Optional existing or shared D3D12 Agility SDK extraction")
+     include("${CMAKE_CURRENT_SOURCE_DIR}/donut/cmake/FetchAgilitySDK.cmake")
++    if (NOT DONUT_D3D_AGILITY_SDK_ENABLED OR
++        NOT DONUT_D3D_AGILITY_SDK_VERSION EQUAL UVSR_D3D12_AGILITY_SDK_VERSION)
++        message(FATAL_ERROR
++            "UVSR requires the complete Direct3D Agility SDK "
++            "${UVSR_D3D12_AGILITY_PACKAGE_VERSION} runtime contract "
++            "(D3D12SDKVersion ${UVSR_D3D12_AGILITY_SDK_VERSION})")
++    endif()
+     file(COPY
+-        "${DONUT_D3D_AGILITY_SDK_PATH}/build/native/bin/x64/D3D12Core.dll"
+-        "${DONUT_D3D_AGILITY_SDK_PATH}/build/native/bin/x64/D3D12SDKLayers.dll"
++        "${DONUT_D3D_AGILITY_SDK_CORE_DLL}"
++        "${DONUT_D3D_AGILITY_SDK_LAYERS_DLL}"
+         DESTINATION "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/D3D12/"
+     )
+ endif()
+@@ -313,7 +351,7 @@ set(UVSR_SHADER_CONFIGURATION_STAMP
+     "${CMAKE_CURRENT_BINARY_DIR}/uvsr_shader_configuration.txt")
+ file(GENERATE
+     OUTPUT "${UVSR_SHADER_CONFIGURATION_STAMP}"
+-    CONTENT "${UVSR_SHADER_CONFIG}\n"
++    CONTENT "${UVSR_SHADER_CONFIG}\nshaderModel=${UVSR_SHADER_MODEL}\n"
+ )
+ 
+ # Donut's Visual Studio shader helper otherwise tracks only ShaderMake and does
+@@ -343,7 +381,7 @@ function(uvsr_add_shader_bundle
+             -I "${CMAKE_CURRENT_SOURCE_DIR}"
+             -D TARGET_D3D12
+             --compiler "${SHADERMAKE_DXC_PATH}"
+-            --shaderModel 6_5
++            --shaderModel "${UVSR_SHADER_MODEL}"
+             --project "${project_name}"
+             --compactProgress
+         COMMAND ${CMAKE_COMMAND} -E touch
+@@ -375,6 +413,7 @@ if (UVSR_BUILD_APPLICATION)
+     add_executable(uvsr WIN32
+         src/auto_exposure.cpp
+         src/camera_collision.cpp
++        src/d3d12_agility_exports.cpp
+         src/denoising_pass.cpp
+         src/fast_approximate_aa.cpp
+         src/heitz_ratio_estimator_shadows.cpp
+@@ -408,7 +447,19 @@ if (UVSR_BUILD_APPLICATION)
+         donut_engine
+         dwmapi)
+     target_compile_definitions(uvsr PRIVATE
+-        "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\"")
++        "UVSR_GIT_COMMIT=\"${UVSR_GIT_COMMIT}\""
++        "UVSR_D3D12_AGILITY_SDK_VERSION=${UVSR_D3D12_AGILITY_SDK_VERSION}"
++        "UVSR_REQUIRED_SHADER_MODEL=${UVSR_SHADER_MODEL_ENCODED}")
++    add_custom_command(TARGET uvsr POST_BUILD
++        COMMAND "${CMAKE_COMMAND}"
++            "-DUVSR_EXECUTABLE=$<TARGET_FILE:uvsr>"
++            "-DUVSR_D3D12_CORE=${DONUT_D3D_AGILITY_SDK_CORE_DLL}"
++            "-DUVSR_D3D12_RUNTIME_DIRECTORY=$<TARGET_FILE_DIR:uvsr>/D3D12"
++            "-DUVSR_EXPECTED_SDK_VERSION=${UVSR_D3D12_AGILITY_SDK_VERSION}"
++            "-DUVSR_LINKER=${CMAKE_LINKER}"
++            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/VerifyD3D12Runtime.cmake"
++        COMMENT "Verifying UVSR's app-local Direct3D 12 runtime contract"
++        VERBATIM)
+     set(UVSR_ENVIRONMENT_SOURCE_DIR
+         "${CMAKE_CURRENT_SOURCE_DIR}/assets/environments")
+     set(UVSR_ENVIRONMENT_STAGE_DIR
+@@ -678,6 +729,27 @@ add_test(
+     NAME uvsr_command_line_options_reference
+     COMMAND uvsr_command_line_options_tests)
+ 
++add_executable(uvsr_gpu_capabilities_tests
++    tests/gpu_capabilities_tests.cpp)
++target_include_directories(
++    uvsr_gpu_capabilities_tests
++    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
++target_compile_definitions(
++    uvsr_gpu_capabilities_tests
++    PRIVATE "UVSR_REQUIRED_SHADER_MODEL=${UVSR_SHADER_MODEL_ENCODED}")
++add_test(
++    NAME uvsr_gpu_capabilities_reference
++    COMMAND uvsr_gpu_capabilities_tests)
++
++add_executable(uvsr_windows_executable_path_tests
++    tests/windows_executable_path_tests.cpp)
++target_include_directories(
++    uvsr_windows_executable_path_tests
++    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
++add_test(
++    NAME uvsr_windows_executable_path_reference
++    COMMAND uvsr_windows_executable_path_tests)
++
+ add_executable(uvsr_adaptive_sync_tests
+     tests/adaptive_sync_tests.cpp)
+ target_include_directories(
+diff --git a/cmake/VerifyD3D12Runtime.cmake b/cmake/VerifyD3D12Runtime.cmake
+new file mode 100644
+index 0000000000000000000000000000000000000000..f48564e44f5d1ceb36beed72ee38f5b482958942
+--- /dev/null
++++ b/cmake/VerifyD3D12Runtime.cmake
+@@ -0,0 +1,51 @@
++foreach(required_variable
++        UVSR_EXECUTABLE
++        UVSR_D3D12_CORE
++        UVSR_D3D12_RUNTIME_DIRECTORY
++        UVSR_EXPECTED_SDK_VERSION
++        UVSR_LINKER)
++    if (NOT DEFINED ${required_variable} OR "${${required_variable}}" STREQUAL "")
++        message(FATAL_ERROR
++            "The Direct3D runtime verifier is missing ${required_variable}")
++    endif()
++endforeach()
++
++if (NOT EXISTS "${UVSR_EXECUTABLE}" OR NOT EXISTS "${UVSR_D3D12_CORE}")
++    message(FATAL_ERROR
++        "The Direct3D runtime verifier could not find the executable or D3D12Core.dll")
++endif()
++
++execute_process(
++    COMMAND "${UVSR_LINKER}" /dump /exports "${UVSR_EXECUTABLE}"
++    RESULT_VARIABLE dump_result
++    OUTPUT_VARIABLE dump_output
++    ERROR_VARIABLE dump_error)
++if (NOT dump_result EQUAL 0)
++    message(FATAL_ERROR
++        "The UVSR export table could not be inspected: ${dump_error}")
++endif()
++
++foreach(required_export D3D12SDKVersion D3D12SDKPath)
++    if (NOT dump_output MATCHES "(^|[\r\n])[^\r\n]*${required_export}([\r\n]|$)")
++        message(FATAL_ERROR
++            "uvsr.exe does not export the required ${required_export} symbol")
++    endif()
++endforeach()
++
++file(MAKE_DIRECTORY "${UVSR_D3D12_RUNTIME_DIRECTORY}")
++set(staged_core "${UVSR_D3D12_RUNTIME_DIRECTORY}/D3D12Core.dll")
++if (NOT EXISTS "${staged_core}")
++    message(FATAL_ERROR "The app-local D3D12Core.dll was not staged")
++endif()
++file(SHA256 "${UVSR_D3D12_CORE}" source_core_sha256)
++file(SHA256 "${staged_core}" staged_core_sha256)
++if (NOT source_core_sha256 STREQUAL staged_core_sha256)
++    message(FATAL_ERROR
++        "The staged D3D12Core.dll does not match the configured Agility SDK")
++endif()
++
++file(WRITE "${UVSR_D3D12_RUNTIME_DIRECTORY}/uvsr-runtime-contract.txt"
++    "schemaVersion=1\n"
++    "sdkVersion=${UVSR_EXPECTED_SDK_VERSION}\n"
++    "sdkPath=.\\D3D12\\\n"
++    "coreSha256=${staged_core_sha256}\n")
+diff --git a/cmake/uvsr-launcher-build-contract-v1.json b/cmake/uvsr-launcher-build-contract-v1.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..09e963b654d55d8cc2e7cf4bca8f255faa9dccaa
+--- /dev/null
++++ b/cmake/uvsr-launcher-build-contract-v1.json
+@@ -0,0 +1,10 @@
++{
++  "schemaVersion": 1,
++  "productId": "0c47a7a8-1ec4-4ffd-b6c4-2f7614181223",
++  "contractId": "uvsr-windows-dx12-stable-619-v1",
++  "minimumLauncherReleaseSequence": 4,
++  "d3d12AgilitySdkVersion": "1.619.5",
++  "directXHeadersVersion": "1.619.5",
++  "dxcVersion": "1.9.2602",
++  "dxcDate": "2026_02_20"
++}
+diff --git a/overrides/nvrhi-stable-directx-headers.patch b/overrides/nvrhi-stable-directx-headers.patch
+new file mode 100644
+index 0000000000000000000000000000000000000000..4feec45339f8bb45aff9c82fe46ebc8b9c089e7b
+GIT binary patch
+literal 935
+zcmdr~T}#6-6n*cn2>6)A(G3y1mt|>ig|?COL-!PFn`%MR(qu!B{dc==NFCTc3g#iX
+zN$xrK<mMDrSptM!Dg&~qZu4m|FYMWIMtQBY$&}I8dDDRB@p}s)bcw@)5MJb2E&-a~
+z-b`#8z<#|0-I2=PrEaoZ0<~*jE63@DT3|TbxogkF3UlsJE-)c9ibS-=Znxt!VhJa7
+zG6wPSh9&Vi1ndW(Pr#+Fw{0#XlNqTUhtz5(TSMx)No5{nrma3a)ojhgf>%`u!j!K)
+zan$zc#cM$rdk`rlG2>kv1S}lW6m3G%rG+WwvGBc+;_hkwJza4u0vvPi=}<?$X=%aV
+xo6)mi-|ur(QI%sQ|FUyzYyLs&l92Jvb<{n%aA2UrAN@4y$#v(LZ`<t`))z{={(t}g
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/d3d12_agility_exports.cpp b/src/d3d12_agility_exports.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..7d00c7651fc428d34385e2f34e27c4300c727726
+--- /dev/null
++++ b/src/d3d12_agility_exports.cpp
+@@ -0,0 +1,10 @@
++#ifndef UVSR_D3D12_AGILITY_SDK_VERSION
++#error UVSR_D3D12_AGILITY_SDK_VERSION must match the packaged D3D12Core.dll.
++#endif
++
++extern "C"
++{
++    __declspec(dllexport) extern const unsigned int D3D12SDKVersion =
++        UVSR_D3D12_AGILITY_SDK_VERSION;
++    __declspec(dllexport) extern const char* D3D12SDKPath = ".\\D3D12\\";
++}
+diff --git a/src/gpu_capabilities.h b/src/gpu_capabilities.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..d2f4aac53709713ba3ee2b8938812b331eebe000
+--- /dev/null
++++ b/src/gpu_capabilities.h
+@@ -0,0 +1,18 @@
++#pragma once
++
++#include <cstdint>
++
++#ifndef UVSR_REQUIRED_SHADER_MODEL
++#error UVSR_REQUIRED_SHADER_MODEL must match the ShaderMake target profile.
++#endif
++
++namespace uvsr
++{
++    constexpr uint32_t MinimumShaderModel = UVSR_REQUIRED_SHADER_MODEL;
++
++    [[nodiscard]] constexpr bool SupportsRequiredShaderModel(
++        uint32_t highestShaderModel) noexcept
++    {
++        return highestShaderModel >= MinimumShaderModel;
++    }
++}
+diff --git a/src/uvsr.cpp b/src/uvsr.cpp
+index d1e232b9f4a91a45ef949752344526919fd4c1aa..3c5eb7daf2cf057db1026ec115cdc03c9c618aab 100644
+--- a/src/uvsr.cpp
++++ b/src/uvsr.cpp
+@@ -103,6 +103,7 @@
+ #include "denoising_settings.h"
+ #include "fast_approximate_aa.h"
+ #include "flashlight.h"
++#include "gpu_capabilities.h"
+ #include "heitz_ratio_estimator_shadows.h"
+ #include "noise_texture_library.h"
+ #include "path_tracing_pass.h"
+@@ -127,6 +128,7 @@
+ #include "ui_skin.h"
+ #include "ui_performance_timing_rows.h"
+ #include "world_space_representation.h"
++#include "windows_executable_path.h"
+ 
+ using namespace donut;
+ using namespace donut::math;
+@@ -165,6 +167,7 @@ struct GpuAdapterChoice
+     uint32_t vendorId = 0;
+     uint32_t deviceId = 0;
+     bool usesSharedSystemMemory = false;
++    uint32_t highestShaderModel = 0;
+ };
+ 
+ constexpr float UiBackgroundBlurPixels = 4.f;
+@@ -1698,9 +1701,11 @@ public:
+     {
+         m_RootFs = std::make_shared<RootFileSystem>();
+ 
+-        std::filesystem::path mediaDir = app::GetDirectoryWithExecutable().parent_path() / "media";
+-        std::filesystem::path frameworkShaderDir = app::GetDirectoryWithExecutable() / "shaders/framework" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
+-        std::filesystem::path appShaderDir = app::GetDirectoryWithExecutable() / "shaders/uvsr" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
++        const std::filesystem::path executableDirectory =
++            GetExecutableDirectoryWide();
++        std::filesystem::path mediaDir = executableDirectory.parent_path() / "media";
++        std::filesystem::path frameworkShaderDir = executableDirectory / "shaders/framework" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
++        std::filesystem::path appShaderDir = executableDirectory / "shaders/uvsr" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
+ 
+         m_RootFs->mount("/media", mediaDir);
+         m_RootFs->mount("/shaders/donut", frameworkShaderDir);
+@@ -4425,7 +4430,7 @@ public:
+                         GetDevice(),
+                         m_ShaderFactory,
+                         m_CommonPasses,
+-                        app::GetDirectoryWithExecutable().parent_path() /
++                        GetExecutableDirectoryWide().parent_path() /
+                             "media/environments");
+                 needNewPasses = true;
+             }
+@@ -25566,6 +25571,15 @@ bool ProcessCommandLine(
+     }
+     return true;
+ }
++static void ShowGraphicsStartupError(const wchar_t* message)
++{
++    MessageBoxW(
++        nullptr,
++        message,
++        L"UVSR Graphics Startup",
++        MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
++}
++
+ bool SelectGraphicsAdapter(
+     DeviceManager* deviceManager,
+     DeviceCreationParameters& deviceParams,
+@@ -25612,6 +25626,38 @@ bool SelectGraphicsAdapter(
+                 deviceParams.featureLevel,
+                 IID_PPV_ARGS(&testDevice))))
+         {
++            log::warning(
++                "Rejected graphics adapter %zu: %s (PCI %04X:%04X) "
++                "because it could not create the required Direct3D 12 device",
++                index,
++                adapter.name.c_str(),
++                adapterDescription.VendorId,
++                adapterDescription.DeviceId);
++            continue;
++        }
++
++        D3D12_FEATURE_DATA_SHADER_MODEL shaderModel{};
++        shaderModel.HighestShaderModel = D3D_SHADER_MODEL_6_5;
++        const HRESULT shaderModelResult = testDevice->CheckFeatureSupport(
++            D3D12_FEATURE_SHADER_MODEL,
++            &shaderModel,
++            sizeof(shaderModel));
++        const uint32_t highestShaderModel = SUCCEEDED(shaderModelResult)
++            ? static_cast<uint32_t>(shaderModel.HighestShaderModel)
++            : 0u;
++        if (!SupportsRequiredShaderModel(highestShaderModel))
++        {
++            log::warning(
++                "Rejected graphics adapter %zu: %s (PCI %04X:%04X) "
++                "because UVSR requires Shader Model 6.5; reported %u.%u "
++                "(HRESULT 0x%08lX)",
++                index,
++                adapter.name.c_str(),
++                adapterDescription.VendorId,
++                adapterDescription.DeviceId,
++                (highestShaderModel >> 4u) & 0xFu,
++                highestShaderModel & 0xFu,
++                static_cast<unsigned long>(shaderModelResult));
+             continue;
+         }
+ 
+@@ -25644,7 +25690,8 @@ bool SelectGraphicsAdapter(
+             adapter.dedicatedVideoMemory,
+             adapterDescription.VendorId,
+             adapterDescription.DeviceId,
+-            usesSharedSystemMemory
++            usesSharedSystemMemory,
++            highestShaderModel
+         });
+ 
+         if (automaticSelection &&
+@@ -25657,7 +25704,14 @@ bool SelectGraphicsAdapter(
+ 
+     if (adapterChoices.empty())
+     {
+-        log::error("No enumerated adapter supports the requested D3D12 feature level");
++        log::error(
++            "No hardware graphics adapter supports UVSR's Direct3D 12 "
++            "Shader Model 6.5 requirement");
++        ShowGraphicsStartupError(
++            L"UVSR requires a hardware DirectX 12 graphics adapter with "
++            L"Shader Model 6.5 or newer. Update the graphics driver and try "
++            L"again. If the adapter cannot support Shader Model 6.5, it is "
++            L"not compatible with this UVSR build.");
+         return false;
+     }
+ 
+@@ -25674,31 +25728,103 @@ bool SelectGraphicsAdapter(
+     if (selectedChoice == adapterChoices.end())
+     {
+         log::error(
+-            "Requested DXGI adapter %d is unavailable or does not support the requested D3D12 feature level",
++            "Requested DXGI adapter %d is unavailable or does not meet "
++            "UVSR's Direct3D 12 Shader Model 6.5 requirement",
+             deviceParams.adapterIndex);
++        ShowGraphicsStartupError(
++            L"The requested graphics adapter is unavailable or does not meet "
++            L"UVSR's DirectX 12 Shader Model 6.5 requirement. Remove the "
++            L"-adapter option or choose a compatible adapter.");
+         return false;
+     }
+ 
+     if (selectedChoice->usesSharedSystemMemory)
+     {
+         log::info(
+-            "Selected graphics adapter %d: %s (PCI %04X:%04X, shared / UMA)",
++            "Selected graphics adapter %d: %s "
++            "(PCI %04X:%04X, shared / UMA, Shader Model %u.%u)",
+             selectedChoice->adapterIndex,
+             selectedChoice->name.c_str(),
+             selectedChoice->vendorId,
+-            selectedChoice->deviceId);
++            selectedChoice->deviceId,
++            (selectedChoice->highestShaderModel >> 4u) & 0xFu,
++            selectedChoice->highestShaderModel & 0xFu);
+     }
+     else
+     {
+         log::info(
+             "Selected graphics adapter %d: %s "
+-            "(PCI %04X:%04X, %llu MiB dedicated VRAM)",
++            "(PCI %04X:%04X, %llu MiB dedicated VRAM, Shader Model %u.%u)",
+             selectedChoice->adapterIndex,
+             selectedChoice->name.c_str(),
+             selectedChoice->vendorId,
+             selectedChoice->deviceId,
+-            static_cast<unsigned long long>(selectedChoice->dedicatedVideoMemory / (1024ull * 1024ull)));
++            static_cast<unsigned long long>(selectedChoice->dedicatedVideoMemory / (1024ull * 1024ull)),
++            (selectedChoice->highestShaderModel >> 4u) & 0xFu,
++            selectedChoice->highestShaderModel & 0xFu);
++    }
++    return true;
++}
++
++bool ValidateLoadedD3D12Runtime()
++{
++    HMODULE runtimeModule = GetModuleHandleW(L"D3D12Core.dll");
++    if (!runtimeModule)
++    {
++        log::error(
++            "UVSR did not load its packaged D3D12Core.dll (Win32 error %lu)",
++            GetLastError());
++        ShowGraphicsStartupError(
++            L"UVSR could not load its packaged DirectX 12 runtime. Reinstall "
++            L"UVSR with UVSR Launcher, then try again.");
++        return false;
++    }
++
++    std::wstring loadedPath(32768, L'\0');
++    const DWORD loadedLength = GetModuleFileNameW(
++        runtimeModule,
++        loadedPath.data(),
++        static_cast<DWORD>(loadedPath.size()));
++    if (loadedLength == 0 || loadedLength >= loadedPath.size())
++    {
++        log::error(
++            "UVSR could not identify the loaded DirectX 12 runtime "
++            "(Win32 error %lu)",
++            GetLastError());
++        ShowGraphicsStartupError(
++            L"UVSR could not verify its packaged DirectX 12 runtime. Reinstall "
++            L"UVSR with UVSR Launcher, then try again.");
++        return false;
+     }
++    loadedPath.resize(loadedLength);
++
++    std::error_code actualPathError;
++    std::error_code expectedPathError;
++    std::error_code equivalentPathError;
++    const std::filesystem::path actual = std::filesystem::weakly_canonical(
++        std::filesystem::path(loadedPath),
++        actualPathError);
++    const std::filesystem::path expected = std::filesystem::weakly_canonical(
++        GetExecutableDirectoryWide() / "D3D12" / "D3D12Core.dll",
++        expectedPathError);
++    const bool matchesPackage = !actualPathError && !expectedPathError &&
++        std::filesystem::equivalent(actual, expected, equivalentPathError) &&
++        !equivalentPathError;
++    if (!matchesPackage)
++    {
++        log::error(
++            "UVSR loaded an unexpected DirectX 12 runtime: %s",
++            actual.u8string().c_str());
++        ShowGraphicsStartupError(
++            L"UVSR did not load the DirectX 12 runtime that belongs to this "
++            L"installation. Reinstall UVSR with UVSR Launcher, then try again.");
++        return false;
++    }
++
++    log::info(
++        "Loaded packaged DirectX 12 runtime: %s (D3D12SDKVersion %u)",
++        actual.u8string().c_str(),
++        UVSR_D3D12_AGILITY_SDK_VERSION);
+     return true;
+ }
+ 
+@@ -25847,6 +25973,12 @@ int WINAPI WinMain(
+         delete deviceManager;
+         return 1;
+     }
++    if (!ValidateLoadedD3D12Runtime())
++    {
++        deviceManager->Shutdown();
++        delete deviceManager;
++        return 1;
++    }
+ 
+     if (!deviceParams.startFullscreen &&
+         !deviceParams.startMaximized)
+diff --git a/src/windows_executable_path.h b/src/windows_executable_path.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..105ad08dba865b288d02a9849fe22d88bb352dff
+--- /dev/null
++++ b/src/windows_executable_path.h
+@@ -0,0 +1,35 @@
++#pragma once
++
++#include <Windows.h>
++
++#include <filesystem>
++#include <stdexcept>
++#include <string>
++#include <string_view>
++
++namespace uvsr
++{
++    inline std::filesystem::path ExecutableDirectoryFromModulePath(
++        std::wstring_view modulePath)
++    {
++        const std::filesystem::path executablePath(modulePath);
++        const std::filesystem::path directory = executablePath.parent_path();
++        if (modulePath.empty() || directory.empty())
++            throw std::runtime_error("UVSR could not determine its executable directory.");
++        return directory;
++    }
++
++    inline std::filesystem::path GetExecutableDirectoryWide()
++    {
++        std::wstring modulePath(32768, L'\0');
++        SetLastError(ERROR_SUCCESS);
++        const DWORD length = GetModuleFileNameW(
++            nullptr,
++            modulePath.data(),
++            static_cast<DWORD>(modulePath.size()));
++        if (length == 0 || length >= modulePath.size())
++            throw std::runtime_error("UVSR could not identify its executable path.");
++        modulePath.resize(length);
++        return ExecutableDirectoryFromModulePath(modulePath);
++    }
++}
+diff --git a/tests/gpu_capabilities_tests.cpp b/tests/gpu_capabilities_tests.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..49c454698c816e72605a02e630aee0e568292e79
+--- /dev/null
++++ b/tests/gpu_capabilities_tests.cpp
+@@ -0,0 +1,15 @@
++#include <cassert>
++
++#include "gpu_capabilities.h"
++
++int main()
++{
++    static_assert(uvsr::MinimumShaderModel == 0x65u);
++    static_assert(!uvsr::SupportsRequiredShaderModel(0x60u));
++    static_assert(!uvsr::SupportsRequiredShaderModel(0x64u));
++    static_assert(uvsr::SupportsRequiredShaderModel(0x65u));
++    static_assert(uvsr::SupportsRequiredShaderModel(0x66u));
++
++    assert(uvsr::SupportsRequiredShaderModel(uvsr::MinimumShaderModel));
++    return 0;
++}
+diff --git a/tests/windows_executable_path_tests.cpp b/tests/windows_executable_path_tests.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..4406d0076e2e4d4b08811352e9dd30fb790f0a6e
+--- /dev/null
++++ b/tests/windows_executable_path_tests.cpp
+@@ -0,0 +1,31 @@
++#include <cassert>
++#include <filesystem>
++#include <stdexcept>
++
++#include "windows_executable_path.h"
++
++int main()
++{
++    const std::filesystem::path expected(
++        L"C:\\Users\\Miyuki-\u7F8E\u96EA\\AppData\\Local\\Programs\\UVSR\\bin");
++    const std::filesystem::path actual =
++        uvsr::ExecutableDirectoryFromModulePath(
++            L"C:\\Users\\Miyuki-\u7F8E\u96EA\\AppData\\Local\\Programs\\UVSR\\bin\\uvsr.exe");
++    assert(actual == expected);
++
++    const std::filesystem::path runningDirectory =
++        uvsr::GetExecutableDirectoryWide();
++    assert(runningDirectory.is_absolute());
++
++    bool rejectedEmptyPath = false;
++    try
++    {
++        (void)uvsr::ExecutableDirectoryFromModulePath(L"");
++    }
++    catch (const std::runtime_error&)
++    {
++        rejectedEmptyPath = true;
++    }
++    assert(rejectedEmptyPath);
++    return 0;
++}

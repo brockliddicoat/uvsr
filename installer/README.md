@@ -13,7 +13,8 @@ preinstalled copy of .NET, Git, CMake, or Python. The main window offers:
   already present.
 - **Update**, which independently checks UVSR and UVSR Launcher, then lets the
   user choose either or both available updates.
-- **Launch**, which opens the verified active UVSR executable.
+- **Launch**, which opens the verified active UVSR executable and changes to
+  **Close** only while an exact launcher-owned renderer process is alive.
 - **Uninstall**, which removes launcher-owned programs, caches, shortcuts, and
   registration while preserving renderer settings and history.
 
@@ -21,6 +22,13 @@ The desktop-shortcut option is selected by default. That shortcut opens UVSR
 Launcher, so the same entry point remains useful for launching, repairing, and
 updating UVSR. Existing owned UVSR and UVSR Launcher shortcuts are migrated;
 unrelated shortcuts are preserved.
+
+Renderer state is refreshed while the window is open. If UVSR exits or crashes,
+the action returns to **Launch** automatically. A stale click is discarded
+instead of being reinterpreted as the opposite action. Normal shutdown is tried
+first; after a timeout, the user can keep waiting, explicitly force-close the
+same verified process identities, or cancel. The launcher never force-closes a
+renderer automatically.
 
 ## First Installation
 
@@ -38,14 +46,33 @@ The first installation performs these actions:
    setup, and performs the elevated installation once from those local files
    with web access disabled for the mutating phase.
 6. Fetches one exact commit from the public UVSR `main` branch and its pinned
-   submodules, then performs a clean DirectX 12 Release build as the original
-   standard user.
+   submodules. When public `main` is the known pre-contract commit described
+   below, the launcher applies its exact embedded compatibility bridge before
+   performing a clean DirectX 12 Release build as the original standard user.
 7. Packages the exact runtime inventory, records its SHA-256 values, and
    atomically activates it only after the complete build succeeds.
 
 Visual Studio Build Tools can require several gigabytes. Completion time depends
 on the connection, CPU, storage, and whether compatible Microsoft components
 are already installed; a few minutes cannot be guaranteed on every computer.
+
+## Exact Public-Source Compatibility Bridge
+
+Launcher `1.1.4` sequence `5` can install while public `main` is exactly commit
+`0c8074848985152ed83f83b4087aaf10013de590`. That public revision predates the
+renderer build contract and stable Direct3D runtime fixes, so simply ignoring
+the missing contract would reproduce the original pipeline-state failure.
+
+For only that exact base commit and tree, the launcher verifies and applies one
+embedded 24,581-byte patch with SHA-256
+`e68f814e2e838ef08bf8561bfa033dbaa0b5a523f776983dca18e8dd83ad799a`.
+It then requires resulting tree
+`736fc012878dc66e5f512dab40d722a56ac8c1f5` and deterministic synthetic Git
+commit `ac19135e176bd137df050fb3da11297a2460312d` before any configure, build, or
+package step. The prepared source is checked again after the build and before
+packaging. The bridge is never downloaded, never applied fuzzily, and never
+used for another public commit. Once public `main` advances to a compatible
+contract-bearing commit, the ordinary exact-public-source path takes over.
 
 ## Connection Tolerance
 
@@ -76,9 +103,12 @@ local storage, access, signature, and permanent HTTP failures.
 Launcher releases use immutable versioned packages under the per-user program
 root. Activation records the release sequence, semantic version, exact
 executable SHA-256, and package inventory before shortcuts or Apps & Features
-are moved to the new version. Older launchers redirect to a verified newer
-package, and an interrupted combined launcher-plus-UVSR update retains its UVSR
-continuation until the new launcher completes it.
+are moved to the new version. External launcher copies redirect automatically
+to a verified installed package at the same or a newer release sequence. A
+strictly newer downloaded copy remains active so it can upgrade the
+installation. Invalid or tampered installed pointers are never followed. An
+interrupted combined launcher-plus-UVSR update retains its UVSR continuation
+until a valid launcher package completes it.
 
 The fixed public feed is
 `installer/launcher-feed-v1.json` on the public `main` branch:
@@ -87,11 +117,16 @@ It names one
 immutable GitHub Release asset and is parsed with strict size, duplicate-field,
 unknown-field, version, sequence, filename, and hash validation.
 
+New feeds use the exact camelCase field names `schemaVersion`, `productId`,
+`channel`, `releaseSequence`, `version`, and `artifact`. Launchers also accept
+the original v1 feed's exact PascalCase schema as a whole-document compatibility
+format. Mixed casing, duplicate aliases, and unknown fields remain invalid.
+
 The launcher reads that feed first, then downloads the launcher package from:
 
 `https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe`
 
-where `<version>` comes from the same `Version` value in the feed (for example,
+where `<version>` comes from the same `version` value in the canonical feed (for example,
 `uvsr-launcher-v1.1.1`).
 
 If that exact versioned release tag is not available yet, the launcher also
@@ -105,10 +140,62 @@ they can still install, launch, update, repair, and remove UVSR. The first publi
 UVSR Launcher release therefore requires the project's permanent code-signing
 identity before it can be called distribution-ready.
 
+## Update Check Diagnostics
+
+The launcher normally checks three exact public addresses and records each
+complete URL before downloading it:
+
+- Launcher release feed:
+  `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/installer/launcher-feed-v1.json`
+- Current renderer commit:
+  `https://api.github.com/repos/brockliddicoat/uvsr/git/ref/heads/main`
+- Renderer build contract for the resolved commit:
+  `https://raw.githubusercontent.com/brockliddicoat/uvsr/<commit>/cmake/uvsr-launcher-build-contract-v1.json`
+
+When the resolved renderer commit is the exact compatibility-bridge base above,
+the launcher checks only the feed and current-commit addresses. It validates the
+embedded patch instead of requesting a contract that is known not to exist at
+that revision. The log records the bridge ID, public base, patch SHA-256,
+resulting tree, and synthetic source commit, including the fact that no remote
+contract request was made.
+
+Details are written under `%LOCALAPPDATA%\UVSR Installer\logs` in files named
+`uvsr-launcher-<date>-<time>-<id>.log`. The update dialog and copied details show
+the exact launcher feed URL, the running and published launcher version and
+release sequence, the exact renderer-contract URL, and the specific transport,
+HTTP, schema, or identity failure. A generic connection message is not used for
+a schema or release-compatibility problem.
+
+| Visible Result | Meaning And Recovery |
+| --- | --- |
+| Running launcher is newer than the published feed | The check succeeded and no launcher update is needed. The displayed versions and sequences identify both sides. |
+| Feed schema or identity failure | The feed was reached but its exact fields or release identity were invalid. Inspect the recorded feed URL and reason; reinstalling the same launcher does not repair the feed. |
+| Exact pre-contract public base | Launcher `1.1.4` sequence `5` verifies its embedded compatibility bridge and can install or repair the corrected renderer immediately. No launcher update or source publication is required for that exact base. |
+| Launcher and renderer source are not a compatible release pair | Public `main` is neither the exact supported bridge base nor a contract-bearing revision supported by that launcher. The launcher disables the unsafe renderer update and preserves the installed copy. Use the complete logged source and contract identities to correct the release pairing. |
+| Transport or HTTP failure | The complete failing URL and HTTP or connection reason are shown. **Check Again** retries both component checks independently. |
+
+`cmake/uvsr-launcher-build-contract-v1.json` is the versioned interface between
+public renderer source and the launcher. It declares only a recognized contract
+ID, minimum launcher sequence, and dependency version identifiers. Download
+locations and SHA-256 values remain compiled into the launcher and are never
+trusted from downloaded source. When a renderer contract raises the minimum
+launcher sequence, publish and validate that launcher artifact and canonical feed
+while public renderer source is still compatible with the prior launcher. Allow
+the launcher release to propagate before publishing the contract-requiring
+renderer source. Reversing that order strands prior launchers on source they
+cannot build. The exact bridge above is a bounded transition for one already
+published legacy commit, not a fallback for missing or unknown contracts.
+
 ## Ownership and Recovery
 
 Programs, versioned launcher packages, tool downloads, clean source/build trees,
 and any resumable Microsoft layout live below `%LOCALAPPDATA%\Programs\UVSR`.
+An empty ownership directory left by a crash during first-run setup is recovered
+automatically; a nonempty unmarked or foreign directory is still preserved and
+rejected.
+Interrupted launcher activation is recovered from whichever cryptographically
+valid owned package remains. If package files are only temporarily inaccessible,
+the recovery journal is retained for a later retry instead of being discarded.
 Legacy compatibility state remains available so already-created installations stay
 recoverable. The hidden name is a compatibility
 identifier, not visible product branding.
@@ -121,13 +208,19 @@ never recursively deleted by the launcher.
 Visual Studio Build Tools, the Windows SDK, and the Visual C++ runtime are shared
 machine components and remain installed after UVSR is removed.
 
+Windows-known Desktop and Start menu roots may be redirected by Windows or an
+administrator. The known-folder result is treated as the trusted boundary, while
+UVSR-specific descendants, existing shortcut collisions, and foreign files are
+still checked before any shell change.
+
 ## Pinned Build Inputs
 
 - Git for Windows MinGit `2.55.0.windows.4`.
 - CMake `4.4.2`.
 - Python `3.13.15` x64 embeddable distribution.
-- Microsoft Direct3D Agility SDK `1.717.1-preview`.
-- Microsoft DirectX Headers `1.717.0-preview`.
+- Microsoft Direct3D Agility SDK `1.619.5` with exported
+  `D3D12SDKVersion 619` and app-local path `.\D3D12\`.
+- Microsoft DirectX Headers `1.619.5`.
 - Microsoft DirectX Shader Compiler `1.9.2602` from `2026_02_20`.
 - Visual Studio 2022 Build Tools with x64 C++ tools and Windows 11 SDK
   `10.0.26100`.
@@ -154,14 +247,34 @@ installer\artifacts\UVSR-Launcher-Windows-11-x64.exe
 installer\artifacts\UVSR-Launcher-Windows-11-x64.exe.sha256
 ```
 
-The `Windows 11 Launcher` workflow performs the same unsigned CI build. Its
-14-day workflow artifact is a test candidate, not a public self-update release.
+The build first regenerates the exact bridge in check-only mode and verifies
+`installer/launcher-input-lock-v1.json`. That lock binds
+all launcher binary inputs to one semantic version and release sequence using
+checkout-invariant bytes. Any binary-input change requires both identity values
+to advance and the lock to be refreshed. CI also compares the change with its
+Git base, preventing a lock edit from silently reusing an older identity. Local
+builds derive that comparison base from the default branch or first parent;
+`-IdentityBaseCommit` supplies an explicit full commit when release automation
+has a stronger base.
+
+The public feed is a record of the final signed bytes, not the local unsigned
+publish output. Release verification can pass `-PublishedArtifactPath` to check
+the size and SHA-256 of the final signed artifact after the feed records that
+same release identity. This keeps source-identity validation independent from
+Authenticode's expected byte changes.
+
+The `Windows 11 Launcher` workflow also runs the production source-preparation
+path against the exact compatibility bridge and pinned recursive submodules,
+then performs the same unsigned CI build. Its 14-day workflow artifact is a test
+candidate, not a public self-update release.
 
 ## Public Release Checklist
 
 1. Choose the permanent Authenticode identity and set
    `LauncherPublisherSpkiSha256` to its lowercase SHA-256 SPKI pin.
-2. Build and run the complete contract suite at the exact release commit.
+2. Build and run the complete contract suite and exact source-bridge preparation
+   smoke at the release commit. For a bridge-bearing transition, also complete
+   the isolated source-build and package smoke before signing.
 3. Exercise fresh install, interrupted and resumed downloads, launcher-only and
    combined updates, repair, UAC cancellation, restart-required setup, Launch,
    and both launcher and Apps & Features uninstall on disposable clean Windows
@@ -171,11 +284,24 @@ The `Windows 11 Launcher` workflow performs the same unsigned CI build. Its
 5. Create the immutable GitHub Release tag
    `uvsr-launcher-v<version>` and upload the exact signed executable and its
    checksum.
-6. Write `installer/launcher-feed-v1.json` with that final release sequence,
-   version, size, and SHA-256. Publish the feed only after the release asset is
-   available and independently re-downloadable.
-7. Recheck the public feed and asset from a clean Windows 11 VM with the previous
-   launcher before advertising the new download.
+6. While public renderer source is still compatible with the prior launcher,
+   publish a feed-only canonical camelCase update with the final release sequence,
+   version, size, and SHA-256. Publish the feed only after the immutable release
+   asset is independently re-downloadable.
+7. Run `build.ps1 -PublishedArtifactPath <signed-launcher>` after the feed update;
+   it rechecks the signed file's bytes, product metadata, and embedded release
+   identity health check against that feed.
+8. Validate the feed and artifact from a clean Windows 11 VM. The first launcher
+   shipped with an empty signer pin cannot self-update by design, so that one-time
+   bootstrap requires users to open the newly signed launcher manually. Confirm
+   that the new pinned launcher can perform future signed updates, then allow the
+   bootstrap release to propagate.
+9. Only after the compatible launcher is available, publish the renderer source
+   that requires its new minimum sequence. Confirm that public `main` contains
+   `cmake/uvsr-launcher-build-contract-v1.json`, that the commit-specific raw URL
+   works, and that its values match the launcher's compiled contract.
+10. Recheck a fresh install and a renderer repair from the new launcher on a clean
+    Windows 11 VM before advertising the renderer update.
 
 Publishing, signing, tagging, and changing GitHub Releases are explicit release
 actions and are not performed by the local build script.
@@ -183,7 +309,10 @@ actions and are not performed by the local build script.
 ## Network and Hardware Requirements
 
 Installation needs HTTPS access to GitHub, GitHub release assets, Python.org,
-NuGet, and Microsoft's Visual Studio services. Running UVSR requires a DirectX
-12-capable GPU and a suitable current vendor driver. No universal safe GPU-driver
+NuGet, and Microsoft's Visual Studio services. Running this UVSR build requires
+a hardware DirectX 12 adapter with Shader Model 6.5 or newer and a suitable
+current vendor driver. Adapter selection is capability-based across Intel, AMD,
+NVIDIA, and UMA hardware; unsupported adapters are rejected before shader
+pipeline creation with an actionable message. No universal safe GPU-driver
 installer exists, so the launcher reports that hardware requirement rather than
 modifying drivers.

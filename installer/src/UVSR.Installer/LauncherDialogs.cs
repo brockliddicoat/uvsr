@@ -147,7 +147,8 @@ internal sealed class UpdateSelectionDialog : Form
 
     internal UpdateSelectionDialog(UpdateCheckResult result)
     {
-        Text = "Choose What to Update";
+        string dialogTitle = GetTitle(result);
+        Text = dialogTitle;
         StartPosition = FormStartPosition.CenterParent;
         ShowInTaskbar = false;
         MinimizeBox = false;
@@ -176,7 +177,7 @@ internal sealed class UpdateSelectionDialog : Form
         {
             AutoSize = true,
             Dock = DockStyle.Top,
-            Text = "Choose What to Update",
+            Text = dialogTitle,
             Font = new Font("Segoe UI Semibold", 17F, FontStyle.Bold),
             ForeColor = LauncherPalette.Text,
             Margin = new Padding(0, 0, 0, 6)
@@ -185,7 +186,7 @@ internal sealed class UpdateSelectionDialog : Form
         {
             AutoSize = true,
             Dock = DockStyle.Top,
-            Text = "Available updates are selected for you. You can install either one or both.",
+            Text = GetIntro(result),
             ForeColor = LauncherPalette.Muted,
             Margin = new Padding(0, 0, 0, 16)
         };
@@ -263,13 +264,35 @@ internal sealed class UpdateSelectionDialog : Form
 
     internal UpdateSelection Selection { get; private set; } = new(false, false, false, false);
 
+    internal static string GetTitle(UpdateCheckResult result) =>
+        HasSelectableUpdate(result)
+            ? "Choose What to Update"
+            : "Update Check Results";
+
+    internal static string GetIntro(UpdateCheckResult result)
+    {
+        bool hasFailure = result.Uvsr.State == ComponentUpdateState.CheckFailed ||
+                          result.Launcher.State == ComponentUpdateState.CheckFailed;
+        if (!hasFailure)
+            return "Available updates are selected for you. You can install either one or both.";
+        return HasSelectableUpdate(result)
+            ? "Available updates are selected for you. One or more checks failed; review the details or check again."
+            : "One or more update checks failed. Review the details or check again.";
+    }
+
+    private static bool HasSelectableUpdate(UpdateCheckResult result) =>
+        IsSelectable(result.Uvsr.State) || IsSelectable(result.Launcher.State);
+
+    private static bool IsSelectable(ComponentUpdateState state) =>
+        state is ComponentUpdateState.UpdateAvailable or
+            ComponentUpdateState.RepairNeeded;
+
     private static Control CreateComponentCard(
         CheckBox checkBox,
         string name,
         ComponentUpdateStatus status)
     {
-        bool selectable = status.State is ComponentUpdateState.UpdateAvailable or
-            ComponentUpdateState.RepairNeeded;
+        bool selectable = IsSelectable(status.State);
         checkBox.Text = name;
         checkBox.Checked = selectable;
         checkBox.Enabled = selectable;

@@ -1,12 +1,20 @@
-using System.Text.RegularExpressions;
+using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace UvsrInstaller;
 
-internal sealed record SourceResolution(string Commit, bool IsAlreadyInstalled, bool IsNonFastForward);
+internal sealed record SourceResolution(
+    string SourceCommit,
+    string PublicBaseCommit,
+    bool IsAlreadyInstalled,
+    bool IsNonFastForward,
+    RendererSourceBridge? Bridge)
+{
+    internal string Commit => SourceCommit;
+}
 
 internal sealed class SourceManager
 {
-    private const string PinnedDxcDate = "2026_02_20";
     private static readonly TimeSpan[] NetworkRetryDelays =
     {
         TimeSpan.FromSeconds(2),
@@ -74,49 +82,97 @@ internal sealed class SourceManager
         ProcessResult revision = await GitAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
             "rev-parse", "refs/remotes/origin/main" }, _paths.CacheDirectory,
             tools, log, cancellationToken);
-        string commit = revision.StandardOutput.Trim().ToLowerInvariant();
-        if (revision.ExitCode != 0 || !ProductConstants.CommitRegex().IsMatch(commit))
+        string publicCommit = revision.StandardOutput.Trim().ToLowerInvariant();
+        if (revision.ExitCode != 0 ||
+            !ProductConstants.CommitRegex().IsMatch(publicCommit))
             throw new InstallerException("GitHub returned an invalid UVSR main revision.");
 
-        bool same = string.Equals(installedState?.Commit, commit, StringComparison.Ordinal);
+        RendererSourceBridge? bridge =
+            RendererSourceBridgeRegistry.FindForPublicBase(publicCommit);
+        if (bridge is not null)
+        {
+            bridge.LoadVerifiedPatch();
+            ValidateSupportedRendererBuildContract(bridge.Contract,
+                RendererSourceBridge.SourceCommit, log,
+                $"embedded bridge '{RendererSourceBridge.BridgeId}'");
+        }
+        string sourceCommit = bridge is null
+            ? publicCommit
+            : RendererSourceBridge.SourceCommit;
+        bool same = string.Equals(installedState?.Commit, sourceCommit,
+            StringComparison.Ordinal);
         bool nonFastForward = false;
         if (installedState is not null && !same)
         {
-            ProcessResult deepen = await GitNetworkAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
-                "fetch", "--unshallow", "--no-tags", "origin", ProductConstants.RepositoryMainRef },
-                _paths.CacheDirectory, tools, progress, log, cancellationToken,
-                "Checking update history");
-            if (deepen.ExitCode != 0)
-                throw new InstallerException(
-                    "The launcher could not verify UVSR's update history after several automatic attempts. " +
-                    "The installed version was preserved.");
-            ProcessResult ancestry = await GitAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
-                "merge-base", "--is-ancestor", installedState.Commit, commit },
-                _paths.CacheDirectory, tools, log, cancellationToken);
-            nonFastForward = ancestry.ExitCode != 0;
+            string installedPublicCommit =
+                RendererSourceBridgeRegistry.MapSourceToPublicBase(installedState.Commit);
+            if (!string.Equals(installedPublicCommit, publicCommit,
+                    StringComparison.Ordinal))
+            {
+                ProcessResult deepen = await GitNetworkAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
+                    "fetch", "--unshallow", "--no-tags", "origin", ProductConstants.RepositoryMainRef },
+                    _paths.CacheDirectory, tools, progress, log, cancellationToken,
+                    "Checking update history");
+                if (deepen.ExitCode != 0)
+                    throw new InstallerException(
+                        "The launcher could not verify UVSR's update history after several automatic attempts. " +
+                        "The installed version was preserved.");
+                ProcessResult ancestry = await GitAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
+                    "merge-base", "--is-ancestor", installedPublicCommit,
+                    publicCommit }, _paths.CacheDirectory, tools, log,
+                    cancellationToken);
+                nonFastForward = ClassifyAncestryExitCode(ancestry.ExitCode);
+            }
         }
 
-        log.Write($"Resolved public UVSR main to {commit}.");
-        return new SourceResolution(commit, same, nonFastForward);
+        if (bridge is null)
+            log.Write($"Resolved public UVSR main and selected renderer source to {publicCommit}.");
+        else
+            log.Write($"Resolved public UVSR main to {publicCommit}; selected exact " +
+                      $"embedded bridge '{RendererSourceBridge.BridgeId}' " +
+                      $"({RendererSourceBridge.PatchSha256}) and synthetic renderer " +
+                      $"source {sourceCommit} with tree {RendererSourceBridge.SourceTree}.");
+        return new SourceResolution(sourceCommit, publicCommit, same,
+            nonFastForward, bridge);
     }
+
+    internal static bool ClassifyAncestryExitCode(int exitCode) => exitCode switch
+    {
+        0 => false,
+        1 => true,
+        _ => throw new InstallerException(
+            "Git could not verify UVSR's update history. The installed version was preserved; choose Update again to retry.")
+    };
 
     internal async Task PrepareExactSourceAsync(
         ToolPaths tools,
-        string commit,
+        SourceResolution resolution,
         IProgress<InstallerProgress>? progress,
         InstallLog log,
         CancellationToken cancellationToken)
     {
-        if (!ProductConstants.CommitRegex().IsMatch(commit))
-            throw new InstallerException("The selected UVSR source revision is invalid.");
+        ValidateResolution(resolution);
         progress?.Report(new InstallerProgress("Preparing UVSR source",
-            $"Checking out {commit[..7]} and its pinned dependencies."));
+            $"Checking out {resolution.SourceCommit[..7]} and its pinned dependencies."));
         await GitRequiredAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
-            "checkout", "--detach", "--force", commit }, _paths.CacheDirectory,
+            "checkout", "--detach", "--force", resolution.PublicBaseCommit },
+            _paths.CacheDirectory,
             tools, log, cancellationToken, "The exact UVSR source revision could not be checked out.");
         await GitRequiredAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
             "clean", "-ffdqx" }, _paths.CacheDirectory, tools, log, cancellationToken,
             "The launcher-owned UVSR source cache could not be cleaned.");
+        await ValidatePublicBaseCheckoutAsync(tools, resolution, log,
+            cancellationToken);
+        if (resolution.Bridge is null)
+        {
+            ValidateRendererBuildContractFromSource(resolution.PublicBaseCommit, log);
+        }
+        else
+        {
+            await ApplyRendererSourceBridgeAsync(tools, resolution, log,
+                cancellationToken);
+            ValidateRendererBuildContractFromSource(resolution.PublicBaseCommit, log);
+        }
         await GitRequiredAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
             "submodule", "sync", "--recursive" }, _paths.CacheDirectory, tools,
             log, cancellationToken, "UVSR dependency addresses could not be synchronized.");
@@ -140,11 +196,6 @@ internal sealed class SourceManager
             _paths.CacheDirectory, tools, log, cancellationToken,
             "Launcher-managed dependency build residue could not be removed safely.");
 
-        ProcessResult head = await GitAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
-            "rev-parse", "HEAD" }, _paths.CacheDirectory, tools, log, cancellationToken);
-        if (head.ExitCode != 0 || !string.Equals(head.StandardOutput.Trim(), commit,
-                StringComparison.OrdinalIgnoreCase))
-            throw new InstallerException("The managed UVSR checkout did not match the selected public revision.");
         ProcessResult submodules = await GitAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
             "submodule", "status", "--recursive" }, _paths.CacheDirectory, tools,
             log, cancellationToken);
@@ -156,21 +207,22 @@ internal sealed class SourceManager
         }
         SafePaths.RejectReparseTree(_paths.SourceDirectory,
             "managed UVSR source cache");
-        ProcessResult dirty = await GitAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
-            "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none" },
-            _paths.CacheDirectory, tools, log, cancellationToken);
-        if (dirty.ExitCode != 0 || !string.IsNullOrWhiteSpace(dirty.StandardOutput))
-            throw new InstallerException("The managed UVSR source did not become clean after exact checkout.");
+        await ValidatePreparedSourceAsync(tools, resolution, log,
+            cancellationToken);
     }
 
     internal async Task BuildAsync(
         ToolPaths tools,
+        SourceResolution resolution,
         IProgress<InstallerProgress>? progress,
         InstallLog log,
         CancellationToken cancellationToken)
     {
-        ValidatePinnedCMakeIsSufficient();
-        ValidatePinnedBuildDependencies();
+        ValidateResolution(resolution);
+        await ValidatePreparedSourceAsync(tools, resolution, log,
+            cancellationToken);
+        ValidatePinnedCMakeIsSufficient(resolution.PublicBaseCommit);
+        ValidateRendererBuildContractFromSource(resolution.PublicBaseCommit, log);
         if (Directory.Exists(_paths.BuildDirectory))
         {
             progress?.Report(new InstallerProgress("Preparing a clean build",
@@ -190,7 +242,8 @@ internal sealed class SourceManager
             configureArguments, _paths.CacheDirectory, environment, log,
             cancellationToken, clearEnvironment: true);
         if (configure.ExitCode != 0)
-            throw new InstallerException("UVSR source configuration failed. The previous installed version was preserved.");
+            throw new InstallerException(
+                "UVSR source configuration failed. Any installed UVSR version was preserved; no candidate was activated.");
 
         progress?.Report(new InstallerProgress("Building UVSR",
             "Compiling the renderer and production shaders. This is the longest step."));
@@ -203,7 +256,261 @@ internal sealed class SourceManager
         }, _paths.CacheDirectory, environment, log, cancellationToken,
             clearEnvironment: true);
         if (build.ExitCode != 0)
-            throw new InstallerException("UVSR did not finish building. The previous installed version was preserved.");
+            throw new InstallerException(
+                "UVSR did not finish building. Any installed UVSR version was preserved; no candidate was activated.");
+        await ValidatePreparedSourceAsync(tools, resolution, log,
+            cancellationToken);
+    }
+
+    internal async Task ValidatePreparedSourceAsync(
+        ToolPaths tools,
+        SourceResolution resolution,
+        InstallLog log,
+        CancellationToken cancellationToken)
+    {
+        ValidateResolution(resolution);
+        ProcessResult head = await GitAsync(tools.Git, new[] { "-C",
+            _paths.SourceDirectory, "rev-parse", "HEAD" }, _paths.CacheDirectory,
+            tools, log, cancellationToken);
+        ProcessResult tree = await GitAsync(tools.Git, new[] { "-C",
+            _paths.SourceDirectory, "rev-parse", "HEAD^{tree}" },
+            _paths.CacheDirectory, tools, log, cancellationToken);
+        ProcessResult status = await GitAsync(tools.Git, new[] { "-C",
+            _paths.SourceDirectory, "status", "--porcelain=v1",
+            "--untracked-files=all", "--ignore-submodules=none" },
+            _paths.CacheDirectory, tools, log, cancellationToken);
+        if (head.ExitCode != 0 || tree.ExitCode != 0 || status.ExitCode != 0)
+            throw new InstallerException(
+                "The managed UVSR source identity could not be verified.");
+        string headValue = head.StandardOutput.Trim().ToLowerInvariant();
+        string treeValue = tree.StandardOutput.Trim().ToLowerInvariant();
+        if (resolution.Bridge is null)
+        {
+            if (!string.Equals(headValue, resolution.SourceCommit,
+                    StringComparison.Ordinal) ||
+                !string.Equals(treeValue, await ReadCommitTreeAsync(tools,
+                    resolution.SourceCommit, log, cancellationToken),
+                    StringComparison.Ordinal) ||
+                !string.IsNullOrWhiteSpace(status.StandardOutput))
+                throw new InstallerException(
+                    "The managed UVSR source did not remain at its selected exact revision.");
+            return;
+        }
+
+        ProcessResult parents = await GitAsync(tools.Git, new[] { "-C",
+            _paths.SourceDirectory, "rev-list", "--parents", "-n", "1", "HEAD" },
+            _paths.CacheDirectory, tools, log, cancellationToken);
+        if (parents.ExitCode != 0)
+            throw new InstallerException(
+                "The renderer source bridge parent identity could not be verified.");
+        resolution.Bridge.ValidatePreparedIdentityValues(headValue, treeValue,
+            parents.StandardOutput.Trim().ToLowerInvariant(),
+            status.StandardOutput);
+    }
+
+    private static void ValidateResolution(SourceResolution resolution)
+    {
+        if (resolution is null ||
+            !ProductConstants.CommitRegex().IsMatch(resolution.SourceCommit) ||
+            !ProductConstants.CommitRegex().IsMatch(resolution.PublicBaseCommit))
+            throw new InstallerException("The selected UVSR source revision is invalid.");
+        if (resolution.Bridge is null)
+        {
+            if (!string.Equals(resolution.SourceCommit, resolution.PublicBaseCommit,
+                    StringComparison.Ordinal))
+                throw new InstallerException(
+                    "The selected UVSR source revision has no verified source bridge.");
+            return;
+        }
+        if (!ReferenceEquals(resolution.Bridge, RendererSourceBridge.Instance) ||
+            !string.Equals(resolution.PublicBaseCommit,
+                RendererSourceBridge.PublicBaseCommit, StringComparison.Ordinal) ||
+            !string.Equals(resolution.SourceCommit,
+                RendererSourceBridge.SourceCommit, StringComparison.Ordinal))
+            throw new InstallerException(
+                "The selected UVSR renderer source bridge identity was invalid.");
+    }
+
+    private async Task ValidatePublicBaseCheckoutAsync(
+        ToolPaths tools,
+        SourceResolution resolution,
+        InstallLog log,
+        CancellationToken cancellationToken)
+    {
+        ProcessResult head = await GitAsync(tools.Git, new[] { "-C",
+            _paths.SourceDirectory, "rev-parse", "HEAD" }, _paths.CacheDirectory,
+            tools, log, cancellationToken);
+        ProcessResult tree = await GitAsync(tools.Git, new[] { "-C",
+            _paths.SourceDirectory, "rev-parse", "HEAD^{tree}" },
+            _paths.CacheDirectory, tools, log, cancellationToken);
+        ProcessResult status = await GitAsync(tools.Git, new[] { "-C",
+            _paths.SourceDirectory, "status", "--porcelain=v1",
+            "--untracked-files=all", "--ignore-submodules=none" },
+            _paths.CacheDirectory, tools, log, cancellationToken);
+        if (head.ExitCode != 0 || tree.ExitCode != 0 || status.ExitCode != 0 ||
+            !string.Equals(head.StandardOutput.Trim(), resolution.PublicBaseCommit,
+                StringComparison.OrdinalIgnoreCase) ||
+            !string.IsNullOrWhiteSpace(status.StandardOutput))
+            throw new InstallerException(
+                "The managed UVSR checkout did not match the selected pristine public revision.");
+        if (resolution.Bridge is not null &&
+            !string.Equals(tree.StandardOutput.Trim(),
+                RendererSourceBridge.PublicBaseTree,
+                StringComparison.OrdinalIgnoreCase))
+            throw new InstallerException(
+                "The public UVSR source base tree did not match the audited renderer bridge base.");
+
+        string gitDirectory = Path.Combine(_paths.SourceDirectory, ".git");
+        if (File.Exists(Path.Combine(gitDirectory, "info", "grafts")) ||
+            File.Exists(Path.Combine(gitDirectory, "info", "attributes")) ||
+            Directory.Exists(Path.Combine(gitDirectory, "refs", "replace")))
+            throw new InstallerException(
+                "The managed UVSR source contains unsupported Git replacement metadata.");
+    }
+
+    private async Task ApplyRendererSourceBridgeAsync(
+        ToolPaths tools,
+        SourceResolution resolution,
+        InstallLog log,
+        CancellationToken cancellationToken)
+    {
+        RendererSourceBridge bridge = resolution.Bridge
+            ?? throw new InstallerException("The renderer source bridge was not selected.");
+        cancellationToken.ThrowIfCancellationRequested();
+        byte[] patch = bridge.LoadVerifiedPatch();
+        string gitDirectory = Path.Combine(_paths.SourceDirectory, ".git");
+        string bridgeDirectory = Path.Combine(gitDirectory,
+            "uvsr-launcher-renderer-bridge");
+        SafePaths.RejectReparsePathChain(gitDirectory, "managed UVSR Git data");
+        SafePaths.RejectReparsePathChain(bridgeDirectory,
+            "managed UVSR renderer bridge data");
+        Directory.CreateDirectory(bridgeDirectory);
+        SafePaths.RejectReparsePathChain(bridgeDirectory,
+            "managed UVSR renderer bridge data");
+        string patchPath = Path.Combine(bridgeDirectory, "bridge.patch");
+        using (FileStream writer = new(patchPath, FileMode.CreateNew,
+                   FileAccess.Write, FileShare.None, 64 * 1024,
+                   FileOptions.WriteThrough))
+        {
+            await writer.WriteAsync(patch, cancellationToken);
+            writer.Flush(flushToDisk: true);
+        }
+
+        using FileStream bridgeLock = new(patchPath, FileMode.Open, FileAccess.Read,
+            FileShare.Read, 64 * 1024, FileOptions.SequentialScan);
+        byte[] lockedHash = SHA256.HashData(bridgeLock);
+        if (!CryptographicOperations.FixedTimeEquals(lockedHash,
+                Convert.FromHexString(RendererSourceBridge.PatchSha256)))
+            throw new InstallerException(
+                "The managed renderer source bridge changed before application.");
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ProcessResult check = await GitAsync(tools.Git, new[] { "-C",
+            _paths.SourceDirectory, "apply", "--check", "--index", "--binary",
+            patchPath }, _paths.CacheDirectory, tools, log, cancellationToken,
+            strictApply: true);
+        if (check.ExitCode != 0)
+            throw new InstallerException(
+                "The exact embedded renderer source bridge did not apply cleanly to its audited public base.");
+        cancellationToken.ThrowIfCancellationRequested();
+        ProcessResult apply = await GitAsync(tools.Git, new[] { "-C",
+            _paths.SourceDirectory, "apply", "--index", "--binary", patchPath },
+            _paths.CacheDirectory, tools, log, cancellationToken,
+            strictApply: true);
+        if (apply.ExitCode != 0)
+            throw new InstallerException(
+                "The exact embedded renderer source bridge could not be applied.");
+
+        ProcessResult stagedPaths = await GitAsync(tools.Git, new[] { "-C",
+            _paths.SourceDirectory, "diff", "--cached", "--name-only",
+            "--no-renames", resolution.PublicBaseCommit }, _paths.CacheDirectory,
+            tools, log, cancellationToken, strictApply: true);
+        HashSet<string> actualPaths = stagedPaths.StandardOutput.Split(
+                new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .ToHashSet(StringComparer.Ordinal);
+        if (stagedPaths.ExitCode != 0 || actualPaths.Count != bridge.StagedBlobs.Count ||
+            !actualPaths.SetEquals(bridge.StagedBlobs.Keys))
+            throw new InstallerException(
+                "The renderer source bridge changed outside its exact audited path set.");
+
+        List<string> entryArguments = new()
+        {
+            "-C", _paths.SourceDirectory, "ls-files", "--stage", "--"
+        };
+        entryArguments.AddRange(bridge.StagedBlobs.Keys);
+        ProcessResult entries = await GitAsync(tools.Git, entryArguments,
+            _paths.CacheDirectory, tools, log, cancellationToken,
+            strictApply: true);
+        if (entries.ExitCode != 0)
+            throw new InstallerException(
+                "The renderer source bridge staged path identities could not be verified.");
+        bridge.ValidateStagedEntries(entries.StandardOutput);
+
+        ProcessResult tree = await GitAsync(tools.Git, new[] { "-C",
+            _paths.SourceDirectory, "write-tree" }, _paths.CacheDirectory,
+            tools, log, cancellationToken, strictApply: true);
+        if (tree.ExitCode != 0 || !string.Equals(tree.StandardOutput.Trim(),
+                RendererSourceBridge.SourceTree, StringComparison.OrdinalIgnoreCase))
+            throw new InstallerException(
+                "The renderer source bridge did not produce its exact audited source tree.");
+
+        IReadOnlyDictionary<string, string?> commitEnvironment =
+            BuildBridgeCommitEnvironment(tools);
+        ProcessResult commit = await GitAsync(tools.Git, new[] { "-C",
+            _paths.SourceDirectory, "commit-tree", RendererSourceBridge.SourceTree,
+            "-p", RendererSourceBridge.PublicBaseCommit, "-m",
+            RendererSourceBridge.CommitMessage }, _paths.CacheDirectory, tools,
+            log, cancellationToken, strictApply: true,
+            environment: commitEnvironment);
+        if (commit.ExitCode != 0 || !string.Equals(commit.StandardOutput.Trim(),
+                RendererSourceBridge.SourceCommit, StringComparison.OrdinalIgnoreCase))
+            throw new InstallerException(
+                "The renderer source bridge did not produce its deterministic source commit.");
+
+        await GitRequiredAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
+            "reset", "--hard", RendererSourceBridge.SourceCommit },
+            _paths.CacheDirectory, tools, log, cancellationToken,
+            "The deterministic renderer source commit could not be checked out.");
+        await ValidatePreparedSourceAsync(tools, resolution, log,
+            cancellationToken);
+        log.Write($"Applied embedded renderer source bridge " +
+                  $"'{RendererSourceBridge.BridgeId}' to public base " +
+                  $"{RendererSourceBridge.PublicBaseCommit}; prepared synthetic " +
+                  $"source {RendererSourceBridge.SourceCommit}, tree " +
+                  $"{RendererSourceBridge.SourceTree}, patch SHA-256 " +
+                  $"{RendererSourceBridge.PatchSha256}.");
+    }
+
+    private async Task<string> ReadCommitTreeAsync(
+        ToolPaths tools,
+        string commit,
+        InstallLog log,
+        CancellationToken cancellationToken)
+    {
+        ProcessResult result = await GitAsync(tools.Git, new[] { "-C",
+            _paths.SourceDirectory, "rev-parse", $"{commit}^{{tree}}" },
+            _paths.CacheDirectory, tools, log, cancellationToken);
+        string tree = result.StandardOutput.Trim().ToLowerInvariant();
+        if (result.ExitCode != 0 || !ProductConstants.CommitRegex().IsMatch(tree))
+            throw new InstallerException(
+                "The selected UVSR source tree identity could not be verified.");
+        return tree;
+    }
+
+    private static IReadOnlyDictionary<string, string?> BuildBridgeCommitEnvironment(
+        ToolPaths tools)
+    {
+        Dictionary<string, string?> environment = new(BuildEnvironment(tools,
+            strictApply: true), StringComparer.OrdinalIgnoreCase)
+        {
+            ["GIT_AUTHOR_NAME"] = RendererSourceBridge.CommitIdentityName,
+            ["GIT_AUTHOR_EMAIL"] = RendererSourceBridge.CommitIdentityEmail,
+            ["GIT_AUTHOR_DATE"] = RendererSourceBridge.CommitIdentityDate,
+            ["GIT_COMMITTER_NAME"] = RendererSourceBridge.CommitIdentityName,
+            ["GIT_COMMITTER_EMAIL"] = RendererSourceBridge.CommitIdentityEmail,
+            ["GIT_COMMITTER_DATE"] = RendererSourceBridge.CommitIdentityDate
+        };
+        return environment;
     }
 
     internal static string[] BuildConfigureArguments(InstallerPaths paths, ToolPaths tools) =>
@@ -228,137 +535,201 @@ internal sealed class SourceManager
             "-DUVSR_WITH_NRD=OFF"
         };
 
-    private void ValidatePinnedBuildDependencies()
+    private void ValidateRendererBuildContractFromSource(
+        string commit,
+        InstallLog log)
     {
-        string root = File.ReadAllText(Path.Combine(_paths.SourceDirectory, "CMakeLists.txt"));
-        string nvrhi = File.ReadAllText(Path.Combine(_paths.SourceDirectory,
-            "donut", "nvrhi", "CMakeLists.txt"));
-        string shaderMake = File.ReadAllText(Path.Combine(_paths.SourceDirectory,
-            "donut", "ShaderMake", "CMakeLists.txt"));
-        string agilityUrl = ParseExactCMakeSetAssignment(root,
-            "DONUT_D3D_AGILITY_SDK_URL");
-        string directXHeadersTag = ParseExactCMakeSetAssignment(nvrhi,
-            "NVRHI_DIRECTX_HEADERS_GIT_TAG");
-        string dxcVersion = ParseExactCMakeSetAssignment(shaderMake,
-            "SHADERMAKE_DXC_VERSION");
-        string dxcDate = ParseExactCMakeSetAssignment(shaderMake,
-            "SHADERMAKE_DXC_DATE");
-        string expectedAgilityUrl =
-            "https://www.nuget.org/api/v2/package/Microsoft.Direct3D.D3D12/" +
-            ProductConstants.AgilitySdk.Version;
-        if (!string.Equals(agilityUrl, expectedAgilityUrl, StringComparison.Ordinal) ||
-            !string.Equals(directXHeadersTag,
-                "v" + ProductConstants.DirectXHeaders.Version, StringComparison.Ordinal) ||
-            !string.Equals(dxcVersion, "v" + ProductConstants.Dxc.Version,
-                StringComparison.Ordinal) ||
-            !string.Equals(dxcDate, PinnedDxcDate, StringComparison.Ordinal))
-            throw new InstallerException(
-                "Public UVSR main now requires newer build components. Update UVSR Launcher first.");
-    }
-
-    internal static string ParseExactCMakeSetAssignment(
-        string contents,
-        string variable)
-    {
-        if (string.IsNullOrWhiteSpace(contents) || string.IsNullOrWhiteSpace(variable) ||
-            variable.Any(character => !(char.IsAsciiLetterOrDigit(character) ||
-                character == '_')))
-            throw new InstallerException("A required UVSR build-component assignment was invalid.");
-
-        string activeContents = MaskCMakeComments(contents);
-        string pattern =
-            "^[\\t ]*(?i:set)[\\t ]*\\([\\t ]*" + Regex.Escape(variable) +
-            "[\\t ]+(?:\"(?<quoted>[^\"\\r\\n]*)\"|(?<bare>[^\\s\\)]+))" +
-            "(?:[\\t ]+CACHE[\\t ]+(?:BOOL|FILEPATH|PATH|STRING|INTERNAL)[\\t ]+" +
-            "(?:\"[^\"\\r\\n]*\"|[^\\s\\)]+)(?:[\\t ]+FORCE)?)?" +
-            "[\\t ]*\\)[\\t ]*(?:#.*)?$";
-        MatchCollection matches = Regex.Matches(activeContents, pattern,
-            RegexOptions.Multiline | RegexOptions.CultureInvariant);
-        if (matches.Count != 1)
-            throw new InstallerException(
-                $"Public UVSR main has an unsupported {variable} build assignment. " +
-                "Update UVSR Launcher first.");
-        Match match = matches[0];
-        return match.Groups["quoted"].Success
-            ? match.Groups["quoted"].Value
-            : match.Groups["bare"].Value;
-    }
-
-    private static string MaskCMakeComments(string contents)
-    {
-        char[] masked = contents.ToCharArray();
-        bool quoted = false;
-        for (int index = 0; index < contents.Length; index++)
+        string relativePath = ProductConstants.RendererBuildContractRelativePath;
+        string path = Path.Combine(_paths.SourceDirectory,
+            relativePath.Replace('/', Path.DirectorySeparatorChar));
+        try
         {
-            char character = contents[index];
-            if (quoted)
-            {
-                if (character == '\\' && index + 1 < contents.Length)
-                {
-                    index++;
-                    continue;
-                }
-                if (character == '"')
-                    quoted = false;
-                continue;
-            }
-            if (character == '"')
-            {
-                quoted = true;
-                continue;
-            }
-            if (character != '#')
-                continue;
-
-            int end;
-            if (TryReadCMakeBracketComment(contents, index + 1,
-                    out string closing, out int openerLength))
-            {
-                int contentStart = index + 1 + openerLength;
-                int closingStart = contents.IndexOf(closing, contentStart,
-                    StringComparison.Ordinal);
-                end = closingStart < 0
-                    ? contents.Length
-                    : closingStart + closing.Length;
-            }
-            else
-            {
-                end = index;
-                while (end < contents.Length && contents[end] is not '\r' and not '\n')
-                    end++;
-            }
-            for (int commentIndex = index; commentIndex < end; commentIndex++)
-            {
-                if (masked[commentIndex] is not '\r' and not '\n')
-                    masked[commentIndex] = ' ';
-            }
-            index = Math.Max(index, end - 1);
+            SafePaths.RejectReparsePathChain(path, "renderer build contract");
+            FileInfo contractFile = new(path);
+            if (!contractFile.Exists)
+                throw CreateSourceCompatibilityException(commit,
+                    $"required contract '{relativePath}' is missing");
+            if (contractFile.Length is <= 0 or > ProductConstants.MaximumRendererBuildContractBytes)
+                throw new InstallerException("The renderer build contract was empty or too large.");
+            RendererBuildContract contract = ParseRendererBuildContract(
+                File.ReadAllBytes(path));
+            ValidateSupportedRendererBuildContract(contract, commit, log);
         }
-        return new string(masked);
+        catch (SourceLauncherCompatibilityException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is InstallerException or IOException or
+                                   UnauthorizedAccessException)
+        {
+            throw CreateSourceCompatibilityException(commit,
+                $"contract '{relativePath}' could not be validated ({ex.Message})", ex);
+        }
     }
 
-    private static bool TryReadCMakeBracketComment(
-        string contents,
-        int openerStart,
-        out string closing,
-        out int openerLength)
+    internal static RendererBuildContract ParseRendererBuildContract(byte[] data)
     {
-        closing = string.Empty;
-        openerLength = 0;
-        if (openerStart >= contents.Length || contents[openerStart] != '[')
-            return false;
-        int cursor = openerStart + 1;
-        while (cursor < contents.Length && contents[cursor] == '=')
-            cursor++;
-        if (cursor >= contents.Length || contents[cursor] != '[')
-            return false;
-        int equalsCount = cursor - openerStart - 1;
-        closing = "]" + new string('=', equalsCount) + "]";
-        openerLength = cursor - openerStart + 1;
-        return true;
+        if (data.LongLength is <= 0 or > ProductConstants.MaximumRendererBuildContractBytes)
+            throw new InstallerException("The renderer build contract was empty or too large.");
+        try
+        {
+            RejectDuplicateJsonProperties(data);
+            RendererBuildContract contract =
+                JsonSerializer.Deserialize<RendererBuildContract>(data, JsonStore.Options)
+                ?? throw new JsonException("The renderer build contract was empty.");
+            if (contract.SchemaVersion != ProductConstants.RendererBuildContractSchemaVersion ||
+                !string.Equals(contract.ProductId, ProductConstants.ProductId,
+                    StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(contract.ContractId) ||
+                contract.ContractId.Length > 96 ||
+                contract.ContractId.Any(character =>
+                    !(char.IsAsciiLetterOrDigit(character) || character == '-')) ||
+                contract.MinimumLauncherReleaseSequence is < 1 or
+                    > ProductConstants.MaximumReleaseSequence ||
+                !IsStableVersion(contract.D3D12AgilitySdkVersion) ||
+                !IsStableVersion(contract.DirectXHeadersVersion) ||
+                !IsStableVersion(contract.DxcVersion) ||
+                string.IsNullOrWhiteSpace(contract.DxcDate) ||
+                contract.DxcDate.Length != 10 ||
+                contract.DxcDate[4] != '_' || contract.DxcDate[7] != '_' ||
+                contract.DxcDate.Where((_, index) => index is not (4 or 7))
+                    .Any(character => !char.IsAsciiDigit(character)))
+            {
+                throw new InstallerException(
+                    "The renderer build contract did not match its required format.");
+            }
+            return contract;
+        }
+        catch (InstallerException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            throw new InstallerException("The renderer build contract was invalid.", ex);
+        }
     }
 
-    private void ValidatePinnedCMakeIsSufficient()
+    internal static void ValidateSupportedRendererBuildContract(
+        RendererBuildContract contract,
+        string commit,
+        InstallLog? log = null,
+        string? sourceAddress = null)
+    {
+        if (!ProductConstants.CommitRegex().IsMatch(commit))
+            throw new InstallerException("The selected UVSR source revision is invalid.");
+        List<string> mismatches = new();
+        if (!string.Equals(contract.ContractId, ProductConstants.RendererBuildContractId,
+                StringComparison.Ordinal))
+            mismatches.Add($"contract ID expected '{ProductConstants.RendererBuildContractId}' but found '{contract.ContractId}'");
+        if (contract.MinimumLauncherReleaseSequence > ProductConstants.LauncherReleaseSequence)
+            mismatches.Add($"minimum launcher sequence is {contract.MinimumLauncherReleaseSequence} but this launcher is sequence {ProductConstants.LauncherReleaseSequence}");
+        AddVersionMismatch(mismatches, "Direct3D Agility SDK",
+            ProductConstants.AgilitySdk.Version, contract.D3D12AgilitySdkVersion);
+        AddVersionMismatch(mismatches, "DirectX Headers",
+            ProductConstants.DirectXHeaders.Version, contract.DirectXHeadersVersion);
+        AddVersionMismatch(mismatches, "DXC", ProductConstants.Dxc.Version,
+            contract.DxcVersion);
+        if (!string.Equals(contract.DxcDate, ProductConstants.PinnedDxcDate,
+                StringComparison.Ordinal))
+            mismatches.Add($"DXC date expected '{ProductConstants.PinnedDxcDate}' but found '{contract.DxcDate}'");
+        if (mismatches.Count > 0)
+            throw CreateSourceCompatibilityException(commit,
+                $"contract '{sourceAddress ?? ProductConstants.RendererBuildContractRelativePath}' " +
+                string.Join("; ", mismatches));
+
+        log?.Write($"Renderer source contract validated for {commit}: " +
+                   $"{ProductConstants.RendererBuildContractRelativePath}, " +
+                   $"contract '{contract.ContractId}', minimum launcher sequence " +
+                   $"{contract.MinimumLauncherReleaseSequence}, running launcher " +
+                   $"{ProductConstants.LauncherVersion} sequence " +
+                   $"{ProductConstants.LauncherReleaseSequence}, Agility SDK " +
+                   $"{contract.D3D12AgilitySdkVersion}, DirectX Headers " +
+                   $"{contract.DirectXHeadersVersion}, DXC {contract.DxcVersion} " +
+                   $"({contract.DxcDate}).");
+    }
+
+    internal static Uri BuildRendererBuildContractUri(string commit)
+    {
+        if (!ProductConstants.CommitRegex().IsMatch(commit))
+            throw new InstallerException("The selected UVSR source revision is invalid.");
+        return new Uri($"{ProductConstants.RepositoryRawUrl}/{commit}/" +
+                       ProductConstants.RendererBuildContractRelativePath);
+    }
+
+    internal static SourceLauncherCompatibilityException CreateSourceCompatibilityException(
+        string commit,
+        string reason,
+        Exception? inner = null)
+    {
+        string shortCommit = ProductConstants.CommitRegex().IsMatch(commit)
+            ? commit[..7]
+            : "unknown";
+        string message =
+            $"Public UVSR main {shortCommit} and UVSR Launcher " +
+            $"{ProductConstants.LauncherVersion} (sequence " +
+            $"{ProductConstants.LauncherReleaseSequence}) are not a compatible " +
+            $"release pair: {reason}. No launcher update is needed unless the " +
+            "validated launcher feed reports a newer compatible release. Try " +
+            "again after matching UVSR source is published. Any installed UVSR " +
+            "version was preserved; no candidate was activated.";
+        return inner is null
+            ? new SourceLauncherCompatibilityException(message)
+            : new SourceLauncherCompatibilityException(message, inner);
+    }
+
+    private static bool IsStableVersion(string value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        ProductConstants.StableVersionRegex().IsMatch(value) &&
+        value.Split('.').All(part => int.TryParse(part, out _));
+
+    private static void AddVersionMismatch(
+        ICollection<string> mismatches,
+        string name,
+        string expected,
+        string actual)
+    {
+        if (!string.Equals(expected, actual, StringComparison.Ordinal))
+            mismatches.Add($"{name} expected '{expected}' but found '{actual}'");
+    }
+
+    private static void RejectDuplicateJsonProperties(ReadOnlySpan<byte> data)
+    {
+        Utf8JsonReader reader = new(data, new JsonReaderOptions
+        {
+            AllowTrailingCommas = false,
+            CommentHandling = JsonCommentHandling.Disallow,
+            MaxDepth = 16
+        });
+        Stack<HashSet<string>?> scopes = new();
+        while (reader.Read())
+        {
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.StartObject:
+                    scopes.Push(new HashSet<string>(StringComparer.Ordinal));
+                    break;
+                case JsonTokenType.StartArray:
+                    scopes.Push(null);
+                    break;
+                case JsonTokenType.EndObject:
+                case JsonTokenType.EndArray:
+                    if (scopes.Count == 0)
+                        throw new JsonException("Unbalanced JSON scope.");
+                    scopes.Pop();
+                    break;
+                case JsonTokenType.PropertyName:
+                    if (scopes.Count == 0 || scopes.Peek() is not HashSet<string> names ||
+                        !names.Add(reader.GetString() ?? string.Empty))
+                        throw new JsonException("Duplicate JSON property.");
+                    break;
+            }
+        }
+        if (scopes.Count != 0)
+            throw new JsonException("Incomplete JSON document.");
+    }
+
+    private void ValidatePinnedCMakeIsSufficient(string commit)
     {
         Version required = new(0, 0);
         foreach (string buildFile in new[]
@@ -383,8 +754,8 @@ internal sealed class SourceManager
         }
         if (!Version.TryParse(ProductConstants.CMake.Version, out Version? available) ||
             available < required)
-            throw new InstallerException(
-                $"Public UVSR main now requires CMake {required} or newer. Update UVSR Launcher before building.");
+            throw CreateSourceCompatibilityException(commit,
+                $"public source requires CMake {required} but this launcher provides {available}");
     }
 
     private async Task<ProcessResult> GitAsync(
@@ -394,7 +765,9 @@ internal sealed class SourceManager
         ToolPaths tools,
         InstallLog log,
         CancellationToken cancellationToken,
-        bool forceHttp11 = false)
+        bool forceHttp11 = false,
+        bool strictApply = false,
+        IReadOnlyDictionary<string, string?>? environment = null)
     {
         List<string> secured = new()
         {
@@ -412,7 +785,8 @@ internal sealed class SourceManager
         }
         secured.AddRange(arguments);
         return await _runner.RunAsync(git, secured, workingDirectory,
-            BuildEnvironment(tools), log, cancellationToken, clearEnvironment: true);
+            environment ?? BuildEnvironment(tools, strictApply), log,
+            cancellationToken, clearEnvironment: true);
     }
 
     private async Task<ProcessResult> GitNetworkAsync(
@@ -506,7 +880,9 @@ internal sealed class SourceManager
             throw new InstallerException(failureMessage);
     }
 
-    internal static IReadOnlyDictionary<string, string?> BuildEnvironment(ToolPaths tools)
+    internal static IReadOnlyDictionary<string, string?> BuildEnvironment(
+        ToolPaths tools,
+        bool strictApply = false)
     {
         string gitDirectory = Path.GetDirectoryName(tools.Git)!;
         string cmakeDirectory = Path.GetDirectoryName(tools.CMake)!;
@@ -523,12 +899,6 @@ internal sealed class SourceManager
                 }),
             ["GIT_CONFIG_NOSYSTEM"] = "1",
             ["GIT_CONFIG_GLOBAL"] = "NUL",
-            // Public main currently contains reviewed dependency patches with
-            // mixed Windows/LF context endings. This fixed Git setting affects
-            // context matching only and keeps the checked-out commit pristine.
-            ["GIT_CONFIG_COUNT"] = "1",
-            ["GIT_CONFIG_KEY_0"] = "apply.ignoreWhitespace",
-            ["GIT_CONFIG_VALUE_0"] = "change",
             ["GIT_NO_REPLACE_OBJECTS"] = "1",
             ["GIT_TERMINAL_PROMPT"] = "0",
             ["GCM_INTERACTIVE"] = "Never",
@@ -536,6 +906,14 @@ internal sealed class SourceManager
             ["LANG"] = "C",
             ["PYTHONDONTWRITEBYTECODE"] = "1"
         };
+        if (!strictApply)
+        {
+            // The build-time dependency overrides have reviewed mixed-EOL
+            // context. The embedded renderer source bridge always opts out.
+            environment["GIT_CONFIG_COUNT"] = "1";
+            environment["GIT_CONFIG_KEY_0"] = "apply.ignoreWhitespace";
+            environment["GIT_CONFIG_VALUE_0"] = "change";
+        }
         foreach (string key in new[]
                  {
                      "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP", "USERPROFILE",

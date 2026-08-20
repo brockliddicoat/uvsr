@@ -26,11 +26,15 @@ internal sealed class ShellIntegration
         if (key is not null && !RegistryOwnedBy(key, installationId) &&
             (transactionId is null || !RegistryTransactionOwnedBy(key, transactionId.Value)))
             throw new InstallerException("An unrelated Apps & Features entry already uses the UVSR name. It was preserved.");
+        _paths.ValidateShellPath(_paths.StartMenuDirectory,
+            "UVSR Start menu directory");
         ValidateShortcutCollision(_paths.StartMenuShortcut,
             shortcut => IsOwnedLauncherShortcut(shortcut, installationId),
             "An unrelated Start menu shortcut already uses the UVSR Launcher name.");
         if (desktopShortcut)
         {
+            _paths.ValidateShellPath(_paths.DesktopShortcut,
+                "UVSR desktop shortcut");
             ValidateShortcutCollision(_paths.DesktopShortcut,
                 shortcut => IsOwnedLauncherShortcut(shortcut, installationId),
                 "An unrelated desktop shortcut named UVSR Launcher already exists. It was preserved.");
@@ -83,7 +87,11 @@ internal sealed class ShellIntegration
         if (renderer is not null && !File.Exists(renderer))
             throw new InstallerException("The installed UVSR program is incomplete.");
 
+        _paths.ValidateShellPath(_paths.StartMenuDirectory,
+            "UVSR Start menu directory");
         Directory.CreateDirectory(_paths.StartMenuDirectory);
+        _paths.ValidateShellPath(_paths.StartMenuDirectory,
+            "UVSR Start menu directory");
         CreateOrReplaceShortcut(_paths.StartMenuShortcut, launcher,
             string.Empty, launcherRoot, launcher,
             "Install, launch, update, or remove UVSR",
@@ -256,12 +264,12 @@ internal sealed class ShellIntegration
         if (DeleteShortcutIfOwned(_paths.LegacyStartMenuShortcut,
                 IsOwnedLegacyManagerShortcut, log))
             mutation.LegacyStartMenuShortcut = ShellMutationState.ExpectedAbsent;
-        if (Directory.Exists(_paths.StartMenuDirectory) &&
-            !Directory.EnumerateFileSystemEntries(_paths.StartMenuDirectory).Any())
+        if (Directory.Exists(_paths.StartMenuDirectory))
         {
-            SafePaths.RejectReparsePathChain(_paths.StartMenuDirectory,
+            _paths.ValidateShellPath(_paths.StartMenuDirectory,
                 "UVSR Start menu directory");
-            Directory.Delete(_paths.StartMenuDirectory, recursive: false);
+            if (!Directory.EnumerateFileSystemEntries(_paths.StartMenuDirectory).Any())
+                Directory.Delete(_paths.StartMenuDirectory, recursive: false);
         }
         log.Write("Removed UVSR's owned per-user shortcuts and Apps & Features entry.");
     }
@@ -443,20 +451,20 @@ internal sealed class ShellIntegration
         string.Equals(key.GetValue("UVSRTransactionId") as string,
             transactionId.ToString("D"), StringComparison.OrdinalIgnoreCase);
 
-    private static void ValidateShortcutCollision(
+    private void ValidateShortcutCollision(
         string path,
         Func<ShortcutInfo, bool> owned,
         string error)
     {
         if (!File.Exists(path))
             return;
-        SafePaths.RejectReparsePathChain(path, "shortcut collision path");
+        _paths.ValidateShellPath(path, "shortcut collision path");
         ShortcutInfo shortcut = ReadShortcut(path);
         if (!owned(shortcut))
             throw new InstallerException(error);
     }
 
-    private static void CreateOrReplaceShortcut(
+    private void CreateOrReplaceShortcut(
         string path,
         string target,
         string arguments,
@@ -466,9 +474,11 @@ internal sealed class ShellIntegration
         Func<ShortcutInfo, bool> owned)
     {
         string parent = Path.GetDirectoryName(path)!;
-        SafePaths.RejectReparsePathChain(parent, "shortcut directory");
+        _paths.ValidateShellPath(parent, "shortcut directory");
         Directory.CreateDirectory(parent);
-        SafePaths.RejectReparsePathChain(parent, "shortcut directory");
+        _paths.ValidateShellPath(parent, "shortcut directory");
+        if (File.Exists(path))
+            _paths.ValidateShellPath(path, "managed shortcut path");
         if (File.Exists(path) && !owned(ReadShortcut(path)))
             throw new InstallerException($"The existing shortcut '{path}' is not owned by UVSR Launcher.");
         string temporary = path + $".{Guid.NewGuid():N}.tmp";
@@ -510,7 +520,7 @@ internal sealed class ShellIntegration
         }
     }
 
-    private static bool DeleteShortcutIfOwned(
+    private bool DeleteShortcutIfOwned(
         string path,
         Func<ShortcutInfo, bool> owned,
         InstallLog log)
@@ -520,7 +530,7 @@ internal sealed class ShellIntegration
         ShortcutInfo shortcut;
         try
         {
-            SafePaths.RejectReparsePathChain(path, "managed shortcut path");
+            _paths.ValidateShellPath(path, "managed shortcut path");
             shortcut = ReadShortcut(path);
         }
         catch (Exception ex) when (ex is InstallerException or IOException or
@@ -561,15 +571,15 @@ internal sealed class ShellIntegration
             CaptureRegistry());
     }
 
-    private static byte[]? CaptureFile(string path)
+    private byte[]? CaptureFile(string path)
     {
         if (!File.Exists(path))
             return null;
-        SafePaths.RejectReparsePathChain(path, "managed shell snapshot");
+        _paths.ValidateShellPath(path, "managed shell snapshot");
         return File.ReadAllBytes(path);
     }
 
-    private static void RestoreFile(
+    private void RestoreFile(
         string path,
         byte[]? contents,
         ShellMutationState mutation,
@@ -578,6 +588,8 @@ internal sealed class ShellIntegration
         if (mutation == ShellMutationState.None)
             return;
         bool exists = File.Exists(path);
+        if (exists)
+            _paths.ValidateShellPath(path, "managed shell rollback path");
         if (mutation == ShellMutationState.OwnedPresent)
         {
             // The transaction wrote an owned shortcut. A missing or foreign file
@@ -599,8 +611,9 @@ internal sealed class ShellIntegration
             return;
         }
         string parent = Path.GetDirectoryName(path)!;
+        _paths.ValidateShellPath(parent, "managed shell rollback directory");
         Directory.CreateDirectory(parent);
-        SafePaths.RejectReparsePathChain(parent, "managed shell rollback directory");
+        _paths.ValidateShellPath(parent, "managed shell rollback directory");
         string temporary = path + $".{Guid.NewGuid():N}.rollback";
         try
         {

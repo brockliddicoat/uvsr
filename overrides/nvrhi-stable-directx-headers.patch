@@ -1,0 +1,23 @@
+diff --git a/src/d3d12/d3d12-constants.cpp b/src/d3d12/d3d12-constants.cpp
+--- a/src/d3d12/d3d12-constants.cpp
++++ b/src/d3d12/d3d12-constants.cpp
+@@ -375,11 +375,19 @@ namespace nvrhi::d3d12
+             D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
+             D3D12_BARRIER_LAYOUT_SHADER_RESOURCE },
+         { ResourceStates::ConvertCoopVecMatrixInput,
++#if NVRHI_D3D12_WITH_COOP_VECTOR_COMMON
+             D3D12_BARRIER_SYNC_CONVERT_LINEAR_ALGEBRA_MATRIX,
++#else
++            D3D12_BARRIER_SYNC_ALL,
++#endif
+             D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
+             D3D12_BARRIER_LAYOUT_SHADER_RESOURCE },
+         { ResourceStates::ConvertCoopVecMatrixOutput,
++#if NVRHI_D3D12_WITH_COOP_VECTOR_COMMON
+             D3D12_BARRIER_SYNC_CONVERT_LINEAR_ALGEBRA_MATRIX,
++#else
++            D3D12_BARRIER_SYNC_ALL,
++#endif
+             D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
+             D3D12_BARRIER_LAYOUT_UNORDERED_ACCESS },
+     };
