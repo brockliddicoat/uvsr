@@ -100,20 +100,23 @@ currently published sequence-2 launcher cannot build the current
 minimum-sequence-4 renderer source, so it must not be used for a fresh
 installation.
 
-The generated block below will name the exact immutable versioned launcher once
-the verified unsigned Windows 11 build is published. Windows may identify that
-manual bootstrap as coming from an unknown publisher. The download is not
-launcher self-update authority; automatic launcher updates remain governed by
-the separate checked feed and publisher policy.
+The generated block below names the exact immutable unsigned Windows 11 manual
+bootstrap. Windows may identify it as coming from an unknown publisher. The
+download is not launcher self-update authority; automatic launcher updates
+remain governed by the separate checked feed and publisher policy.
 
 <!-- uvsr-launcher-download:start -->
-> UVSR Launcher download is temporarily unavailable.
+> [Download Unsigned UVSR Launcher v1.1.12 (unsigned manual bootstrap)](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.1.12/UVSR-Launcher-Windows-11-x64.exe)
+>
+> [SHA-256 checksum](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.1.12/UVSR-Launcher-Windows-11-x64.exe.sha256)
+>
+> Not Authenticode-signed. Windows may warn. Launcher self-updates are disabled.
 <!-- uvsr-launcher-download:end -->
 
-After that unsigned manual bootstrap is published, opening the one file will
-start the launcher. Its shortcut is selected by default, transient downloads
-resume or retry safely, and Update can install or repair UVSR Engine. Launcher
-self-updates remain disabled for this unsigned bootstrap.
+Opening the unsigned manual bootstrap starts the launcher. Its shortcut is
+selected by default, transient downloads resume or retry safely, and Update can
+install or repair UVSR Engine. Launcher self-updates remain disabled for this
+unsigned bootstrap.
 
 Update checks come from:
 
@@ -165,19 +168,6 @@ again, so it remains available after the renderer closes.
 
 The first configure may download Microsoft's Direct3D 12 Agility SDK. Optional
 build variants and the complete validation workflow are documented below.
-
-## Coming Soon
-
-This section summarizes stable work that is active but not yet complete.
-Experimental entries are not promises that the work will ship.
-
-- **UVSR Launcher for Windows 11 — Awaiting Release Validation.** The launcher
-  source downloads verified prerequisites, builds the newest public `main`,
-  uses the launcher for its default desktop shortcut, checks UVSR and launcher
-  updates independently, and tolerates ordinary connection pauses. The manual
-  unsigned bootstrap still requires an exact immutable release and clean
-  Windows 11 release-matrix validation; permanent code signing remains future
-  hardening rather than a download prerequisite.
 
 ## Engineering Documentation
 
