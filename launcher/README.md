@@ -105,13 +105,12 @@ installation.
 
 This font transition has a mandatory source-first publication order. Validate
 the dual-output Noto source with the retained exact sequence-9 transition
-candidate, publish that Noto source, and only then configure the permanent
-signer, advance the launcher identity again, rebuild, sign, and publish that
-freshly identified launcher artifact and feed. The local 1.1.12 sequence-13
-source candidate is unsigned and must not be offered as install-ready.
-The live sequence-2 bootstrap cannot consume the current minimum-sequence-4
-renderer contract and has no pinned signer, so it is not evidence for this
-transition; users must manually open the final signed bootstrap launcher.
+candidate and publish that Noto source before publishing a compatible launcher.
+The verified 1.1.12 sequence-13 source candidate may be offered as an explicitly
+unsigned manual bootstrap only after its immutable versioned prerelease and
+clean Windows validation pass. The live sequence-2 bootstrap cannot consume the
+current minimum-sequence-4 renderer contract, so it is not evidence for this
+transition and must not be offered for a fresh installation.
 
 ## Exact Public-Source Compatibility Bridge
 
@@ -162,6 +161,19 @@ A failed check, download, build, or candidate health check leaves the active UVS
 and launcher packages unchanged. Details distinguish a stalled connection from
 local storage, access, signature, and permanent HTTP failures.
 
+## Manual Bootstrap Download
+
+The root README may link one explicitly unsigned manual bootstrap independently
+from the launcher self-update feed. The link uses the exact immutable
+`uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe` prerelease asset and
+also exposes its SHA-256 checksum. The executable must be labeled unsigned;
+Windows may show an unknown-publisher or SmartScreen warning.
+
+The manual bootstrap can install, update, launch, repair, and remove UVSR Engine.
+It is not authority for launcher self-update. Both feed files and the compiled
+publisher policy remain unchanged, so a launcher with no pinned publisher still
+fails closed when asked to download another launcher version.
+
 ## Launcher Updates and Update Source
 
 Launcher releases use immutable versioned packages under the per-user program
@@ -203,13 +215,12 @@ where `<version>` comes from the same `version` value in the canonical feed (for
 If that exact versioned release tag is not available yet, the launcher also
 supports `uvsr-launcher-latest` as a compatibility fallback for update recovery.
 
-A release artifact must also have a valid Authenticode chain whose signer public
-key matches the SHA-256 SPKI pin compiled into the launcher. Repository control
-and a feed hash alone are not accepted as publisher identity. Local preview
-builds intentionally leave that pin unset and fail closed for launcher downloads;
-they can still install, launch, update, repair, and remove UVSR. The first public
-UVSR Launcher release therefore requires the project's permanent code-signing
-identity before it can be called distribution-ready.
+A launcher self-update release must also have a valid Authenticode chain whose
+signer public key matches the SHA-256 SPKI pin compiled into the launcher.
+Repository control and a feed hash alone are not accepted as self-update
+publisher identity. Local and manual-bootstrap builds intentionally leave that
+pin unset and fail closed for launcher downloads; they can still install,
+launch, update, repair, and remove UVSR Engine.
 
 ## Update Check Diagnostics
 
@@ -346,19 +357,47 @@ path against the exact compatibility bridge and pinned recursive submodules,
 then performs the same unsigned CI build. Its 14-day workflow artifact is a test
 candidate, not a public self-update release.
 
-## Public Release Checklist
+## Unsigned Manual Bootstrap Release Checklist
 
-For the Noto transition, first prove that the retained exact sequence-9
-transition candidate can build and stage the dual-output Noto renderer source,
-then publish that source. Do not configure and publish the final pinned launcher
-or feed until that source-first gate passes. The current 1.1.12 sequence-13
-source candidate is only an unsigned local preview; setting the permanent signer changes
-a locked input and requires another unique identity, lock, build, and complete
-verification pass. The live sequence-2 bootstrap cannot build the
-minimum-sequence-4 source and cannot self-update without a pinned signer; step 9
-therefore requires a manual signed-launcher bootstrap. The ordinary
-consumer-first order in step 10 applies only to a future source contract that
-raises its minimum launcher sequence.
+The unsigned manual bootstrap is a separate public-download contract. It does
+not change the launcher self-update feed or make unsigned executables acceptable
+as launcher updates.
+
+1. Build the launcher from one exact 40-character commit and pass the complete
+   launcher, renderer-source compatibility, package, and clean Windows 11
+   install/repair checks.
+2. Verify the final executable is x64, reports the exact product version and
+   launcher health identity, has `NotSigned` Authenticode status, and matches
+   the canonical checksum file.
+3. Land the unavailable-state validation workflow first. Protect `main` with
+   Launcher README Download as a required pull-request check before advertising
+   any executable.
+4. Create a draft `uvsr-launcher-v<version>` prerelease targeting the exact
+   verified commit. Upload only `UVSR-Launcher-Windows-11-x64.exe` and its
+   `.sha256` file, verify their inventory and attestations, then publish the
+   immutable prerelease. Never upload the expiring Actions ZIP itself.
+5. On a new release-state branch, run
+   `python tools/sync_launcher_readme_download.py --set-unsigned-version
+   <version>`. Leave both launcher feed files byte-for-byte unchanged.
+6. Open a pull request and require Launcher README Download. It verifies the
+   immutable release and tag, source identity and input lock, public renderer
+   compatibility, two-asset inventory, attestation, bytes and checksum, x64
+   metadata, `NotSigned` status, health check, and exact generated disclosure.
+7. Merge only after the protected check passes. Then repeat an unauthenticated
+   download, checksum, metadata, unsigned-status, and health verification from
+   public `main` before announcing the bootstrap.
+
+## Signed Self-Update Release Checklist
+
+For a future signed self-update line, first prove that the retained exact
+sequence-9 transition candidate can build and stage the dual-output Noto
+renderer source, then publish that source. Do not configure and publish the
+final pinned launcher or feed until that source-first gate passes. Setting the
+permanent signer changes a locked input and requires another unique identity,
+lock, build, and complete verification pass. The live sequence-2 bootstrap
+cannot build the minimum-sequence-4 source or self-update without a pinned
+signer. The ordinary consumer-first order in step 10 applies only to a future
+source contract that raises its minimum launcher sequence.
 
 1. Choose the permanent Authenticode identity and set
    `LauncherPublisherSpkiSha256` to its lowercase SHA-256 SPKI pin.

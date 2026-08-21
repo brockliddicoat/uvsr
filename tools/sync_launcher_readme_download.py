@@ -17,14 +17,25 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_README = ROOT / "README.md"
 DEFAULT_CANONICAL_FEED = ROOT / "launcher" / "launcher-feed-v1.json"
 DEFAULT_LEGACY_FEED = ROOT / "installer" / "launcher-feed-v1.json"
+DEFAULT_RENDERER_CONTRACT = ROOT / "cmake" / "uvsr-launcher-build-contract-v1.json"
 START_MARKER = "<!-- uvsr-launcher-download:start -->"
 END_MARKER = "<!-- uvsr-launcher-download:end -->"
-UNAVAILABLE_MESSAGE = "> No compatible signed UVSR Launcher is public yet."
+UNAVAILABLE_MESSAGE = "> UVSR Launcher download is temporarily unavailable."
 ARTIFACT_NAME = "UVSR-Launcher-Windows-11-x64.exe"
 RELEASE_PREFIX = (
     "https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v"
 )
-LINK_LABEL_PREFIX = "Download UVSR Launcher v"
+SIGNED_LINK_LABEL_PREFIX = "Download UVSR Launcher v"
+UNSIGNED_LINK_LABEL_PREFIX = "Download Unsigned UVSR Launcher v"
+UNSIGNED_LINK_LABEL_SUFFIX = " (unsigned manual bootstrap)"
+UNSIGNED_CHECKSUM_LABEL = "SHA-256 checksum"
+UNSIGNED_DISCLOSURE = (
+    "> Not Authenticode-signed. Windows may warn. Launcher self-updates are disabled."
+)
+STATE_UNAVAILABLE = "unavailable"
+STATE_UNSIGNED = "unsigned"
+STATE_SIGNED = "signed"
+STATE_KINDS = {STATE_UNAVAILABLE, STATE_UNSIGNED, STATE_SIGNED}
 LATEST_ROUTE = f"/releases/latest/download/{ARTIFACT_NAME}".encode("ascii")
 LATEST_ALIAS_ROUTE = (
     f"/releases/download/uvsr-launcher-latest/{ARTIFACT_NAME}"
@@ -38,7 +49,10 @@ PRODUCT_ID = "0c47a7a8-1ec4-4ffd-b6c4-2f7614181223"
 MAXIMUM_RELEASE_SEQUENCE = 9_007_199_254_740_991
 MAXIMUM_LAUNCHER_BYTES = 256 * 1024 * 1024
 MAXIMUM_LAUNCHER_FEED_BYTES = 16 * 1024
+MAXIMUM_RENDERER_CONTRACT_BYTES = 16 * 1024
 MAXIMUM_VERSION_COMPONENT = 2_147_483_647
+CONTRACT_ID_PATTERN = re.compile(r"[A-Za-z0-9-]{1,96}")
+DXC_DATE_PATTERN = re.compile(r"[0-9]{4}_[0-9]{2}_[0-9]{2}")
 
 
 class SyncError(RuntimeError):
@@ -46,12 +60,19 @@ class SyncError(RuntimeError):
 
 
 class DownloadState:
-    def __init__(self, version: str | None) -> None:
+    def __init__(self, kind: str, version: str | None) -> None:
+        if kind not in STATE_KINDS:
+            raise SyncError(f"invalid launcher download state {kind!r}")
+        if (kind == STATE_UNAVAILABLE) != (version is None):
+            raise SyncError("launcher download state and version are inconsistent")
+        if version is not None:
+            validate_version(version)
+        self.kind = kind
         self.version = version
 
     @property
     def is_available(self) -> bool:
-        return self.version is not None
+        return self.kind != STATE_UNAVAILABLE
 
 
 class ParsedReadme:
@@ -80,20 +101,45 @@ def validate_version(version: str) -> str:
     return version
 
 
-def published_link(version: str) -> str:
+def release_url(version: str) -> str:
     validate_version(version)
+    return f"{RELEASE_PREFIX}{version}/{ARTIFACT_NAME}"
+
+
+def published_link(version: str) -> str:
+    return f"> [{SIGNED_LINK_LABEL_PREFIX}{version}]({release_url(version)})"
+
+
+def unsigned_link(version: str) -> str:
     return (
-        f"> [{LINK_LABEL_PREFIX}{version}]({RELEASE_PREFIX}{version}/{ARTIFACT_NAME})"
+        f"> [{UNSIGNED_LINK_LABEL_PREFIX}{version}{UNSIGNED_LINK_LABEL_SUFFIX}]"
+        f"({release_url(version)})"
     )
 
 
-def render_block(version: str | None, newline: bytes) -> bytes:
+def unsigned_checksum_link(version: str) -> str:
+    return f"> [{UNSIGNED_CHECKSUM_LABEL}]({release_url(version)}.sha256)"
+
+
+def render_block(kind: str, version: str | None, newline: bytes) -> bytes:
     if newline not in (b"\n", b"\r\n"):
         raise SyncError("README uses an unsupported launcher block newline style")
-    middle = UNAVAILABLE_MESSAGE if version is None else published_link(version)
-    return newline.join(
-        part.encode("ascii") for part in (START_MARKER, middle, END_MARKER)
-    )
+    state = DownloadState(kind, version)
+    if state.kind == STATE_UNAVAILABLE:
+        lines = (START_MARKER, UNAVAILABLE_MESSAGE, END_MARKER)
+    elif state.kind == STATE_SIGNED:
+        lines = (START_MARKER, published_link(state.version), END_MARKER)
+    else:
+        lines = (
+            START_MARKER,
+            unsigned_link(state.version),
+            ">",
+            unsigned_checksum_link(state.version),
+            ">",
+            UNSIGNED_DISCLOSURE,
+            END_MARKER,
+        )
+    return newline.join(part.encode("ascii") for part in lines)
 
 
 def marker_line_bounds(data: bytes, marker: bytes, position: int) -> tuple[int, int]:
@@ -208,6 +254,66 @@ def read_feed(canonical_path: Path, legacy_path: Path) -> dict[str, object]:
     return parse_feed(canonical)
 
 
+def parse_renderer_contract(data: bytes) -> dict[str, object]:
+    if not 1 <= len(data) <= MAXIMUM_RENDERER_CONTRACT_BYTES:
+        raise SyncError("renderer build contract exceeds its strict size limit")
+    try:
+        text = data.decode("utf-8")
+        value = json.loads(text, object_pairs_hook=reject_duplicate_json_properties)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SyncError(
+            f"renderer build contract is not strict UTF-8 JSON: {error}"
+        ) from error
+
+    contract = require_exact_keys(
+        value,
+        {
+            "schemaVersion",
+            "productId",
+            "contractId",
+            "minimumLauncherReleaseSequence",
+            "d3d12AgilitySdkVersion",
+            "directXHeadersVersion",
+            "dxcVersion",
+            "dxcDate",
+        },
+        "renderer contract",
+    )
+    minimum_sequence = contract["minimumLauncherReleaseSequence"]
+    version_fields = (
+        contract["d3d12AgilitySdkVersion"],
+        contract["directXHeadersVersion"],
+        contract["dxcVersion"],
+    )
+    if not all(isinstance(version, str) for version in version_fields):
+        raise SyncError("renderer build contract dependency version is not a string")
+    for version in version_fields:
+        validate_version(version)
+    if (
+        type(contract["schemaVersion"]) is not int
+        or contract["schemaVersion"] != 1
+        or contract["productId"] != PRODUCT_ID
+        or not isinstance(contract["contractId"], str)
+        or CONTRACT_ID_PATTERN.fullmatch(contract["contractId"]) is None
+        or type(minimum_sequence) is not int
+        or not 1 <= minimum_sequence <= MAXIMUM_RELEASE_SEQUENCE
+        or not isinstance(contract["dxcDate"], str)
+        or DXC_DATE_PATTERN.fullmatch(contract["dxcDate"]) is None
+    ):
+        raise SyncError("renderer build contract identity is not canonical")
+    return contract
+
+
+def read_renderer_contract(path: Path) -> dict[str, object]:
+    if path.is_symlink():
+        raise SyncError(f"refusing to use a symlink as a renderer build contract: {path}")
+    try:
+        data = path.read_bytes()
+    except OSError as error:
+        raise SyncError(f"could not read renderer build contract: {error}") from error
+    return parse_renderer_contract(data)
+
+
 def parse_readme(data: bytes) -> ParsedReadme:
     if LATEST_ROUTE in data or LATEST_ALIAS_ROUTE in data:
         raise SyncError(
@@ -235,11 +341,15 @@ def parse_readme(data: bytes) -> ParsedReadme:
     newline = block_newline(data, start_content_end)
     block = data[block_start:block_end]
 
-    unavailable = render_block(None, newline)
+    unavailable = render_block(STATE_UNAVAILABLE, None, newline)
     if block == unavailable:
         validate_launcher_artifact_ownership(data, block_start, block_end, 0)
         return ParsedReadme(
-            data, block_start, block_end, newline, DownloadState(None)
+            data,
+            block_start,
+            block_end,
+            newline,
+            DownloadState(STATE_UNAVAILABLE, None),
         )
 
     try:
@@ -248,10 +358,10 @@ def parse_readme(data: bytes) -> ParsedReadme:
     except UnicodeDecodeError as error:
         raise SyncError("README launcher download block must contain only ASCII") from error
 
-    link_pattern = re.compile(
+    signed_pattern = re.compile(
         re.escape(START_MARKER)
         + r"\n> \["
-        + re.escape(LINK_LABEL_PREFIX)
+        + re.escape(SIGNED_LINK_LABEL_PREFIX)
         + r"(?P<label_version>[^\]\r\n]+)"
         + r"\]\("
         + re.escape(RELEASE_PREFIX)
@@ -260,18 +370,52 @@ def parse_readme(data: bytes) -> ParsedReadme:
         + r"\)\n"
         + re.escape(END_MARKER)
     )
-    match = link_pattern.fullmatch(normalized)
+    unsigned_pattern = re.compile(
+        re.escape(START_MARKER)
+        + r"\n> \["
+        + re.escape(UNSIGNED_LINK_LABEL_PREFIX)
+        + r"(?P<label_version>[^\]\r\n]+)"
+        + re.escape(UNSIGNED_LINK_LABEL_SUFFIX)
+        + r"\]\("
+        + re.escape(RELEASE_PREFIX)
+        + r"(?P<version>[^/\r\n]+)/"
+        + re.escape(ARTIFACT_NAME)
+        + r"\)\n>\n> \["
+        + re.escape(UNSIGNED_CHECKSUM_LABEL)
+        + r"\]\("
+        + re.escape(RELEASE_PREFIX)
+        + r"(?P<checksum_version>[^/\r\n]+)/"
+        + re.escape(ARTIFACT_NAME)
+        + r"\.sha256\)\n>\n"
+        + re.escape(UNSIGNED_DISCLOSURE)
+        + r"\n"
+        + re.escape(END_MARKER)
+    )
+    kind = STATE_SIGNED
+    match = signed_pattern.fullmatch(normalized)
+    if match is None:
+        kind = STATE_UNSIGNED
+        match = unsigned_pattern.fullmatch(normalized)
     if match is None:
         raise SyncError("README launcher download block is noncanonical")
     version = validate_version(match.group("version"))
     label_version = validate_version(match.group("label_version"))
     if label_version != version:
         raise SyncError("README launcher download label and URL versions differ")
-    if block != render_block(version, newline):
+    if kind == STATE_UNSIGNED:
+        checksum_version = validate_version(match.group("checksum_version"))
+        if checksum_version != version:
+            raise SyncError(
+                "README launcher download and checksum URL versions differ"
+            )
+    if block != render_block(kind, version, newline):
         raise SyncError("README launcher download block is noncanonical")
-    validate_launcher_artifact_ownership(data, block_start, block_end, 1)
+    expected_references = 2 if kind == STATE_UNSIGNED else 1
+    validate_launcher_artifact_ownership(
+        data, block_start, block_end, expected_references
+    )
     return ParsedReadme(
-        data, block_start, block_end, newline, DownloadState(version)
+        data, block_start, block_end, newline, DownloadState(kind, version)
     )
 
 
@@ -317,11 +461,10 @@ def atomic_replace(path: Path, data: bytes) -> None:
                 pass
 
 
-def set_state(path: Path, version: str | None) -> bool:
-    if version is not None:
-        validate_version(version)
+def set_state(path: Path, kind: str, version: str | None) -> bool:
+    target = DownloadState(kind, version)
     parsed = read_readme(path)
-    replacement = render_block(version, parsed.newline)
+    replacement = render_block(target.kind, target.version, parsed.newline)
     updated = (
         parsed.data[: parsed.block_start]
         + replacement
@@ -331,7 +474,10 @@ def set_state(path: Path, version: str | None) -> bool:
         return False
 
     reparsed = parse_readme(updated)
-    if reparsed.state.version != version:
+    if (
+        reparsed.state.kind != target.kind
+        or reparsed.state.version != target.version
+    ):
         raise SyncError("generated README launcher download state did not verify")
     if parsed.data[: parsed.block_start] != updated[: parsed.block_start]:
         raise SyncError("generated README changed bytes before the launcher block")
@@ -360,35 +506,87 @@ def self_test() -> None:
         readme = root / "README.md"
         prefix = b"# UVSR\r\n\r\nBefore \xe2\x98\x83.\r\n\r\n"
         suffix = b"\r\n\r\nAfter.\r\n"
-        readme.write_bytes(prefix + render_block(None, b"\r\n") + suffix)
+        readme.write_bytes(
+            prefix
+            + render_block(STATE_UNAVAILABLE, None, b"\r\n")
+            + suffix
+        )
 
         initial = read_readme(readme)
-        if initial.state.is_available:
+        if (
+            initial.state.kind != STATE_UNAVAILABLE
+            or initial.state.version is not None
+            or initial.state.is_available
+        ):
             raise RuntimeError("unavailable launcher fixture parsed as published")
         if readme.read_bytes() != initial.data:
             raise RuntimeError("launcher check changed the README")
 
-        if not set_state(readme, "1.2.3"):
-            raise RuntimeError("launcher version update reported no change")
-        published = readme.read_bytes()
-        if not published.startswith(prefix) or not published.endswith(suffix):
-            raise RuntimeError("launcher version update changed bytes outside its block")
-        if render_block("1.2.3", b"\r\n") not in published:
-            raise RuntimeError("launcher version update lost CRLF block formatting")
-        if read_readme(readme).state.version != "1.2.3":
-            raise RuntimeError("published launcher block did not pass exact check")
-        if set_state(readme, "1.2.3"):
-            raise RuntimeError("identical launcher version update rewrote the README")
+        for kind, expected_block in (
+            (
+                STATE_SIGNED,
+                render_block(STATE_SIGNED, "1.2.3", b"\r\n"),
+            ),
+            (
+                STATE_UNSIGNED,
+                render_block(STATE_UNSIGNED, "1.2.3", b"\r\n"),
+            ),
+        ):
+            if not set_state(readme, kind, "1.2.3"):
+                raise RuntimeError(f"{kind} launcher update reported no change")
+            published = readme.read_bytes()
+            if not published.startswith(prefix) or not published.endswith(suffix):
+                raise RuntimeError(
+                    f"{kind} launcher update changed bytes outside its block"
+                )
+            if expected_block not in published:
+                raise RuntimeError(
+                    f"{kind} launcher update lost CRLF block formatting"
+                )
+            state = read_readme(readme).state
+            if (
+                state.kind != kind
+                or state.version != "1.2.3"
+                or not state.is_available
+            ):
+                raise RuntimeError(f"{kind} launcher block did not pass exact check")
+            if set_state(readme, kind, "1.2.3"):
+                raise RuntimeError(f"identical {kind} update rewrote the README")
 
-        if not set_state(readme, None):
+        unsigned = readme.read_bytes()
+        for required_text in (
+            b"(unsigned manual bootstrap)",
+            b".exe.sha256)",
+            b"Not Authenticode-signed.",
+            b"Windows may warn.",
+            b"Launcher self-updates are disabled.",
+        ):
+            if required_text not in unsigned:
+                raise RuntimeError(
+                    f"unsigned launcher disclosure lost {required_text!r}"
+                )
+
+        if not set_state(readme, STATE_UNAVAILABLE, None):
             raise RuntimeError("launcher unavailable update reported no change")
-        if readme.read_bytes() != prefix + render_block(None, b"\r\n") + suffix:
+        if readme.read_bytes() != (
+            prefix
+            + render_block(STATE_UNAVAILABLE, None, b"\r\n")
+            + suffix
+        ):
             raise RuntimeError("launcher unavailable update was not canonical")
+
+        expect_sync_error(lambda: DownloadState("unknown", None), "invalid")
+        expect_sync_error(
+            lambda: DownloadState(STATE_UNAVAILABLE, "1.2.3"), "inconsistent"
+        )
+        expect_sync_error(
+            lambda: DownloadState(STATE_SIGNED, None), "inconsistent"
+        )
 
         missing = b"# UVSR\n"
         expect_sync_error(lambda: parse_readme(missing), "exactly one")
         duplicate = (
-            render_block(None, b"\n")
+            render_block(STATE_UNAVAILABLE, None, b"\n")
             + b"\n"
             + START_MARKER.encode("ascii")
             + b"\n"
@@ -425,7 +623,7 @@ def self_test() -> None:
             (
                 START_MARKER.encode("ascii"),
                 (
-                    f"> [{LINK_LABEL_PREFIX}1.2.3](https://github.com/brockliddicoat/uvsr"
+                    f"> [{SIGNED_LINK_LABEL_PREFIX}1.2.3](https://github.com/brockliddicoat/uvsr"
                     f"{LATEST_ROUTE.decode('ascii')})"
                 ).encode("ascii"),
                 END_MARKER.encode("ascii"),
@@ -434,7 +632,7 @@ def self_test() -> None:
         expect_sync_error(lambda: parse_readme(latest), "mutable latest")
 
         outside_versioned = (
-            render_block(None, b"\n")
+            render_block(STATE_UNAVAILABLE, None, b"\n")
             + b"\n"
             + published_link("1.2.3").encode("ascii")
         )
@@ -443,19 +641,27 @@ def self_test() -> None:
         )
 
         outside_alias = (
-            render_block(None, b"\n")
+            render_block(STATE_UNAVAILABLE, None, b"\n")
             + b"\nhttps://github.com/brockliddicoat/uvsr"
             + LATEST_ALIAS_ROUTE
         )
         expect_sync_error(lambda: parse_readme(outside_alias), "mutable latest")
 
         duplicate_versioned = (
-            render_block("1.2.3", b"\n")
+            render_block(STATE_SIGNED, "1.2.3", b"\n")
             + b"\n"
             + published_link("1.2.3").encode("ascii")
         )
         expect_sync_error(
             lambda: parse_readme(duplicate_versioned), "owned only"
+        )
+        duplicate_unsigned = (
+            render_block(STATE_UNSIGNED, "1.2.3", b"\n")
+            + b"\n"
+            + unsigned_checksum_link("1.2.3").encode("ascii")
+        )
+        expect_sync_error(
+            lambda: parse_readme(duplicate_unsigned), "owned only"
         )
 
         for unsafe_destination in (
@@ -467,24 +673,49 @@ def self_test() -> None:
             "https://example.invalid/downloads/" + ARTIFACT_NAME,
         ):
             unsafe_outside = (
-                render_block(None, b"\n")
+                render_block(STATE_UNAVAILABLE, None, b"\n")
                 + f"\n> [Unsafe launcher]({unsafe_destination})".encode("ascii")
             )
             expect_sync_error(
                 lambda value=unsafe_outside: parse_readme(value), "owned only"
             )
 
-        noncanonical = render_block(None, b"\n").replace(
+        noncanonical = render_block(STATE_UNAVAILABLE, None, b"\n").replace(
             UNAVAILABLE_MESSAGE.encode("ascii"),
             UNAVAILABLE_MESSAGE.encode("ascii") + b" ",
         )
         expect_sync_error(lambda: parse_readme(noncanonical), "noncanonical")
 
-        mismatched_label = render_block("1.2.3", b"\n").replace(
+        mismatched_label = render_block(STATE_SIGNED, "1.2.3", b"\n").replace(
             b"Download UVSR Launcher v1.2.3",
             b"Download UVSR Launcher v1.2.4",
         )
         expect_sync_error(lambda: parse_readme(mismatched_label), "versions differ")
+
+        mismatched_unsigned_label = render_block(
+            STATE_UNSIGNED, "1.2.3", b"\n"
+        ).replace(
+            b"Download Unsigned UVSR Launcher v1.2.3",
+            b"Download Unsigned UVSR Launcher v1.2.4",
+        )
+        expect_sync_error(
+            lambda: parse_readme(mismatched_unsigned_label), "versions differ"
+        )
+        mismatched_checksum = render_block(
+            STATE_UNSIGNED, "1.2.3", b"\n"
+        ).replace(
+            b"uvsr-launcher-v1.2.3/UVSR-Launcher-Windows-11-x64.exe.sha256",
+            b"uvsr-launcher-v1.2.4/UVSR-Launcher-Windows-11-x64.exe.sha256",
+        )
+        expect_sync_error(
+            lambda: parse_readme(mismatched_checksum), "checksum URL versions differ"
+        )
+        missing_disclosure = render_block(
+            STATE_UNSIGNED, "1.2.3", b"\n"
+        ).replace(UNSIGNED_DISCLOSURE.encode("ascii"), b"> Unsigned.")
+        expect_sync_error(
+            lambda: parse_readme(missing_disclosure), "noncanonical"
+        )
 
         valid_feed = {
             "schemaVersion": 1,
@@ -524,6 +755,54 @@ def self_test() -> None:
             lambda: read_feed(canonical_feed, legacy_feed), "byte-identical"
         )
 
+        valid_contract = {
+            "schemaVersion": 1,
+            "productId": PRODUCT_ID,
+            "contractId": "uvsr-windows-dx12-stable-619-v1",
+            "minimumLauncherReleaseSequence": 4,
+            "d3d12AgilitySdkVersion": "1.619.5",
+            "directXHeadersVersion": "1.619.5",
+            "dxcVersion": "1.9.2602",
+            "dxcDate": "2026_02_20",
+        }
+        contract_bytes = json.dumps(
+            valid_contract, separators=(",", ":")
+        ).encode("utf-8")
+        parsed_contract = parse_renderer_contract(contract_bytes)
+        if parsed_contract["minimumLauncherReleaseSequence"] != 4:
+            raise RuntimeError("valid renderer contract lost its release sequence")
+        expect_sync_error(
+            lambda: parse_renderer_contract(
+                contract_bytes.replace(b'"contractId"', b'"ContractId"')
+            ),
+            "properties",
+        )
+        duplicate_contract = contract_bytes.replace(
+            b'"schemaVersion":1,', b'"schemaVersion":1,"schemaVersion":1,'
+        )
+        expect_sync_error(
+            lambda: parse_renderer_contract(duplicate_contract), "duplicate"
+        )
+        expect_sync_error(
+            lambda: parse_renderer_contract(
+                contract_bytes.replace(
+                    b'"minimumLauncherReleaseSequence":4',
+                    b'"minimumLauncherReleaseSequence":0',
+                )
+            ),
+            "identity",
+        )
+        expect_sync_error(
+            lambda: parse_renderer_contract(
+                contract_bytes.replace(b'"dxcDate":"2026_02_20"', b'"dxcDate":"latest"')
+            ),
+            "identity",
+        )
+        contract_path = root / "uvsr-launcher-build-contract-v1.json"
+        contract_path.write_bytes(contract_bytes)
+        if read_renderer_contract(contract_path)["dxcVersion"] != "1.9.2602":
+            raise RuntimeError("renderer contract file validation lost its DXC version")
+
     print("Launcher README download synchronization self-test passed.")
 
 
@@ -534,16 +813,21 @@ def main() -> int:
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--check", action="store_true")
     action.add_argument("--set-version", metavar="X.Y.Z")
+    action.add_argument("--set-unsigned-version", metavar="X.Y.Z")
     action.add_argument("--set-from-feed", action="store_true")
     action.add_argument("--set-unavailable", action="store_true")
     action.add_argument("--self-test", action="store_true")
     action.add_argument("--print-feed-json", action="store_true")
+    action.add_argument("--print-renderer-contract-json", action="store_true")
     action.add_argument("--print-state-json", action="store_true")
     parser.add_argument("--readme", type=Path, default=DEFAULT_README)
     parser.add_argument(
         "--canonical-feed", type=Path, default=DEFAULT_CANONICAL_FEED
     )
     parser.add_argument("--legacy-feed", type=Path, default=DEFAULT_LEGACY_FEED)
+    parser.add_argument(
+        "--renderer-contract", type=Path, default=DEFAULT_RENDERER_CONTRACT
+    )
     arguments = parser.parse_args()
 
     try:
@@ -556,11 +840,20 @@ def main() -> int:
             print(json.dumps(feed, separators=(",", ":"), sort_keys=True))
             return 0
 
+        if arguments.print_renderer_contract_json:
+            contract = read_renderer_contract(arguments.renderer_contract)
+            print(json.dumps(contract, separators=(",", ":"), sort_keys=True))
+            return 0
+
         if arguments.print_state_json:
             state = read_readme(arguments.readme).state
             print(
                 json.dumps(
-                    {"available": state.is_available, "version": state.version},
+                    {
+                        "available": state.is_available,
+                        "kind": state.kind,
+                        "version": state.version,
+                    },
                     separators=(",", ":"),
                     sort_keys=True,
                 )
@@ -573,7 +866,7 @@ def main() -> int:
             if state.is_available:
                 print(
                     "README launcher download block is canonical for "
-                    f"version {state.version}."
+                    f"{state.kind} version {state.version}."
                 )
             else:
                 print("README launcher download block is canonically unavailable.")
@@ -582,10 +875,18 @@ def main() -> int:
         if arguments.set_from_feed:
             feed = read_feed(arguments.canonical_feed, arguments.legacy_feed)
             version = str(feed["version"])
+            kind = STATE_SIGNED
+        elif arguments.set_unsigned_version is not None:
+            version = arguments.set_unsigned_version
+            kind = STATE_UNSIGNED
+        elif arguments.set_version is not None:
+            version = arguments.set_version
+            kind = STATE_SIGNED
         else:
-            version = arguments.set_version if arguments.set_version is not None else None
-        changed = set_state(readme, version)
-        state_text = "unavailable" if version is None else f"version {version}"
+            version = None
+            kind = STATE_UNAVAILABLE
+        changed = set_state(readme, kind, version)
+        state_text = kind if version is None else f"{kind} version {version}"
         verb = "Updated" if changed else "Verified"
         print(f"{verb} README launcher download block as {state_text}.")
         return 0

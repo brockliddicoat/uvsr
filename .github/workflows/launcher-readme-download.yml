@@ -15,10 +15,12 @@ on:
       - "installer/launcher-feed-v1.json"
       - "launcher/launcher-input-lock-v1.json"
       - "launcher/verify-launcher-feed-alias.ps1"
+      - "launcher/verify-launcher-identity.ps1"
       - "launcher/src/UVSR.Installer/LauncherTypography.cs"
       - "launcher/src/UVSR.Installer/Program.cs"
       - "launcher/src/UVSR.Installer/ProductConstants.cs"
       - "launcher/src/UVSR.Installer/UVSR.Installer.csproj"
+      - "cmake/uvsr-launcher-build-contract-v1.json"
       - "tools/sync_launcher_readme_download.py"
 
 permissions:
@@ -84,10 +86,12 @@ jobs:
             launcher/launcher-feed-v1.json installer/launcher-feed-v1.json `
             launcher/launcher-input-lock-v1.json `
             launcher/verify-launcher-feed-alias.ps1 `
+            launcher/verify-launcher-identity.ps1 `
             launcher/src/UVSR.Installer/LauncherTypography.cs `
             launcher/src/UVSR.Installer/Program.cs `
             launcher/src/UVSR.Installer/ProductConstants.cs `
             launcher/src/UVSR.Installer/UVSR.Installer.csproj `
+            cmake/uvsr-launcher-build-contract-v1.json `
             tools/sync_launcher_readme_download.py)
           if ($LASTEXITCODE -ne 0) {
             throw 'Git could not inspect launcher download contract changes.'
@@ -122,56 +126,79 @@ jobs:
             throw 'The README launcher download block failed strict validation.'
           }
           $readmeState = $readmeStateJson | ConvertFrom-Json
-          if (-not [bool]$readmeState.available) {
+          $stateKind = [string]$readmeState.kind
+          if ($stateKind -notin @('unavailable', 'unsigned', 'signed')) {
+            throw 'The README launcher download state kind is not recognized.'
+          }
+          if ($stateKind -eq 'unavailable') {
+            if ([bool]$readmeState.available -or $null -ne $readmeState.version) {
+              throw 'The unavailable README launcher state is inconsistent.'
+            }
             if ($env:FEED_CHANGED -eq 'true') {
               throw ('A launcher feed publication must update the README in the ' +
                 'same change. Run tools/sync_launcher_readme_download.py ' +
                 '--set-from-feed.')
             }
-            Write-Host 'No compatible signed public launcher is currently advertised.'
+            Write-Host 'UVSR Launcher download is temporarily unavailable.'
             exit 0
           }
           $readmeVersion = [string]$readmeState.version
+          if (-not [bool]$readmeState.available -or
+              $readmeVersion -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+            throw 'The available README launcher state is inconsistent.'
+          }
+          $isSigned = $stateKind -eq 'signed'
+          $isUnsigned = $stateKind -eq 'unsigned'
+          $version = $readmeVersion
+          $sequence = 0L
+          $feed = $null
 
-          $feedJson = & python tools/sync_launcher_readme_download.py `
-            --print-feed-json
-          if ($LASTEXITCODE -ne 0) {
-            throw 'The canonical launcher feed failed strict validation.'
+          if ($isUnsigned) {
+            if ($env:FEED_CHANGED -eq 'true') {
+              throw 'An unsigned manual bootstrap must not change the signed launcher feed.'
+            }
           }
-          $feed = $feedJson | ConvertFrom-Json
-          $version = [string]$feed.version
-          $sequence = [long]$feed.releaseSequence
-          if ([long]$feed.schemaVersion -ne 1 -or
-              $version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$' -or
-              [string]$feed.productId -ne
-                '0c47a7a8-1ec4-4ffd-b6c4-2f7614181223' -or
-              [string]$feed.channel -ne 'stable' -or
-              [string]$feed.artifact.name -ne $artifactName -or
-              [string]$feed.artifact.sha256 -notmatch '^[0-9a-f]{64}$' -or
-              $sequence -lt 1 -or $sequence -gt 9007199254740991 -or
-              [long]$feed.artifact.size -lt 1 -or
-              [long]$feed.artifact.size -gt 268435456) {
-            throw 'The canonical launcher feed is not a valid stable release record.'
-          }
-          if ($readmeVersion -ne $version) {
-            throw "The README launcher version does not match feed version $version."
-          }
+          else {
+            $feedJson = & python tools/sync_launcher_readme_download.py `
+              --print-feed-json
+            if ($LASTEXITCODE -ne 0) {
+              throw 'The canonical launcher feed failed strict validation.'
+            }
+            $feed = $feedJson | ConvertFrom-Json
+            $version = [string]$feed.version
+            $sequence = [long]$feed.releaseSequence
+            if ([long]$feed.schemaVersion -ne 1 -or
+                $version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' -or
+                [string]$feed.productId -ne
+                  '0c47a7a8-1ec4-4ffd-b6c4-2f7614181223' -or
+                [string]$feed.channel -ne 'stable' -or
+                [string]$feed.artifact.name -ne $artifactName -or
+                [string]$feed.artifact.sha256 -notmatch '^[0-9a-f]{64}$' -or
+                $sequence -lt 1 -or $sequence -gt 9007199254740991 -or
+                [long]$feed.artifact.size -lt 1 -or
+                [long]$feed.artifact.size -gt 268435456) {
+              throw 'The canonical launcher feed is not a valid stable release record.'
+            }
+            if ($readmeVersion -ne $version) {
+              throw "The README launcher version does not match feed version $version."
+            }
 
-          if ($env:FEED_CHANGED -eq 'true') {
-            $baseFeedPath = 'launcher/launcher-feed-v1.json'
-            & git cat-file -e "$env:PUBLICATION_BASE`:$baseFeedPath" 2>$null
-            if ($LASTEXITCODE -ne 0) {
-              $baseFeedPath = 'installer/launcher-feed-v1.json'
-            }
-            $baseFeedJson = (& git show `
-              "$env:PUBLICATION_BASE`:$baseFeedPath") -join "`n"
-            if ($LASTEXITCODE -ne 0) {
-              throw 'The launcher feed at the publication base could not be read.'
-            }
-            $baseFeed = $baseFeedJson | ConvertFrom-Json
-            if ($sequence -le [long]$baseFeed.releaseSequence -or
-                [version]$version -le [version]([string]$baseFeed.version)) {
-              throw 'A launcher feed publication must advance version and sequence.'
+            if ($env:FEED_CHANGED -eq 'true') {
+              $baseFeedPath = 'launcher/launcher-feed-v1.json'
+              & git cat-file -e "$env:PUBLICATION_BASE`:$baseFeedPath" 2>$null
+              if ($LASTEXITCODE -ne 0) {
+                $baseFeedPath = 'installer/launcher-feed-v1.json'
+              }
+              $baseFeedJson = (& git show `
+                "$env:PUBLICATION_BASE`:$baseFeedPath") -join "`n"
+              if ($LASTEXITCODE -ne 0) {
+                throw 'The launcher feed at the publication base could not be read.'
+              }
+              $baseFeed = $baseFeedJson | ConvertFrom-Json
+              if ($sequence -le [long]$baseFeed.releaseSequence -or
+                  [version]$version -le [version]([string]$baseFeed.version)) {
+                throw 'A launcher feed publication must advance version and sequence.'
+              }
             }
           }
 
@@ -183,10 +210,13 @@ jobs:
             throw "The exact public launcher release '$tag' could not be read."
           }
           $release = $releaseJson | ConvertFrom-Json
-          if ($release.draft -or $release.prerelease -or -not $release.immutable -or
+          if ($release.draft -or -not $release.immutable -or
               [string]$release.tag_name -ne $tag -or
-              [string]$release.target_commitish -notmatch '^[0-9a-f]{40}$') {
-            throw 'The launcher release is not stable, immutable, and commit-pinned.'
+              [string]$release.target_commitish -notmatch '^[0-9a-f]{40}$' -or
+              [string]::IsNullOrWhiteSpace([string]$release.published_at) -or
+              ($isSigned -and [bool]$release.prerelease) -or
+              ($isUnsigned -and -not [bool]$release.prerelease)) {
+            throw 'The launcher release publication mode or immutable identity is invalid.'
           }
           & gh release verify $tag --repo $env:GITHUB_REPOSITORY
           if ($LASTEXITCODE -ne 0) {
@@ -236,27 +266,56 @@ jobs:
             }
           }
 
+          function Read-UniqueSourceValue(
+              [string] $Text,
+              [string] $Pattern,
+              [string] $Description) {
+            $options = [Text.RegularExpressions.RegexOptions]::CultureInvariant -bor `
+              [Text.RegularExpressions.RegexOptions]::Singleline
+            $matches = [regex]::Matches($Text, $Pattern, $options)
+            if ($matches.Count -ne 1) {
+              throw "Release source has no unique $Description."
+            }
+            return $matches[0].Groups['value'].Value
+          }
+
           $constants = Read-ReleaseSourceFile `
             'launcher/src/UVSR.Installer/ProductConstants.cs'
-          $sourceProductId = [regex]::Match($constants,
-            'ProductId = "(?<value>[0-9a-f-]{36})";').Groups['value'].Value
-          $sourceVersion = [regex]::Match($constants,
-            'LauncherVersion = "(?<value>[0-9]+\.[0-9]+\.[0-9]+)";').Groups['value'].Value
-          $sourceSequence = [regex]::Match($constants,
-            'LauncherReleaseSequence = (?<value>[0-9]+);').Groups['value'].Value
-          $pinMatch = [regex]::Match($constants,
-            'LauncherPublisherSpkiSha256 = "(?<pin>[0-9a-f]{64})";')
-          if ($sourceProductId -ne [string]$feed.productId -or
-              $sourceVersion -ne $version -or
-              $sourceSequence -ne [string]$sequence -or
-              -not $pinMatch.Success) {
-            throw 'The feed does not match the launcher identity at the release commit.'
+          $sourceProductId = Read-UniqueSourceValue $constants `
+            'ProductId\s*=\s*"(?<value>[0-9a-f-]{36})";' 'product ID'
+          $sourceVersion = Read-UniqueSourceValue $constants `
+            'LauncherVersion\s*=\s*"(?<value>[0-9]+\.[0-9]+\.[0-9]+)";' `
+            'launcher version'
+          $sourceSequenceText = Read-UniqueSourceValue $constants `
+            'LauncherReleaseSequence\s*=\s*(?<value>[0-9]+);' 'release sequence'
+          $sourcePin = Read-UniqueSourceValue $constants `
+            'LauncherPublisherSpkiSha256\s*=\s*"(?<value>[0-9a-f]{64}|)";' `
+            'publisher pin'
+          $sourceSequence = [long]$sourceSequenceText
+          if ($sourceProductId -ne
+              '0c47a7a8-1ec4-4ffd-b6c4-2f7614181223' -or
+              $sourceVersion -ne $version -or $sourceSequence -lt 1 -or
+              $sourceSequence -gt 9007199254740991) {
+            throw 'The launcher identity at the release commit is not canonical.'
+          }
+          if ($isSigned) {
+            if ($sourceProductId -ne [string]$feed.productId -or
+                $sourceSequence -ne $sequence -or
+                $sourcePin -notmatch '^[0-9a-f]{64}$') {
+              throw 'The feed does not match the launcher identity at the release commit.'
+            }
+          }
+          elseif ($sourcePin.Length -ne 0) {
+            throw 'An unsigned manual bootstrap release must have an empty publisher pin.'
+          }
+          else {
+            $sequence = $sourceSequence
           }
           $releaseLock = Read-ReleaseSourceFile `
             'launcher/launcher-input-lock-v1.json' | ConvertFrom-Json
           if ([string]$releaseLock.version -ne $version -or
               [long]$releaseLock.releaseSequence -ne $sequence) {
-            throw 'The release commit input lock does not match the canonical feed.'
+            throw 'The release commit input lock does not match its launcher identity.'
           }
 
           $sourceWorktree = Join-Path $env:RUNNER_TEMP `
@@ -281,6 +340,58 @@ jobs:
             }
           }
 
+          if ($isUnsigned) {
+            $contractId = Read-UniqueSourceValue $constants `
+              'RendererBuildContractId\s*=\s*"(?<value>[A-Za-z0-9-]{1,96})";' `
+              'renderer contract ID'
+            $dxcDate = Read-UniqueSourceValue $constants `
+              'PinnedDxcDate\s*=\s*"(?<value>[0-9]{4}_[0-9]{2}_[0-9]{2})";' `
+              'DXC date'
+            $agilityVersion = Read-UniqueSourceValue $constants `
+              'PinnedArchivePackage\s+AgilitySdk\s*=\s*new\(\s*"[^"]+",\s*"(?<value>[0-9]+\.[0-9]+\.[0-9]+)"' `
+              'Agility SDK version'
+            $headersVersion = Read-UniqueSourceValue $constants `
+              'PinnedArchivePackage\s+DirectXHeaders\s*=\s*new\(\s*"[^"]+",\s*"(?<value>[0-9]+\.[0-9]+\.[0-9]+)"' `
+              'DirectX Headers version'
+            $dxcVersion = Read-UniqueSourceValue $constants `
+              'PinnedArchivePackage\s+Dxc\s*=\s*new\(\s*"[^"]+",\s*"(?<value>[0-9]+\.[0-9]+\.[0-9]+)"' `
+              'DXC version'
+
+            $contractPath = 'cmake/uvsr-launcher-build-contract-v1.json'
+            $contractText = (& git show `
+              "$env:PUBLICATION_BASE`:$contractPath") -join "`n"
+            if ($LASTEXITCODE -ne 0) {
+              throw 'The public renderer build contract could not be read.'
+            }
+            $contractFile = Join-Path $env:RUNNER_TEMP `
+              "uvsr-renderer-contract-$([Guid]::NewGuid().ToString('N')).json"
+            try {
+              [IO.File]::WriteAllText($contractFile, $contractText,
+                [Text.UTF8Encoding]::new($false))
+              $contractJson = & python tools/sync_launcher_readme_download.py `
+                --print-renderer-contract-json --renderer-contract $contractFile
+              if ($LASTEXITCODE -ne 0) {
+                throw 'The public renderer build contract failed strict validation.'
+              }
+              $contract = $contractJson | ConvertFrom-Json
+            }
+            finally {
+              if (Test-Path -LiteralPath $contractFile -PathType Leaf) {
+                Remove-Item -LiteralPath $contractFile -Force
+              }
+            }
+            if ([long]$contract.minimumLauncherReleaseSequence -gt $sequence -or
+                [string]$contract.productId -ne $sourceProductId -or
+                [string]$contract.contractId -ne $contractId -or
+                [string]$contract.d3d12AgilitySdkVersion -ne $agilityVersion -or
+                [string]$contract.directXHeadersVersion -ne $headersVersion -or
+                [string]$contract.dxcVersion -ne $dxcVersion -or
+                [string]$contract.dxcDate -ne $dxcDate) {
+              throw ('The unsigned launcher release is incompatible with the ' +
+                'public renderer build contract or pinned dependencies.')
+            }
+          }
+
           $executableAssets = @($release.assets |
             Where-Object { [string]$_.name -eq $artifactName })
           $checksumAssets = @($release.assets |
@@ -290,18 +401,27 @@ jobs:
             throw 'The launcher release must contain only one executable and one checksum.'
           }
           $asset = $executableAssets[0]
+          $checksumAsset = $checksumAssets[0]
           $expectedChecksumUrl = "$expectedUrl.sha256"
           if ([string]$asset.state -ne 'uploaded' -or
               [string]$asset.browser_download_url -ne $expectedUrl -or
-              [long]$asset.size -ne [long]$feed.artifact.size -or
-              [string]$asset.digest -ne "sha256:$($feed.artifact.sha256)") {
-            throw 'The published launcher asset does not match the canonical feed.'
+              [long]$asset.size -lt 1 -or [long]$asset.size -gt 268435456 -or
+              [string]$asset.digest -notmatch '^sha256:[0-9a-f]{64}$') {
+            throw 'The published launcher executable asset is not canonical.'
           }
-          if ([string]$checksumAssets[0].state -ne 'uploaded' -or
-              [string]$checksumAssets[0].browser_download_url -ne
-                $expectedChecksumUrl) {
+          if ([string]$checksumAsset.state -ne 'uploaded' -or
+              [string]$checksumAsset.browser_download_url -ne $expectedChecksumUrl -or
+              [long]$checksumAsset.size -ne 99 -or
+              [string]$checksumAsset.digest -notmatch '^sha256:[0-9a-f]{64}$') {
             throw 'The published launcher checksum asset is not canonical.'
           }
+          if ($isSigned -and
+              ([long]$asset.size -ne [long]$feed.artifact.size -or
+               [string]$asset.digest -ne "sha256:$($feed.artifact.sha256)")) {
+            throw 'The published launcher asset does not match the canonical feed.'
+          }
+          $expectedSize = [long]$asset.size
+          $expectedHash = ([string]$asset.digest).Substring(7)
 
           $temporaryToken = [Guid]::NewGuid().ToString('N')
           $download = Join-Path $env:RUNNER_TEMP `
@@ -310,7 +430,7 @@ jobs:
             "uvsr-launcher-readme-$temporaryToken.sha256"
           try {
             Invoke-WebRequest -Uri $expectedUrl -OutFile $download
-            Invoke-WebRequest -Uri $checksumAssets[0].browser_download_url `
+            Invoke-WebRequest -Uri $checksumAsset.browser_download_url `
               -OutFile $checksum
             & gh release verify-asset $tag $download `
               --repo $env:GITHUB_REPOSITORY
@@ -324,17 +444,20 @@ jobs:
             }
             $actualSize = (Get-Item -LiteralPath $download).Length
             $actualHash = (Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ($actualSize -ne [long]$feed.artifact.size -or
-                $actualHash -ne [string]$feed.artifact.sha256) {
-              throw 'The public launcher download bytes do not match the feed.'
+            if ($actualSize -ne $expectedSize -or $actualHash -ne $expectedHash) {
+              throw 'The public launcher download bytes do not match its release identity.'
             }
-            if ([IO.File]::ReadAllText($checksum).Trim() -ne
-                "$actualHash  $artifactName") {
+            $checksumBytes = [IO.File]::ReadAllBytes($checksum)
+            $expectedChecksumBytes = [Text.Encoding]::ASCII.GetBytes(
+              "$actualHash  $artifactName`n")
+            if ($checksumBytes.Length -ne 99 -or
+                [Convert]::ToHexString($checksumBytes) -cne
+                  [Convert]::ToHexString($expectedChecksumBytes)) {
               throw 'The published launcher checksum file is not canonical.'
             }
             $checksumHash = (Get-FileHash -LiteralPath $checksum `
               -Algorithm SHA256).Hash.ToLowerInvariant()
-            if ([string]$checksumAssets[0].digest -ne "sha256:$checksumHash") {
+            if ([string]$checksumAsset.digest -ne "sha256:$checksumHash") {
               throw 'The published checksum asset digest is not canonical.'
             }
 
@@ -361,28 +484,37 @@ jobs:
             }
 
             $signature = Get-AuthenticodeSignature -LiteralPath $download
-            if ([string]$signature.Status -ne 'Valid' -or
-                $null -eq $signature.SignerCertificate) {
-              throw 'The public launcher does not have a valid Authenticode signature.'
+            if ($isSigned) {
+              if ([string]$signature.Status -ne 'Valid' -or
+                  $null -eq $signature.SignerCertificate) {
+                throw 'The public launcher does not have a valid Authenticode signature.'
+              }
+              $certificate = $signature.SignerCertificate
+              $key = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($certificate)
+              if ($null -eq $key) {
+                $key = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPublicKey($certificate)
+              }
+              if ($null -eq $key) {
+                throw 'The launcher release uses an unsupported signing key.'
+              }
+              try {
+                $actualPin = [Convert]::ToHexString(
+                  [Security.Cryptography.SHA256]::HashData(
+                    $key.ExportSubjectPublicKeyInfo())).ToLowerInvariant()
+              }
+              finally {
+                $key.Dispose()
+              }
+              if ($actualPin -ne $sourcePin) {
+                throw 'The launcher release signer does not match its release-source pin.'
+              }
             }
-            $certificate = $signature.SignerCertificate
-            $key = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($certificate)
-            if ($null -eq $key) {
-              $key = [Security.Cryptography.X509Certificates.ECDsaCertificateExtensions]::GetECDsaPublicKey($certificate)
-            }
-            if ($null -eq $key) {
-              throw 'The launcher release uses an unsupported signing key.'
-            }
-            try {
-              $actualPin = [Convert]::ToHexString(
-                [Security.Cryptography.SHA256]::HashData(
-                  $key.ExportSubjectPublicKeyInfo())).ToLowerInvariant()
-            }
-            finally {
-              $key.Dispose()
-            }
-            if ($actualPin -ne $pinMatch.Groups['pin'].Value) {
-              throw 'The launcher release signer does not match its release-source pin.'
+            elseif ([string]$signature.Status -ne 'NotSigned' -or
+                [string]$signature.SignatureType -ne 'None' -or
+                $null -ne $signature.SignerCertificate -or
+                $null -ne $signature.TimeStamperCertificate) {
+              throw ('The unsigned manual bootstrap must have exact Authenticode ' +
+                'NotSigned status with no signer or timestamp certificate.')
             }
 
             $metadata = [Diagnostics.FileVersionInfo]::GetVersionInfo($download)
