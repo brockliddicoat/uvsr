@@ -7,18 +7,40 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$constantsRelativePath = 'installer/src/UVSR.Installer/ProductConstants.cs'
+$constantsRelativePath = 'launcher/src/UVSR.Installer/ProductConstants.cs'
+$constantsRelativePathCandidates = @(
+    'installer/src/UVSR.Installer/ProductConstants.cs',
+    $constantsRelativePath
+)
 $lockPath = Join-Path $PSScriptRoot 'launcher-input-lock-v1.json'
 $binaryInputs = @(
     '.gitattributes',
+    'assets/fonts/noto-sans/NotoSans-Regular.ttf',
+    'assets/fonts/noto-sans/NotoSans-Bold.ttf',
+    'assets/fonts/noto-sans/OFL.txt',
+    'launcher/src/UVSR.Installer',
+    'launcher/build.ps1',
+    'launcher/generate-renderer-source-bridge.ps1',
+    'launcher/global.json',
+    'launcher/tests/launcher-feed-alias-tests.ps1',
+    'launcher/tests/renderer-source-bridge-verifier-tests.ps1',
+    'launcher/verify-launcher-feed-alias.ps1',
+    'launcher/verify-launcher-identity.ps1',
+    'cmake/uvsr-launcher-build-contract-v1.json',
+    'LICENSE.md'
+)
+$legacyBinaryInputs = @(
     'installer/src/UVSR.Installer',
     'installer/build.ps1',
     'installer/generate-renderer-source-bridge.ps1',
     'installer/global.json',
-    'installer/verify-launcher-identity.ps1',
-    'cmake/uvsr-launcher-build-contract-v1.json',
-    'LICENSE.md'
+    'installer/tests/renderer-source-bridge-verifier-tests.ps1',
+    'installer/verify-launcher-identity.ps1'
 )
+$comparisonInputs = @($binaryInputs + $legacyBinaryInputs |
+    Sort-Object -CaseSensitive -Unique)
+$minimumPreviousVersion = [version]'1.1.11'
+$minimumPreviousSequence = 12L
 
 function Read-LauncherIdentity {
     param([Parameter(Mandatory)] [string] $Text)
@@ -70,8 +92,28 @@ function Get-LauncherInputHash {
     }
 }
 
+function Get-BaseConstantsRelativePath {
+    param([Parameter(Mandatory)] [string] $Commit)
+
+    $matches = @()
+    foreach ($candidate in $constantsRelativePathCandidates) {
+        & git -C $repositoryRoot cat-file -e "${Commit}:$candidate" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $matches += $candidate
+        }
+    }
+    if ($matches.Count -ne 1) {
+        throw "The launcher identity comparison base must contain exactly one legacy or current ProductConstants.cs path; found $($matches.Count)."
+    }
+    return $matches[0]
+}
+
 $current = Read-LauncherIdentity ([IO.File]::ReadAllText(
     (Join-Path $repositoryRoot $constantsRelativePath)))
+if ($current.Version -le $minimumPreviousVersion -or
+    $current.Sequence -le $minimumPreviousSequence) {
+    throw "The launcher directory migration requires an identity newer than $minimumPreviousVersion sequence $minimumPreviousSequence."
+}
 if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
     throw 'The checked-in launcher input lock is missing.'
 }
@@ -102,7 +144,8 @@ if ($base -notmatch '^[0-9a-fA-F]{40}$') {
 if ($LASTEXITCODE -ne 0) {
     throw "The launcher identity comparison base '$base' is unavailable."
 }
-$changedInputs = @(& git -C $repositoryRoot diff --name-only $base -- $binaryInputs)
+$baseConstantsRelativePath = Get-BaseConstantsRelativePath -Commit $base
+$changedInputs = @(& git -C $repositoryRoot diff --name-only $base -- $comparisonInputs)
 if ($LASTEXITCODE -ne 0) {
     throw 'Git could not compare launcher binary inputs with the requested base.'
 }
@@ -118,7 +161,8 @@ if ($changedInputs.Count -eq 0) {
     return
 }
 
-$baseText = (& git -C $repositoryRoot show "${base}:$constantsRelativePath") -join "`n"
+$baseText = (& git -C $repositoryRoot show `
+    "${base}:$baseConstantsRelativePath") -join "`n"
 if ($LASTEXITCODE -ne 0) {
     throw 'Git could not read the launcher identity at the comparison base.'
 }

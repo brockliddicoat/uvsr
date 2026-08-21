@@ -141,6 +141,43 @@ function Read-CSharpLongConstant {
         [Globalization.CultureInfo]::InvariantCulture)
 }
 
+function Assert-RendererBridgeStagedEntries {
+    param([Parameter(Mandatory)] [string] $Output)
+
+    $actual = [Collections.Generic.Dictionary[string, string]]::new(
+        [StringComparer]::Ordinal)
+    foreach ($line in ($Output -split '\r?\n')) {
+        if ([string]::IsNullOrEmpty($line)) {
+            continue
+        }
+        $tab = $line.IndexOf("`t")
+        $identity = if ($tab -gt 0) {
+            $line.Substring(0, $tab).Split(
+                [char[]]@(' '), [StringSplitOptions]::RemoveEmptyEntries)
+        }
+        else {
+            @()
+        }
+        $path = if ($tab -gt 0) { $line.Substring($tab + 1) } else { '' }
+        if ($identity.Count -ne 3 -or $identity[0] -cne '100644' -or
+            $identity[1] -cnotmatch '^[0-9a-f]{40}$' -or
+            $identity[2] -cne '0' -or
+            -not $actual.TryAdd($path, $identity[1])) {
+            throw "Renderer bridge staged an invalid Git entry '$line'."
+        }
+    }
+    if ($actual.Count -ne $expectedBlobs.Count) {
+        throw "Renderer bridge staged $($actual.Count) entries; expected $($expectedBlobs.Count)."
+    }
+    foreach ($entry in $expectedBlobs.GetEnumerator()) {
+        if (-not $actual.ContainsKey([string]$entry.Key) -or
+            $actual[[string]$entry.Key] -cne [string]$entry.Value) {
+            throw "Renderer bridge staged blob '$($entry.Key)' as " +
+                  "'$($actual[[string]$entry.Key])'; expected '$($entry.Value)'."
+        }
+    }
+}
+
 function New-RendererBridgeTemporaryRoot {
     $path = Join-Path ([IO.Path]::GetTempPath()) `
         "uvsr-renderer-bridge-$([Guid]::NewGuid().ToString('N'))"
@@ -341,6 +378,21 @@ try {
         }
     }
 
+    if (-not [IO.File]::Exists($bridgeOutput)) {
+        throw "Embedded renderer bridge is missing at '$bridgeOutput'."
+    }
+    $patchBytes = [IO.File]::ReadAllBytes($bridgeOutput)
+    $patchHash = [Convert]::ToHexString(
+        [Security.Cryptography.SHA256]::HashData($patchBytes)).ToLowerInvariant()
+    if ($patchBytes.LongLength -ne $expectedSize -or
+        $patchHash -cne $expectedSha256) {
+        throw "Embedded renderer bridge was $($patchBytes.LongLength) bytes " +
+              "SHA-256 $patchHash; expected $expectedSize bytes SHA-256 " +
+              "$expectedSha256."
+    }
+    $temporaryPatch = Join-Path $temporaryRoot 'bridge.patch'
+    [IO.File]::WriteAllBytes($temporaryPatch, $patchBytes)
+
     $objectsText = (Invoke-GitText -Arguments @('rev-parse', '--git-path', 'objects') `
         -IndexPath $temporaryIndex).Trim()
     $repositoryObjects = if ([IO.Path]::IsPathRooted($objectsText)) {
@@ -368,19 +420,26 @@ try {
 
     $null = Invoke-GitText -Arguments @('read-tree', $publicBaseCommit) `
         @gitStorage
-    $null = Invoke-GitText -Arguments (@('add', '--') + $bridgePaths) `
+    $null = Invoke-GitText -Arguments @('apply', '--check', '--cached',
+        '--binary', '--whitespace=nowarn', '--', $temporaryPatch) `
         @gitStorage
+    $null = Invoke-GitText -Arguments @('apply', '--cached', '--binary',
+        '--whitespace=nowarn', '--', $temporaryPatch) @gitStorage
 
-    $stagedPaths = (Invoke-GitText -Arguments `
-        (@('diff', '--cached', '--name-only', '--no-renames', $publicBaseCommit, '--') +
-         $bridgePaths) @gitStorage).Split("`n",
-            [StringSplitOptions]::RemoveEmptyEntries)
+    $stagedPaths = @((Invoke-GitText -Arguments @('diff', '--cached',
+        '--name-only', '--no-renames', '--no-ext-diff', $publicBaseCommit,
+        '--') @gitStorage) -split '\r?\n' |
+        Where-Object { -not [string]::IsNullOrEmpty($_) })
     $expectedStagedPaths = [Collections.Generic.HashSet[string]]::new(
         [string[]]$bridgePaths, [StringComparer]::Ordinal)
     if ($stagedPaths.Count -ne $bridgePaths.Count -or
-        -not $expectedStagedPaths.SetEquals($stagedPaths)) {
+        -not $expectedStagedPaths.SetEquals([string[]]$stagedPaths)) {
         throw "Renderer bridge staged an unexpected path set: $($stagedPaths -join ', ')."
     }
+
+    $stagedEntries = Invoke-GitText -Arguments `
+        (@('ls-files', '--stage', '--') + $bridgePaths) @gitStorage
+    Assert-RendererBridgeStagedEntries -Output $stagedEntries
 
     $tree = (Invoke-GitText -Arguments @('write-tree') `
         @gitStorage).Trim()
@@ -403,39 +462,8 @@ try {
         throw "Renderer bridge synthetic commit was $commit; expected $expectedCommit."
     }
 
-    $patchText = Invoke-GitText -Arguments `
-        (@('diff', '--cached', '--binary', '--full-index', '--no-renames',
-           '--no-ext-diff', '--no-textconv', '--no-color', '--src-prefix=a/',
-           '--dst-prefix=b/', $publicBaseCommit, '--') +
-         $bridgePaths) `
-        @gitStorage
-    $patchBytes = [Text.UTF8Encoding]::new($false).GetBytes($patchText)
-    $patchHash = [Convert]::ToHexString(
-        [Security.Cryptography.SHA256]::HashData($patchBytes)).ToLowerInvariant()
-    if ($patchBytes.LongLength -ne $expectedSize -or
-        $patchHash -ne $expectedSha256) {
-        throw "Renderer bridge patch was $($patchBytes.LongLength) bytes SHA-256 " +
-              "$patchHash; expected $expectedSize bytes SHA-256 $expectedSha256."
-    }
-
-    if ($Check) {
-        if (-not [IO.File]::Exists($bridgeOutput)) {
-            throw "Embedded renderer bridge is missing at '$bridgeOutput'."
-        }
-        $existing = [IO.File]::ReadAllBytes($bridgeOutput)
-        if (-not [Security.Cryptography.CryptographicOperations]::FixedTimeEquals(
-                $patchBytes, $existing)) {
-            throw "Embedded renderer bridge is stale. Run installer/generate-renderer-source-bridge.ps1."
-        }
-        Write-Output "Renderer bridge is current: $expectedSize bytes, SHA-256 $expectedSha256, tree $expectedTree, commit $expectedCommit."
-    }
-    else {
-        [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($bridgeOutput)) |
-            Out-Null
-        [IO.File]::WriteAllBytes($bridgeOutput, $patchBytes)
-        Write-Output "Generated $bridgeOutput"
-        Write-Output "Renderer bridge: $expectedSize bytes, SHA-256 $expectedSha256, tree $expectedTree."
-    }
+    $status = if ($Check) { 'current' } else { 'frozen and verified' }
+    Write-Output "Renderer bridge is ${status}: $expectedSize bytes, SHA-256 $expectedSha256, tree $expectedTree, commit $expectedCommit."
 }
 catch {
     $generationError = $_

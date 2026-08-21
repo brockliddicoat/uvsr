@@ -4,6 +4,60 @@ namespace UvsrInstaller;
 
 internal sealed class PayloadPackager
 {
+    private const string NotoSansLicenseFile =
+        "bin/licenses/Noto-Sans-OFL-1.1.txt";
+    private const string TransitionalGeistLicenseFile =
+        "bin/licenses/Geist-OFL-1.1.txt";
+    private const string ProggyCleanLicenseFile =
+        "bin/licenses/ProggyClean-MIT.txt";
+    private const long ProggyCleanLicenseSize = 1082;
+    private const string ProggyCleanLicenseSha256 =
+        "8b802d79f256d29b45ad253323d212fa14ca952a20dcd227cfbcdb3d140bfe7c";
+    private static readonly string[] LegacyUiFontFiles =
+    {
+        "media/fonts/System/CodexUI.ttf",
+        "media/fonts/System/CodexUI-Semibold.ttf",
+        "media/fonts/System/CodexUI-Bold.ttf"
+    };
+    private static readonly string[] NotoSansUiFontFiles =
+    {
+        "media/fonts/NotoSans/NotoSans-Regular.ttf",
+        "media/fonts/NotoSans/NotoSans-SemiBold.ttf",
+        "media/fonts/NotoSans/NotoSans-Bold.ttf"
+    };
+    private static readonly IReadOnlyDictionary<string, string>
+        TransitionalUiFontAliases =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["media/fonts/System/CodexUI.ttf"] =
+                    "media/fonts/NotoSans/NotoSans-Regular.ttf",
+                ["media/fonts/System/CodexUI-Semibold.ttf"] =
+                    "media/fonts/NotoSans/NotoSans-SemiBold.ttf",
+                ["media/fonts/System/CodexUI-Bold.ttf"] =
+                    "media/fonts/NotoSans/NotoSans-Bold.ttf"
+            };
+    private static readonly IReadOnlyDictionary<string, (long Size, string Sha256)>
+        NotoSansPackageFiles =
+            new Dictionary<string, (long Size, string Sha256)>(
+                StringComparer.OrdinalIgnoreCase)
+            {
+                ["media/fonts/NotoSans/NotoSans-Regular.ttf"] =
+                    (621572, "478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823"),
+                ["media/fonts/NotoSans/NotoSans-SemiBold.ttf"] =
+                    (625052, "a4e91fd530ac2b4ef5367240144ff37d7d65d66cf76f2e9a2187b93c676f92d0"),
+                ["media/fonts/NotoSans/NotoSans-Bold.ttf"] =
+                    (631484, "1df075a380fc7cb898acf64c1f7b3b4dd780de3caa860178bf929de35817a913"),
+                [NotoSansLicenseFile] =
+                    (4396, "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a")
+            };
+
+    private enum UiFontContract
+    {
+        Legacy,
+        NotoSans,
+        DualTransition
+    }
+
     private readonly InstallerPaths _paths;
 
     internal PayloadPackager(InstallerPaths paths) => _paths = paths;
@@ -16,6 +70,8 @@ internal sealed class PayloadPackager
         InstallLog log)
     {
         ValidateBuildOutput(_paths.SourceDirectory, _paths.BuildDirectory);
+        ValidateBuildOutputCanBeStaged(_paths.BuildDirectory,
+            ProductConstants.LauncherReleaseSequence);
         string sourceBin = Path.Combine(_paths.BuildDirectory, "bin");
         string sourceMedia = Path.Combine(_paths.BuildDirectory, "media");
         string transactionRoot = Path.Combine(_paths.StagingDirectory, transactionId.ToString("N"));
@@ -33,6 +89,7 @@ internal sealed class PayloadPackager
         CopyDirectory(sourceBin, Path.Combine(packageRoot, "bin"), "licenses");
         CopyFile(sourceBin, Path.Combine(packageRoot, "bin"), "third-party-notices.md");
         SafePaths.CopyDirectory(sourceMedia, Path.Combine(packageRoot, "media"));
+        NormalizeStagedUiTransition(packageRoot);
 
         string executable = Path.Combine(packageRoot, "bin", "uvsr.exe");
         string hash = ComputeSha256(executable);
@@ -83,10 +140,7 @@ internal sealed class PayloadPackager
             "bin/D3D12/D3D12Core.dll",
             "bin/D3D12/D3D12SDKLayers.dll",
             "bin/D3D12/uvsr-runtime-contract.txt",
-            "bin/third-party-notices.md",
-            "media/fonts/System/CodexUI.ttf",
-            "media/fonts/System/CodexUI-Semibold.ttf",
-            "media/fonts/System/CodexUI-Bold.ttf"
+            "bin/third-party-notices.md"
         };
         Dictionary<string, PackageFile> recorded = new(StringComparer.OrdinalIgnoreCase);
         foreach (PackageFile? file in manifest.Files)
@@ -100,6 +154,15 @@ internal sealed class PayloadPackager
                 !recorded.TryAdd(normalized, file))
                 throw new InstallerException("The staged UVSR package file inventory is invalid.");
         }
+        UiFontContract uiFontContract = ClassifyUiFontContract(recorded.Keys);
+        ValidateUiLicenseContract(recorded.Keys, uiFontContract,
+            "staged UVSR runtime");
+        ValidateProggyCleanPackageNotice(recorded,
+            required: false, "staged UVSR runtime");
+        if (uiFontContract != UiFontContract.Legacy)
+            ValidateNotoSansPackageFiles(recorded);
+        if (uiFontContract == UiFontContract.DualTransition)
+            ValidateTransitionalAliasRecords(recorded);
         if (requiredFiles.Any(path => !recorded.ContainsKey(path)) ||
             !HasFilesUnder(recorded, "bin/shaders/") ||
             !HasFilesUnder(recorded, "bin/licenses/") ||
@@ -144,10 +207,7 @@ internal sealed class PayloadPackager
             Path.Combine(bin, "D3D12", "D3D12Core.dll"),
             Path.Combine(bin, "D3D12", "D3D12SDKLayers.dll"),
             Path.Combine(bin, "D3D12", "uvsr-runtime-contract.txt"),
-            Path.Combine(bin, "third-party-notices.md"),
-            Path.Combine(media, "fonts", "System", "CodexUI.ttf"),
-            Path.Combine(media, "fonts", "System", "CodexUI-Semibold.ttf"),
-            Path.Combine(media, "fonts", "System", "CodexUI-Bold.ttf")
+            Path.Combine(bin, "third-party-notices.md")
         };
         string[] legalFiles =
         {
@@ -156,7 +216,7 @@ internal sealed class PayloadPackager
             "Apache-2.0.txt", "BSD-2-Clause.txt", "IOLITE-AgX-MIT.txt",
             "Google-Filament-FXAA-Attribution.md", "NVIDIA-Donut-MIT.txt",
             "Donut-Third-Party-Licenses.txt", "NVIDIA-NVRHI-MIT.txt",
-            "NVIDIA-ShaderMake-MIT.txt", "Dear-ImGui-MIT.txt", "Geist-OFL-1.1.txt",
+            "NVIDIA-ShaderMake-MIT.txt", "Dear-ImGui-MIT.txt",
             "Intel-PBR-Sponza.txt", "Amazon-Lumberyard-Bistro.txt",
             "San-Miguel-2.1.txt", "Blender-Classroom-CC0-1.0.txt",
             "Poly-Haven-Environments.md", "Microsoft-DirectX-Headers-MIT.txt",
@@ -169,6 +229,13 @@ internal sealed class PayloadPackager
         {
             throw new InstallerException("The completed build did not contain a runnable UVSR package.");
         }
+
+        UiFontContract uiFontContract = ValidateUiFontOutput(media);
+        ValidateBuildUiLicenseContract(bin, uiFontContract);
+        if (uiFontContract != UiFontContract.Legacy)
+            ValidateNotoSansBuildFiles(buildRoot);
+        if (uiFontContract == UiFontContract.DualTransition)
+            ValidateTransitionalBuildAliases(buildRoot);
 
         ValidateRelativeManifest(
             Path.Combine(buildRoot, "uvsr_runtime_shader_paths.manifest"),
@@ -186,6 +253,28 @@ internal sealed class PayloadPackager
             Path.Combine(sourceRoot, "assets", "scenes"),
             Path.Combine(media, "glTF-Sample-Assets", "Models"));
         ValidateD3D12RuntimeContract(buildRoot);
+    }
+
+    internal static void ValidateBuildOutputCanBeStaged(
+        string buildDirectory,
+        long launcherReleaseSequence)
+    {
+        if (launcherReleaseSequence < 1 ||
+            launcherReleaseSequence > ProductConstants.MaximumReleaseSequence)
+            throw new ArgumentOutOfRangeException(nameof(launcherReleaseSequence));
+        if (launcherReleaseSequence < 10)
+            return;
+        UiFontContract contract = ValidateUiFontOutput(
+            Path.Combine(Path.GetFullPath(buildDirectory), "media"));
+        if (contract == UiFontContract.Legacy)
+        {
+            throw new InstallerException(
+                "UVSR Launcher will not create a new renderer package from the " +
+                "legacy CodexUI font inventory. The checked-out UVSR source and " +
+                "this launcher are out of sync. Retry after matching public UVSR " +
+                "source with the bundled Noto Sans assets is published. Existing " +
+                "legacy installations remain available for recovery.");
+        }
     }
 
     internal static void ValidateD3D12RuntimeContract(string packageRoot)
@@ -321,6 +410,283 @@ internal sealed class PayloadPackager
         IReadOnlyDictionary<string, PackageFile> files,
         string prefix) => files.Keys.Any(path => path.StartsWith(prefix,
         StringComparison.OrdinalIgnoreCase));
+
+    internal static void NormalizeStagedUiTransition(string packageRoot)
+    {
+        string root = Path.GetFullPath(packageRoot);
+        SafePaths.RejectReparsePathChain(root,
+            "UVSR staged runtime package");
+        Dictionary<string, PackageFile> files = BuildStagedUiRecords(root);
+        UiFontContract contract = ClassifyUiFontContract(files.Keys);
+        ValidateUiLicenseContract(files.Keys, contract,
+            "staged UVSR runtime");
+        ValidateProggyCleanPackageNotice(files,
+            required: contract != UiFontContract.Legacy,
+            "staged UVSR runtime");
+        if (contract != UiFontContract.Legacy)
+            ValidateNotoSansPackageFiles(files);
+        if (contract != UiFontContract.DualTransition)
+            return;
+
+        ValidateTransitionalAliasRecords(files);
+        string fontsRoot = Path.Combine(root, "media", "fonts");
+        SafePaths.DeleteOwnedTree(
+            Path.Combine(fontsRoot, "System"),
+            fontsRoot);
+        string licensesRoot = Path.Combine(root, "bin", "licenses");
+        SafePaths.DeleteOwnedTree(
+            Path.Combine(licensesRoot, "Geist-OFL-1.1.txt"),
+            licensesRoot);
+
+        Dictionary<string, PackageFile> normalized = BuildStagedUiRecords(root);
+        if (ClassifyUiFontContract(normalized.Keys) != UiFontContract.NotoSans)
+            throw new InstallerException(
+                "The staged UVSR runtime font transition could not be normalized.");
+        ValidateUiLicenseContract(normalized.Keys, UiFontContract.NotoSans,
+            "normalized UVSR runtime");
+        ValidateProggyCleanPackageNotice(normalized,
+            required: true, "normalized UVSR runtime");
+        ValidateNotoSansPackageFiles(normalized);
+    }
+
+    private static UiFontContract ClassifyUiFontContract(
+        IEnumerable<string> files)
+    {
+        HashSet<string> actual = files
+            .Where(path => path.StartsWith("media/fonts/",
+                StringComparison.OrdinalIgnoreCase))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> legacy = LegacyUiFontFiles
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (actual.SetEquals(legacy))
+            return UiFontContract.Legacy;
+        HashSet<string> notoSans = NotoSansUiFontFiles
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (actual.SetEquals(notoSans))
+            return UiFontContract.NotoSans;
+        legacy.UnionWith(notoSans);
+        if (actual.SetEquals(legacy))
+            return UiFontContract.DualTransition;
+        throw new InstallerException(
+            "The UVSR runtime has an incomplete, mixed, or unknown UI font contract.");
+    }
+
+    private static UiFontContract ValidateUiFontOutput(string mediaRoot)
+    {
+        string fontsRoot = Path.Combine(mediaRoot, "fonts");
+        if (!Directory.Exists(fontsRoot))
+        {
+            throw new InstallerException(
+                "The completed build is missing its UI font directory.");
+        }
+        IReadOnlyList<string> files = BuildFileManifest(fontsRoot)
+            .Select(file => "media/fonts/" + file.RelativePath)
+            .ToArray();
+        return ClassifyUiFontContract(files);
+    }
+
+    private static void ValidateUiLicenseContract(
+        IEnumerable<string> files,
+        UiFontContract contract,
+        string description)
+    {
+        HashSet<string> inventory = files.ToHashSet(
+            StringComparer.OrdinalIgnoreCase);
+        bool hasNotoSans = inventory.Contains(NotoSansLicenseFile);
+        bool hasGeist = inventory.Contains(TransitionalGeistLicenseFile);
+        bool expectsNotoSans = contract != UiFontContract.Legacy;
+        bool expectsGeist = contract != UiFontContract.NotoSans;
+        if (hasNotoSans != expectsNotoSans || hasGeist != expectsGeist)
+        {
+            throw new InstallerException(
+                $"The {description} has an incomplete or mixed UI font license contract.");
+        }
+    }
+
+    private static void ValidateBuildUiLicenseContract(
+        string binRoot,
+        UiFontContract contract)
+    {
+        string licensesRoot = Path.Combine(binRoot, "licenses");
+        List<string> present = new();
+        foreach (string relative in new[]
+                 {
+                     NotoSansLicenseFile,
+                     TransitionalGeistLicenseFile
+                 })
+        {
+            string name = relative["bin/licenses/".Length..];
+            if (File.Exists(Path.Combine(licensesRoot, name)))
+                present.Add(relative);
+        }
+        ValidateUiLicenseContract(present, contract, "completed build");
+        ValidateProggyCleanBuildNotice(
+            licensesRoot,
+            required: contract != UiFontContract.Legacy);
+    }
+
+    private static Dictionary<string, PackageFile> BuildStagedUiRecords(
+        string packageRoot)
+    {
+        string fontsRoot = Path.Combine(packageRoot, "media", "fonts");
+        if (!Directory.Exists(fontsRoot))
+            throw new InstallerException(
+                "The staged UVSR runtime is missing its UI font directory.");
+        Dictionary<string, PackageFile> files = BuildFileManifest(fontsRoot)
+            .Select(file => new PackageFile(
+                "media/fonts/" + file.RelativePath,
+                file.Size,
+                file.Sha256))
+            .ToDictionary(file => file.RelativePath,
+                StringComparer.OrdinalIgnoreCase);
+        foreach (string relative in new[]
+                 {
+                     NotoSansLicenseFile,
+                     TransitionalGeistLicenseFile,
+                     ProggyCleanLicenseFile
+                 })
+        {
+            string path = Path.Combine(packageRoot,
+                relative.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(path))
+                continue;
+            SafePaths.RejectReparsePathChain(path,
+                "UVSR staged UI font license");
+            FileInfo info = new(path);
+            files.Add(relative, new PackageFile(
+                relative,
+                info.Length,
+                ComputeSha256(path)));
+        }
+        return files;
+    }
+
+    private static void ValidateProggyCleanPackageNotice(
+        IReadOnlyDictionary<string, PackageFile> files,
+        bool required,
+        string description)
+    {
+        if (!files.TryGetValue(ProggyCleanLicenseFile,
+                out PackageFile? actual))
+        {
+            if (required)
+            {
+                throw new InstallerException(
+                    $"The {description} is missing its ProggyClean MIT notice.");
+            }
+            return;
+        }
+        if (actual.Size != ProggyCleanLicenseSize ||
+            !string.Equals(actual.Sha256, ProggyCleanLicenseSha256,
+                StringComparison.Ordinal))
+        {
+            throw new InstallerException(
+                $"The {description} does not contain the exact ProggyClean MIT notice.");
+        }
+    }
+
+    private static void ValidateProggyCleanBuildNotice(
+        string licensesRoot,
+        bool required)
+    {
+        string path = Path.Combine(
+            licensesRoot,
+            ProggyCleanLicenseFile["bin/licenses/".Length..]);
+        FileInfo actual = new(path);
+        if (!actual.Exists)
+        {
+            if (required)
+            {
+                throw new InstallerException(
+                    "The completed build is missing its ProggyClean MIT notice.");
+            }
+            return;
+        }
+        SafePaths.RejectReparsePathChain(path,
+            "UVSR ProggyClean MIT notice");
+        if (actual.Length != ProggyCleanLicenseSize ||
+            !string.Equals(ComputeSha256(path), ProggyCleanLicenseSha256,
+                StringComparison.Ordinal))
+        {
+            throw new InstallerException(
+                "The completed build does not contain the exact ProggyClean MIT notice.");
+        }
+    }
+
+    private static void ValidateNotoSansPackageFiles(
+        IReadOnlyDictionary<string, PackageFile> files)
+    {
+        foreach (KeyValuePair<string, (long Size, string Sha256)> expected in
+                 NotoSansPackageFiles)
+        {
+            if (!files.TryGetValue(expected.Key, out PackageFile? actual) ||
+                actual.Size != expected.Value.Size ||
+                !string.Equals(actual.Sha256, expected.Value.Sha256,
+                    StringComparison.Ordinal))
+            {
+                throw new InstallerException(
+                    "The staged UVSR runtime does not contain the exact Noto Sans v2.015 files.");
+            }
+        }
+    }
+
+    private static void ValidateNotoSansBuildFiles(string buildRoot)
+    {
+        foreach (KeyValuePair<string, (long Size, string Sha256)> expected in
+                 NotoSansPackageFiles)
+        {
+            string path = Path.Combine(buildRoot,
+                expected.Key.Replace('/', Path.DirectorySeparatorChar));
+            FileInfo actual = new(path);
+            if (!actual.Exists || actual.Length != expected.Value.Size ||
+                !string.Equals(ComputeSha256(path), expected.Value.Sha256,
+                    StringComparison.Ordinal))
+            {
+                throw new InstallerException(
+                    "The completed build does not contain the exact Noto Sans v2.015 files.");
+            }
+        }
+    }
+
+    private static void ValidateTransitionalAliasRecords(
+        IReadOnlyDictionary<string, PackageFile> files)
+    {
+        foreach (KeyValuePair<string, string> alias in
+                 TransitionalUiFontAliases)
+        {
+            if (!files.TryGetValue(alias.Key, out PackageFile? compatibility) ||
+                !files.TryGetValue(alias.Value, out PackageFile? canonical) ||
+                compatibility.Size != canonical.Size ||
+                !string.Equals(compatibility.Sha256, canonical.Sha256,
+                    StringComparison.Ordinal))
+            {
+                throw new InstallerException(
+                    "The UVSR runtime has an invalid transitional UI font alias.");
+            }
+        }
+    }
+
+    private static void ValidateTransitionalBuildAliases(string buildRoot)
+    {
+        foreach (KeyValuePair<string, string> alias in
+                 TransitionalUiFontAliases)
+        {
+            string compatibility = Path.Combine(buildRoot,
+                alias.Key.Replace('/', Path.DirectorySeparatorChar));
+            string canonical = Path.Combine(buildRoot,
+                alias.Value.Replace('/', Path.DirectorySeparatorChar));
+            FileInfo compatibilityInfo = new(compatibility);
+            FileInfo canonicalInfo = new(canonical);
+            if (!compatibilityInfo.Exists || !canonicalInfo.Exists ||
+                compatibilityInfo.Length != canonicalInfo.Length ||
+                !string.Equals(ComputeSha256(compatibility),
+                    ComputeSha256(canonical), StringComparison.Ordinal))
+            {
+                throw new InstallerException(
+                    "The completed build has an invalid transitional UI font alias.");
+            }
+        }
+    }
 
     private static void CopyDirectory(string sourceParent, string destinationParent, string name)
     {

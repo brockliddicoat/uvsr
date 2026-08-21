@@ -5,6 +5,9 @@
 /installer/artifacts/
 /installer/**/bin/
 /installer/**/obj/
+/launcher/artifacts/
+/launcher/**/bin/
+/launcher/**/obj/
 *.user
 *.suo
 *.vcxproj.user

@@ -913,6 +913,18 @@ add_test(
     COMMAND uvsr_ui_skin_tests
 )
 
+add_executable(uvsr_ui_font_family_tests
+    tests/ui_font_family_tests.cpp
+)
+target_include_directories(
+    uvsr_ui_font_family_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_ui_font_family_reference
+    COMMAND uvsr_ui_font_family_tests
+)
+
 add_executable(uvsr_ui_commands_tests
     tests/ui_commands_tests.cpp
 )
@@ -1371,40 +1383,71 @@ set_tests_properties(
         LABELS "assets;scenes"
         TIMEOUT 600)
 
-if (WIN32)
-    file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts/SegUIVar.ttf"
-        UVSR_UI_FONT_SOURCE)
-    if (NOT EXISTS "${UVSR_UI_FONT_SOURCE}")
-        file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts/segoeui.ttf"
-            UVSR_UI_FONT_SOURCE)
-    endif()
-    if (NOT EXISTS "${UVSR_UI_FONT_SOURCE}")
+set(UVSR_NOTO_SANS_SOURCE_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/noto-sans")
+set(UVSR_UI_REGULAR_FONT_SOURCE
+    "${UVSR_NOTO_SANS_SOURCE_ROOT}/NotoSans-Regular.ttf")
+set(UVSR_UI_SEMIBOLD_FONT_SOURCE
+    "${UVSR_NOTO_SANS_SOURCE_ROOT}/NotoSans-SemiBold.ttf")
+set(UVSR_UI_BOLD_FONT_SOURCE
+    "${UVSR_NOTO_SANS_SOURCE_ROOT}/NotoSans-Bold.ttf")
+set(UVSR_UI_FONT_LICENSE_SOURCE
+    "${UVSR_NOTO_SANS_SOURCE_ROOT}/OFL.txt")
+set(UVSR_PROGGY_CLEAN_LICENSE_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/proggy-clean/ProggyClean-MIT.txt")
+set(UVSR_UI_TRANSITION_LICENSE_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/geist/LICENSE.txt")
+
+function(uvsr_require_exact_ui_asset asset expected_size expected_sha256 label)
+    if (NOT EXISTS "${asset}")
         message(FATAL_ERROR
-            "Segoe UI system font was not found in the Windows font directory")
+            "${label} is missing from the checked-in UVSR UI assets")
     endif()
-    file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts/seguisb.ttf"
-        UVSR_UI_HEADER_FONT_SOURCE)
-    if (NOT EXISTS "${UVSR_UI_HEADER_FONT_SOURCE}")
-        file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts/seguibl.ttf"
-            UVSR_UI_HEADER_FONT_SOURCE)
-    endif()
-    if (NOT EXISTS "${UVSR_UI_HEADER_FONT_SOURCE}")
+    file(SIZE "${asset}" actual_size)
+    if (NOT actual_size EQUAL expected_size)
         message(FATAL_ERROR
-            "Segoe UI Semibold or Bold was not found in the Windows font directory")
+            "${label} has size ${actual_size}; expected ${expected_size}. "
+            "Restore the exact checked-in UI asset.")
     endif()
-    file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts/segoeuib.ttf"
-        UVSR_UI_BOLD_FONT_SOURCE)
-    if (NOT EXISTS "${UVSR_UI_BOLD_FONT_SOURCE}")
-        set(UVSR_UI_BOLD_FONT_SOURCE "${UVSR_UI_HEADER_FONT_SOURCE}")
+    file(SHA256 "${asset}" actual_sha256)
+    string(TOUPPER "${actual_sha256}" actual_sha256)
+    if (NOT actual_sha256 STREQUAL expected_sha256)
+        message(FATAL_ERROR
+            "${label} failed its SHA-256 check. "
+            "Restore the exact checked-in UI asset.")
     endif()
-else()
-    set(UVSR_UI_FONT_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/geist/Geist-Medium.ttf")
-    set(UVSR_UI_HEADER_FONT_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/geist/Geist-Medium.ttf")
-    set(UVSR_UI_BOLD_FONT_SOURCE
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/geist/Geist-Medium.ttf")
-endif()
+endfunction()
+
+uvsr_require_exact_ui_asset(
+    "${UVSR_UI_REGULAR_FONT_SOURCE}"
+    621572
+    "478C558EA716033CD60C03438F628DFA75694DCF6B5F6D505A2F05FD2B4F3823"
+    "Noto Sans Regular")
+uvsr_require_exact_ui_asset(
+    "${UVSR_UI_SEMIBOLD_FONT_SOURCE}"
+    625052
+    "A4E91FD530AC2B4EF5367240144FF37D7D65D66CF76F2E9A2187B93C676F92D0"
+    "Noto Sans SemiBold")
+uvsr_require_exact_ui_asset(
+    "${UVSR_UI_BOLD_FONT_SOURCE}"
+    631484
+    "1DF075A380FC7CB898ACF64C1F7B3B4DD780DE3CAA860178BF929DE35817A913"
+    "Noto Sans Bold")
+uvsr_require_exact_ui_asset(
+    "${UVSR_UI_FONT_LICENSE_SOURCE}"
+    4396
+    "CEE9892F9F0CC8FE882C9E9537EE6A89621D86EE7CEAF70B02E2B2B1C25C061A"
+    "Noto Sans OFL 1.1 license")
+uvsr_require_exact_ui_asset(
+    "${UVSR_PROGGY_CLEAN_LICENSE_SOURCE}"
+    1082
+    "8B802D79F256D29B45AD253323D212FA14CA952A20DCD227CFBCDB3D140BFE7C"
+    "ProggyClean MIT license notice")
+uvsr_require_exact_ui_asset(
+    "${UVSR_UI_TRANSITION_LICENSE_SOURCE}"
+    4476
+    "336949B89D706C480F5807F4CA1AC0484CAD93FFC2765818526F6035572970AC"
+    "transitional Geist OFL 1.1 compatibility notice")
 
 if (UVSR_BUILD_APPLICATION)
     add_custom_command(TARGET uvsr POST_BUILD
@@ -1422,15 +1465,33 @@ if (UVSR_BUILD_APPLICATION)
             "${CMAKE_BINARY_DIR}/media/fonts/Inter"
         COMMAND ${CMAKE_COMMAND} -E remove_directory
             "${CMAKE_BINARY_DIR}/media/fonts/Geist"
+        COMMAND ${CMAKE_COMMAND} -E remove_directory
+            "${CMAKE_BINARY_DIR}/media/fonts/System"
+        COMMAND ${CMAKE_COMMAND} -E remove_directory
+            "${CMAKE_BINARY_DIR}/media/fonts/NotoSans"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_BINARY_DIR}/media/fonts/NotoSans"
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "${CMAKE_BINARY_DIR}/media/fonts/System"
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${UVSR_UI_FONT_SOURCE}"
+            "${UVSR_UI_REGULAR_FONT_SOURCE}"
+            "${CMAKE_BINARY_DIR}/media/fonts/NotoSans/NotoSans-Regular.ttf"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${UVSR_UI_SEMIBOLD_FONT_SOURCE}"
+            "${CMAKE_BINARY_DIR}/media/fonts/NotoSans/NotoSans-SemiBold.ttf"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${UVSR_UI_BOLD_FONT_SOURCE}"
+            "${CMAKE_BINARY_DIR}/media/fonts/NotoSans/NotoSans-Bold.ttf"
+        # UVSR Launcher sequence 9 requires the historical paths while the
+        # public source transitions to Noto Sans. These are byte-for-byte Noto
+        # aliases; the renderer never loads the compatibility names.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${UVSR_UI_REGULAR_FONT_SOURCE}"
             "${CMAKE_BINARY_DIR}/media/fonts/System/CodexUI.ttf"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${UVSR_UI_HEADER_FONT_SOURCE}"
+            "${UVSR_UI_SEMIBOLD_FONT_SOURCE}"
             "${CMAKE_BINARY_DIR}/media/fonts/System/CodexUI-Semibold.ttf"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${UVSR_UI_BOLD_FONT_SOURCE}"
@@ -1469,7 +1530,15 @@ if (UVSR_BUILD_APPLICATION)
             "${CMAKE_CURRENT_SOURCE_DIR}/donut/thirdparty/imgui/LICENSE.txt"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Dear-ImGui-MIT.txt"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/geist/LICENSE.txt"
+            "${UVSR_UI_FONT_LICENSE_SOURCE}"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Noto-Sans-OFL-1.1.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${UVSR_PROGGY_CLEAN_LICENSE_SOURCE}"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/ProggyClean-MIT.txt"
+        # No Geist font is staged or loaded by the current renderer. Sequence 9
+        # requires this historical notice filename during the transition.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${UVSR_UI_TRANSITION_LICENSE_SOURCE}"
             "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/licenses/Geist-OFL-1.1.txt"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_CURRENT_SOURCE_DIR}/assets/scenes/intel_sponza/LICENSE.txt"

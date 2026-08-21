@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -34,6 +35,79 @@ namespace
         return std::string(
             std::istreambuf_iterator<char>(stream),
             std::istreambuf_iterator<char>());
+    }
+
+    std::vector<unsigned char> ReadBinaryFile(
+        const std::filesystem::path& path)
+    {
+        std::ifstream stream(path, std::ios::binary);
+        if (!stream)
+            return {};
+        return std::vector<unsigned char>(
+            std::istreambuf_iterator<char>(stream),
+            std::istreambuf_iterator<char>());
+    }
+
+    std::uint16_t ReadBigEndian16(
+        const std::vector<unsigned char>& bytes,
+        size_t offset)
+    {
+        return std::uint16_t(
+            (std::uint16_t(bytes[offset]) << 8u) |
+            std::uint16_t(bytes[offset + 1u]));
+    }
+
+    std::uint32_t ReadBigEndian32(
+        const std::vector<unsigned char>& bytes,
+        size_t offset)
+    {
+        return (std::uint32_t(bytes[offset]) << 24u) |
+            (std::uint32_t(bytes[offset + 1u]) << 16u) |
+            (std::uint32_t(bytes[offset + 2u]) << 8u) |
+            std::uint32_t(bytes[offset + 3u]);
+    }
+
+    std::uint16_t ReadOpenTypeWeight(
+        const std::filesystem::path& path,
+        std::string_view label)
+    {
+        const std::vector<unsigned char> bytes = ReadBinaryFile(path);
+        if (bytes.size() < 12u)
+        {
+            Fail(std::string(label) + " is not a readable OpenType font.");
+            return 0u;
+        }
+        const std::uint16_t tableCount = ReadBigEndian16(bytes, 4u);
+        for (std::uint16_t tableIndex = 0u;
+             tableIndex < tableCount;
+             ++tableIndex)
+        {
+            const size_t recordOffset = 12u + size_t(tableIndex) * 16u;
+            if (recordOffset + 16u > bytes.size())
+            {
+                Fail(std::string(label) + " has a truncated table directory.");
+                return 0u;
+            }
+            if (bytes[recordOffset] != 'O' ||
+                bytes[recordOffset + 1u] != 'S' ||
+                bytes[recordOffset + 2u] != '/' ||
+                bytes[recordOffset + 3u] != '2')
+            {
+                continue;
+            }
+            const std::uint32_t tableOffset =
+                ReadBigEndian32(bytes, recordOffset + 8u);
+            const std::uint32_t tableLength =
+                ReadBigEndian32(bytes, recordOffset + 12u);
+            if (tableLength < 6u || tableOffset > bytes.size() - 6u)
+            {
+                Fail(std::string(label) + " has an invalid OS/2 table.");
+                return 0u;
+            }
+            return ReadBigEndian16(bytes, size_t(tableOffset) + 4u);
+        }
+        Fail(std::string(label) + " is missing its OS/2 weight metadata.");
+        return 0u;
     }
 
     size_t CountOccurrences(
@@ -152,6 +226,88 @@ namespace
             }
             cursor = position + value.size();
         }
+    }
+
+    void ValidateNotoSansAssets(
+        const std::filesystem::path& root,
+        std::string_view cmakeSource)
+    {
+        struct FontAsset
+        {
+            const char* fileName;
+            size_t size;
+            std::uint16_t weight;
+            const char* sha256;
+        };
+        const FontAsset fonts[] =
+        {
+            {
+                "NotoSans-Regular.ttf",
+                621572u,
+                400u,
+                "478C558EA716033CD60C03438F628DFA75694DCF6B5F6D505A2F05FD2B4F3823"
+            },
+            {
+                "NotoSans-SemiBold.ttf",
+                625052u,
+                600u,
+                "A4E91FD530AC2B4EF5367240144FF37D7D65D66CF76F2E9A2187B93C676F92D0"
+            },
+            {
+                "NotoSans-Bold.ttf",
+                631484u,
+                700u,
+                "1DF075A380FC7CB898ACF64C1F7B3B4DD780DE3CAA860178BF929DE35817A913"
+            }
+        };
+        const std::filesystem::path fontRoot =
+            root / "assets" / "fonts" / "noto-sans";
+        std::set<std::uint16_t> weights;
+        for (const FontAsset& font : fonts)
+        {
+            const std::filesystem::path path = fontRoot / font.fileName;
+            const std::vector<unsigned char> bytes = ReadBinaryFile(path);
+            Require(
+                bytes.size() == font.size,
+                std::string(font.fileName) +
+                    " must have its exact Noto Sans v2.015 size.");
+            const std::uint16_t weight =
+                ReadOpenTypeWeight(path, font.fileName);
+            Require(
+                weight == font.weight,
+                std::string(font.fileName) +
+                    " must preserve its exact OS/2 weight.");
+            weights.insert(weight);
+            RequireContains(
+                cmakeSource,
+                font.sha256,
+                std::string(font.fileName) + " configure-time SHA-256 contract");
+        }
+        Require(
+            weights == std::set<std::uint16_t>({ 400u, 600u, 700u }),
+            "Noto Sans Regular, SemiBold, and Bold must remain distinct weights.");
+
+        const std::vector<unsigned char> license =
+            ReadBinaryFile(fontRoot / "OFL.txt");
+        Require(
+            license.size() == 4396u,
+            "the Noto Sans OFL must have its exact upstream size.");
+        RequireContains(
+            cmakeSource,
+            "CEE9892F9F0CC8FE882C9E9537EE6A89621D86EE7CEAF70B02E2B2B1C25C061A",
+            "Noto Sans OFL configure-time SHA-256 contract");
+
+        const std::vector<unsigned char> proggyCleanLicense =
+            ReadBinaryFile(
+                root / "assets" / "fonts" / "proggy-clean" /
+                "ProggyClean-MIT.txt");
+        Require(
+            proggyCleanLicense.size() == 1082u,
+            "the ProggyClean MIT notice must have its exact source size.");
+        RequireContains(
+            cmakeSource,
+            "8B802D79F256D29B45AD253323D212FA14CA952A20DCD227CFBCDB3D140BFE7C",
+            "ProggyClean MIT notice configure-time SHA-256 contract");
     }
 
     std::vector<std::string> ParseQuotedStrings(std::string_view source)
@@ -646,6 +802,10 @@ namespace
                 "for (const UiSkin candidate : UiSkinValues)",
                 "DrawDeferredDropdownOption(",
                 "UiSkinLabel(candidate).data(),",
+                "\"Font Family\"",
+                "\"Font Family##UiFontFamily\"",
+                "for (const UiFontFamily candidate : UiFontFamilyValues)",
+                "UiFontFamilyLabel(candidate).data(),",
                 "FindUiSkinPalette(m_ui.Accents, m_ui.Skin)",
                 "\"Primary Accent\"",
                 "editablePalette.primaryAccent",
@@ -659,7 +819,8 @@ namespace
                 "editablePalette.primaryBackground"
             },
             "Interface starts with the inverse-bound animation checkbox, then "
-            "owns the skin and all five directly visible color roles");
+            "owns the skin, font family, and all five directly visible color "
+            "roles");
         RequireAbsent(
             interfaceDrawer,
             "Advanced Accents",
@@ -673,6 +834,11 @@ namespace
             interfaceDrawer,
             "\"Enable Animations\"",
             "Interface animation control has one stable inverse-bound label");
+        RequireContains(
+            viewer,
+            "UiFontFamily                        FontFamily = "
+            "DefaultUiFontFamily;",
+            "Interface font family defaults to Noto Sans on each launch");
         RequireContains(
             viewer,
             "bool                                AnimationsEnabled = true;",
@@ -2881,6 +3047,7 @@ namespace
                 "m_app->ResetAllRendererSettings();",
                 "ApplyAdaptiveSyncMode(GetDefaultAdaptiveSyncMode());",
                 "m_ui.Skin = DefaultUiSkin;",
+                "m_ui.FontFamily = DefaultUiFontFamily;",
                 "m_ui.AnimationsEnabled = true;",
                 "m_ui.OverrideVisualMaxes = false;",
                 "m_ui.Accents = UiAccentSettings{};",
@@ -2970,7 +3137,7 @@ namespace
             uiDispatcher,
             "if (path == \"ui.skin\")",
             "if (path == \"ui.visible\")",
-            "UI skin command dispatcher");
+            "UI skin and font-family command dispatcher");
         RequireOrdered(
             uiSkinDispatcher,
             {
@@ -2979,6 +3146,16 @@ namespace
                 "{ \"og\", UiSkin::Og }",
                 "{ \"ogg\", UiSkin::Og }",
                 "DefaultUiSkin",
+                "if (path == \"ui.font-family\")",
+                "std::pair<std::string_view, UiFontFamily>, 3",
+                "{ \"codex\", UiFontFamily::Codex }",
+                "{ \"noto-sans\", UiFontFamily::NotoSans }",
+                "{ \"proggy-clean\", UiFontFamily::ProggyClean }",
+                "UiFontFamily candidate = m_ui.FontFamily;",
+                "DefaultUiFontFamily",
+                "!IsUiFontFamilyAvailable(candidate)",
+                "GetUiFontFamilyUnavailableReason(candidate)",
+                "m_ui.FontFamily = candidate;",
                 "if (path == \"ui.animations\")",
                 "ApplyCommandBool(",
                 "m_ui.AnimationsEnabled,",
@@ -2988,14 +3165,19 @@ namespace
                 "m_ui.OverrideVisualMaxes,",
                 "false,"
             },
-            "canonical skin commands followed by the default-enabled "
-            "animation preference and default-disabled visual-maximum "
-            "override");
+            "canonical skin and fail-closed font-family commands followed by "
+            "the default-enabled animation preference and default-disabled "
+            "visual-maximum override");
         RequireContains(
             catalogSource,
             "Value(\"ui.skin\", Kind::Enum, Section::Ui, "
             "\"amp|ogg\")",
             "visible Amp/Ogg command domain");
+        RequireContains(
+            catalogSource,
+            "Value(\"ui.font-family\", Kind::Enum, Section::Ui, "
+            "\"codex|noto-sans|proggy-clean\")",
+            "represented font-family command domain");
         RequireContains(
             catalogSource,
             "Value(\"ui.animations\", Kind::Boolean, Section::Ui, \"on|off\")",
@@ -3151,8 +3333,8 @@ namespace
             "inline constexpr std::array<std::string_view, 5>",
             "Settings command catalog");
         const std::vector<CatalogEntry> entries = ParseCatalog(catalog);
-        Require(entries.size() == 221u,
-            "Settings command catalog must contain exactly 221 entries.");
+        Require(entries.size() == 222u,
+            "Settings command catalog must contain exactly 222 entries.");
 
         std::set<std::string> names;
         std::set<std::string> actions;
@@ -3166,8 +3348,8 @@ namespace
             else
                 ++valueCount;
         }
-        Require(valueCount == 217u,
-            "Settings command catalog must contain exactly 217 values.");
+        Require(valueCount == 218u,
+            "Settings command catalog must contain exactly 218 values.");
         Require(actions == std::set<std::string>{
                 "open-scene-folder",
                 "reset-settings",
@@ -3997,6 +4179,7 @@ namespace
 
     void ValidateUiSafety(
         std::string_view viewer,
+        std::string_view fontFamilySource,
         std::string_view settingsSnapshotSchema,
         std::string_view uiAnimation,
         std::string_view donutAppOverride,
@@ -4999,27 +5182,337 @@ namespace
             "ultra-bright authored root keeps a one-pixel fully rounded "
             "title/body support overlap");
 
-        for (const std::string_view boldFontContract : {
+        for (const std::string_view stagedFontContract : {
+                std::string_view("UVSR_NOTO_SANS_SOURCE_ROOT"),
+                std::string_view("UVSR_UI_REGULAR_FONT_SOURCE"),
+                std::string_view("NotoSans-Regular.ttf"),
+                std::string_view("UVSR_UI_SEMIBOLD_FONT_SOURCE"),
+                std::string_view("NotoSans-SemiBold.ttf"),
                 std::string_view("UVSR_UI_BOLD_FONT_SOURCE"),
-                std::string_view("$ENV{WINDIR}/Fonts/segoeuib.ttf"),
-                std::string_view("CodexUI-Bold.ttf") })
+                std::string_view("NotoSans-Bold.ttf"),
+                std::string_view("UVSR_UI_FONT_LICENSE_SOURCE"),
+                std::string_view("Noto-Sans-OFL-1.1.txt"),
+                std::string_view("UVSR_PROGGY_CLEAN_LICENSE_SOURCE"),
+                std::string_view("assets/fonts/proggy-clean/ProggyClean-MIT.txt"),
+                std::string_view("licenses/ProggyClean-MIT.txt"),
+                std::string_view("UVSR_UI_TRANSITION_LICENSE_SOURCE"),
+                std::string_view("Geist-OFL-1.1.txt"),
+                std::string_view("media/fonts/NotoSans"),
+                std::string_view("media/fonts/System/CodexUI.ttf"),
+                std::string_view("media/fonts/System/CodexUI-Semibold.ttf"),
+                std::string_view("media/fonts/System/CodexUI-Bold.ttf") })
         {
             RequireContains(
                 cmakeSource,
-                boldFontContract,
-                "staged bold authored-header font");
+                stagedFontContract,
+                "exact staged Noto Sans UI font contract");
+        }
+        for (const std::string_view obsoleteFontRoute : {
+                std::string_view("$ENV{WINDIR}/Fonts/"),
+                std::string_view("Geist-Medium.ttf") })
+        {
+            RequireAbsent(
+                cmakeSource,
+                obsoleteFontRoute,
+                "ordinary Noto Sans build and runtime font routes");
+        }
+        RequireOrdered(
+            cmakeSource,
+            {
+                "remove_directory",
+                "\"${CMAKE_BINARY_DIR}/media/fonts/System\"",
+                "remove_directory",
+                "\"${CMAKE_BINARY_DIR}/media/fonts/NotoSans\"",
+                "make_directory",
+                "\"${CMAKE_BINARY_DIR}/media/fonts/NotoSans\"",
+                "make_directory",
+                "\"${CMAKE_BINARY_DIR}/media/fonts/System\""
+            },
+            "stale font output removal before exact dual transition staging");
+        const std::string_view transitionAliases = ExtractSection(
+            cmakeSource,
+            "# UVSR Launcher sequence 9 requires the historical paths",
+            "\"${CMAKE_CURRENT_SOURCE_DIR}/LICENSE.md\"",
+            "Noto-backed transitional font aliases");
+        RequireOrdered(
+            transitionAliases,
+            {
+                "\"${UVSR_UI_REGULAR_FONT_SOURCE}\"",
+                "media/fonts/System/CodexUI.ttf",
+                "\"${UVSR_UI_SEMIBOLD_FONT_SOURCE}\"",
+                "media/fonts/System/CodexUI-Semibold.ttf",
+                "\"${UVSR_UI_BOLD_FONT_SOURCE}\"",
+                "media/fonts/System/CodexUI-Bold.ttf"
+            },
+            "all transitional aliases source only exact Noto Sans faces");
+        RequireContains(
+            cmakeSource,
+            "assets/fonts/geist/LICENSE.txt",
+            "transitional sequence-9 compatibility notice source");
+        RequireContains(
+            cmakeSource,
+            "No Geist font is staged or loaded by the current renderer.",
+            "transitional notice is not a current font route");
+        RequireAbsent(
+            viewer,
+            "/media/fonts/System/",
+            "renderer runtime font routes");
+        RequireContains(
+            viewer,
+            "#include \"ui_font_family.h\"",
+            "renderer font-family model include");
+        RequireOrdered(
+            fontFamilySource,
+            {
+                "enum class UiFontFamily",
+                "Codex,",
+                "NotoSans,",
+                "ProggyClean,",
+                "Count",
+                "DefaultUiFontFamily =",
+                "UiFontFamily::NotoSans;",
+                "UiFontFamilyValues =",
+                "UiFontFamily::Codex,",
+                "UiFontFamily::NotoSans,",
+                "UiFontFamily::ProggyClean"
+            },
+            "stable font-family enum order and Noto Sans default");
+        for (const std::string_view exactFontFamilyText : {
+                std::string_view("return \"Codex (Segoe UI)\";"),
+                std::string_view("return \"Noto Sans\";"),
+                std::string_view("return \"Ogg (ProggyClean)\";"),
+                std::string_view("return \"codex\";"),
+                std::string_view("return \"noto-sans\";"),
+                std::string_view("return \"proggy-clean\";") })
+        {
+            RequireContains(
+                fontFamilySource,
+                exactFontFamilyText,
+                "exact visible font labels and canonical command values");
         }
         RequireContains(
             viewer,
-            "std::shared_ptr<app::RegisteredFont> m_HeaderFont;",
-            "owned authored-header font");
+            "std::array<UiFontFaces, UiFontFamilyCount> m_UiFontFaces;",
+            "owned pre-registered font-family role table");
+        const std::string_view fontConstructor = ExtractSection(
+            viewer,
+            "UIRenderer(",
+            "void Animate(float elapsedTimeSeconds) override",
+            "pre-atlas UI font registration");
+        RequireOrdered(
+            fontConstructor,
+            {
+                "UiFontFaces& noto = GetUiFontFaces(UiFontFamily::NotoSans);",
+                "noto.regular = registerRequiredFont(",
+                "\"/media/fonts/NotoSans/NotoSans-Regular.ttf\", 13.f, \"Regular\");",
+                "noto.body = registerRequiredFont(",
+                "\"/media/fonts/NotoSans/NotoSans-SemiBold.ttf\", 16.f, \"SemiBold\");",
+                "noto.header = registerRequiredFont(",
+                "\"/media/fonts/NotoSans/NotoSans-Bold.ttf\", 16.f, \"Bold\");",
+                "UiFontFaces& proggy = GetUiFontFaces(UiFontFamily::ProggyClean);",
+                "proggy.regular = GetDefaultFont();",
+                "proggy.body = std::make_shared<app::RegisteredFont>(16.f);",
+                "m_fonts.push_back(proggy.body);",
+                "proggy.header = noto.header;",
+                "UiFontFaces& codex = GetUiFontFaces(UiFontFamily::Codex);",
+                "GetWindowsFontsDirectory();",
+                "NativeFileSystem windowsFileSystem;",
+                "CreateFontFromFile(windowsFileSystem, path, size);",
+                "windowsFontsDirectory / L\"segoeui.ttf\", 13.f",
+                "windowsFontsDirectory / L\"seguisb.ttf\", 16.f",
+                "windowsFontsDirectory / L\"segoeuib.ttf\", 16.f",
+                "ImGui::GetIO().IniFilename = nullptr;"
+            },
+            "all Noto, ProggyClean, and optional Segoe roles register before "
+            "the first atlas");
+        RequireAbsent(
+            fontConstructor,
+            "ImGui_Renderer::Animate(",
+            "runtime UI font registration and atlas rebuilding");
+        const std::string_view windowsFontRouting = ExtractSection(
+            viewer,
+            "static std::filesystem::path GetWindowsFontsDirectory()",
+            "UiFontFaces& GetUiFontFaces(",
+            "Unicode-safe installed Windows font discovery");
+        RequireOrdered(
+            windowsFontRouting,
+            {
+                "GetWindowsDirectoryW(",
+                "std::wstring(buffer.data(), length)",
+                "/ L\"Fonts\""
+            },
+            "Windows font discovery uses the Unicode Win32 path contract");
+        const std::string_view fontFamilyDrawer = ExtractSection(
+            viewer,
+            "SetNextLabeledControlWidth(\n            \"Font Family\"",
+            "const auto drawInterfaceColor =",
+            "Interface font-family dropdown");
+        RequireOrdered(
+            fontFamilyDrawer,
+            {
+                "\"Font Family##UiFontFamily\"",
+                "UiFontFamilyLabel(m_ui.FontFamily).data()",
+                "for (const UiFontFamily candidate : UiFontFamilyValues)",
+                "IsUiFontFamilyAvailable(candidate)",
+                "ImGui::BeginDisabled();",
+                "DrawDeferredDropdownOption(",
+                "m_ui.FontFamily = candidate;",
+                "GetUiFontFamilyUnavailableReason(candidate)",
+                "ImGui::SetItemTooltip(\"%s\", reason.c_str());",
+                "ImGui::EndDisabled();",
+                "DrawPresetResetIcon(",
+                "m_ui.FontFamily != DefaultUiFontFamily",
+                "QueueDeferredControlUiAction(",
+                "m_ui.FontFamily = DefaultUiFontFamily;"
+            },
+            "font selection is deferred and unavailable Segoe is visibly "
+            "disabled with actionable recovery");
+        RequireContains(
+            fontFamilyDrawer,
+            "headings remain Noto Sans Bold for clear emphasis.",
+            "ProggyClean authored-heading behavior tooltip");
         RequireContains(
             viewer,
-            "m_HeaderFont = CreateFontFromFile(",
-            "loaded authored-header font");
+            "else if (topic == \"fonts\")",
+            "font-family command help topic");
         RequireContains(
             viewer,
-            "\"/media/fonts/System/CodexUI-Bold.ttf\"",
+            "Amp headings remain Noto Sans Bold",
+            "font-family help explains the ProggyClean heading mapping");
+        const std::string_view activeFontSelection = ExtractSection(
+            viewer,
+            "ImFont* GetActiveUiFont()",
+            "void ApplyActiveUiWordSpacing()",
+            "active UI font selection");
+        RequireOrdered(
+            activeFontSelection,
+            {
+                "RequireUiFontFamily(m_ui.FontFamily);",
+                "UiFontFaces& faces = GetUiFontFaces(m_ui.FontFamily);",
+                "ImGui::IsUvsrStockWidgetRenderingEnabled()",
+                "return faces.regular->GetScaledFont();",
+                "return faces.body->GetScaledFont();",
+                "ImFont* GetActiveUiHeaderFont()",
+                "RequireUiFontFamily(m_ui.FontFamily);",
+                "GetUiFontFaces(m_ui.FontFamily).header->GetScaledFont();"
+            },
+            "Ogg stock widgets use the selected 13px face while Amp body and "
+            "heading routes use the selected 16px role mappings");
+        const std::string_view requiredFontLoading = ExtractSection(
+            viewer,
+            "bool IsUiFontFamilyAvailable(UiFontFamily family) const",
+            "void ApplyActiveUiWordSpacing()",
+            "fail-closed UI font loading");
+        for (const std::string_view requiredFontContract : {
+                std::string_view("throw RequiredUiFontStartupError("),
+                std::string_view("Noto Sans remains available."),
+                std::string_view("Reinstall UVSR with UVSR Launcher"),
+                std::string_view("HasFontData()") })
+        {
+            RequireContains(
+                viewer,
+                requiredFontContract,
+                "actionable required Noto Sans font registration");
+        }
+        RequireAbsent(
+            activeFontSelection,
+            "ImGui::GetFont()",
+            "implicit current-font fallback in selected family routing");
+        RequireAbsent(
+            viewer,
+            "ImFont* m_",
+            "cached transient ImFont pointers across DPI atlas rebuilds");
+        RequireContains(
+            viewer,
+            "class RequiredUiFontStartupError final : public std::runtime_error",
+            "narrow required-font startup exception type");
+        const std::string_view fontAtlasStartup = ExtractSection(
+            viewer,
+            "void Animate(float elapsedTimeSeconds) override",
+            "bool ShouldSuppressFullscreenShortcut() const override",
+            "first-frame required-font atlas validation");
+        RequireOrdered(
+            fontAtlasStartup,
+            {
+                "try",
+                "ImGui_Renderer::Animate(elapsedTimeSeconds);",
+                "RequireUiFontFamily(UiFontFamily::NotoSans);",
+                "RequireUiFontFamily(m_ui.FontFamily);",
+                "m_RequiredFontsReady = true;",
+                "catch (const RequiredUiFontStartupError&)",
+                "catch (const std::exception& error)",
+                "throw RequiredUiFontStartupError("
+            },
+            "required Noto and selected-family atlas errors become the narrow "
+            "visible-startup failure");
+
+        const std::string_view uiStartupBoundary = ExtractSection(
+            viewer,
+            "std::shared_ptr<UvsrSceneViewer> demo;",
+            "\n    }\n\n    deviceManager->Shutdown();",
+            "UI startup exception boundary");
+        RequireOrdered(
+            uiStartupBoundary,
+            {
+                "const auto releaseUiState = [&]()",
+                "try",
+                "demo = std::make_shared<UvsrSceneViewer>(",
+                "gui = std::make_shared<UIRenderer>(",
+                "gui->Init(demo->GetShaderFactory())",
+                "deviceManager->AddRenderPassToBack(demo.get());",
+                "deviceManager->AddRenderPassToBack(gui.get());",
+                "deviceManager->RunMessageLoop();",
+                "catch (const RequiredUiFontStartupError& error)"
+            },
+            "UI construction, initialization, and first-frame font setup boundary");
+        RequireAbsent(
+            uiStartupBoundary,
+            "catch (const std::exception&",
+            "unrelated message-loop failures remain outside the font repair path");
+        const std::string_view fontStartupFailure = ExtractSection(
+            uiStartupBoundary,
+            "catch (const RequiredUiFontStartupError& error)",
+            "\n        }",
+            "visible required-font startup failure");
+        RequireOrdered(
+            fontStartupFailure,
+            {
+                "log::error(",
+                "error.what()",
+                "ShowGraphicsStartupError(",
+                "reinstall UVSR with UVSR Launcher",
+                "releaseUiState();",
+                "deviceManager->Shutdown();",
+                "delete deviceManager;",
+                "return 1;"
+            },
+            "required-font failure logging, visible presentation, and cleanup");
+        Require(
+            CountOccurrences(
+                fontStartupFailure,
+                "deviceManager->Shutdown();") == 1u &&
+            CountOccurrences(
+                fontStartupFailure,
+                "delete deviceManager;") == 1u,
+            "the visible required-font failure path must shut down and delete "
+            "the device manager exactly once before returning.");
+        const std::string_view releaseUiState = ExtractSection(
+            uiStartupBoundary,
+            "const auto releaseUiState = [&]()",
+            "\n\n        try",
+            "UI startup cleanup");
+        RequireOrdered(
+            releaseUiState,
+            {
+                "deviceManager->RemoveRenderPass(gui.get());",
+                "deviceManager->RemoveRenderPass(demo.get());",
+                "gui.reset();",
+                "demo.reset();"
+            },
+            "font startup failure releases registered UI and scene state safely");
+        RequireContains(
+            viewer,
+            "\"/media/fonts/NotoSans/NotoSans-Bold.ttf\"",
             "runtime authored-header font path");
         const std::string_view collapsingHeader = ExtractSection(
             viewer,
@@ -8330,7 +8823,7 @@ namespace
         const std::string_view adaptiveStartup = ExtractSection(
             viewer,
             "const auto activeAdapter = std::find_if(",
-            "auto demo = std::make_shared<UvsrSceneViewer>(",
+            "std::shared_ptr<UvsrSceneViewer> demo;",
             "Adaptive Sync startup policy");
         RequireOrdered(
             adaptiveStartup,
@@ -9349,6 +9842,8 @@ int main(int argc, char** argv)
 
     const std::filesystem::path root = argv[1];
     const std::string viewer = ReadFile(root / "src" / "uvsr.cpp");
+    const std::string fontFamilySource = ReadFile(
+        root / "src" / "ui_font_family.h");
     const std::string settingsSnapshotSchema = ReadFile(
         root / "src" / "settings_snapshot_schema.h");
     const std::string catalog = ReadFile(
@@ -9380,7 +9875,8 @@ int main(int argc, char** argv)
     const std::string backdropBlurShader = ReadFile(
         root / "src" / "backdrop_blur_ps.hlsl");
     const std::string cmakeSource = ReadFile(root / "CMakeLists.txt");
-    if (viewer.empty() || settingsSnapshotSchema.empty() ||
+    if (viewer.empty() || fontFamilySource.empty() ||
+        settingsSnapshotSchema.empty() ||
         catalog.empty() || temporalOptions.empty() ||
         temporalPass.empty() || uiAnimation.empty() ||
         uiCommandLayout.empty() ||
@@ -9412,8 +9908,10 @@ int main(int argc, char** argv)
     ValidateRayTracedShadows(viewer, catalog);
     ValidateCatalogAndDispatch(viewer, catalog);
     ValidateMaterialHistoryInvalidation(viewer);
+    ValidateNotoSansAssets(root, cmakeSource);
     ValidateUiSafety(
         viewer,
+        fontFamilySource,
         settingsSnapshotSchema,
         uiAnimation,
         donutAppOverride,

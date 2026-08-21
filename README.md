@@ -13,11 +13,11 @@ production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 128,918 non-blank source lines.
+**First-Party Lines of Code:** 129,955 non-blank source lines.
 
 **Third-Party Lines of Code:** 386,164 non-blank source lines.
 
-**Total Lines of Code:** 515,082 non-blank source lines.
+**Total Lines of Code:** 516,119 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -92,39 +92,48 @@ needs, builds the newest public `main`, and provides Install, Update, Launch, an
 Uninstall from one user-facing window. Install also offers Launch or Reinstall
 when UVSR is already present.
 
-## Use the Launcher (Recommended)
+## Launcher Availability
 
-Most users should use the launcher flow instead of building locally. The
-launcher handles downloading prerequisites, builds the newest public `main`, and
-keeps UVSR updates separate from the renderer installation.
+The launcher flow is intended to handle prerequisites, build the newest public
+`main`, and keep launcher updates separate from the renderer installation. Its
+new signed bootstrap is not public yet. The currently published sequence-2
+launcher cannot build the current minimum-sequence-4 renderer source, so it
+must not be used for a fresh installation.
 
-If you want to start immediately, download the latest launcher and launch it from
-the release asset:
+When the permanent signing identity and clean Windows 11 release validation are
+complete, the compatible bootstrap will be published at:
 
->[Download UVSR Launcher](https://github.com/brockliddicoat/uvsr/releases/latest/download/UVSR-Launcher-Windows-11-x64.exe)
+>[UVSR Launcher Release Asset](https://github.com/brockliddicoat/uvsr/releases/latest/download/UVSR-Launcher-Windows-11-x64.exe)
 
-Open that one file to launch immediately. The launcher shortcut is selected by
-default, transient downloads resume or retry safely, and Update lets you choose
-UVSR, UVSR Launcher, or both.
+After that compatible signed bootstrap is published, opening the one file will
+start the launcher. Its shortcut is selected by default, transient downloads
+resume or retry safely, and Update lets you choose UVSR Engine, UVSR Launcher,
+or both.
 
 Update checks come from:
 
-- `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/installer/launcher-feed-v1.json`
+- `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-feed-v1.json`
 - `https://api.github.com/repos/brockliddicoat/uvsr/git/ref/heads/main`
 - `https://raw.githubusercontent.com/brockliddicoat/uvsr/<commit>/cmake/uvsr-launcher-build-contract-v1.json`
 - `https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe`
   and falls back to `uvsr-launcher-latest` if the versioned tag is temporarily
   unavailable.
 
+Launchers built from the renamed source use the canonical `launcher/` feed
+address above. The legacy
+`https://raw.githubusercontent.com/brockliddicoat/uvsr/main/installer/launcher-feed-v1.json`
+address remains a byte-identical compatibility mirror for already-released
+launchers that compiled that path into their executable.
+
 The update dialog and copied details include the exact checked URL, launcher
 versions and release sequences, and the specific schema, identity, HTTP, or
 connection failure. Persistent logs are under
-`%LOCALAPPDATA%\UVSR Installer\logs`; the [launcher guide](installer/README.md#update-check-diagnostics)
+`%LOCALAPPDATA%\UVSR Installer\logs`; the [launcher guide](launcher/README.md#update-check-diagnostics)
 explains each result and recovery path.
 
 The first source build may take several minutes and may ask for administrator
 approval for Microsoft's signed C++ Build Tools setup; UVSR source and build
-commands always remain unelevated. See the [launcher guide](installer/README.md)
+commands always remain unelevated. See the [launcher guide](launcher/README.md)
 for its exact trust, ownership, recovery, and public-release contracts.
 
 ## Build and Run
@@ -154,16 +163,15 @@ build variants and the complete validation workflow are documented below.
 
 ## Coming Soon
 
-This section summarizes stable work that is active but not yet merged into
-`main`. Experimental entries are not promises that the work will ship.
+This section summarizes stable work that is active but not yet complete.
+Experimental entries are not promises that the work will ship.
 
-- **UVSR Launcher for Windows 11 — Awaiting Release Validation**
-  (`codex/windows-installer`). The local candidate adds a self-contained public
-  launcher that downloads verified prerequisites, builds the newest public
-  `main`, uses the launcher for its default desktop shortcut, checks UVSR and
-  launcher updates independently, and tolerates ordinary connection pauses.
-  Public distribution still requires the permanent code-signing identity and
-  clean Windows 11 release-matrix validation.
+- **UVSR Launcher for Windows 11 — Awaiting Release Validation.** The launcher
+  source downloads verified prerequisites, builds the newest public `main`,
+  uses the launcher for its default desktop shortcut, checks UVSR and launcher
+  updates independently, and tolerates ordinary connection pauses. Public
+  distribution still requires the permanent code-signing identity and clean
+  Windows 11 release-matrix validation.
 
 ## Engineering Documentation
 

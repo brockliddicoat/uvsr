@@ -16,10 +16,28 @@ internal static class LauncherDialog
         string title,
         string message,
         params DialogAction[] actions)
+        => ShowCore(owner, title, message, error: false, actions);
+
+    internal static string ShowError(
+        IWin32Window? owner,
+        string title,
+        string message,
+        params DialogAction[] actions)
+        => ShowCore(owner, title, message, error: true, actions);
+
+    internal static Color GetBodyColor(bool error) =>
+        error ? LauncherPalette.Danger : LauncherPalette.Muted;
+
+    private static string ShowCore(
+        IWin32Window? owner,
+        string title,
+        string message,
+        bool error,
+        params DialogAction[] actions)
     {
         if (actions.Length == 0)
             actions = new[] { new DialogAction("ok", "OK", Primary: true, Cancel: true) };
-        using StyledDialog dialog = new(title, message, actions);
+        using StyledDialog dialog = new(title, message, error, actions);
         dialog.ShowDialog(owner);
         return dialog.SelectedAction ?? actions.FirstOrDefault(action => action.Cancel)?.Id
             ?? actions[^1].Id;
@@ -27,7 +45,11 @@ internal static class LauncherDialog
 
     private sealed class StyledDialog : Form
     {
-        internal StyledDialog(string title, string message, IReadOnlyList<DialogAction> actions)
+        internal StyledDialog(
+            string title,
+            string message,
+            bool error,
+            IReadOnlyList<DialogAction> actions)
         {
             Text = title;
             StartPosition = FormStartPosition.CenterParent;
@@ -37,7 +59,7 @@ internal static class LauncherDialog
             FormBorderStyle = FormBorderStyle.FixedDialog;
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
-            Font = new Font("Segoe UI", 10F);
+            Font = LauncherTypography.CreateRegular(10F);
             BackColor = LauncherPalette.Window;
             ClientSize = new Size(540, 230);
             MinimumSize = new Size(480, 220);
@@ -57,7 +79,7 @@ internal static class LauncherDialog
                 AutoSize = true,
                 Dock = DockStyle.Top,
                 Text = title,
-                Font = new Font("Segoe UI Semibold", 16F, FontStyle.Bold),
+                Font = LauncherTypography.CreateBold(16F),
                 ForeColor = LauncherPalette.Text,
                 Margin = new Padding(0, 0, 0, 12)
             };
@@ -66,7 +88,7 @@ internal static class LauncherDialog
                 AutoSize = true,
                 Dock = DockStyle.Top,
                 Text = message,
-                ForeColor = LauncherPalette.Muted,
+                ForeColor = GetBodyColor(error),
                 Margin = new Padding(0, 0, 0, 20)
             };
             Panel bodyViewport = new()
@@ -141,6 +163,9 @@ internal sealed record UpdateSelection(
 
 internal sealed class UpdateSelectionDialog : Form
 {
+    internal const string EngineLabel = "UVSR Engine";
+    internal const string LauncherLabel = "UVSR Launcher";
+
     private readonly CheckBox _uvsr = new();
     private readonly CheckBox _launcher = new();
     private readonly Button _update;
@@ -156,7 +181,7 @@ internal sealed class UpdateSelectionDialog : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
-        Font = new Font("Segoe UI", 10F);
+        Font = LauncherTypography.CreateRegular(10F);
         BackColor = LauncherPalette.Window;
         ClientSize = new Size(620, 390);
         MinimumSize = new Size(540, 360);
@@ -178,7 +203,7 @@ internal sealed class UpdateSelectionDialog : Form
             AutoSize = true,
             Dock = DockStyle.Top,
             Text = dialogTitle,
-            Font = new Font("Segoe UI Semibold", 17F, FontStyle.Bold),
+            Font = LauncherTypography.CreateBold(17F),
             ForeColor = LauncherPalette.Text,
             Margin = new Padding(0, 0, 0, 6)
         };
@@ -203,9 +228,10 @@ internal sealed class UpdateSelectionDialog : Form
         components.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         components.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         components.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        components.Controls.Add(CreateComponentCard(_uvsr, "UVSR", result.Uvsr), 0, 0);
         components.Controls.Add(CreateComponentCard(
-            _launcher, "UVSR Launcher", result.Launcher), 0, 1);
+            _uvsr, EngineLabel, result.Uvsr), 0, 0);
+        components.Controls.Add(CreateComponentCard(
+            _launcher, LauncherLabel, result.Launcher), 0, 1);
         Panel componentViewport = new()
         {
             Dock = DockStyle.Fill,
@@ -287,6 +313,11 @@ internal sealed class UpdateSelectionDialog : Form
         state is ComponentUpdateState.UpdateAvailable or
             ComponentUpdateState.RepairNeeded;
 
+    internal static Color GetComponentDetailColor(ComponentUpdateState state) =>
+        state is ComponentUpdateState.CheckFailed or ComponentUpdateState.RepairNeeded
+            ? LauncherPalette.Danger
+            : LauncherPalette.Muted;
+
     private static Control CreateComponentCard(
         CheckBox checkBox,
         string name,
@@ -297,7 +328,7 @@ internal sealed class UpdateSelectionDialog : Form
         checkBox.Checked = selectable;
         checkBox.Enabled = selectable;
         checkBox.AutoSize = true;
-        checkBox.Font = new Font("Segoe UI Semibold", 11F, FontStyle.Bold);
+        checkBox.Font = LauncherTypography.CreateBold(11F);
         checkBox.ForeColor = LauncherPalette.Text;
         checkBox.AccessibleName = $"Select {name} update";
         checkBox.AccessibleDescription = status.Detail;
@@ -307,9 +338,7 @@ internal sealed class UpdateSelectionDialog : Form
             AutoSize = true,
             Dock = DockStyle.Top,
             Text = status.Detail,
-            ForeColor = status.State == ComponentUpdateState.CheckFailed
-                ? LauncherPalette.Warning
-                : LauncherPalette.Muted,
+            ForeColor = GetComponentDetailColor(status.State),
             Margin = new Padding(26, 2, 0, 0)
         };
         TableLayoutPanel card = new()
@@ -353,10 +382,10 @@ internal static class LauncherPalette
         ? SystemColors.WindowText : Color.FromArgb(218, 224, 232);
     internal static readonly Color Success = SystemInformation.HighContrast
         ? SystemColors.WindowText : Color.FromArgb(31, 122, 82);
-    internal static readonly Color Warning = SystemInformation.HighContrast
-        ? SystemColors.WindowText : Color.FromArgb(173, 91, 28);
     internal static readonly Color Danger = SystemInformation.HighContrast
         ? SystemColors.WindowText : Color.FromArgb(185, 48, 48);
+    internal static readonly Color Disabled = SystemInformation.HighContrast
+        ? SystemColors.Control : Color.FromArgb(232, 236, 241);
 }
 
 internal readonly record struct LauncherWindowLayout(
@@ -368,6 +397,8 @@ internal static class LauncherUi
 {
     private const int LogicalDpi = 96;
     private const int LogicalWorkingAreaMargin = 16;
+    internal static readonly Size StandardButtonSize = new(144, 44);
+    internal static readonly Padding StandardButtonPadding = new(14, 0, 14, 0);
 
     internal static int ScaleLogical(Control control, int logicalValue) =>
         ScaleLogical(logicalValue, control.DeviceDpi);
@@ -476,23 +507,63 @@ internal static class LauncherUi
         Button button = new()
         {
             Text = text,
-            AutoSize = true,
-            MinimumSize = new Size(96, 42),
-            Padding = new Padding(14, 7, 14, 7),
+            AutoSize = false,
+            AutoEllipsis = true,
+            Size = StandardButtonSize,
+            MinimumSize = StandardButtonSize,
+            MaximumSize = StandardButtonSize,
+            Padding = StandardButtonPadding,
             Margin = new Padding(8, 0, 0, 0),
             FlatStyle = FlatStyle.Flat,
             Cursor = Cursors.Hand,
-            UseVisualStyleBackColor = false
+            UseVisualStyleBackColor = false,
+            UseCompatibleTextRendering = false,
+            TextAlign = ContentAlignment.MiddleCenter,
+            Font = LauncherTypography.CreateRegular(10F)
         };
+        bool danger = destructive || IsLiteralCancel(text);
+        button.EnabledChanged += (_, _) => ApplyButtonStyle(button, primary, danger);
+        ApplyButtonStyle(button, primary, danger);
+        return button;
+    }
+
+    internal static bool IsLiteralCancel(string text) =>
+        string.Equals(text, "Cancel", StringComparison.Ordinal);
+
+    private static void ApplyButtonStyle(
+        Button button,
+        bool primary,
+        bool danger)
+    {
+        button.Cursor = button.Enabled ? Cursors.Hand : Cursors.Default;
         if (SystemInformation.HighContrast)
         {
             button.FlatStyle = FlatStyle.Standard;
             button.UseVisualStyleBackColor = true;
-            button.ForeColor = destructive ? SystemColors.HotTrack : SystemColors.ControlText;
-            return button;
+            button.BackColor = SystemColors.Control;
+            button.ForeColor = button.Enabled
+                ? danger ? LauncherPalette.Danger : SystemColors.ControlText
+                : SystemColors.GrayText;
+            return;
         }
+        button.FlatStyle = FlatStyle.Flat;
+        button.UseVisualStyleBackColor = false;
         button.FlatAppearance.BorderSize = 1;
-        if (primary)
+        if (!button.Enabled)
+        {
+            button.BackColor = LauncherPalette.Disabled;
+            button.ForeColor = LauncherPalette.Muted;
+            button.FlatAppearance.BorderColor = LauncherPalette.Border;
+            button.FlatAppearance.MouseOverBackColor = LauncherPalette.Disabled;
+        }
+        else if (danger)
+        {
+            button.BackColor = LauncherPalette.Card;
+            button.ForeColor = LauncherPalette.Danger;
+            button.FlatAppearance.BorderColor = LauncherPalette.Border;
+            button.FlatAppearance.MouseOverBackColor = Color.FromArgb(238, 242, 247);
+        }
+        else if (primary)
         {
             button.BackColor = LauncherPalette.Accent;
             button.ForeColor = Color.White;
@@ -502,11 +573,10 @@ internal static class LauncherUi
         else
         {
             button.BackColor = LauncherPalette.Card;
-            button.ForeColor = destructive ? LauncherPalette.Danger : LauncherPalette.Text;
+            button.ForeColor = LauncherPalette.Text;
             button.FlatAppearance.BorderColor = LauncherPalette.Border;
             button.FlatAppearance.MouseOverBackColor = Color.FromArgb(238, 242, 247);
         }
-        return button;
     }
 }
 

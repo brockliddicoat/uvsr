@@ -110,6 +110,7 @@ namespace uvsr
     inline constexpr auto UiSettingsCommandCatalog = std::array{
         // UI.
         Value("ui.skin", Kind::Enum, Section::Ui, "amp|ogg"),
+        Value("ui.font-family", Kind::Enum, Section::Ui, "codex|noto-sans|proggy-clean"),
         Value("ui.animations", Kind::Boolean, Section::Ui, "on|off"),
         Value("ui.override-visual-maxes", Kind::Boolean, Section::Ui, "on|off"),
         Value("ui.accent.main", Kind::Float3, Section::Ui, "display rgb float3 0..1"),

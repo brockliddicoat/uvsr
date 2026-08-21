@@ -53,6 +53,8 @@ int main()
 {
     using namespace uvsr;
 
+    static_assert(UiFontFamilyCommandPath == "ui.font-family");
+
     {
         const UiCommandParseResult result =
             ParseUiCommand(" \t /SeT  renderer.mode  \"deferred path\"  ");
@@ -153,6 +155,16 @@ int main()
                 run.arguments ==
                     std::vector<std::string>{ "comparison frame" },
             "run must separate its action from trailing arguments");
+
+        const UiCommand& fontFamily = RequireSuccess(
+            ParseUiCommand("/set ui.font-family noto-sans"),
+            "font-family setting must use the generic Settings command");
+        Require(
+            fontFamily.verb == UiCommandVerb::Set &&
+                fontFamily.path == UiFontFamilyCommandPath &&
+                fontFamily.arguments ==
+                    std::vector<std::string>{ "noto-sans" },
+            "font-family setting must retain its canonical path and value");
     }
 
     {
@@ -377,6 +389,12 @@ int main()
 
         const UiCommandCompletionToken skinValue =
             GetUiCommandCompletionToken("/skin ", 6u);
+        const std::string fontFamilyInput =
+            "/set ui.font-family ";
+        const UiCommandCompletionToken fontFamilyValue =
+            GetUiCommandCompletionToken(
+                fontFamilyInput,
+                fontFamilyInput.size());
         const UiCommandCompletionToken sceneValue =
             GetUiCommandCompletionToken("/scene ", 7u);
         const UiCommandCompletionToken cameraValue =
@@ -388,6 +406,8 @@ int main()
         Require(
             skinValue.target == UiCommandCompletionTarget::Value &&
                 skinValue.valuePath == "ui.skin" &&
+                fontFamilyValue.target == UiCommandCompletionTarget::Value &&
+                fontFamilyValue.valuePath == UiFontFamilyCommandPath &&
                 uiValue.valuePath == "ui.visible" &&
                 sceneValue.valuePath == "scene.current" &&
                 cameraValue.valuePath == "camera.mode" &&

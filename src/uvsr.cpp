@@ -48,6 +48,7 @@
 #include <unordered_map>
 #include <limits>
 #include <string_view>
+#include <stdexcept>
 #include <system_error>
 #include <thread>
 #include <iterator>
@@ -124,6 +125,7 @@
 #include "ui_animation.h"
 #include "ui_command_layout.h"
 #include "ui_commands.h"
+#include "ui_font_family.h"
 #include "ui_settings_command_catalog.h"
 #include "ui_skin.h"
 #include "ui_performance_timing_rows.h"
@@ -1240,6 +1242,7 @@ struct UIData
 {
     bool                                ShowUI = false;
     UiSkin                              Skin = DefaultUiSkin;
+    UiFontFamily                        FontFamily = DefaultUiFontFamily;
     bool                                AnimationsEnabled = true;
     bool                                OverrideVisualMaxes = false;
     UiAccentSettings                    Accents;
@@ -7893,6 +7896,11 @@ void UvsrSceneViewer::InvalidateRendererStageTiming(
     m_RendererTimings.available[stageIndex] = false;
 }
 
+class RequiredUiFontStartupError final : public std::runtime_error
+{
+public:
+    using std::runtime_error::runtime_error;
+};
 
 class UIRenderer : public ImGui_Renderer
 {
@@ -7997,8 +8005,15 @@ private:
 
     std::shared_ptr<UvsrSceneViewer> m_app;
 
-    std::shared_ptr<app::RegisteredFont> m_Font;
-    std::shared_ptr<app::RegisteredFont> m_HeaderFont;
+    struct UiFontFaces
+    {
+        std::shared_ptr<app::RegisteredFont> regular;
+        std::shared_ptr<app::RegisteredFont> body;
+        std::shared_ptr<app::RegisteredFont> header;
+    };
+
+    std::array<UiFontFaces, UiFontFamilyCount> m_UiFontFaces;
+    bool m_RequiredFontsReady = false;
     std::shared_ptr<engine::Light> m_SelectedLight;
     ImGuiID m_AdjustedSpaceFontBakedId = 0;
     float m_BaseSpaceAdvance = 0.f;
@@ -10956,25 +10971,96 @@ private:
         }
     }
 
+    static std::filesystem::path GetWindowsFontsDirectory()
+    {
+        std::vector<wchar_t> buffer(MAX_PATH);
+        for (int attempt = 0; attempt < 2; ++attempt)
+        {
+            const UINT length = GetWindowsDirectoryW(
+                buffer.data(),
+                static_cast<UINT>(buffer.size()));
+            if (length == 0u)
+                return {};
+            if (length < buffer.size())
+            {
+                return std::filesystem::path(
+                    std::wstring(buffer.data(), length)) / L"Fonts";
+            }
+            buffer.resize(static_cast<std::size_t>(length) + 1u);
+        }
+        return {};
+    }
+
+    UiFontFaces& GetUiFontFaces(UiFontFamily family)
+    {
+        return m_UiFontFaces[static_cast<std::size_t>(
+            ResolveUiFontFamily(family))];
+    }
+
+    const UiFontFaces& GetUiFontFaces(UiFontFamily family) const
+    {
+        return m_UiFontFaces[static_cast<std::size_t>(
+            ResolveUiFontFamily(family))];
+    }
+
+    bool IsUiFontFamilyAvailable(UiFontFamily family) const
+    {
+        const UiFontFaces& faces = GetUiFontFaces(family);
+        return faces.regular && faces.regular->GetScaledFont() &&
+            faces.body && faces.body->GetScaledFont() &&
+            faces.header && faces.header->GetScaledFont();
+    }
+
+    static std::string GetUiFontFamilyUnavailableReason(
+        UiFontFamily family)
+    {
+        switch (ResolveUiFontFamily(family))
+        {
+        case UiFontFamily::Codex:
+            return
+                "Codex (Segoe UI) requires the installed Windows fonts "
+                "segoeui.ttf, seguisb.ttf, and segoeuib.ttf. Restore the "
+                "standard Segoe UI fonts in Windows, then restart UVSR; "
+                "Noto Sans remains available.";
+        case UiFontFamily::NotoSans:
+            return
+                "UVSR could not initialize its required Noto Sans UI fonts. "
+                "Reinstall UVSR with UVSR Launcher, then restart UVSR.";
+        case UiFontFamily::ProggyClean:
+            return
+                "UVSR could not initialize the embedded ProggyClean UI "
+                "fonts. Restart UVSR; if the problem continues, reinstall "
+                "UVSR with UVSR Launcher.";
+        case UiFontFamily::Count:
+            break;
+        }
+        return
+            "UVSR could not initialize the selected UI font family. "
+            "Select Noto Sans or reinstall UVSR with UVSR Launcher.";
+    }
+
+    void RequireUiFontFamily(UiFontFamily family) const
+    {
+        if (!IsUiFontFamilyAvailable(family))
+        {
+            throw RequiredUiFontStartupError(
+                GetUiFontFamilyUnavailableReason(family));
+        }
+    }
+
     ImFont* GetActiveUiFont()
     {
+        RequireUiFontFamily(m_ui.FontFamily);
+        UiFontFaces& faces = GetUiFontFaces(m_ui.FontFamily);
         if (ImGui::IsUvsrStockWidgetRenderingEnabled())
-        {
-            const std::shared_ptr<app::RegisteredFont> defaultFont =
-                GetDefaultFont();
-            if (defaultFont && defaultFont->GetScaledFont())
-                return defaultFont->GetScaledFont();
-        }
-        return m_Font && m_Font->GetScaledFont()
-            ? m_Font->GetScaledFont()
-            : ImGui::GetFont();
+            return faces.regular->GetScaledFont();
+        return faces.body->GetScaledFont();
     }
 
     ImFont* GetActiveUiHeaderFont()
     {
-        return m_HeaderFont && m_HeaderFont->GetScaledFont()
-            ? m_HeaderFont->GetScaledFont()
-            : GetActiveUiFont();
+        RequireUiFontFamily(m_ui.FontFamily);
+        return GetUiFontFaces(m_ui.FontFamily).header->GetScaledFont();
     }
 
     void ApplyActiveUiWordSpacing()
@@ -11723,6 +11809,36 @@ private:
                 value,
                 error);
         }
+        if (path == "ui.font-family")
+        {
+            static constexpr std::array<
+                std::pair<std::string_view, UiFontFamily>, 3> Options = {{
+                { "codex", UiFontFamily::Codex },
+                { "noto-sans", UiFontFamily::NotoSans },
+                { "proggy-clean", UiFontFamily::ProggyClean }
+            }};
+            UiFontFamily candidate = m_ui.FontFamily;
+            if (!ApplyCommandEnum(
+                    operation,
+                    arguments,
+                    path,
+                    candidate,
+                    DefaultUiFontFamily,
+                    Options,
+                    value,
+                    error))
+            {
+                return false;
+            }
+            if (operation != CommandValueOperation::Get &&
+                !IsUiFontFamilyAvailable(candidate))
+            {
+                error = GetUiFontFamilyUnavailableReason(candidate);
+                return false;
+            }
+            m_ui.FontFamily = candidate;
+            return true;
+        }
         if (path == "ui.animations")
         {
             return ApplyCommandBool(
@@ -12000,6 +12116,7 @@ private:
         m_app->ResetAllRendererSettings();
         ApplyAdaptiveSyncMode(GetDefaultAdaptiveSyncMode());
         m_ui.Skin = DefaultUiSkin;
+        m_ui.FontFamily = DefaultUiFontFamily;
         m_ui.AnimationsEnabled = true;
         m_ui.OverrideVisualMaxes = false;
         m_ui.Accents = UiAccentSettings{};
@@ -16511,6 +16628,15 @@ private:
                     "Skins: Amp is the animated UVSR interface; Ogg is stock "
                     "ImGui with UI animations disabled. Use /skin [amp|ogg].");
             }
+            else if (topic == "fonts")
+            {
+                SetCommandResult(
+                    "Fonts: Codex uses installed Windows Segoe UI; Noto Sans "
+                    "uses bundled Regular, SemiBold, and Bold faces; Ogg uses "
+                    "ProggyClean body text. Amp headings remain Noto Sans Bold "
+                    "when Ogg is selected. Use 'set ui.font-family "
+                    "[codex|noto-sans|proggy-clean]'.");
+            }
             else if (topic == "settings")
             {
                 SetCommandResult(
@@ -18676,6 +18802,54 @@ private:
                 });
         }
 
+        SetNextLabeledControlWidth(
+            "Font Family",
+            settingsControlWidth);
+        if (BeginRoundedCombo(
+                "Font Family##UiFontFamily",
+                UiFontFamilyLabel(m_ui.FontFamily).data()))
+        {
+            for (const UiFontFamily candidate : UiFontFamilyValues)
+            {
+                const bool available = IsUiFontFamilyAvailable(candidate);
+                const bool selected = candidate == m_ui.FontFamily;
+                if (!available)
+                    ImGui::BeginDisabled();
+                DrawDeferredDropdownOption(
+                    UiFontFamilyLabel(candidate).data(),
+                    UiFontFamilyLabel(candidate).data(),
+                    selected,
+                    [this, candidate]()
+                    {
+                        m_ui.FontFamily = candidate;
+                    });
+                if (!available)
+                {
+                    const std::string reason =
+                        GetUiFontFamilyUnavailableReason(candidate);
+                    ImGui::SetItemTooltip("%s", reason.c_str());
+                    ImGui::EndDisabled();
+                }
+                if (selected)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip(
+            "Choose the global interface font independently of the interface "
+            "skin. Ogg (ProggyClean) uses ProggyClean for body text; Amp "
+            "headings remain Noto Sans Bold for clear emphasis.");
+        if (DrawPresetResetIcon(
+                "Font Family",
+                m_ui.FontFamily != DefaultUiFontFamily))
+        {
+            QueueDeferredControlUiAction(
+                [this]()
+                {
+                    m_ui.FontFamily = DefaultUiFontFamily;
+                });
+        }
+
         const auto drawInterfaceColor =
             [&](const char* label,
                 const char* id,
@@ -19084,13 +19258,126 @@ public:
         , m_app(app)
         , m_ui(ui)
     {
-        m_Font = CreateFontFromFile(
-            *(app->GetRootFs()), "/media/fonts/System/CodexUI-Semibold.ttf", 16.f);
-        m_HeaderFont = CreateFontFromFile(
-            *(app->GetRootFs()), "/media/fonts/System/CodexUI-Bold.ttf", 16.f);
+        const auto registerRequiredFont =
+            [&](const char* path, float size, const char* weight)
+            {
+                try
+                {
+                    std::shared_ptr<app::RegisteredFont> font =
+                        CreateFontFromFile(*(app->GetRootFs()), path, size);
+                    if (!font || !font->HasFontData())
+                    {
+                        throw RequiredUiFontStartupError(
+                            std::string("UVSR could not read the required Noto Sans ") +
+                            weight + " UI font at '" + path +
+                            "'. Reinstall UVSR.");
+                    }
+                    return font;
+                }
+                catch (const RequiredUiFontStartupError&)
+                {
+                    throw;
+                }
+                catch (const std::exception& error)
+                {
+                    throw RequiredUiFontStartupError(
+                        std::string("UVSR could not read the required Noto Sans ") +
+                        weight + " UI font at '" + path + "': " + error.what() +
+                        ". Reinstall UVSR.");
+                }
+            };
+        UiFontFaces& noto = GetUiFontFaces(UiFontFamily::NotoSans);
+        noto.regular = registerRequiredFont(
+            "/media/fonts/NotoSans/NotoSans-Regular.ttf", 13.f, "Regular");
+        noto.body = registerRequiredFont(
+            "/media/fonts/NotoSans/NotoSans-SemiBold.ttf", 16.f, "SemiBold");
+        noto.header = registerRequiredFont(
+            "/media/fonts/NotoSans/NotoSans-Bold.ttf", 16.f, "Bold");
+
+        UiFontFaces& proggy = GetUiFontFaces(UiFontFamily::ProggyClean);
+        proggy.regular = GetDefaultFont();
+        proggy.body = std::make_shared<app::RegisteredFont>(16.f);
+        m_fonts.push_back(proggy.body);
+        // ProggyClean has one regular embedded face. Keep authored Amp
+        // headings visibly emphasized with the required Noto Sans Bold face.
+        proggy.header = noto.header;
+
+        UiFontFaces& codex = GetUiFontFaces(UiFontFamily::Codex);
+        const std::filesystem::path windowsFontsDirectory =
+            GetWindowsFontsDirectory();
+        if (!windowsFontsDirectory.empty())
+        {
+            NativeFileSystem windowsFileSystem;
+            const auto registerOptionalWindowsFont =
+                [&](const std::filesystem::path& path, float size)
+                    -> std::shared_ptr<app::RegisteredFont>
+                {
+                    try
+                    {
+                        std::shared_ptr<app::RegisteredFont> font =
+                            CreateFontFromFile(windowsFileSystem, path, size);
+                        return font && font->HasFontData() ? font : nullptr;
+                    }
+                    catch (const std::exception& error)
+                    {
+                        log::warning(
+                            "Codex (Segoe UI) font registration failed: %s",
+                            error.what());
+                        return nullptr;
+                    }
+                    catch (...)
+                    {
+                        log::warning(
+                            "Codex (Segoe UI) font registration failed with "
+                            "an unknown error.");
+                        return nullptr;
+                    }
+                };
+            codex.regular = registerOptionalWindowsFont(
+                windowsFontsDirectory / L"segoeui.ttf", 13.f);
+            codex.body = registerOptionalWindowsFont(
+                windowsFontsDirectory / L"seguisb.ttf", 16.f);
+            codex.header = registerOptionalWindowsFont(
+                windowsFontsDirectory / L"segoeuib.ttf", 16.f);
+        }
+        if (!codex.regular || !codex.body || !codex.header)
+        {
+            log::warning(
+                "Codex (Segoe UI) is unavailable because one or more "
+                "required Windows Segoe UI font files could not be read. "
+                "Noto Sans remains available.");
+        }
 
         ImGui::GetIO().IniFilename = nullptr;
         LoadSceneLoadTimingDatabase();
+    }
+
+    void Animate(float elapsedTimeSeconds) override
+    {
+        if (m_RequiredFontsReady)
+        {
+            ImGui_Renderer::Animate(elapsedTimeSeconds);
+            return;
+        }
+
+        try
+        {
+            ImGui_Renderer::Animate(elapsedTimeSeconds);
+            RequireUiFontFamily(UiFontFamily::NotoSans);
+            RequireUiFontFamily(m_ui.FontFamily);
+            m_RequiredFontsReady = true;
+        }
+        catch (const RequiredUiFontStartupError&)
+        {
+            throw;
+        }
+        catch (const std::exception& error)
+        {
+            throw RequiredUiFontStartupError(
+                std::string("UVSR could not initialize its required UI font ") +
+                "atlas: " + error.what() +
+                ". Reinstall UVSR with UVSR Launcher.");
+        }
     }
 
     bool ShouldSuppressFullscreenShortcut() const override
@@ -26010,29 +26297,58 @@ int WINAPI WinMain(
             AdaptiveSyncRequestsPresentTearing(
                 uiData.AdaptiveSync));
 
-        auto demo = std::make_shared<UvsrSceneViewer>(
-            deviceManager,
-            uiData,
-            sceneName);
-        auto gui = std::make_shared<UIRenderer>(
-            deviceManager,
-            demo,
-            uiData);
-        if (!gui->Init(demo->GetShaderFactory()))
+        std::shared_ptr<UvsrSceneViewer> demo;
+        std::shared_ptr<UIRenderer> gui;
+        const auto releaseUiState = [&]()
         {
-            // The scene worker executes UvsrSceneViewer::LoadScene and may
-            // still use the device. Destroy UI ownership and join that worker
-            // before shutting the device down on this initialization failure.
+            if (gui)
+                deviceManager->RemoveRenderPass(gui.get());
+            if (demo)
+                deviceManager->RemoveRenderPass(demo.get());
             gui.reset();
             demo.reset();
+        };
+
+        try
+        {
+            demo = std::make_shared<UvsrSceneViewer>(
+                deviceManager,
+                uiData,
+                sceneName);
+            gui = std::make_shared<UIRenderer>(
+                deviceManager,
+                demo,
+                uiData);
+            if (!gui->Init(demo->GetShaderFactory()))
+            {
+                // The scene worker executes UvsrSceneViewer::LoadScene and may
+                // still use the device. Destroy UI ownership and join that
+                // worker before shutting the device down on this failure.
+                releaseUiState();
+                deviceManager->Shutdown();
+                delete deviceManager;
+                return 1;
+            }
+
+            deviceManager->AddRenderPassToBack(demo.get());
+            deviceManager->AddRenderPassToBack(gui.get());
+            deviceManager->RunMessageLoop();
+        }
+        catch (const RequiredUiFontStartupError& error)
+        {
+            log::error(
+                "Cannot initialize required UVSR UI fonts: %s",
+                error.what());
+            ShowGraphicsStartupError(
+                L"UVSR could not initialize the selected UI fonts. If Codex "
+                L"was selected, restore the standard Windows Segoe UI fonts. "
+                L"Otherwise, reinstall UVSR with UVSR Launcher, then try "
+                L"again.");
+            releaseUiState();
             deviceManager->Shutdown();
             delete deviceManager;
             return 1;
         }
-
-        deviceManager->AddRenderPassToBack(demo.get());
-        deviceManager->AddRenderPassToBack(gui.get());
-        deviceManager->RunMessageLoop();
 
     }
 

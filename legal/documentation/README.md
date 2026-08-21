@@ -48,6 +48,7 @@ license decision before it should be strengthened.
 - [Microsoft DirectX-Headers](microsoft-directx-headers.md)
 - [Microsoft DirectX Shader Compiler](microsoft-directx-shader-compiler.md)
 - [Microsoft Direct3D 12 Agility SDK](microsoft-direct3d-agility-sdk.md)
+- [Microsoft Segoe UI Fonts](microsoft-segoe-ui-fonts.md)
 - [GLFW](glfw.md)
 - [cgltf](cgltf.md)
 - [stb](stb.md)
@@ -78,8 +79,8 @@ license decision before it should be strengthened.
 - [San Miguel 2.1](san-miguel-2-1.md)
 - [Blender Classroom](blender-classroom.md)
 - [Poly Haven Environments](poly-haven-environments.md)
-- [Vercel Geist Font](vercel-geist-font.md)
-- [Microsoft Segoe UI Fonts](microsoft-segoe-ui-fonts.md)
+- [Noto Sans Fonts](noto-sans-fonts.md)
+- [ProggyClean Font](proggy-clean-font.md)
 - [PBRT v4 San Miguel Camera](pbrt-v4-scenes-san-miguel-camera.md)
 
 ## Historical and Retired Sources
@@ -94,6 +95,7 @@ license decision before it should be strengthened.
 - [Epic Unreal Engine Shadow Systems](epic-unreal-engine-shadow-systems.md)
 - [Complementary Reimagined](complementary-reimagined.md)
 - [Kodak Film-Look References](kodak-film-look-references.md)
+- [Vercel Geist Font](vercel-geist-font.md)
 
 ## Auxiliary Tooling
 

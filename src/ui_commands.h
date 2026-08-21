@@ -38,6 +38,8 @@ namespace uvsr
         static_cast<std::size_t>(-1);
 
     inline constexpr std::string_view UiSkinCommandPath = "ui.skin";
+    inline constexpr std::string_view UiFontFamilyCommandPath =
+        "ui.font-family";
     inline constexpr std::string_view UiVisibilityCommandPath = "ui.visible";
     inline constexpr std::string_view UiSceneCommandPath = "scene.current";
     inline constexpr std::string_view UiCameraCommandPath = "camera.mode";

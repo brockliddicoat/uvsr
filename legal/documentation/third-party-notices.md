@@ -33,9 +33,18 @@ notice, and attribution requirements. This notice does not replace them.
 
 Bundled scenes, HDR environments, and fonts retain their adjacent licenses and
 attribution. In particular, San Miguel's grant is limited to research and
-educational use, Intel Sponza and Bistro require CC BY 4.0 attribution, Blender
-Classroom and Poly Haven assets use CC0, and Geist uses the SIL Open Font
-License 1.1. Segoe UI font redistribution is not granted by this repository.
+educational use, Intel Sponza and Bistro require CC BY 4.0 attribution, and
+Blender Classroom and Poly Haven assets use CC0. The current renderer bundles
+unmodified Noto Sans under the SIL Open Font License 1.1 and installs the
+complete license as `licenses/Noto-Sans-OFL-1.1.txt`. Geist remains a historical
+source-only font asset. A transition build may also contain byte-identical Noto
+Sans aliases under historical `CodexUI` paths and a temporary copy of the Geist
+OFL under its historical notice filename for Launcher sequence 9 compatibility;
+neither is a runtime Geist or Segoe font route. Current builds do not copy or
+package Windows-installed Segoe UI fonts. The `Ogg (ProggyClean)` option uses
+Tristan Grimmer's ProggyClean font already embedded by Dear ImGui under the MIT
+License; new packages install its complete separate notice as
+`licenses/ProggyClean-MIT.txt` without staging a duplicate font binary.
 
 ## Distribution Responsibility
 

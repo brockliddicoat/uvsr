@@ -62,7 +62,7 @@ rendering views and output diagnostics belong in Debug, grouped under the effect
 they explain.
 
 The fixed settings code is exactly 32 lowercase hexadecimal characters. The
-first four characters are its registered schema version (currently `0004`);
+first four characters are its registered schema version (currently `0005`);
 the remaining 112 bits are a deterministic fingerprint of every sorted
 represented non-action command value,
 including stored inactive and runtime-dynamic selections. Root Settings
@@ -138,7 +138,12 @@ Interface is the final drawer. Its first two toggles disable or enable every
 authored UI animation and opt exact numeric entry into values beyond compact
 visual tracks but within each setting's safe logical bounds; both preferences
 are session-only, and Ogg remains immediate regardless. It also owns the skin
-selector plus session-only RGBA editors. Amp Primary Accent drives drawer and
+selector, the independent font-family selector, plus session-only RGBA editors.
+Font Family offers **Codex (Segoe UI)** from the installed Windows faces,
+bundled **Noto Sans** as the default, and embedded **Ogg (ProggyClean)**. Never
+copy the Segoe files into build or package output. Preserve Noto Sans Bold for
+authored Amp headings when ProggyClean supplies the body because the embedded
+Ogg face has no truthful Bold weight. Amp Primary Accent drives drawer and
 panel headers, footer buttons, checkmarks, selection, and raised slider knobs;
 it is unavailable under Ogg. Shared Secondary Accent defaults to
 `#4296FA4F` and drives error, negative, and toggle-off presentation. Shared
@@ -150,7 +155,8 @@ Color owns all authored copy, while Background Color owns the menu body,
 resting closed controls, and slider tracks. Role-state colors derive from these
 resting RGBA values, and ultra-bright Primary Accent surfaces select dark
 transparent depth automatically. Slider knobs remain raised. Footer Reset and
-`/reset all` restore renderer defaults, the dynamic Adaptive Sync default, Amp, enabled
+`/reset all` restore renderer defaults, the dynamic Adaptive Sync default, Amp,
+Noto Sans, enabled
 animations, disabled visual-maximum override, every Interface color, and the
 collapsed Complete Renderer view.
 They preserve camera, scene, active adapter, and shell navigation state.

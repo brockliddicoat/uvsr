@@ -53,14 +53,14 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 221u);
+    static_assert(UiSettingsCommandCatalog.size() == 222u);
     static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 14u);
     static_assert(static_cast<std::uint8_t>(UiSettingsCommandKind::Float4) == 7u);
     static_assert(Action("test", Section::General, "test").supportedVerbs ==
         static_cast<std::uint8_t>(UiSettingsCommandVerb::Run));
 
     constexpr std::array<std::size_t, 14> ExpectedSectionCounts = {
-        15u, // UI
+        16u, // UI
         7u,  // General
         12u, // Pathing
         4u,  // Representation
@@ -275,15 +275,15 @@ int main()
     }
 
     Require(names.size() == UiSettingsCommandCatalog.size(),
-        "the compact catalog must contain 221 unique commands");
+        "the compact catalog must contain 222 unique commands");
     Require(sectionCounts == ExpectedSectionCounts,
         "section counts must match the current UI");
     Require(actionCount == 4u,
         "only open-folder, reset, capture, and restart actions remain");
-    Require(UiSettingsCommandCatalog.size() - actionCount == 217u,
-        "the compact catalog must contain 217 values");
-    Require(snapshotValueCount == 215u,
-        "the current snapshot schema must represent 215 values after excluding "
+    Require(UiSettingsCommandCatalog.size() - actionCount == 218u,
+        "the compact catalog must contain 218 values");
+    Require(snapshotValueCount == 216u,
+        "the current snapshot schema must represent 216 values after excluding "
         "transient root and Material drawer presentation");
     const UiSettingsCommandDefinition* settingsCollapsed =
         Find("ui.settings-collapsed");
@@ -331,6 +331,9 @@ int main()
         "reset-settings",
         "restore renderer and interface factory settings");
     requireDomain("ui.skin", "amp|ogg");
+    requireDomain(
+        "ui.font-family",
+        "codex|noto-sans|proggy-clean");
     requireDomain("ui.animations", "on|off");
     requireDomain("ui.override-visual-maxes", "on|off");
     requireDomain("ui.accent.main", "display rgb float3 0..1");
@@ -567,9 +570,14 @@ int main()
     requireKindAndSection(
         "pathing.spatial-neighbors", Kind::Integer, Section::Pathing);
     requireKindAndSection("ui.skin", Kind::Enum, Section::Ui);
+    requireKindAndSection("ui.font-family", Kind::Enum, Section::Ui);
     requireKindAndSection("ui.animations", Kind::Boolean, Section::Ui);
     requireKindAndSection(
         "ui.override-visual-maxes", Kind::Boolean, Section::Ui);
+    Require(
+        Find("ui.font-family")->Supports(UiSettingsCommandVerb::Reset) &&
+            !Find("ui.font-family")->dynamic,
+        "the font-family preference must be a resettable static value");
     Require(
         Find("ui.animations")->Supports(UiSettingsCommandVerb::Reset) &&
             !Find("ui.animations")->dynamic,

@@ -10,6 +10,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Windows.Forms;
 using UvsrInstaller;
 
 internal static class Program
@@ -33,10 +34,14 @@ internal static class Program
         ("runtime package validation requires exact executable hash", PackageHashIsVerified),
         ("runtime package validation requires every recorded file", PackageInventoryIsVerified),
         ("runtime package validation rejects null inventory data", PackageNullInventoryIsRejected),
+        ("runtime package validation accepts only complete UI font generations", PackageUiFontContractsAreExact),
+        ("ProggyClean package notice is exact and transition-safe", ProggyCleanPackageNoticeIsExact),
+        ("staging normalizes exact transitional UI font aliases", StageNormalizesTransitionalUiFonts),
         ("DirectX runtime contract binds the packaged core", D3D12RuntimeContractIsBound),
         ("pinned prerequisite metadata is HTTPS and hashed", ToolMetadataIsPinned),
         ("pinned build dependencies are offline-configured", BuildDependenciesArePinnedAndOffline),
         ("renderer build contract is strict and launcher-bound", RendererBuildContractIsStrict),
+        ("ordinary renderer source requires exact bundled Noto assets", RendererSourceFontsAreReleaseBound),
         ("renderer source bridge registry and resource are exact", RendererSourceBridgeIsExact),
         ("renderer source bridge identity rejects mutation", RendererSourceBridgeRejectsMutation),
         ("renderer source bridge applies to its exact Git base", RendererSourceBridgeGitApplicationWorks),
@@ -81,11 +86,15 @@ internal static class Program
         ("legacy installer operation values remain stable", LegacyOperationValuesRemainStable),
         ("launcher actions remain available for repair states", LauncherActionStatesSupportRepair),
         ("renderer button intent never inverts a stale click", RendererButtonIntentIsStable),
+        ("renderer UI retries and closure remain lifecycle-safe", RendererUiLifecycleIsSafe),
         ("exact renderer process identity observes process exit", ExactRendererIdentityObservesExit),
         ("exact force-close terminates only the verified process handle", ExactTerminationUsesVerifiedHandle),
         ("update exits always stop indeterminate progress", UpdateExitStatesAreTerminal),
         ("update selection copy distinguishes failed checks", UpdateSelectionCopyIsAccurate),
         ("launcher windows stay inside small high-DPI work areas", LauncherLayoutsAreBounded),
+        ("launcher visual roles remain fixed and accessible", LauncherVisualContractIsStable),
+        ("embedded launcher typography is exact and licensed", LauncherTypographyIsExact),
+        ("launcher font roles preserve their exact weights", LauncherFontRolesAreStable),
         ("launcher feed parsing is strict and deterministic", LauncherFeedParsingIsStrict),
         ("checked-in launcher feed matches the strict production schema", CheckedInLauncherFeedIsValid),
         ("update checks identify live feed and source release skew", UpdateCheckDiagnosticsAreExact),
@@ -515,6 +524,246 @@ internal static class Program
         Expect<InstallerException>(() => PayloadPackager.ValidatePackage(package, manifest));
     }
 
+    private static void PackageUiFontContractsAreExact()
+    {
+        using TestDirectory test = new();
+
+        string legacy = Path.Combine(test.Root, "legacy");
+        WritePackageFixture(legacy);
+        ValidateFixturePackage(legacy);
+
+        string noto = Path.Combine(test.Root, "noto");
+        WritePackageFixture(noto);
+        Directory.Delete(Path.Combine(noto, "media", "fonts", "System"), true);
+        File.Delete(Path.Combine(noto, "bin", "licenses", "Geist-OFL-1.1.txt"));
+        string notoDirectory = Path.Combine(noto, "media", "fonts", "NotoSans");
+        Directory.CreateDirectory(notoDirectory);
+        string sourceDirectory = Path.Combine(RepositoryRoot(), "assets", "fonts",
+            "noto-sans");
+        foreach (string name in new[]
+                 {
+                     "NotoSans-Regular.ttf", "NotoSans-SemiBold.ttf",
+                     "NotoSans-Bold.ttf"
+                 })
+        {
+            File.Copy(Path.Combine(sourceDirectory, name),
+                Path.Combine(notoDirectory, name));
+        }
+        File.Copy(Path.Combine(sourceDirectory, "OFL.txt"),
+            Path.Combine(noto, "bin", "licenses", "Noto-Sans-OFL-1.1.txt"));
+        ValidateFixturePackage(noto);
+
+        string currentNoto = Path.Combine(test.Root, "current-noto");
+        CopyDirectoryForTest(noto, currentNoto);
+        CopyProggyCleanNotice(currentNoto);
+        ValidateFixturePackage(currentNoto);
+
+        string corruptProggyClean = Path.Combine(test.Root, "corrupt-proggy-clean");
+        CopyDirectoryForTest(currentNoto, corruptProggyClean);
+        File.AppendAllText(Path.Combine(corruptProggyClean, "bin", "licenses",
+            "ProggyClean-MIT.txt"), "x");
+        Expect<InstallerException>(() =>
+            ValidateFixturePackage(corruptProggyClean));
+
+        string dual = Path.Combine(test.Root, "dual");
+        CopyDirectoryForTest(noto, dual);
+        WriteExactLegacyAliases(dual);
+        File.Copy(Path.Combine(RepositoryRoot(), "assets", "fonts", "geist",
+                "LICENSE.txt"),
+            Path.Combine(dual, "bin", "licenses", "Geist-OFL-1.1.txt"));
+        ValidateFixturePackage(dual);
+
+        string partial = Path.Combine(test.Root, "partial");
+        CopyDirectoryForTest(noto, partial);
+        File.Delete(Path.Combine(partial, "media", "fonts", "NotoSans",
+            "NotoSans-Bold.ttf"));
+        Expect<InstallerException>(() => ValidateFixturePackage(partial));
+
+        string arbitraryMixed = Path.Combine(test.Root, "arbitrary-mixed");
+        CopyDirectoryForTest(noto, arbitraryMixed);
+        string legacyDirectory = Path.Combine(arbitraryMixed, "media", "fonts", "System");
+        Directory.CreateDirectory(legacyDirectory);
+        File.Copy(Path.Combine(notoDirectory, "NotoSans-Regular.ttf"),
+            Path.Combine(legacyDirectory, "CodexUI.ttf"));
+        Expect<InstallerException>(() => ValidateFixturePackage(arbitraryMixed));
+
+        string wrongAlias = Path.Combine(test.Root, "wrong-alias");
+        CopyDirectoryForTest(dual, wrongAlias);
+        string wrongAliasFont = Path.Combine(wrongAlias, "media", "fonts", "System",
+            "CodexUI-Bold.ttf");
+        byte[] wrongAliasBytes = File.ReadAllBytes(wrongAliasFont);
+        wrongAliasBytes[^1] ^= 0x01;
+        File.WriteAllBytes(wrongAliasFont, wrongAliasBytes);
+        Expect<InstallerException>(() => ValidateFixturePackage(wrongAlias));
+
+        string wrongHash = Path.Combine(test.Root, "wrong-hash");
+        CopyDirectoryForTest(noto, wrongHash);
+        string wrongHashFont = Path.Combine(wrongHash, "media", "fonts", "NotoSans",
+            "NotoSans-Regular.ttf");
+        byte[] wrongHashBytes = File.ReadAllBytes(wrongHashFont);
+        wrongHashBytes[^1] ^= 0x01;
+        File.WriteAllBytes(wrongHashFont, wrongHashBytes);
+        Expect<InstallerException>(() => ValidateFixturePackage(wrongHash));
+
+        string wrongSize = Path.Combine(test.Root, "wrong-size");
+        CopyDirectoryForTest(noto, wrongSize);
+        File.AppendAllText(Path.Combine(wrongSize, "media", "fonts", "NotoSans",
+            "NotoSans-Bold.ttf"), "x");
+        Expect<InstallerException>(() => ValidateFixturePackage(wrongSize));
+
+        string missingLicense = Path.Combine(test.Root, "missing-license");
+        CopyDirectoryForTest(noto, missingLicense);
+        File.Delete(Path.Combine(missingLicense, "bin", "licenses",
+            "Noto-Sans-OFL-1.1.txt"));
+        Expect<InstallerException>(() => ValidateFixturePackage(missingLicense));
+    }
+
+    private static void ProggyCleanPackageNoticeIsExact()
+    {
+        string repository = RepositoryRoot();
+        string noticePath = Path.Combine(repository, "assets", "fonts",
+            "proggy-clean", "ProggyClean-MIT.txt");
+        byte[] notice = File.ReadAllBytes(noticePath);
+        Assert(notice.LongLength == 1082);
+        Assert(Hash(notice) ==
+            "8b802d79f256d29b45ad253323d212fa14ca952a20dcd227cfbcdb3d140bfe7c");
+        string noticeText = Encoding.UTF8.GetString(notice);
+        Assert(noticeText.Contains(
+            "Copyright (c) 2004, 2005 Tristan Grimmer",
+            StringComparison.Ordinal));
+        Assert(noticeText.Contains(
+            "Permission is hereby granted, free of charge",
+            StringComparison.Ordinal));
+        Assert(noticeText.Contains(
+            "THE SOFTWARE IS PROVIDED \"AS IS\"",
+            StringComparison.Ordinal));
+
+        string fontPath = Path.Combine(repository, "donut", "thirdparty",
+            "imgui", "misc", "fonts", "ProggyClean.ttf");
+        byte[] font = File.ReadAllBytes(fontPath);
+        Assert(font.LongLength == 41208);
+        Assert(Hash(font) ==
+            "527d2a443ce051f93f7e77b855609722b8cb220a9f104b4aa037be5c90b71324");
+
+        string imguiSource = File.ReadAllText(Path.Combine(repository, "donut",
+            "thirdparty", "imgui", "imgui_draw.cpp"));
+        Assert(imguiSource.Contains("// ProggyClean.ttf",
+            StringComparison.Ordinal));
+        Assert(imguiSource.Contains(
+            "// Copyright (c) 2004, 2005 Tristan Grimmer",
+            StringComparison.Ordinal));
+        Assert(imguiSource.Contains("// MIT license", StringComparison.Ordinal));
+        Assert(imguiSource.Contains("// File: 'ProggyClean.ttf' (41208 bytes)",
+            StringComparison.Ordinal));
+    }
+
+    private static void StageNormalizesTransitionalUiFonts()
+    {
+        using TestDirectory test = new();
+        InstallerPaths paths = InstallerPaths.Create(test.Root,
+            Path.Combine(test.Root, "Desktop"), Path.Combine(test.Root, "ProgramsMenu"));
+        OwnerMarker owner = new OwnershipManager(paths).EnsureRoots();
+        WriteDualBuildOutputFixture(paths);
+        InstallLog log = new(paths.LogsDirectory);
+        Guid transactionId = Guid.NewGuid();
+        PayloadPackager packager = new(paths);
+        PackageManifest manifest = packager.Stage(owner.InstallationId,
+            transactionId,
+            "0123456789abcdef0123456789abcdef01234567-20260817123456-89abcdef",
+            "0123456789abcdef0123456789abcdef01234567",
+            log);
+        string package = Path.Combine(paths.StagingDirectory,
+            transactionId.ToString("N"), "package");
+        Assert(Directory.Exists(Path.Combine(package, "media", "fonts", "NotoSans")));
+        Assert(!Directory.Exists(Path.Combine(package, "media", "fonts", "System")));
+        Assert(!File.Exists(Path.Combine(package, "bin", "licenses",
+            "Geist-OFL-1.1.txt")));
+        string proggyCleanNotice = Path.Combine(package, "bin", "licenses",
+            "ProggyClean-MIT.txt");
+        Assert(File.Exists(proggyCleanNotice));
+        Assert(new FileInfo(proggyCleanNotice).Length == 1082);
+        Assert(PayloadPackager.ComputeSha256(proggyCleanNotice) ==
+            "8b802d79f256d29b45ad253323d212fa14ca952a20dcd227cfbcdb3d140bfe7c");
+        Assert(manifest.Files.All(file =>
+            !file.RelativePath.StartsWith("media/fonts/System/",
+                StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(file.RelativePath, "bin/licenses/Geist-OFL-1.1.txt",
+                StringComparison.OrdinalIgnoreCase)));
+        Assert(manifest.Files.Any(file =>
+            string.Equals(file.RelativePath, "bin/licenses/ProggyClean-MIT.txt",
+                StringComparison.OrdinalIgnoreCase) &&
+            file.Size == 1082 &&
+            file.Sha256 ==
+                "8b802d79f256d29b45ad253323d212fa14ca952a20dcd227cfbcdb3d140bfe7c"));
+        PayloadPackager.ValidatePackage(package, manifest);
+
+        string build = paths.BuildDirectory;
+        string buildProggyCleanNotice = Path.Combine(build, "bin", "licenses",
+            "ProggyClean-MIT.txt");
+        File.Delete(buildProggyCleanNotice);
+        Expect<InstallerException>(() =>
+            PayloadPackager.ValidateBuildOutput(paths.SourceDirectory, build));
+        CopyProggyCleanNotice(build);
+        byte[] corruptNotice = File.ReadAllBytes(buildProggyCleanNotice);
+        corruptNotice[^1] ^= 0x01;
+        File.WriteAllBytes(buildProggyCleanNotice, corruptNotice);
+        Expect<InstallerException>(() =>
+            PayloadPackager.ValidateBuildOutput(paths.SourceDirectory, build));
+        CopyProggyCleanNotice(build, overwrite: true);
+
+        Directory.Delete(Path.Combine(build, "media", "fonts", "NotoSans"), true);
+        File.Delete(Path.Combine(build, "bin", "licenses",
+            "Noto-Sans-OFL-1.1.txt"));
+        PayloadPackager.ValidateBuildOutput(paths.SourceDirectory, build);
+        PayloadPackager.ValidateBuildOutputCanBeStaged(build, 9);
+        Expect<InstallerException>(() =>
+            PayloadPackager.ValidateBuildOutputCanBeStaged(build, 10));
+        Guid legacyTransactionId = Guid.NewGuid();
+        InstallerException legacyStage = Capture<InstallerException>(() =>
+            packager.Stage(owner.InstallationId, legacyTransactionId,
+                "0123456789abcdef0123456789abcdef01234567-20260817123456-89abcdef",
+                "0123456789abcdef0123456789abcdef01234567", log));
+        Assert(ProductConstants.LauncherReleaseSequence >= 10);
+        Assert(legacyStage.Message.Contains("legacy CodexUI",
+            StringComparison.Ordinal));
+        Assert(legacyStage.Message.Contains("source and this launcher are out of sync",
+            StringComparison.Ordinal));
+        Assert(!Directory.Exists(Path.Combine(paths.StagingDirectory,
+            legacyTransactionId.ToString("N"))));
+
+        Directory.Delete(Path.Combine(build, "media", "fonts", "System"), true);
+        File.Delete(Path.Combine(build, "bin", "licenses", "Geist-OFL-1.1.txt"));
+        string noto = Path.Combine(build, "media", "fonts", "NotoSans");
+        Directory.CreateDirectory(noto);
+        string sourceFonts = Path.Combine(RepositoryRoot(), "assets", "fonts",
+            "noto-sans");
+        foreach (string name in new[]
+                 {
+                     "NotoSans-Regular.ttf", "NotoSans-SemiBold.ttf",
+                     "NotoSans-Bold.ttf"
+                 })
+        {
+            File.Copy(Path.Combine(sourceFonts, name), Path.Combine(noto, name));
+        }
+        File.Copy(Path.Combine(sourceFonts, "OFL.txt"),
+            Path.Combine(build, "bin", "licenses", "Noto-Sans-OFL-1.1.txt"));
+        PayloadPackager.ValidateBuildOutput(paths.SourceDirectory, build);
+        Guid notoTransactionId = Guid.NewGuid();
+        PackageManifest notoManifest = packager.Stage(owner.InstallationId,
+            notoTransactionId,
+            "0123456789abcdef0123456789abcdef01234567-20260817123456-89abcdef",
+            "0123456789abcdef0123456789abcdef01234567", log);
+        string notoPackage = Path.Combine(paths.StagingDirectory,
+            notoTransactionId.ToString("N"), "package");
+        Assert(Directory.Exists(Path.Combine(notoPackage,
+            "media", "fonts", "NotoSans")));
+        Assert(!Directory.Exists(Path.Combine(notoPackage,
+            "media", "fonts", "System")));
+        Assert(File.Exists(Path.Combine(notoPackage, "bin", "licenses",
+            "ProggyClean-MIT.txt")));
+        PayloadPackager.ValidatePackage(notoPackage, notoManifest);
+    }
+
     private static void D3D12RuntimeContractIsBound()
     {
         using TestDirectory test = new();
@@ -623,6 +872,80 @@ internal static class Program
         Expect<SourceLauncherCompatibilityException>(() =>
             SourceManager.ValidateSupportedRendererBuildContract(
                 contract with { DirectXHeadersVersion = "1.0.0" }, commit));
+    }
+
+    private static void RendererSourceFontsAreReleaseBound()
+    {
+        using TestDirectory test = new();
+        string commit = new('a', 40);
+        string source = Path.Combine(test.Root, "ordinary-public-source");
+        Directory.CreateDirectory(Path.Combine(source, "assets", "fonts", "geist"));
+        File.WriteAllText(Path.Combine(source, "assets", "fonts", "geist",
+            "legacy.ttf"), "legacy");
+        SourceLauncherCompatibilityException missing =
+            Capture<SourceLauncherCompatibilityException>(() =>
+                SourceManager.ValidateBundledNotoSourceContract(source, commit));
+        Assert(missing.Message.Contains("not a compatible release pair",
+            StringComparison.Ordinal));
+        Assert(missing.Message.Contains(
+            SourceManager.NotoSansSourceRootRelativePath, StringComparison.Ordinal));
+        Assert(missing.Message.Contains("matching UVSR source is published",
+            StringComparison.Ordinal));
+
+        string target = Path.Combine(source,
+            SourceManager.NotoSansSourceRootRelativePath.Replace('/',
+                Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(target);
+        string checkedIn = Path.Combine(RepositoryRoot(), "assets", "fonts",
+            "noto-sans");
+        foreach (string name in SourceManager.RequiredNotoSansSourceFiles.Keys)
+            File.Copy(Path.Combine(checkedIn, name), Path.Combine(target, name));
+        SourceManager.ValidateBundledNotoSourceContract(source, commit);
+
+        string regular = Path.Combine(target, "NotoSans-Regular.ttf");
+        File.AppendAllText(regular, "x");
+        SourceLauncherCompatibilityException wrongSize =
+            Capture<SourceLauncherCompatibilityException>(() =>
+                SourceManager.ValidateBundledNotoSourceContract(source, commit));
+        Assert(wrongSize.Message.Contains("wrong size", StringComparison.Ordinal));
+        File.Copy(Path.Combine(checkedIn, "NotoSans-Regular.ttf"), regular, true);
+
+        byte[] mutated = File.ReadAllBytes(regular);
+        mutated[^1] ^= 0x01;
+        File.WriteAllBytes(regular, mutated);
+        SourceLauncherCompatibilityException wrongHash =
+            Capture<SourceLauncherCompatibilityException>(() =>
+                SourceManager.ValidateBundledNotoSourceContract(source, commit));
+        Assert(wrongHash.Message.Contains("SHA-256", StringComparison.Ordinal));
+        File.Copy(Path.Combine(checkedIn, "NotoSans-Regular.ttf"), regular, true);
+
+        File.WriteAllText(Path.Combine(target, "unexpected.txt"), "unexpected");
+        SourceLauncherCompatibilityException unexpected =
+            Capture<SourceLauncherCompatibilityException>(() =>
+                SourceManager.ValidateBundledNotoSourceContract(source, commit));
+        Assert(unexpected.Message.Contains("is not exact", StringComparison.Ordinal));
+        File.Delete(Path.Combine(target, "unexpected.txt"));
+        SourceManager.ValidateBundledNotoSourceContract(source, commit);
+
+        string managerSource = File.ReadAllText(Path.Combine(RepositoryRoot(),
+            "launcher", "src", "UVSR.Installer", "SourceManager.cs"));
+        string prepare = SourceMethodBody(managerSource,
+            "internal async Task PrepareExactSourceAsync",
+            "internal async Task BuildAsync");
+        int preparePreflight = prepare.IndexOf(
+            "ValidateBundledNotoSourceContractIfRequired(",
+            StringComparison.Ordinal);
+        int submoduleDownload = prepare.IndexOf(
+            "\"submodule\", \"sync\"", StringComparison.Ordinal);
+        Assert(preparePreflight >= 0 && submoduleDownload > preparePreflight);
+        string build = SourceMethodBody(managerSource,
+            "internal async Task BuildAsync",
+            "internal async Task ValidatePreparedSourceAsync");
+        int buildPreflight = build.LastIndexOf(
+            "ValidateBundledNotoSourceContractIfRequired(",
+            StringComparison.Ordinal);
+        int configure = build.IndexOf("Configuring UVSR", StringComparison.Ordinal);
+        Assert(buildPreflight >= 0 && configure > buildPreflight);
     }
 
     private static void RendererSourceBridgeIsExact()
@@ -1815,6 +2138,8 @@ internal static class Program
         var freshActions = MainForm.DetermineActionAvailability(fresh, false);
         Assert(freshActions.Install && freshActions.Update && !freshActions.Uninstall &&
                !freshActions.Launch && freshActions.Options);
+        Assert(MainForm.DetermineInstallButtonText(fresh) == "Install");
+        Assert(MainForm.DetermineSnapshotStatusColor(fresh) == LauncherPalette.Muted);
 
         InstallSnapshot partial = new(true, false, Guid.NewGuid(), null, null, "partial");
         var partialActions = MainForm.DetermineActionAvailability(partial, false);
@@ -1825,9 +2150,31 @@ internal static class Program
         var damagedActions = MainForm.DetermineActionAvailability(damaged, false);
         Assert(damagedActions.Install && damagedActions.Update && damagedActions.Uninstall &&
                !damagedActions.Launch);
+        Assert(MainForm.DetermineInstallButtonText(damaged) == "Install");
+        Assert(MainForm.DetermineSnapshotStatusColor(damaged) == LauncherPalette.Danger);
+
+        InstallSnapshot healthy = damaged with { IsDamaged = false };
+        var healthyActions = MainForm.DetermineActionAvailability(healthy, false);
+        Assert(healthyActions.Install && healthyActions.Update && healthyActions.Uninstall &&
+               healthyActions.Launch);
+        Assert(MainForm.DetermineInstallButtonText(healthy) == "Installed");
+        Assert(MainForm.DetermineSnapshotStatusColor(healthy) == LauncherPalette.Success);
 
         var busy = MainForm.DetermineActionAvailability(damaged, true);
         Assert(!busy.Install && !busy.Update && !busy.Uninstall && !busy.Launch && !busy.Options);
+
+        foreach (RendererBusyAction rendererBusy in new[]
+                 {
+                     RendererBusyAction.Launching,
+                     RendererBusyAction.Closing
+                 })
+        {
+            var rendererActions = MainForm.DetermineActionAvailability(
+                healthy, false, rendererBusy);
+            Assert(!rendererActions.Install && !rendererActions.Update &&
+                   !rendererActions.Uninstall && !rendererActions.Launch &&
+                   rendererActions.Options);
+        }
     }
 
     private static void RendererButtonIntentIsStable()
@@ -1842,6 +2189,68 @@ internal static class Program
                    TrackedProcessState.Running) == RendererClickAction.None);
         Assert(MainForm.ReconcileRendererClick(RendererButtonIntent.Close,
                    TrackedProcessState.Unverifiable) == RendererClickAction.None);
+    }
+
+    private static void RendererUiLifecycleIsSafe()
+    {
+        TerminalUiState failure = MainForm.DetermineErrorTerminalState(
+            restartRequired: false, "fixture failure");
+        Assert(failure.Tone == TerminalUiTone.Error);
+        foreach (RendererBusyAction action in new[]
+                 {
+                     RendererBusyAction.Launching,
+                     RendererBusyAction.Closing
+                 })
+        {
+            TerminalUiState active = MainForm.DetermineRendererActiveState(action);
+            TerminalUiState success = MainForm.DetermineRendererSuccessState(action);
+            Assert(active.Tone == TerminalUiTone.Normal);
+            Assert(active.ProgressStyle == ProgressBarStyle.Marquee);
+            Assert(success.Tone == TerminalUiTone.Normal);
+            Assert(success.ProgressStyle == ProgressBarStyle.Blocks);
+            Assert(success.Progress == 100);
+            if (action == RendererBusyAction.Launching)
+                Assert(success.Phase == "UVSR Started");
+            Assert(MainForm.ShouldBlockCloseForRenderer(action, allowClose: false));
+            Assert(!MainForm.ShouldBlockCloseForRenderer(action, allowClose: true));
+            Assert(!string.IsNullOrWhiteSpace(
+                MainForm.GetRendererBusyCloseDetail(action)));
+        }
+        Assert(!MainForm.ShouldBlockCloseForRenderer(
+            RendererBusyAction.None, allowClose: false));
+        TerminalUiState cancelled = MainForm.DetermineRendererCloseCancelledState();
+        Assert(cancelled.Tone == TerminalUiTone.Normal);
+        Assert(cancelled.ProgressStyle == ProgressBarStyle.Blocks);
+        Expect<ArgumentOutOfRangeException>(() =>
+            MainForm.DetermineRendererActiveState(RendererBusyAction.None));
+        Expect<ArgumentOutOfRangeException>(() =>
+            MainForm.DetermineRendererSuccessState(RendererBusyAction.None));
+        Expect<ArgumentOutOfRangeException>(() =>
+            MainForm.GetRendererBusyCloseDetail(RendererBusyAction.None));
+
+        string source = File.ReadAllText(Path.Combine(RepositoryRoot(), "launcher",
+            "src", "UVSR.Installer", "MainForm.cs"));
+        string launchBody = SourceMethodBody(source,
+            "private async Task LaunchUvsrAsync", "private async Task CloseUvsrAsync");
+        string closeBody = SourceMethodBody(source,
+            "private async Task CloseUvsrAsync",
+            "private static async Task<bool> WaitForExactProcessesStoppedAsync");
+        string formClosingBody = SourceMethodBody(source,
+            "private void OnFormClosing", "protected override void Dispose");
+        Assert(launchBody.Contains("DetermineRendererActiveState(",
+            StringComparison.Ordinal));
+        Assert(launchBody.Contains("DetermineRendererSuccessState(",
+            StringComparison.Ordinal));
+        Assert(closeBody.Contains("DetermineRendererActiveState(",
+            StringComparison.Ordinal));
+        Assert(closeBody.Contains("DetermineRendererSuccessState(",
+            StringComparison.Ordinal));
+        Assert(closeBody.Contains("DetermineRendererCloseCancelledState()",
+            StringComparison.Ordinal));
+        Assert(formClosingBody.Contains(
+            "ShouldBlockCloseForRenderer(_rendererBusy, _allowClose)",
+            StringComparison.Ordinal));
+        Assert(formClosingBody.Contains("e.Cancel = true", StringComparison.Ordinal));
     }
 
     private static void ExactRendererIdentityObservesExit()
@@ -1929,7 +2338,7 @@ internal static class Program
                 process.Kill(entireProcessTree: true);
         }
 
-        string source = File.ReadAllText(Path.Combine(RepositoryRoot(), "installer",
+        string source = File.ReadAllText(Path.Combine(RepositoryRoot(), "launcher",
             "src", "UVSR.Installer", "ProcessInspector.cs"));
         int startIndex = source.IndexOf("internal static bool TryTerminate",
             StringComparison.Ordinal);
@@ -1952,12 +2361,23 @@ internal static class Program
             Assert(!string.IsNullOrWhiteSpace(state.Phase));
             Assert(!string.IsNullOrWhiteSpace(state.Detail));
             Assert(state.Progress is >= 0 and <= 100);
+            Assert(state.Tone == TerminalUiTone.Normal);
         }
         TerminalUiState current = MainForm.DetermineUpdateTerminalState(
             UpdateFlowExit.UpToDate, "custom current detail");
         Assert(current.Phase == "Up to Date");
         Assert(current.Detail == "custom current detail");
         Assert(current.Progress == 100);
+
+        TerminalUiState error = MainForm.DetermineErrorTerminalState(
+            restartRequired: false, "fixture failure");
+        Assert(error.Phase == "Stopped Safely");
+        Assert(error.Detail == "fixture failure");
+        Assert(error.Progress == 0);
+        Assert(error.ProgressStyle == System.Windows.Forms.ProgressBarStyle.Blocks);
+        Assert(error.Tone == TerminalUiTone.Error);
+        Assert(MainForm.DetermineErrorTerminalState(
+            restartRequired: true, "restart").Phase == "Restart Required");
     }
 
     private static void LauncherLayoutsAreBounded()
@@ -1979,6 +2399,45 @@ internal static class Program
             offsetWorking, 216);
         Assert(offsetWorking.Contains(available));
         Assert(available.Width > 0 && available.Height > 0);
+
+        Assert(MainForm.PreferredClientSizeLogical == new Size(840, 720));
+        Assert(MainForm.MinimumOuterSizeLogical == new Size(700, 520));
+        Assert(MainForm.IsWorkingAreaChangeMessage(0x007E, 0));
+        Assert(MainForm.IsWorkingAreaChangeMessage(0x001A, 0x002F));
+        Assert(!MainForm.IsWorkingAreaChangeMessage(0x001A, 0));
+        Assert(!MainForm.IsWorkingAreaChangeMessage(0x0005, 0x002F));
+        string source = File.ReadAllText(Path.Combine(RepositoryRoot(), "launcher",
+            "src", "UVSR.Installer", "MainForm.cs"));
+        Assert(source.Contains("FormBorderStyle = FormBorderStyle.FixedSingle",
+            StringComparison.Ordinal));
+        Assert(source.Contains("MaximizeBox = false", StringComparison.Ordinal));
+        Assert(source.Contains("ResizeEnd += (_, _) => ScheduleWorkingAreaRebound()",
+            StringComparison.Ordinal));
+        string reboundBody = SourceMethodBody(source,
+            "private void ScheduleWorkingAreaRebound", "protected override void WndProc");
+        Assert(reboundBody.Contains("_workingAreaReboundPending",
+            StringComparison.Ordinal));
+        Assert(reboundBody.Contains("LauncherUi.SizeToWorkingArea(this,",
+            StringComparison.Ordinal));
+        string windowMessageBody = SourceMethodBody(source,
+            "protected override void WndProc", "private void OnFormClosing");
+        Assert(windowMessageBody.Contains("IsWorkingAreaChangeMessage(",
+            StringComparison.Ordinal));
+        Assert(windowMessageBody.Contains("ScheduleWorkingAreaRebound()",
+            StringComparison.Ordinal));
+        string detailsBody = SourceMethodBody(source,
+            "private void SetDetailsVisible", "private void CopyDetails");
+        string errorBody = SourceMethodBody(source,
+            "private void ShowError", "private void ShowTerminalStatus");
+        foreach (string boundsMutation in new[]
+                 {
+                     "ClientSize", ".Size =", ".Width =", ".Height =",
+                     "SizeToWorkingArea", "ConstrainToWorkingArea"
+                 })
+        {
+            Assert(!detailsBody.Contains(boundsMutation, StringComparison.Ordinal));
+            Assert(!errorBody.Contains(boundsMutation, StringComparison.Ordinal));
+        }
     }
 
     private static void UpdateSelectionCopyIsAccurate()
@@ -2000,6 +2459,266 @@ internal static class Program
                "Choose What to Update");
         Assert(UpdateSelectionDialog.GetIntro(partialFailure).Contains(
             "One or more checks failed", StringComparison.Ordinal));
+        Assert(UpdateSelectionDialog.EngineLabel == "UVSR Engine");
+        Assert(UpdateSelectionDialog.LauncherLabel == "UVSR Launcher");
+        Assert(UpdateSelectionDialog.GetComponentDetailColor(
+            ComponentUpdateState.CheckFailed) == LauncherPalette.Danger);
+        Assert(UpdateSelectionDialog.GetComponentDetailColor(
+            ComponentUpdateState.RepairNeeded) == LauncherPalette.Danger);
+        Assert(UpdateSelectionDialog.GetComponentDetailColor(
+            ComponentUpdateState.Current) == LauncherPalette.Muted);
+        Assert(LauncherDialog.GetBodyColor(error: true) == LauncherPalette.Danger);
+        Assert(LauncherDialog.GetBodyColor(error: false) == LauncherPalette.Muted);
+    }
+
+    private static void LauncherVisualContractIsStable()
+    {
+        SynchronizationContext? previousContext = SynchronizationContext.Current;
+        try
+        {
+            LauncherVisualContractIsStableCore();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previousContext);
+        }
+    }
+
+    private static void LauncherVisualContractIsStableCore()
+    {
+        LauncherTypography.EnsureAvailable();
+        Assert(LauncherUi.StandardButtonSize == new Size(144, 44));
+        Assert(LauncherUi.StandardButtonPadding == new Padding(14, 0, 14, 0));
+        string[] labels =
+        {
+            "Install", "Installed", "Launch", "Launching", "Close", "Closing",
+            "Checking", "Update", "Uninstall", "Notices", "Details", "Copy",
+            "Cancel", "Update Selected", "Check Again", "OK", "Reinstall",
+            "Retry", "Continue", "Keep Waiting", "Force Close", "Stop",
+            "Keep Working"
+        };
+        foreach (string label in labels)
+        {
+            using Button button = LauncherUi.CreateButton(label);
+            Assert(button.Size == LauncherUi.StandardButtonSize);
+            Assert(button.MinimumSize == LauncherUi.StandardButtonSize);
+            Assert(button.MaximumSize == LauncherUi.StandardButtonSize);
+            Assert(!button.AutoSize);
+            Assert(button.Padding == LauncherUi.StandardButtonPadding);
+            Assert(button.TextAlign == ContentAlignment.MiddleCenter);
+            Assert(!button.UseCompatibleTextRendering);
+            Assert(button.Font.FontFamily.Name == LauncherTypography.FamilyName);
+            Assert(button.Font.Style == FontStyle.Regular);
+            Size text = TextRenderer.MeasureText(label, button.Font, Size.Empty,
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+            Assert(text.Width <= button.ClientSize.Width - button.Padding.Horizontal);
+            Assert(text.Height <= button.ClientSize.Height - button.Padding.Vertical);
+        }
+
+        int[] dpis = { 96, 120, 144, 168, 192, 216, 240, 288, 384 };
+        string[] lowGlyphLabels =
+            { "Update", "Copy", "Closing", "Checking", "Keep Working" };
+        int minimumClearance = int.MaxValue;
+        foreach (int dpi in dpis)
+        {
+            foreach (string label in lowGlyphLabels)
+                minimumClearance = Math.Min(minimumClearance,
+                    MeasureButtonRenderingAtDpi(label, dpi));
+            int mainRow = 5 * (LauncherUi.StandardButtonSize.Width + 8);
+            int updateRow = 3 * (LauncherUi.StandardButtonSize.Width + 8);
+            Assert(LauncherUi.ScaleLogical(mainRow, dpi) <=
+                   LauncherUi.ScaleLogical(840 - 56, dpi));
+            Assert(LauncherUi.ScaleLogical(updateRow, dpi) <=
+                   LauncherUi.ScaleLogical(540 - 48, dpi));
+        }
+        Console.WriteLine(
+            $"BUTTON_RENDER_MIN_CLEARANCE={minimumClearance}px DPIS={string.Join(',', dpis)}");
+
+        using Button primary = LauncherUi.CreateButton("Install", primary: true);
+        if (!SystemInformation.HighContrast)
+        {
+            Assert(primary.BackColor == LauncherPalette.Accent);
+            Assert(primary.ForeColor == Color.White);
+            primary.Enabled = false;
+            Assert(primary.BackColor == LauncherPalette.Disabled);
+            Assert(primary.ForeColor == LauncherPalette.Muted);
+        }
+
+        using Button cancel = LauncherUi.CreateButton("Cancel", primary: true);
+        Assert(LauncherUi.IsLiteralCancel(cancel.Text));
+        Assert(!LauncherUi.IsLiteralCancel("cancel"));
+        Assert(cancel.ForeColor == LauncherPalette.Danger);
+
+        Rectangle bounds = new(10, 4, 200, 7);
+        Assert(LauncherProgressBar.FillColor == LauncherPalette.Accent);
+        Assert(LauncherProgressBar.CalculateDeterminateFill(bounds, 25) ==
+               new Rectangle(10, 4, 50, 7));
+        Assert(LauncherProgressBar.CalculateDeterminateFill(bounds, -1).IsEmpty);
+        Assert(LauncherProgressBar.CalculateDeterminateFill(bounds, 101) == bounds);
+        Rectangle marquee = LauncherProgressBar.CalculateMarqueeFill(bounds, 50);
+        Assert(bounds.Contains(marquee));
+        Assert(!marquee.IsEmpty);
+        using LauncherProgressBar progress = new();
+        progress.AccessibleName = "Operation progress";
+        progress.Value = 37;
+        Assert(progress.AccessibleRole == AccessibleRole.ProgressBar);
+        Assert(progress.AccessibilityObject.Role == AccessibleRole.ProgressBar);
+        Assert(progress.AccessibilityObject.Value == "37 percent");
+        progress.Style = System.Windows.Forms.ProgressBarStyle.Marquee;
+        Assert(progress.AccessibilityObject.Value == "In progress");
+    }
+
+    private static void LauncherTypographyIsExact()
+    {
+        string root = RepositoryRoot();
+        string sourceDirectory = Path.Combine(root, "assets", "fonts", "noto-sans");
+        (string Name, long Length, string Sha256, ushort Weight, string Subfamily)[]
+            sourceFonts =
+            {
+                ("NotoSans-Regular.ttf", 621572,
+                    "478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823",
+                    400, "Regular"),
+                ("NotoSans-SemiBold.ttf", 625052,
+                    "a4e91fd530ac2b4ef5367240144ff37d7d65d66cf76f2e9a2187b93c676f92d0",
+                    600, "SemiBold"),
+                ("NotoSans-Bold.ttf", 631484,
+                    "1df075a380fc7cb898acf64c1f7b3b4dd780de3caa860178bf929de35817a913",
+                    700, "Bold")
+            };
+        foreach (var expected in sourceFonts)
+        {
+            byte[] bytes = File.ReadAllBytes(Path.Combine(sourceDirectory, expected.Name));
+            Assert(bytes.LongLength == expected.Length);
+            Assert(Hash(bytes) == expected.Sha256);
+            OpenTypeFontMetadata metadata =
+                LauncherTypography.ParseOpenTypeMetadata(bytes);
+            Assert(metadata.FamilyName == LauncherTypography.FamilyName);
+            Assert(metadata.SubfamilyName == expected.Subfamily);
+            Assert(metadata.WeightClass == expected.Weight);
+        }
+
+        string[] resourceNames = typeof(LauncherTypography).Assembly
+            .GetManifestResourceNames();
+        Assert(resourceNames.Contains(
+            LauncherTypography.RegularResource.ResourceName, StringComparer.Ordinal));
+        Assert(resourceNames.Contains(
+            LauncherTypography.BoldResource.ResourceName, StringComparer.Ordinal));
+        Assert(!resourceNames.Any(name => name.Contains("SemiBold",
+            StringComparison.OrdinalIgnoreCase)));
+        Assert(resourceNames.Contains(
+            LauncherTypography.LicenseResourceName, StringComparer.Ordinal));
+
+        byte[] regular = ReadAssemblyResource(
+            LauncherTypography.RegularResource.ResourceName);
+        byte[] bold = ReadAssemblyResource(LauncherTypography.BoldResource.ResourceName);
+        LauncherTypography.ValidateFontBytes(
+            regular, LauncherTypography.RegularResource);
+        LauncherTypography.ValidateFontBytes(bold, LauncherTypography.BoldResource);
+        byte[] mutated = (byte[])regular.Clone();
+        mutated[^1] ^= 0x01;
+        Expect<InstallerException>(() => LauncherTypography.ValidateFontBytes(
+            mutated, LauncherTypography.RegularResource));
+        Expect<InstallerException>(() => LauncherTypography.ValidateFontBytes(
+            regular[..^1], LauncherTypography.RegularResource));
+
+        LauncherTypography.EnsureAvailable();
+        using Font regularFont = LauncherTypography.CreateRegular(10F);
+        using Font boldFont = LauncherTypography.CreateBold(10F);
+        Assert(regularFont.FontFamily.Name == LauncherTypography.FamilyName);
+        Assert(regularFont.Style == FontStyle.Regular);
+        Assert(boldFont.FontFamily.Name == LauncherTypography.FamilyName);
+        Assert(boldFont.Style == FontStyle.Bold);
+
+        byte[] sourceLicense = File.ReadAllBytes(Path.Combine(sourceDirectory, "OFL.txt"));
+        Assert(sourceLicense.LongLength == 4396);
+        Assert(Hash(sourceLicense) ==
+               "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a");
+        Assert(ReadAssemblyResource(LauncherTypography.LicenseResourceName)
+            .SequenceEqual(sourceLicense));
+        Assert(MainForm.ReadNotice(LauncherTypography.LicenseResourceName) ==
+               File.ReadAllText(Path.Combine(sourceDirectory, "OFL.txt")));
+        string main = File.ReadAllText(Path.Combine(root, "launcher", "src",
+            "UVSR.Installer", "MainForm.cs"));
+        Assert(main.Contains("NOTO SANS FONT LICENSE", StringComparison.Ordinal));
+        Assert(main.Contains("LauncherTypography.LicenseResourceName",
+            StringComparison.Ordinal));
+
+        string program = File.ReadAllText(Path.Combine(root, "launcher", "src",
+            "UVSR.Installer", "Program.cs"));
+        Assert(Regex.Matches(program,
+            Regex.Escape("LauncherTypography.EnsureAvailable();")).Count == 2);
+        string healthCheck = SourceMethodBody(program,
+            "if (args.Length == 3", "if (args.Length == 5");
+        string directLaunch = SourceMethodBody(program,
+            "if (args.Length == 1 && args[0].Equals(\"--launch\"",
+            "bool uninstall");
+        Assert(healthCheck.Contains("LauncherTypography.EnsureAvailable",
+            StringComparison.Ordinal));
+        Assert(!healthCheck.Contains("ApplicationConfiguration.Initialize",
+            StringComparison.Ordinal));
+        Assert(!directLaunch.Contains("LauncherTypography", StringComparison.Ordinal));
+        string healthImplementation = SourceMethodBody(program,
+            "internal static int RunLauncherHealthCheck",
+            "private static void ShowCleanupFailure");
+        Assert(healthImplementation.Contains("return 3;", StringComparison.Ordinal));
+        Assert(healthImplementation.Contains("return 4;", StringComparison.Ordinal));
+        int healthCalls = 0;
+        Assert(UvsrInstaller.Program.RunLauncherHealthCheck(
+                   ProductConstants.LauncherReleaseSequence.ToString(),
+                   ProductConstants.LauncherVersion, () => healthCalls++) == 0);
+        Assert(healthCalls == 1);
+        Assert(UvsrInstaller.Program.RunLauncherHealthCheck(
+                   (ProductConstants.LauncherReleaseSequence - 1).ToString(),
+                   ProductConstants.LauncherVersion, () => healthCalls++) == 3);
+        Assert(healthCalls == 1);
+        Assert(UvsrInstaller.Program.RunLauncherHealthCheck(
+                   ProductConstants.LauncherReleaseSequence.ToString(),
+                   "wrong", () => healthCalls++) == 3);
+        Assert(healthCalls == 1);
+        Assert(UvsrInstaller.Program.RunLauncherHealthCheck(
+                   ProductConstants.LauncherReleaseSequence.ToString(),
+                   ProductConstants.LauncherVersion,
+                   () => throw new InstallerException("font unavailable")) == 4);
+        Assert(program.Contains("LauncherTypography.TryEnsureAvailable(",
+            StringComparison.Ordinal));
+        Assert(program.Contains("MessageBox.Show(owner,", StringComparison.Ordinal));
+    }
+
+    private static void LauncherFontRolesAreStable()
+    {
+        string root = RepositoryRoot();
+        string main = File.ReadAllText(Path.Combine(root, "launcher", "src",
+            "UVSR.Installer", "MainForm.cs"));
+        string dialogs = File.ReadAllText(Path.Combine(root, "launcher", "src",
+            "UVSR.Installer", "LauncherDialogs.cs"));
+
+        Assert(Regex.Matches(main, "new Font\\(").Count == 0);
+        Assert(Regex.Matches(main,
+            Regex.Escape("LauncherTypography.CreateRegular(10F)")).Count == 1);
+        Assert(Regex.Matches(main,
+            Regex.Escape("LauncherTypography.CreateBold(25F)")).Count == 1);
+        Assert(Regex.Matches(main,
+            Regex.Escape("LauncherTypography.CreateBold(11.5F)")).Count == 1);
+        Assert(Regex.Matches(main,
+            Regex.Escape("LauncherTypography.CreateBold(10F)")).Count == 1);
+        Assert(Regex.Matches(main,
+            Regex.Escape("LauncherTypography.CreateRegular(9F)")).Count == 2);
+
+        Assert(Regex.Matches(dialogs, "new Font\\(").Count == 0);
+        Assert(Regex.Matches(dialogs,
+            Regex.Escape("LauncherTypography.CreateRegular(10F)")).Count == 3);
+        Assert(Regex.Matches(dialogs,
+            Regex.Escape("LauncherTypography.CreateBold(16F)")).Count == 1);
+        Assert(Regex.Matches(dialogs,
+            Regex.Escape("LauncherTypography.CreateBold(17F)")).Count == 1);
+        Assert(Regex.Matches(dialogs,
+            Regex.Escape("LauncherTypography.CreateBold(11F)")).Count == 1);
+
+        string installerSource = string.Join('\n', Directory.EnumerateFiles(
+                Path.Combine(root, "launcher", "src", "UVSR.Installer"), "*.cs")
+            .Select(File.ReadAllText));
+        Assert(!installerSource.Contains("Segoe UI", StringComparison.OrdinalIgnoreCase));
+        Assert(!installerSource.Contains("CreateSemiBold", StringComparison.Ordinal));
     }
 
     private static void LauncherFeedParsingIsStrict()
@@ -2013,7 +2732,7 @@ internal static class Program
                "https://github.com/brockliddicoat/uvsr/releases/download/" +
                "uvsr-launcher-v1.1.0/UVSR-Launcher-Windows-11-x64.exe");
 
-        string legacyPath = Path.Combine(RepositoryRoot(), "installer", "tests",
+        string legacyPath = Path.Combine(RepositoryRoot(), "launcher", "tests",
             "fixtures", "launcher-feed-public-legacy-v1.json");
         string legacy = File.ReadAllText(legacyPath);
         LauncherFeed legacyFeed = LauncherManager.ParseAndValidateFeed(
@@ -2056,10 +2775,17 @@ internal static class Program
 
     private static void CheckedInLauncherFeedIsValid()
     {
-        string feedPath = Path.Combine(RepositoryRoot(), "installer",
+        string root = RepositoryRoot();
+        string feedPath = Path.Combine(root, "launcher", "launcher-feed-v1.json");
+        string legacyFeedPath = Path.Combine(root, "installer",
             "launcher-feed-v1.json");
+        byte[] canonicalFeed = File.ReadAllBytes(feedPath);
+        byte[] legacyFeed = File.ReadAllBytes(legacyFeedPath);
+        Assert(canonicalFeed.SequenceEqual(legacyFeed));
         LauncherFeed feed = LauncherManager.ParseAndValidateFeed(
-            File.ReadAllBytes(feedPath));
+            canonicalFeed);
+        Assert(ProductConstants.LauncherFeedUrl ==
+               "https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-feed-v1.json");
         Assert(feed.ProductId == ProductConstants.ProductId);
         Assert(feed.Channel == "stable");
         Assert(feed.ReleaseSequence == 2);
@@ -2069,11 +2795,27 @@ internal static class Program
         Assert(feed.Artifact.Sha256 ==
                "2b5f092bdf80dcdabca46034f1334f6be374c712400e7bf8d6ae1e672f7a5b36");
         Assert(ProductConstants.LauncherReleaseSequence > feed.ReleaseSequence);
+
+        string build = File.ReadAllText(Path.Combine(root, "launcher", "build.ps1"));
+        const string aliasVerification =
+            "& (Join-Path $PSScriptRoot 'verify-launcher-feed-alias.ps1')";
+        const string aliasTests =
+            "& (Join-Path $PSScriptRoot 'tests\\launcher-feed-alias-tests.ps1')";
+        int verificationIndex = build.IndexOf(aliasVerification,
+            StringComparison.Ordinal);
+        int testIndex = build.IndexOf(aliasTests, StringComparison.Ordinal);
+        int firstMutationIndex = build.IndexOf(
+            "New-Item -ItemType Directory -Path $output -Force",
+            StringComparison.Ordinal);
+        Assert(verificationIndex >= 0 && testIndex > verificationIndex &&
+               firstMutationIndex > testIndex);
+        Assert(Regex.Matches(build, Regex.Escape(aliasVerification)).Count == 1);
+        Assert(Regex.Matches(build, Regex.Escape(aliasTests)).Count == 1);
     }
 
     private static void UpdateCheckDiagnosticsAreExact()
     {
-        string legacyPath = Path.Combine(RepositoryRoot(), "installer", "tests",
+        string legacyPath = Path.Combine(RepositoryRoot(), "launcher", "tests",
             "fixtures", "launcher-feed-public-legacy-v1.json");
         byte[] legacyFeed = File.ReadAllBytes(legacyPath);
         byte[] bridgeMainReference = Encoding.UTF8.GetBytes(
@@ -2597,7 +3339,7 @@ internal static class Program
 
     private static void LauncherCopyWordingIsConcise()
     {
-        string source = File.ReadAllText(Path.Combine(RepositoryRoot(), "installer",
+        string source = File.ReadAllText(Path.Combine(RepositoryRoot(), "launcher",
             "src", "UVSR.Installer", "MainForm.cs"));
         Assert(source.Contains("LauncherUi.CreateButton(\"Copy\")",
             StringComparison.Ordinal));
@@ -2610,19 +3352,24 @@ internal static class Program
     private static void LauncherVersionMetadataAgrees()
     {
         string root = RepositoryRoot();
-        string project = File.ReadAllText(Path.Combine(root, "installer", "src",
+        string project = File.ReadAllText(Path.Combine(root, "launcher", "src",
             "UVSR.Installer", "UVSR.Installer.csproj"));
-        string manifest = File.ReadAllText(Path.Combine(root, "installer", "src",
+        string manifest = File.ReadAllText(Path.Combine(root, "launcher", "src",
             "UVSR.Installer", "app.manifest"));
         Assert(project.Contains($"<Version>{ProductConstants.LauncherVersion}</Version>",
             StringComparison.Ordinal));
-        Assert(project.Contains("<FileVersion>1.1.5.0</FileVersion>",
+        Assert(project.Contains("<FileVersion>1.1.12.0</FileVersion>",
             StringComparison.Ordinal));
-        Assert(manifest.Contains("version=\"1.1.5.0\"", StringComparison.Ordinal));
-        Assert(ProductConstants.LauncherVersion == "1.1.5");
-        Assert(ProductConstants.LauncherReleaseSequence == 6);
+        Assert(project.Contains("<AssemblyVersion>1.1.12.0</AssemblyVersion>",
+            StringComparison.Ordinal));
+        Assert(manifest.Contains("version=\"1.1.12.0\"", StringComparison.Ordinal));
+        Assert(ProductConstants.LauncherVersion == "1.1.12");
+        Assert(ProductConstants.LauncherReleaseSequence == 13);
+        Assert(Version.Parse(ProductConstants.LauncherVersion) >
+               Version.Parse("1.1.11"));
+        Assert(ProductConstants.LauncherReleaseSequence > 12);
         using JsonDocument inputLock = JsonDocument.Parse(File.ReadAllText(
-            Path.Combine(root, "installer", "launcher-input-lock-v1.json")));
+            Path.Combine(root, "launcher", "launcher-input-lock-v1.json")));
         JsonElement lockRoot = inputLock.RootElement;
         Assert(lockRoot.GetProperty("schemaVersion").GetInt32() == 1);
         Assert(lockRoot.GetProperty("version").GetString() ==
@@ -2637,12 +3384,116 @@ internal static class Program
         Assert(Regex.Matches(workflow, "- \\\"tests/\\*\\*\\\"").Count == 2);
     }
 
+    private static int MeasureButtonRenderingAtDpi(string label, int dpi)
+    {
+        Size size = new(
+            LauncherUi.ScaleLogical(LauncherUi.StandardButtonSize.Width, dpi),
+            LauncherUi.ScaleLogical(LauncherUi.StandardButtonSize.Height, dpi));
+        Padding padding = new(
+            LauncherUi.ScaleLogical(LauncherUi.StandardButtonPadding.Left, dpi),
+            0,
+            LauncherUi.ScaleLogical(LauncherUi.StandardButtonPadding.Right, dpi),
+            0);
+        using Font logicalFont = LauncherTypography.CreateRegular(10F);
+        using Font pixelFont = new(logicalFont.FontFamily, 10F * dpi / 72F,
+            FontStyle.Regular, GraphicsUnit.Pixel);
+        Size measured = TextRenderer.MeasureText(label, pixelFont, Size.Empty,
+            TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+        Assert(measured.Width <= size.Width - padding.Horizontal);
+        Assert(measured.Height + 4 <= size.Height);
+
+        using Button button = LauncherUi.CreateButton(label);
+        button.MinimumSize = Size.Empty;
+        button.MaximumSize = Size.Empty;
+        button.Size = size;
+        button.Padding = padding;
+        Font factoryFont = button.Font;
+        button.Font = pixelFont;
+        factoryFont.Dispose();
+        button.AutoEllipsis = false;
+        button.FlatStyle = FlatStyle.Flat;
+        button.UseVisualStyleBackColor = false;
+        button.BackColor = Color.White;
+        button.ForeColor = Color.Black;
+        button.FlatAppearance.BorderSize = 0;
+        button.CreateControl();
+
+        using Bitmap actualBitmap = new(size.Width, size.Height);
+        button.DrawToBitmap(actualBitmap, new Rectangle(Point.Empty, size));
+        Rectangle actualInk = FindDarkInk(actualBitmap, 2);
+        Assert(!actualInk.IsEmpty);
+        int bottomClearance = size.Height - 1 - actualInk.Bottom;
+        Assert(bottomClearance >= 2);
+
+        using Bitmap referenceBitmap = new(size.Width, size.Height * 2);
+        using (Graphics graphics = Graphics.FromImage(referenceBitmap))
+        {
+            graphics.Clear(Color.White);
+            TextRenderer.DrawText(graphics, label, pixelFont,
+                new Rectangle(0, 0, referenceBitmap.Width, referenceBitmap.Height),
+                Color.Black, Color.White,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix |
+                TextFormatFlags.NoPadding | TextFormatFlags.NoClipping);
+        }
+        Rectangle referenceInk = FindDarkInk(referenceBitmap, 2);
+        Assert(!referenceInk.IsEmpty);
+        Assert(actualInk.Height >= referenceInk.Height);
+        return bottomClearance;
+    }
+
+    private static Rectangle FindDarkInk(Bitmap bitmap, int horizontalInset)
+    {
+        int left = bitmap.Width;
+        int top = bitmap.Height;
+        int right = -1;
+        int bottom = -1;
+        for (int y = 0; y < bitmap.Height; y++)
+        {
+            for (int x = horizontalInset; x < bitmap.Width - horizontalInset; x++)
+            {
+                Color pixel = bitmap.GetPixel(x, y);
+                if (pixel.R >= 240 && pixel.G >= 240 && pixel.B >= 240)
+                    continue;
+                left = Math.Min(left, x);
+                top = Math.Min(top, y);
+                right = Math.Max(right, x);
+                bottom = Math.Max(bottom, y);
+            }
+        }
+        return right < left || bottom < top
+            ? Rectangle.Empty
+            : Rectangle.FromLTRB(left, top, right + 1, bottom + 1);
+    }
+
+    private static byte[] ReadAssemblyResource(string resourceName)
+    {
+        using Stream stream = typeof(LauncherTypography).Assembly
+            .GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException(
+                $"Missing assembly resource '{resourceName}'.");
+        using MemoryStream memory = new();
+        stream.CopyTo(memory);
+        return memory.ToArray();
+    }
+
+    private static string SourceMethodBody(
+        string source,
+        string startMarker,
+        string endMarker)
+    {
+        int start = source.IndexOf(startMarker, StringComparison.Ordinal);
+        int end = source.IndexOf(endMarker, start, StringComparison.Ordinal);
+        Assert(start >= 0 && end > start);
+        return source[start..end];
+    }
+
     private static string RepositoryRoot()
     {
         DirectoryInfo? directory = new(Directory.GetCurrentDirectory());
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "installer", "src",
+            if (File.Exists(Path.Combine(directory.FullName, "launcher", "src",
                     "UVSR.Installer", "UVSR.Installer.csproj")))
                 return directory.FullName;
             directory = directory.Parent;
@@ -2672,6 +3523,160 @@ internal static class Program
         return new LauncherState(ProductConstants.LauncherSchemaVersion,
             ProductConstants.ProductId, installationId, sequence, version, hash,
             desktopShortcut, installed);
+    }
+
+    private static void WriteDualBuildOutputFixture(InstallerPaths paths)
+    {
+        string source = paths.SourceDirectory;
+        string build = paths.BuildDirectory;
+        string bin = Path.Combine(build, "bin");
+        string media = Path.Combine(build, "media");
+        string d3d = Path.Combine(bin, "D3D12");
+        string shaders = Path.Combine(bin, "shaders");
+        string licenses = Path.Combine(bin, "licenses");
+        string fonts = Path.Combine(media, "fonts", "NotoSans");
+        Directory.CreateDirectory(d3d);
+        Directory.CreateDirectory(shaders);
+        Directory.CreateDirectory(licenses);
+        Directory.CreateDirectory(fonts);
+
+        File.WriteAllText(Path.Combine(bin, "uvsr.exe"), "binary");
+        string core = Path.Combine(d3d, "D3D12Core.dll");
+        File.WriteAllText(core, "dll");
+        File.WriteAllText(Path.Combine(d3d, "D3D12SDKLayers.dll"), "layers");
+        File.WriteAllText(Path.Combine(d3d, "uvsr-runtime-contract.txt"),
+            "schemaVersion=1\n" +
+            $"sdkVersion={ProductConstants.D3D12AgilitySdkVersion}\n" +
+            "sdkPath=.\\D3D12\\\n" +
+            $"coreSha256={PayloadPackager.ComputeSha256(core)}\n");
+        File.WriteAllText(Path.Combine(bin, "third-party-notices.md"), "notice");
+        File.WriteAllText(Path.Combine(shaders, "uvsr.bin"), "shader");
+        File.WriteAllText(Path.Combine(build, "uvsr_runtime_shader_paths.manifest"),
+            "uvsr.bin\n");
+
+        string checkedInFonts = Path.Combine(RepositoryRoot(), "assets", "fonts");
+        foreach (string name in new[]
+                 {
+                     "NotoSans-Regular.ttf", "NotoSans-SemiBold.ttf",
+                     "NotoSans-Bold.ttf"
+                 })
+        {
+            File.Copy(Path.Combine(checkedInFonts, "noto-sans", name),
+                Path.Combine(fonts, name));
+        }
+        File.Copy(Path.Combine(checkedInFonts, "noto-sans", "OFL.txt"),
+            Path.Combine(licenses, "Noto-Sans-OFL-1.1.txt"));
+        File.Copy(Path.Combine(checkedInFonts, "proggy-clean",
+                "ProggyClean-MIT.txt"),
+            Path.Combine(licenses, "ProggyClean-MIT.txt"));
+        File.Copy(Path.Combine(checkedInFonts, "geist", "LICENSE.txt"),
+            Path.Combine(licenses, "Geist-OFL-1.1.txt"));
+        WriteExactLegacyAliases(build);
+
+        string[] legalFiles =
+        {
+            "UVSR-Polyform-Noncommercial-1.0.0.md",
+            "Microsoft-DirectX-Graphics-Samples.txt", "Apache-2.0.txt",
+            "BSD-2-Clause.txt", "IOLITE-AgX-MIT.txt",
+            "Google-Filament-FXAA-Attribution.md", "NVIDIA-Donut-MIT.txt",
+            "Donut-Third-Party-Licenses.txt", "NVIDIA-NVRHI-MIT.txt",
+            "NVIDIA-ShaderMake-MIT.txt", "Dear-ImGui-MIT.txt",
+            "Intel-PBR-Sponza.txt", "Amazon-Lumberyard-Bistro.txt",
+            "San-Miguel-2.1.txt", "Blender-Classroom-CC0-1.0.txt",
+            "Poly-Haven-Environments.md", "Microsoft-DirectX-Headers-MIT.txt",
+            "Microsoft-D3D12-Agility-SDK-Terms.txt",
+            "Microsoft-D3D12-Agility-SDK-Code-MIT.txt"
+        };
+        foreach (string name in legalFiles)
+            File.WriteAllText(Path.Combine(licenses, name), "license");
+
+        WriteSourceAssetManifestFixture(source, build, media,
+            "assets/environments/environment.hdr",
+            "uvsr_environment_assets.manifest", "environments/environment.hdr");
+        WriteSourceAssetManifestFixture(source, build, media,
+            "assets/noise/noise.bin",
+            "uvsr_noise_assets.manifest", "uvsr/noise/noise.bin");
+        WriteSourceAssetManifestFixture(source, build, media,
+            "assets/scenes/scene.bin",
+            "scene_runtime_assets.manifest",
+            "glTF-Sample-Assets/Models/scene.bin");
+    }
+
+    private static void WriteSourceAssetManifestFixture(
+        string sourceRoot,
+        string buildRoot,
+        string mediaRoot,
+        string sourceRelative,
+        string manifestName,
+        string outputRelative)
+    {
+        string source = Path.Combine(sourceRoot,
+            sourceRelative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        File.WriteAllText(source, "asset");
+        string output = Path.Combine(mediaRoot,
+            outputRelative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+        File.WriteAllText(output, "asset");
+        File.WriteAllText(Path.Combine(buildRoot, manifestName), source + "\n");
+    }
+
+    private static void ValidateFixturePackage(string package)
+    {
+        string executable = Path.Combine(package, "bin", "uvsr.exe");
+        PackageManifest manifest = new(ProductConstants.SchemaVersion, Guid.NewGuid(),
+            "0123456789abcdef0123456789abcdef01234567-20260817123456-89abcdef",
+            "0123456789abcdef0123456789abcdef01234567",
+            PayloadPackager.ComputeSha256(executable), BuildPackageFiles(package),
+            DateTimeOffset.UtcNow);
+        PayloadPackager.ValidatePackage(package, manifest);
+    }
+
+    private static void CopyDirectoryForTest(string source, string destination)
+    {
+        foreach (string directory in Directory.EnumerateDirectories(
+                     source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(destination,
+                Path.GetRelativePath(source, directory)));
+        }
+        Directory.CreateDirectory(destination);
+        foreach (string file in Directory.EnumerateFiles(
+                     source, "*", SearchOption.AllDirectories))
+        {
+            string target = Path.Combine(destination,
+                Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target);
+        }
+    }
+
+    private static void WriteExactLegacyAliases(string package)
+    {
+        string noto = Path.Combine(package, "media", "fonts", "NotoSans");
+        string legacy = Path.Combine(package, "media", "fonts", "System");
+        Directory.CreateDirectory(legacy);
+        foreach ((string source, string alias) in new[]
+                 {
+                     ("NotoSans-Regular.ttf", "CodexUI.ttf"),
+                     ("NotoSans-SemiBold.ttf", "CodexUI-Semibold.ttf"),
+                     ("NotoSans-Bold.ttf", "CodexUI-Bold.ttf")
+                 })
+        {
+            File.Copy(Path.Combine(noto, source), Path.Combine(legacy, alias));
+        }
+    }
+
+    private static void CopyProggyCleanNotice(
+        string package,
+        bool overwrite = false)
+    {
+        string destination = Path.Combine(package, "bin", "licenses",
+            "ProggyClean-MIT.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+        File.Copy(Path.Combine(RepositoryRoot(), "assets", "fonts",
+                "proggy-clean", "ProggyClean-MIT.txt"),
+            destination, overwrite);
     }
 
     private static void WritePackageFixture(string package)
@@ -2704,6 +3709,9 @@ internal static class Program
         File.WriteAllText(Path.Combine(package, "media", "fonts", "System", "CodexUI-Bold.ttf"), "font");
         File.WriteAllText(Path.Combine(package, "bin", "shaders", "uvsr.bin"), "shader");
         File.WriteAllText(Path.Combine(package, "bin", "licenses", "license.txt"), "license");
+        File.Copy(Path.Combine(RepositoryRoot(), "assets", "fonts", "geist",
+                "LICENSE.txt"),
+            Path.Combine(package, "bin", "licenses", "Geist-OFL-1.1.txt"));
         File.WriteAllText(Path.Combine(package, "media", "glTF-Sample-Assets", "Models", "scene.bin"), "scene");
         File.WriteAllText(Path.Combine(package, "media", "environments", "environment.hdr"), "environment");
         File.WriteAllText(Path.Combine(package, "media", "uvsr", "noise", "noise.bin"), "noise");

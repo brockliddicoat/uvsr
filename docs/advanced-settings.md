@@ -130,7 +130,7 @@ Performance view. It
 preserves the camera, scene, active graphics adapter, and command history.
 
 The snapshot code is exactly 32 lowercase hexadecimal characters. Its first
-four characters are the registered settings schema version (currently `0004`);
+four characters are the registered settings schema version (currently `0005`);
 the remaining 28 characters fingerprint the complete sorted represented
 command-value snapshot.
 The root Settings collapsed state and Material drawer visibility are
@@ -170,7 +170,15 @@ logical limit; pointer and navigation travel remain on the compact track.
 Disabling it again preserves an already entered supported value. **Interface
 Skin** selects Amp or Ogg. Amp owns the animated UVSR presentation; Ogg uses
 stock ImGui presentation and immediate endpoints. Performance and Settings use
-the same authored root-panel motion as the drawers in Amp.
+the same authored root-panel motion as the drawers in Amp. **Font Family** is a
+separate session setting with three explicit presentations: **Codex (Segoe
+UI)** reads the installed Windows Regular, SemiBold, and Bold faces without
+copying them; **Noto Sans** uses UVSR's bundled 400/600/700 faces and remains the
+default; **Ogg (ProggyClean)** uses Dear ImGui's embedded ProggyClean face. Since
+ProggyClean has no Bold face, authored Amp headings retain Noto Sans Bold so
+their established emphasis is not silently removed. A missing Windows face
+disables only the Codex option. The corresponding command path is
+`ui.font-family`.
 
 **Primary Accent** edits Amp's drawer and panel headers, footer buttons,
 selection details, checkmarks, and raised slider knobs. Ogg disables this row
@@ -189,7 +197,7 @@ body opacity are derived from the resting background. Ultra-bright Primary
 Accent surfaces automatically use a transparent dark depth gradient. Slider
 tracks follow Background Color so the Primary Accent knob remains
 distinct.
-These interface choices, including Override Visual Maxes, are session-only and
+These interface choices, including Font Family and Override Visual Maxes, are session-only and
 are restored by footer Reset or `/reset all`.
 
 Authored Primary Accent slider knobs retain a subtle raised depth surface. When

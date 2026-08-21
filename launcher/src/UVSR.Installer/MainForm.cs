@@ -33,15 +33,25 @@ internal enum RendererClickAction
     Close
 }
 
+internal enum TerminalUiTone
+{
+    Normal,
+    Error
+}
+
 internal readonly record struct TerminalUiState(
     string Phase,
     string Detail,
     int Progress,
-    ProgressBarStyle ProgressStyle = ProgressBarStyle.Blocks);
+    ProgressBarStyle ProgressStyle = ProgressBarStyle.Blocks,
+    TerminalUiTone Tone = TerminalUiTone.Normal);
 
 internal sealed class MainForm : Form
 {
     private const int MaximumDisplayedLogCharacters = 200_000;
+    private const int WindowsMessageDisplayChange = 0x007E;
+    private const int WindowsMessageSettingChange = 0x001A;
+    private const long SystemParameterSetWorkArea = 0x002F;
     private static readonly TimeSpan UvsrLaunchPollTimeout = TimeSpan.FromSeconds(6);
     private static readonly TimeSpan UvsrClosePollTimeout = TimeSpan.FromSeconds(3);
     private static readonly int UvsrPollDelayMs = 150;
@@ -50,6 +60,8 @@ internal sealed class MainForm : Form
     private static readonly Color CloseLaunchColor = Color.FromArgb(186, 35, 35);
     private static readonly Color CloseLaunchHover = Color.FromArgb(158, 28, 28);
     private static readonly Color DisabledLaunchColor = Color.FromArgb(232, 236, 241);
+    internal static readonly Size PreferredClientSizeLogical = new(840, 720);
+    internal static readonly Size MinimumOuterSizeLogical = new(700, 520);
 
     private readonly InstallerEngine _engine;
     private readonly bool _startWithUninstall;
@@ -65,7 +77,7 @@ internal sealed class MainForm : Form
     private readonly Button _notices;
     private readonly Button _detailsToggle;
     private readonly Button _copyDetails;
-    private readonly ProgressBar _progress = new();
+    private readonly LauncherProgressBar _progress = new();
     private readonly RichTextBox _log = new();
     private readonly LauncherCard _detailsCard = new();
     private readonly ConcurrentQueue<string> _pendingLog = new();
@@ -80,7 +92,8 @@ internal sealed class MainForm : Form
     private bool _canCancel = true;
     private bool _detailsVisible;
     private bool _launcherWindowObsolete;
-    private int? _collapsedClientHeight;
+    private bool _windowShown;
+    private bool _workingAreaReboundPending;
 
     internal MainForm(
         InstallerEngine engine,
@@ -101,21 +114,19 @@ internal sealed class MainForm : Form
 
         Text = "UVSR Launcher";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(700, 520);
-        ClientSize = new Size(840, 570);
+        FormBorderStyle = FormBorderStyle.FixedSingle;
+        MaximizeBox = false;
+        MinimumSize = MinimumOuterSizeLogical;
+        ClientSize = PreferredClientSizeLogical;
         BackColor = LauncherPalette.Window;
-        Font = new Font("Segoe UI", 10F);
+        Font = LauncherTypography.CreateRegular(10F);
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
         BuildInterface();
         Shown += OnShown;
         FormClosing += OnFormClosing;
-        DpiChanged += (_, _) =>
-        {
-            if (!IsDisposed && IsHandleCreated)
-                BeginInvoke(new Action(() =>
-                    LauncherUi.ConstrainToWorkingArea(this, new Size(700, 520))));
-        };
+        DpiChanged += (_, _) => ScheduleWorkingAreaRebound();
+        ResizeEnd += (_, _) => ScheduleWorkingAreaRebound();
         _logTimer.Tick += (_, _) => FlushPendingLog();
         _logTimer.Start();
         _processTimer.Tick += (_, _) => RefreshRendererState();
@@ -140,7 +151,7 @@ internal sealed class MainForm : Form
         {
             AutoSize = true,
             Text = "UVSR Launcher",
-            Font = new Font("Segoe UI Semibold", 25F, FontStyle.Bold),
+            Font = LauncherTypography.CreateBold(25F),
             ForeColor = LauncherPalette.Text,
             Margin = new Padding(0, 0, 0, 4),
             AccessibleName = "UVSR Launcher"
@@ -164,7 +175,7 @@ internal sealed class MainForm : Form
         };
         _status.AutoSize = true;
         _status.Dock = DockStyle.Top;
-        _status.Font = new Font("Segoe UI Semibold", 11.5F, FontStyle.Bold);
+        _status.Font = LauncherTypography.CreateBold(11.5F);
         _status.ForeColor = LauncherPalette.Success;
         _status.Text = "Checking this PC...";
         _status.AccessibleName = "Installation status";
@@ -198,7 +209,7 @@ internal sealed class MainForm : Form
 
         _phase.AutoSize = true;
         _phase.Dock = DockStyle.Top;
-        _phase.Font = new Font("Segoe UI Semibold", 10F, FontStyle.Bold);
+        _phase.Font = LauncherTypography.CreateBold(10F);
         _phase.ForeColor = LauncherPalette.Text;
         _phase.Text = "Ready";
         _phase.Margin = new Padding(0, 0, 0, 4);
@@ -225,13 +236,9 @@ internal sealed class MainForm : Form
             WrapContents = true,
             Margin = new Padding(0, 0, 0, 8)
         };
-        _detailsToggle.MinimumSize = new Size(112, 36);
-        _detailsToggle.Padding = new Padding(10, 4, 10, 4);
         _detailsToggle.Margin = Padding.Empty;
         _detailsToggle.Click += (_, _) => SetDetailsVisible(!_detailsVisible);
         _detailsToggle.AccessibleName = "Show operation details";
-        _copyDetails.MinimumSize = new Size(108, 36);
-        _copyDetails.Padding = new Padding(10, 4, 10, 4);
         _copyDetails.Margin = new Padding(8, 0, 0, 0);
         _copyDetails.Visible = false;
         _copyDetails.Click += (_, _) => CopyDetails();
@@ -248,7 +255,7 @@ internal sealed class MainForm : Form
         _log.BackColor = LauncherPalette.Card;
         _log.ForeColor = LauncherPalette.Muted;
         _log.BorderStyle = BorderStyle.None;
-        _log.Font = new Font("Segoe UI", 9F);
+        _log.Font = LauncherTypography.CreateRegular(9F);
         _log.DetectUrls = false;
         _log.WordWrap = true;
         _log.AccessibleName = "Operation details";
@@ -285,7 +292,9 @@ internal sealed class MainForm : Form
 
     private async void OnShown(object? sender, EventArgs e)
     {
-        LauncherUi.SizeToWorkingArea(this, new Size(840, 570), new Size(700, 520));
+        LauncherUi.SizeToWorkingArea(this,
+            PreferredClientSizeLogical, MinimumOuterSizeLogical);
+        _windowShown = true;
         RefreshSnapshot();
         if (_startWithUninstall)
         {
@@ -349,11 +358,7 @@ internal sealed class MainForm : Form
         {
             _snapshot = _engine.Inspect();
             _status.Text = _snapshot.Summary;
-            _status.ForeColor = _snapshot.IsDamaged
-                ? LauncherPalette.Warning
-                : _snapshot.IsInstalled
-                    ? LauncherPalette.Success
-                    : LauncherPalette.Muted;
+            _status.ForeColor = DetermineSnapshotStatusColor(_snapshot);
             _desktopShortcut.Checked = _engine.GetDesktopShortcutPreference(_snapshot);
             SetButtons(_snapshot);
         }
@@ -369,7 +374,7 @@ internal sealed class MainForm : Form
     private void SetButtons(InstallSnapshot? snapshot)
     {
         (bool install, bool update, bool uninstall, bool launch, bool options) =
-            DetermineActionAvailability(snapshot, _operationRunning);
+            DetermineActionAvailability(snapshot, _operationRunning, _rendererBusy);
         ExactProcessInspection rendererProcesses = snapshot?.IsInstalled == true
             ? _engine.InspectRendererProcesses()
             : new ExactProcessInspection(TrackedProcessState.NotRunning,
@@ -384,12 +389,18 @@ internal sealed class MainForm : Form
             launch = false;
             options = !_operationRunning;
         }
+        _install.Text = DetermineInstallButtonText(snapshot);
+        _install.AccessibleName = _install.Text == "Installed"
+            ? "UVSR is installed; open launch or reinstall options"
+            : "Install UVSR";
         _install.Enabled = install;
         _update.Enabled = update;
         _uninstall.Enabled = uninstall;
-        _launch.Enabled = launch && _rendererBusy == RendererBusyAction.None;
+        _launch.Enabled = launch;
         _notices.Enabled = options;
-        _desktopShortcut.Enabled = options && !_launcherWindowObsolete;
+        _desktopShortcut.Enabled = snapshot is not null &&
+            !_operationRunning && _rendererBusy == RendererBusyAction.None &&
+            !_launcherWindowObsolete;
         ApplyLaunchButtonStyle(rendererProcesses.State, launch);
     }
 
@@ -400,14 +411,78 @@ internal sealed class MainForm : Form
     }
 
     internal static (bool Install, bool Update, bool Uninstall, bool Launch, bool Options)
-        DetermineActionAvailability(InstallSnapshot? snapshot, bool operationRunning)
+        DetermineActionAvailability(
+            InstallSnapshot? snapshot,
+            bool operationRunning,
+            RendererBusyAction rendererBusy = RendererBusyAction.None)
     {
-        bool available = !operationRunning && snapshot is not null;
+        bool available = !operationRunning &&
+                         rendererBusy == RendererBusyAction.None &&
+                         snapshot is not null;
         return (available, available,
             available && snapshot!.IsInitialized,
             available && snapshot!.IsInstalled && !snapshot.IsDamaged,
             !operationRunning);
     }
+
+    internal static string DetermineInstallButtonText(InstallSnapshot? snapshot) =>
+        snapshot?.IsInstalled == true && !snapshot.IsDamaged
+            ? "Installed"
+            : "Install";
+
+    internal static Color DetermineSnapshotStatusColor(InstallSnapshot snapshot) =>
+        snapshot.IsDamaged
+            ? LauncherPalette.Danger
+            : snapshot.IsInstalled
+                ? LauncherPalette.Success
+                : LauncherPalette.Muted;
+
+    internal static bool ShouldBlockCloseForRenderer(
+        RendererBusyAction rendererBusy,
+        bool allowClose) =>
+        !allowClose && rendererBusy != RendererBusyAction.None;
+
+    internal static string GetRendererBusyCloseDetail(
+        RendererBusyAction action) => action switch
+        {
+            RendererBusyAction.Launching =>
+                "UVSR Launcher is waiting for UVSR to finish starting. " +
+                "Try closing the launcher again after this action finishes.",
+            RendererBusyAction.Closing =>
+                "UVSR Launcher is waiting for UVSR to finish closing. " +
+                "Try closing the launcher again after this action finishes.",
+            _ => throw new ArgumentOutOfRangeException(nameof(action), action, null)
+        };
+
+    internal static bool IsWorkingAreaChangeMessage(int message, long wParam) =>
+        message == WindowsMessageDisplayChange ||
+        (message == WindowsMessageSettingChange &&
+         wParam == SystemParameterSetWorkArea);
+
+    internal static TerminalUiState DetermineRendererActiveState(
+        RendererBusyAction action) => action switch
+        {
+            RendererBusyAction.Launching => new TerminalUiState(
+                "Launching UVSR", "Waiting for UVSR to start.", 0,
+                ProgressBarStyle.Marquee),
+            RendererBusyAction.Closing => new TerminalUiState(
+                "Closing UVSR", "Waiting for UVSR to close safely.", 0,
+                ProgressBarStyle.Marquee),
+            _ => throw new ArgumentOutOfRangeException(nameof(action), action, null)
+        };
+
+    internal static TerminalUiState DetermineRendererSuccessState(
+        RendererBusyAction action) => action switch
+        {
+            RendererBusyAction.Launching => new TerminalUiState(
+                "UVSR Started", "UVSR started successfully.", 100),
+            RendererBusyAction.Closing => new TerminalUiState(
+                "UVSR Closed", "UVSR closed successfully.", 100),
+            _ => throw new ArgumentOutOfRangeException(nameof(action), action, null)
+        };
+
+    internal static TerminalUiState DetermineRendererCloseCancelledState() => new(
+        "Close Cancelled", "UVSR is still running. Nothing was changed.", 0);
 
     internal static RendererClickAction ReconcileRendererClick(
         RendererButtonIntent renderedIntent,
@@ -424,7 +499,7 @@ internal sealed class MainForm : Form
 
     private async Task HandleInstallAsync()
     {
-        if (_operationRunning)
+        if (_operationRunning || _rendererBusy != RendererBusyAction.None)
             return;
         RefreshSnapshot();
         if (_snapshot is null)
@@ -465,9 +540,10 @@ internal sealed class MainForm : Form
 
     private async Task RunUpdateFlowAsync()
     {
-        if (_operationRunning)
+        if (_operationRunning || _rendererBusy != RendererBusyAction.None)
             return;
-        BeginOperation("Checking for updates", "Checking UVSR and UVSR Launcher.");
+        BeginOperation("Checking for updates",
+            "Checking UVSR Engine and UVSR Launcher.");
         try
         {
             UpdateCheckResult result;
@@ -484,7 +560,7 @@ internal sealed class MainForm : Form
                 {
                     string message = result.Uvsr.State == ComponentUpdateState.NotInstalled
                         ? "UVSR Launcher is up to date. UVSR is not installed yet."
-                        : "UVSR and UVSR Launcher are up to date.";
+                        : "UVSR Engine and UVSR Launcher are up to date.";
                     ShowTerminalStatus(DetermineUpdateTerminalState(
                         UpdateFlowExit.UpToDate, message));
                     LauncherDialog.Show(this, "Everything Is Up to Date", message,
@@ -551,7 +627,7 @@ internal sealed class MainForm : Form
 
     private async Task<bool> RunOperationAsync(InstallerOperation operation, bool confirm)
     {
-        if (_operationRunning)
+        if (_operationRunning || _rendererBusy != RendererBusyAction.None)
             return false;
         if (confirm && !ConfirmOperation(operation))
             return false;
@@ -763,8 +839,6 @@ internal sealed class MainForm : Form
     {
         if (visible == _detailsVisible)
             return;
-        if (visible)
-            _collapsedClientHeight = ClientSize.Height;
         _detailsVisible = visible;
         _detailsCard.Visible = visible;
         _copyDetails.Visible = visible;
@@ -772,22 +846,6 @@ internal sealed class MainForm : Form
         _detailsToggle.AccessibleName = visible
             ? "Hide operation details"
             : "Show operation details";
-        Rectangle available = LauncherUi.AvailableWorkingBounds(this);
-        int chrome = Math.Max(0, Height - ClientSize.Height);
-        int maximumClientHeight = Math.Max(1, available.Height - chrome);
-        if (visible)
-        {
-            int desired = Math.Min(LauncherUi.ScaleLogical(this, 720), maximumClientHeight);
-            if (ClientSize.Height < desired)
-                ClientSize = new Size(ClientSize.Width, desired);
-        }
-        else if (_collapsedClientHeight is int collapsed)
-        {
-            ClientSize = new Size(ClientSize.Width,
-                Math.Min(collapsed, maximumClientHeight));
-            _collapsedClientHeight = null;
-        }
-        LauncherUi.ConstrainToWorkingArea(this, new Size(700, 520));
     }
 
     private void CopyDetails()
@@ -851,6 +909,8 @@ internal sealed class MainForm : Form
 
     private async Task LaunchUvsrAsync(string executablePath)
     {
+        ShowTerminalStatus(DetermineRendererActiveState(
+            RendererBusyAction.Launching));
         SetRendererBusy(RendererBusyAction.Launching);
         try
         {
@@ -859,7 +919,10 @@ internal sealed class MainForm : Form
             {
                 ShowError(new InstallerException(
                     "UVSR was launched, but the process did not appear to start."));
+                return;
             }
+            ShowTerminalStatus(DetermineRendererSuccessState(
+                RendererBusyAction.Launching));
         }
         catch (Exception ex)
         {
@@ -875,6 +938,8 @@ internal sealed class MainForm : Form
     private async Task CloseUvsrAsync(
         IReadOnlyList<ExactProcessIdentity> targets)
     {
+        ShowTerminalStatus(DetermineRendererActiveState(
+            RendererBusyAction.Closing));
         SetRendererBusy(RendererBusyAction.Closing);
         try
         {
@@ -890,18 +955,28 @@ internal sealed class MainForm : Form
                     new DialogAction("force", "Force Close", Destructive: true),
                     new DialogAction("cancel", "Cancel", Cancel: true));
                 if (choice == "cancel")
+                {
+                    ShowTerminalStatus(DetermineRendererCloseCancelledState());
                     return;
+                }
                 if (choice == "force")
                 {
                     foreach (ExactProcessIdentity target in targets)
                         ProcessInspector.TryTerminate(target);
                     if (!await WaitForExactProcessesStoppedAsync(
                             targets, UvsrClosePollTimeout))
+                    {
                         ShowError(new InstallerException(
                             "The exact UVSR processes selected for force close still appear to be running."));
+                        return;
+                    }
+                    ShowTerminalStatus(DetermineRendererSuccessState(
+                        RendererBusyAction.Closing));
                     return;
                 }
             }
+            ShowTerminalStatus(DetermineRendererSuccessState(
+                RendererBusyAction.Closing));
         }
         catch (Exception ex)
         {
@@ -1026,6 +1101,8 @@ internal sealed class MainForm : Form
         {
             string text =
                 "UVSR LICENSE\r\n\r\n" + ReadNotice("UVSR.Installer.Notices.UvsrLicense.md") +
+                "\r\n\r\nNOTO SANS FONT LICENSE\r\n\r\n" +
+                ReadNotice(LauncherTypography.LicenseResourceName) +
                 "\r\n\r\n.NET LICENSE\r\n\r\n" + ReadNotice("UVSR.Installer.Notices.DotNetLicense.txt") +
                 "\r\n\r\n.NET THIRD-PARTY NOTICES\r\n\r\n" +
                 ReadNotice("UVSR.Installer.Notices.DotNetThirdParty.txt");
@@ -1050,7 +1127,7 @@ internal sealed class MainForm : Form
                 BackColor = LauncherPalette.Card,
                 ForeColor = LauncherPalette.Text,
                 BorderStyle = BorderStyle.None,
-                Font = new Font("Segoe UI", 9F),
+                Font = LauncherTypography.CreateRegular(9F),
                 Text = text,
                 WordWrap = true
             };
@@ -1071,7 +1148,7 @@ internal sealed class MainForm : Form
         }
     }
 
-    private static string ReadNotice(string resourceName)
+    internal static string ReadNotice(string resourceName)
     {
         using Stream stream = typeof(MainForm).Assembly.GetManifestResourceStream(resourceName)
             ?? throw new InstallerException("The launcher notice bundle is incomplete.");
@@ -1082,11 +1159,10 @@ internal sealed class MainForm : Form
     private void ShowError(Exception exception)
     {
         string message = FriendlyMessage(exception);
-        ShowTerminalStatus(
-            exception is RebootRequiredException ? "Restart Required" : "Stopped Safely",
-            message, 0);
+        ShowTerminalStatus(DetermineErrorTerminalState(
+            exception is RebootRequiredException, message));
         SetDetailsVisible(true);
-        LauncherDialog.Show(this,
+        LauncherDialog.ShowError(this,
             exception is RebootRequiredException ? "Restart Required" : "UVSR Launcher Stopped",
             message,
             new DialogAction("ok", "OK", Primary: true, Cancel: true));
@@ -1097,7 +1173,7 @@ internal sealed class MainForm : Form
 
     private void ShowTerminalStatus(TerminalUiState status)
     {
-        SetProgressStatus(status.Phase, status.Detail);
+        SetProgressStatus(status.Phase, status.Detail, status.Tone);
         _progress.Style = status.ProgressStyle;
         _progress.MarqueeAnimationSpeed = status.ProgressStyle == ProgressBarStyle.Marquee
             ? 28
@@ -1111,7 +1187,7 @@ internal sealed class MainForm : Form
         string? upToDateDetail = null) => exit switch
         {
             UpdateFlowExit.UpToDate => new TerminalUiState("Up to Date",
-                upToDateDetail ?? "UVSR and UVSR Launcher are up to date.", 100),
+                upToDateDetail ?? "UVSR Engine and UVSR Launcher are up to date.", 100),
             UpdateFlowExit.SelectionCancelled => new TerminalUiState("Cancelled",
                 "The update selection was cancelled. Nothing installed was changed.", 0),
             UpdateFlowExit.NoSelection => new TerminalUiState("Ready",
@@ -1121,12 +1197,30 @@ internal sealed class MainForm : Form
             _ => throw new ArgumentOutOfRangeException(nameof(exit), exit, null)
         };
 
-    private void SetProgressStatus(string phase, string detail)
+    internal static TerminalUiState DetermineErrorTerminalState(
+        bool restartRequired,
+        string detail) => new(
+            restartRequired ? "Restart Required" : "Stopped Safely",
+            detail,
+            0,
+            ProgressBarStyle.Blocks,
+            TerminalUiTone.Error);
+
+    private void SetProgressStatus(
+        string phase,
+        string detail,
+        TerminalUiTone tone = TerminalUiTone.Normal)
     {
         bool changed = !string.Equals(_phase.Text, phase, StringComparison.Ordinal) ||
                        !string.Equals(_detail.Text, detail, StringComparison.Ordinal);
         _phase.Text = phase;
         _detail.Text = detail;
+        _phase.ForeColor = tone == TerminalUiTone.Error
+            ? LauncherPalette.Danger
+            : LauncherPalette.Text;
+        _detail.ForeColor = tone == TerminalUiTone.Error
+            ? LauncherPalette.Danger
+            : LauncherPalette.Muted;
         _phase.AccessibleName = phase;
         _detail.AccessibleName = $"{phase}. {detail}";
         if (changed && _detail.IsHandleCreated && !IsDisposed)
@@ -1144,11 +1238,50 @@ internal sealed class MainForm : Form
         exception is OperationCanceledException ||
         exception.GetBaseException() is OperationCanceledException;
 
+    private void ScheduleWorkingAreaRebound()
+    {
+        if (!_windowShown || _workingAreaReboundPending ||
+            IsDisposed || Disposing || !IsHandleCreated)
+            return;
+        _workingAreaReboundPending = true;
+        BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                if (IsDisposed || Disposing || !IsHandleCreated)
+                    return;
+                LauncherUi.SizeToWorkingArea(this,
+                    PreferredClientSizeLogical, MinimumOuterSizeLogical);
+            }
+            finally
+            {
+                _workingAreaReboundPending = false;
+            }
+        }));
+    }
+
+    protected override void WndProc(ref Message message)
+    {
+        bool workingAreaChanged = IsWorkingAreaChangeMessage(
+            message.Msg, message.WParam.ToInt64());
+        base.WndProc(ref message);
+        if (workingAreaChanged)
+            ScheduleWorkingAreaRebound();
+    }
+
     private void OnFormClosing(object? sender, FormClosingEventArgs e)
     {
-        if (_launcherWindowObsolete)
+        if (_launcherWindowObsolete || _allowClose)
             return;
-        if (!_operationRunning || _allowClose)
+        if (ShouldBlockCloseForRenderer(_rendererBusy, _allowClose))
+        {
+            LauncherDialog.Show(this, "UVSR Launcher Is Busy",
+                GetRendererBusyCloseDetail(_rendererBusy),
+                new DialogAction("ok", "OK", Primary: true, Cancel: true));
+            e.Cancel = true;
+            return;
+        }
+        if (!_operationRunning)
             return;
         if (!_canCancel)
         {

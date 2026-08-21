@@ -114,6 +114,9 @@ if (-not [Environment]::Is64BitOperatingSystem) {
     throw 'UVSR Launcher requires 64-bit Windows.'
 }
 
+& (Join-Path $PSScriptRoot 'verify-launcher-feed-alias.ps1')
+& (Join-Path $PSScriptRoot 'tests\launcher-feed-alias-tests.ps1')
+
 $project = Join-Path $PSScriptRoot 'src\UVSR.Installer\UVSR.Installer.csproj'
 $tests = Join-Path $PSScriptRoot 'tests\UVSR.Installer.Tests\UVSR.Installer.Tests.csproj'
 $output = [IO.Path]::GetFullPath($OutputDirectory)
@@ -130,6 +133,8 @@ if (-not $publish.StartsWith($outputPrefix, [StringComparison]::OrdinalIgnoreCas
 }
 $locationPushed = $false
 try {
+    & (Join-Path $PSScriptRoot `
+        'tests\renderer-source-bridge-verifier-tests.ps1')
     & (Join-Path $PSScriptRoot 'generate-renderer-source-bridge.ps1') -Check
     $resolvedIdentityBase = Resolve-LauncherIdentityBase $IdentityBaseCommit
     & (Join-Path $PSScriptRoot 'verify-launcher-identity.ps1') `

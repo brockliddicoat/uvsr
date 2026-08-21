@@ -893,18 +893,22 @@ int main(int argc, char** argv)
         viewerDestructor,
         "WaitForSceneLoadingThread();",
         "derived scene-worker join before viewer member destruction");
+    const std::string_view releaseUiState = ExtractSection(
+        viewer,
+        "const auto releaseUiState = [&]()",
+        "try\n        {");
+    passed &= ExpectOrdered(
+        releaseUiState,
+        "gui.reset();",
+        "demo.reset();",
+        "shared UI cleanup releases UI ownership before the viewer");
     const std::string_view failedGuiInitialization = ExtractSection(
         viewer,
         "if (!gui->Init(demo->GetShaderFactory()))",
         "deviceManager->AddRenderPassToBack(demo.get());");
     passed &= ExpectOrdered(
         failedGuiInitialization,
-        "gui.reset();",
-        "demo.reset();",
-        "failed GUI initialization releases UI ownership before the viewer");
-    passed &= ExpectOrdered(
-        failedGuiInitialization,
-        "demo.reset();",
+        "releaseUiState();",
         "deviceManager->Shutdown();",
         "failed GUI initialization joins the scene worker before device shutdown");
     passed &= ExpectOrdered(

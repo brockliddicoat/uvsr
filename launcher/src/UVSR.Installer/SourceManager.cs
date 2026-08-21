@@ -15,6 +15,22 @@ internal sealed record SourceResolution(
 
 internal sealed class SourceManager
 {
+    internal const string NotoSansSourceRootRelativePath =
+        "assets/fonts/noto-sans";
+    internal static readonly IReadOnlyDictionary<string, (long Size, string Sha256)>
+        RequiredNotoSansSourceFiles =
+            new Dictionary<string, (long Size, string Sha256)>(StringComparer.Ordinal)
+            {
+                ["NotoSans-Regular.ttf"] =
+                    (621572, "478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823"),
+                ["NotoSans-SemiBold.ttf"] =
+                    (625052, "a4e91fd530ac2b4ef5367240144ff37d7d65d66cf76f2e9a2187b93c676f92d0"),
+                ["NotoSans-Bold.ttf"] =
+                    (631484, "1df075a380fc7cb898acf64c1f7b3b4dd780de3caa860178bf929de35817a913"),
+                ["OFL.txt"] =
+                    (4396, "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a")
+            };
+
     private static readonly TimeSpan[] NetworkRetryDelays =
     {
         TimeSpan.FromSeconds(2),
@@ -173,6 +189,8 @@ internal sealed class SourceManager
                 cancellationToken);
             ValidateRendererBuildContractFromSource(resolution.PublicBaseCommit, log);
         }
+        ValidateBundledNotoSourceContractIfRequired(
+            resolution, log, cancellationToken);
         await GitRequiredAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
             "submodule", "sync", "--recursive" }, _paths.CacheDirectory, tools,
             log, cancellationToken, "UVSR dependency addresses could not be synchronized.");
@@ -223,6 +241,8 @@ internal sealed class SourceManager
             cancellationToken);
         ValidatePinnedCMakeIsSufficient(resolution.PublicBaseCommit);
         ValidateRendererBuildContractFromSource(resolution.PublicBaseCommit, log);
+        ValidateBundledNotoSourceContractIfRequired(
+            resolution, log, cancellationToken);
         if (Directory.Exists(_paths.BuildDirectory))
         {
             progress?.Report(new InstallerProgress("Preparing a clean build",
@@ -294,6 +314,8 @@ internal sealed class SourceManager
                 !string.IsNullOrWhiteSpace(status.StandardOutput))
                 throw new InstallerException(
                     "The managed UVSR source did not remain at its selected exact revision.");
+            ValidateBundledNotoSourceContractIfRequired(
+                resolution, log, cancellationToken);
             return;
         }
 
@@ -329,6 +351,123 @@ internal sealed class SourceManager
                 RendererSourceBridge.SourceCommit, StringComparison.Ordinal))
             throw new InstallerException(
                 "The selected UVSR renderer source bridge identity was invalid.");
+    }
+
+    private void ValidateBundledNotoSourceContractIfRequired(
+        SourceResolution resolution,
+        InstallLog log,
+        CancellationToken cancellationToken)
+    {
+        if (resolution.Bridge is not null)
+            return;
+        ValidateBundledNotoSourceContract(
+            _paths.SourceDirectory,
+            resolution.SourceCommit,
+            log,
+            cancellationToken);
+    }
+
+    internal static void ValidateBundledNotoSourceContract(
+        string sourceDirectory,
+        string commit,
+        InstallLog? log = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!ProductConstants.CommitRegex().IsMatch(commit))
+            throw new InstallerException("The selected UVSR source revision is invalid.");
+        string sourceRoot = Path.GetFullPath(sourceDirectory);
+        string fontRoot = Path.Combine(sourceRoot,
+            NotoSansSourceRootRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SafePaths.RejectReparsePathChain(fontRoot,
+                "bundled Noto Sans source directory");
+            if (!Directory.Exists(fontRoot))
+            {
+                throw CreateSourceCompatibilityException(commit,
+                    $"required bundled Noto Sans v2.015 source directory " +
+                    $"'{NotoSansSourceRootRelativePath}' is missing");
+            }
+            SafePaths.RejectReparseTree(fontRoot,
+                "bundled Noto Sans source directory");
+
+            string[] actualFiles = Directory.EnumerateFiles(fontRoot, "*",
+                    SearchOption.AllDirectories)
+                .Select(path => Path.GetRelativePath(fontRoot, path)
+                    .Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+            string[] expectedFiles = RequiredNotoSansSourceFiles.Keys
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+            if (!actualFiles.SequenceEqual(expectedFiles, StringComparer.Ordinal))
+            {
+                string missing = string.Join(", ", expectedFiles.Except(
+                    actualFiles, StringComparer.Ordinal));
+                string unexpected = string.Join(", ", actualFiles.Except(
+                    expectedFiles, StringComparer.Ordinal));
+                List<string> differences = new();
+                if (missing.Length > 0)
+                    differences.Add("missing " + missing);
+                if (unexpected.Length > 0)
+                    differences.Add("unexpected " + unexpected);
+                throw CreateSourceCompatibilityException(commit,
+                    $"bundled Noto Sans v2.015 source contract at " +
+                    $"'{NotoSansSourceRootRelativePath}' is not exact " +
+                    $"({string.Join("; ", differences)})");
+            }
+
+            foreach (KeyValuePair<string, (long Size, string Sha256)> expected in
+                     RequiredNotoSansSourceFiles)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string path = Path.Combine(fontRoot,
+                    expected.Key.Replace('/', Path.DirectorySeparatorChar));
+                SafePaths.RejectReparsePoint(path,
+                    $"bundled Noto Sans source file '{expected.Key}'");
+                FileInfo actual = new(path);
+                if (!actual.Exists || actual.Length != expected.Value.Size)
+                {
+                    throw CreateSourceCompatibilityException(commit,
+                        $"bundled Noto Sans v2.015 source asset " +
+                        $"'{NotoSansSourceRootRelativePath}/{expected.Key}' has " +
+                        $"the wrong size (expected {expected.Value.Size} bytes)");
+                }
+                using FileStream stream = new(path, FileMode.Open, FileAccess.Read,
+                    FileShare.Read);
+                string hash = Convert.ToHexString(SHA256.HashData(stream))
+                    .ToLowerInvariant();
+                if (!string.Equals(hash, expected.Value.Sha256,
+                        StringComparison.Ordinal))
+                {
+                    throw CreateSourceCompatibilityException(commit,
+                        $"bundled Noto Sans v2.015 source asset " +
+                        $"'{NotoSansSourceRootRelativePath}/{expected.Key}' failed " +
+                        "its SHA-256 check");
+                }
+            }
+
+            log?.Write($"Renderer source font contract validated for {commit}: " +
+                       $"exact Noto Sans v2.015 assets at " +
+                       $"'{NotoSansSourceRootRelativePath}'.");
+        }
+        catch (SourceLauncherCompatibilityException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is InstallerException or IOException or
+                                   UnauthorizedAccessException)
+        {
+            throw CreateSourceCompatibilityException(commit,
+                $"bundled Noto Sans v2.015 source contract at " +
+                $"'{NotoSansSourceRootRelativePath}' could not be validated " +
+                $"({ex.Message})", ex);
+        }
     }
 
     private async Task ValidatePublicBaseCheckoutAsync(

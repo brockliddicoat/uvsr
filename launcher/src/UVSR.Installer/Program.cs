@@ -8,12 +8,8 @@ internal static class Program
         if (args.Length == 3 &&
             args[0].Equals("--launcher-health-check", StringComparison.OrdinalIgnoreCase))
         {
-            return long.TryParse(args[1], out long sequence) &&
-                   sequence == ProductConstants.LauncherReleaseSequence &&
-                   string.Equals(args[2], ProductConstants.LauncherVersion,
-                       StringComparison.Ordinal)
-                ? 0
-                : 3;
+            return RunLauncherHealthCheck(args[1], args[2],
+                LauncherTypography.EnsureAvailable);
         }
 
         if (args.Length == 5 && args[0].Equals("--cleanup", StringComparison.OrdinalIgnoreCase) &&
@@ -42,9 +38,9 @@ internal static class Program
             InstallerEngine.EnsureSupportedPlatform();
             if (NativeMethods.IsCurrentProcessElevated())
             {
-                LauncherDialog.Show(null, "UVSR Launcher",
+                ShowLauncherError("UVSR Launcher",
                     "UVSR Launcher must run as your normal Windows user so downloaded source is never built with administrator rights. Close this copy, then open it normally (do not choose Run as administrator).",
-                    new DialogAction("ok", "OK", Primary: true, Cancel: true));
+                    null);
                 return 1;
             }
             if (args.Length == 1 &&
@@ -59,6 +55,7 @@ internal static class Program
                     Path.Combine(previewRoot, "Desktop"),
                     Path.Combine(previewRoot, "Programs"));
                 using InstallerEngine previewEngine = new(previewPaths);
+                LauncherTypography.EnsureAvailable();
                 Application.Run(new MainForm(previewEngine, false, null));
                 return 0;
             }
@@ -85,21 +82,42 @@ internal static class Program
             bool continueUvsrUpdate = continuationId is not null;
             if (args.Length > 0 && !uninstall && !continueUvsrUpdate)
                 throw new InstallerException("UVSR Launcher received an unsupported command.");
+            LauncherTypography.EnsureAvailable();
             Application.Run(new MainForm(engine, uninstall, continuationId));
             return 0;
         }
         catch (InstallerException ex)
         {
-            LauncherDialog.Show(null, "UVSR Launcher", ex.Message,
-                new DialogAction("ok", "OK", Primary: true, Cancel: true));
+            ShowLauncherError("UVSR Launcher", ex.Message, null);
             return 1;
         }
         catch (Exception ex)
         {
-            LauncherDialog.Show(null, "UVSR Launcher",
-                "UVSR Launcher stopped before making a change. " + ex.Message,
-                new DialogAction("ok", "OK", Primary: true, Cancel: true));
+            ShowLauncherError("UVSR Launcher",
+                "UVSR Launcher stopped before making a change. " + ex.Message, null);
             return 2;
+        }
+    }
+
+    internal static int RunLauncherHealthCheck(
+        string sequenceText,
+        string version,
+        Action ensureTypography)
+    {
+        ArgumentNullException.ThrowIfNull(ensureTypography);
+        if (!long.TryParse(sequenceText, out long sequence) ||
+            sequence != ProductConstants.LauncherReleaseSequence ||
+            !string.Equals(version, ProductConstants.LauncherVersion,
+                StringComparison.Ordinal))
+            return 3;
+        try
+        {
+            ensureTypography();
+            return 0;
+        }
+        catch
+        {
+            return 4;
         }
     }
 
@@ -116,15 +134,34 @@ internal static class Program
         };
         try
         {
-            LauncherDialog.Show(null, "UVSR Uninstall Needs Attention",
+            ShowLauncherError("UVSR Uninstall Needs Attention",
                 reason + " Reopen the UVSR Launcher file you originally downloaded; " +
                 "it will safely resume the uninstall and keep your renderer settings and history.",
-                new DialogAction("ok", "OK", Primary: true, Cancel: true));
+                null);
         }
         catch
         {
             // The helper's nonzero exit code and durable uninstall record still
             // preserve recovery if Windows cannot display this last-resort notice.
         }
+    }
+
+    private static void ShowLauncherError(
+        string title,
+        string message,
+        IWin32Window? owner)
+    {
+        if (LauncherTypography.TryEnsureAvailable(out string fontFailure))
+        {
+            LauncherDialog.ShowError(owner, title, message,
+                new DialogAction("ok", "OK", Primary: true, Cancel: true));
+            return;
+        }
+
+        MessageBox.Show(owner,
+            fontFailure + Environment.NewLine + Environment.NewLine + message,
+            title,
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
     }
 }
