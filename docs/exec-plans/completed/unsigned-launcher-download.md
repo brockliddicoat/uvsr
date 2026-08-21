@@ -2,10 +2,12 @@
 
 ## Status
 
-- State: active
+- State: complete
 - Coordinator: `/root`
-- Project/integration branch and worktree:
-  `codex/unsigned-launcher-download` in `work/launcher-reliability`
+- Gate branch: `codex/unsigned-launcher-download`; merged by PR #36
+- Publication branch: `codex/unsigned-launcher-link`; merged by PR #37
+- Closeout branch: `codex/unsigned-launcher-closeout`
+- Worktree: `work/launcher-reliability`
 - Base commit: `29e9df8d8a6326240e1f7560c7a5ae0f59322cf8`
 - Started: 2026-08-21
 - Last updated: 2026-08-21
@@ -19,15 +21,15 @@ inside launcher self-update.
 
 Done when:
 
-- [ ] A versioned unsigned launcher artifact is bound to an exact verified
+- [x] A versioned unsigned launcher artifact is bound to an exact verified
   source commit and exposed through a durable GitHub Release URL.
-- [ ] The generated README block labels the executable as unsigned and points
+- [x] The generated README block labels the executable as unsigned and points
   to the exact versioned release.
 - [x] Launcher self-update remains governed by its existing feed and publisher
   verification unless the user separately requests that trust change.
 - [x] Tooling, workflow validation, documentation, and focused regressions agree
   with the unsigned manual-download contract.
-- [ ] The integrated change and public release state pass independent review and
+- [x] The integrated change and public release state pass independent review and
   exact artifact verification.
 
 ## Scope
@@ -52,7 +54,7 @@ Affected subsystems and paths:
 - `README.md`, `AGENTS.md`, `launcher/README.md`.
 - `tools/sync_launcher_readme_download.py`.
 - `.github/workflows/launcher-readme-download.yml`.
-- `docs/exec-plans/active/unsigned-launcher-download.md`.
+- `docs/exec-plans/completed/unsigned-launcher-download.md`.
 - GitHub release/tag state for the exact verified launcher artifact.
 
 Shared hotspots reserved for the coordinator:
@@ -98,7 +100,7 @@ Public contracts:
 | UNSIGNED-DESIGN | `/root/bridge_identity_design` | Shared/read-only | `29e9df8` | None | None | Complete |
 | RELEASE-PREFLIGHT | `/root/bridge_patch_audit` | Shared/read-only | `29e9df8` | None | None | Complete |
 | UNSIGNED-IMPLEMENT | `/root/bridge_implementer` | Shared writer | `29e9df8` | README synchronization tool and launcher download workflow | All audits | Complete |
-| INTEGRATION | `/root` | `codex/unsigned-launcher-download` | `29e9df8` | All task-owned paths and external publication | All audits | Active |
+| INTEGRATION | `/root` | Gate and publication branches | `29e9df8` | All task-owned paths and external publication | All audits | Complete |
 
 ## Assignment Contracts
 
@@ -168,10 +170,10 @@ Public contracts:
 | --- | --- | --- | --- |
 | Exact unsigned binary | x64/ProductVersion/health/hash/size/NotSigned | Artifact audit and Windows metadata checks | Passed: EXE SHA-256 `2c393a2d...`, 59,054,520 bytes, x64, `1.1.12+29e9df8...`, health exit 0, `NotSigned` |
 | Deterministic block | Valid unsigned/manual, unavailable, and future signed states; malformed links rejected | Sync-tool self-test and focused fixtures | Passed: Python compile, self-test, unavailable check/state JSON, strict feed and renderer-contract parse |
-| Workflow enforcement | Action accepts the exact unsigned versioned release and rejects mutable/mismatched/signed-label errors | Action lint, PowerShell parse, and simulations | Static checks passed: actionlint and all three PowerShell blocks; live release-path validation remains post-publication |
+| Workflow enforcement | Action accepts the exact unsigned versioned release and rejects mutable/mismatched/signed-label errors | Action lint, PowerShell parse, and protected PR/main validation | Passed: PR #37 run `32531046996` and post-merge main run `32531695128` validated the public unsigned release |
 | Update trust isolation | Feed files and launcher signature-verification source are unchanged | Exact Git diff assertions | Passed: both feeds, ProductConstants, NativeMethods, and input lock have no diff; feed alias and identity verifiers pass |
-| Documentation correctness | Title Case, line counts, and no stale signed-only claim | Repository documentation checks | Passed: 2,371 headings with zero violations; line counts `130,763 / 386,164 / 516,927`; diff check clean |
-| Public availability | Anonymous exact URL returns the verified bytes | Post-publication download and hash check | Pending |
+| Documentation correctness | Title Case, line counts, and no stale signed-only claim | Repository documentation checks | Passed: 2,369 headings with zero violations; line counts `130,763 / 386,164 / 516,927`; diff check clean |
+| Public availability | Anonymous exact URL returns the verified bytes | Post-publication download and hash check | Passed: EXE 59,054,520 bytes/SHA-256 `2c393a2d...8d2`; checksum 99 bytes/SHA-256 `c8d3c4e7...ba63`; x64, metadata, `NotSigned`, and health exit 0 reverified |
 
 ## Decisions
 
@@ -187,14 +189,17 @@ Public contracts:
 
 | Date/Time | Task/Owner | Status | Revision/Artifact | Checks | Risks/Next Action |
 | --- | --- | --- | --- | --- | --- |
-| 2026-08-21 | `/root` | Active | Branch `codex/unsigned-launcher-download` at `29e9df8` | Remote/worktree/PR/plan preflight complete | Await audit handoffs |
+| 2026-08-21 | `/root` | Complete | Branch `codex/unsigned-launcher-download` at `29e9df8` | Remote/worktree/PR/plan preflight completed | Audit handoffs received |
 | 2026-08-21 | `/root/bridge_implementer` | Complete | Actions artifact `9461188459` | ZIP/executable/checksum digests, x64 metadata, `NotSigned`, and health 13/1.1.12 passed | Evidence retained in isolated Temp directory |
 | 2026-08-21 | `/root/bridge_identity_design` | Complete | Separate manual-bootstrap contract | State, workflow, compatibility, disclosure, and regression matrix reviewed | Updater feed and signature policy remain untouched |
 | 2026-08-21 | `/root/bridge_patch_audit` | Complete | Live release/publication preflight | Main, PRs, workflows, immutability, releases, and authority classified | Prepare locally; request exact publication authorization afterward |
 | 2026-08-21 | `/root/bridge_implementer` | Complete | Three-state README generator and signed/unsigned workflow validation | Python compile/self-test, live unavailable check, renderer contract parse, PowerShell AST parse, and actionlint passed | Coordinator composition and independent review |
-| 2026-08-21 | `/root` | Active | `work/unsigned-launcher-release-v1.1.12-29e9df8d` | Copied only the audited EXE and checksum; hashes remain `2c393a2d...` and `c8d3c4e7...` | Preserve for publication after explicit authorization |
+| 2026-08-21 | `/root` | Complete | `work/unsigned-launcher-release-v1.1.12-29e9df8d` | Copied only the audited EXE and checksum; hashes remain `2c393a2d...` and `c8d3c4e7...` | Exact files published after explicit authorization |
 | 2026-08-21 | `/root/bridge_patch_audit` | Complete | Final composed candidate | No P0-P3 findings; parser, workflow syntax, exact checksum, docs, feed/identity isolation, and artifact hashes rechecked | External publication only |
-| 2026-08-21 | `/root` | Active | User-authorized publication | Live `main` remains `29e9df8`; no open PR or v1.1.12 tag collision | Land unavailable-state gate before publishing the immutable prerelease |
+| 2026-08-21 | `/root` | Complete | User-authorized publication | Live `main` was `29e9df8`; no open PR or v1.1.12 tag collision existed | Protected gate and immutable prerelease publication completed |
+| 2026-08-21 | `/root` | Complete | PR #36, gate commit `c37dac73` on `main` | All six checks passed, including required README validation and two Windows launcher builds; post-merge run `32530279332` passed | Gate is canonical |
+| 2026-08-21 | `/root` | Complete | Release `uvsr-launcher-v1.1.12`, ID `374692496`, source `29e9df8` | Immutable prerelease; exact two assets and attestations passed; anonymous downloads, hashes, checksum, x64 metadata, `NotSigned`, and health exit 0 passed | Manual bootstrap is public; self-update feeds remain unchanged |
+| 2026-08-21 | `/root` | Complete | PR #37, publication commit `f6f75f4a` on `main` | PR runs `32531047005`, `32531046996`, `32531046978`, and `32531046884` passed; post-merge runs `32531695190`, `32531695128`, `32531695152`, and `32531695181` passed | README link is canonical and public |
 
 ## Risks and Escalation Triggers
 
@@ -202,9 +207,8 @@ Public contracts:
 - The manual download cannot become authority for launcher self-update.
 - GitHub Release creation becomes difficult to undo after immutability locks the
   release; every byte and source identity must be verified first.
-- The active legal-and-licensing plan overlaps README and workflow paths but is
-  owned in a separate worktree/branch; integration remains serialized through
-  this coordinator.
+- The separate legal-and-licensing work was kept isolated and publication was
+  serialized through this coordinator.
 
 Stop and ask the user if:
 
@@ -216,11 +220,11 @@ Stop and ask the user if:
 
 ## Completion
 
-- Final integrated commit: pending
-- Verification summary: local implementation checks passed; public release checks await publication
-- Independent review: passed with no P0-P3 findings
-- Coming Soon/documentation update: complete for the local candidate
-- Pushed/PR/merged, or intentionally local: local pending explicit publication authority
-- Remaining experiments or follow-ups: permanent signing remains separate
-- Active ownership released: no
-- Archived to completed/abandoned path: pending
+- Final integrated publication commit: `f6f75f4a4f0642814da150656ba95576eb008573`.
+- Verification summary: exact unsigned artifact, immutable release/tag/source, attestations, anonymous downloads, checksum, PE x64 metadata, ProductVersion, `NotSigned`, health identity, generated README state, and required GitHub checks all passed.
+- Independent review: passed with no P0-P3 findings.
+- Coming Soon/documentation update: complete; the finished launcher item was removed.
+- Pushed/PR/merged, or intentionally local: gate PR #36 and publication PR #37 merged through protected `main`; closeout record uses the same protected path.
+- Remaining experiments or follow-ups: permanent signing and signed self-update remain separate future work.
+- Active ownership released: yes.
+- Archived to completed/abandoned path: `docs/exec-plans/completed/unsigned-launcher-download.md`.
