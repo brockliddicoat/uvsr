@@ -13,11 +13,11 @@ production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 130,478 non-blank source lines.
+**First-Party Lines of Code:** 130,763 non-blank source lines.
 
 **Third-Party Lines of Code:** 386,164 non-blank source lines.
 
-**Total Lines of Code:** 516,642 non-blank source lines.
+**Total Lines of Code:** 516,927 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -95,23 +95,25 @@ when UVSR is already present.
 ## Launcher Availability
 
 The launcher flow is intended to handle prerequisites, build the newest public
-`main`, and keep launcher updates separate from the renderer installation. Its
-new signed bootstrap is not public yet. The currently published sequence-2
-launcher cannot build the current minimum-sequence-4 renderer source, so it
-must not be used for a fresh installation.
+`main`, and keep launcher updates separate from the renderer installation. The
+currently published sequence-2 launcher cannot build the current
+minimum-sequence-4 renderer source, so it must not be used for a fresh
+installation.
 
-When the permanent signing identity and clean Windows 11 release validation are
-complete, the generated block below will name the exact immutable versioned
-release recorded by the canonical launcher feed.
+The generated block below will name the exact immutable versioned launcher once
+the verified unsigned Windows 11 build is published. Windows may identify that
+manual bootstrap as coming from an unknown publisher. The download is not
+launcher self-update authority; automatic launcher updates remain governed by
+the separate checked feed and publisher policy.
 
 <!-- uvsr-launcher-download:start -->
-> No compatible signed UVSR Launcher is public yet.
+> UVSR Launcher download is temporarily unavailable.
 <!-- uvsr-launcher-download:end -->
 
-After that compatible signed bootstrap is published, opening the one file will
+After that unsigned manual bootstrap is published, opening the one file will
 start the launcher. Its shortcut is selected by default, transient downloads
-resume or retry safely, and Update lets you choose UVSR Engine, UVSR Launcher,
-or both.
+resume or retry safely, and Update can install or repair UVSR Engine. Launcher
+self-updates remain disabled for this unsigned bootstrap.
 
 Update checks come from:
 
@@ -172,9 +174,10 @@ Experimental entries are not promises that the work will ship.
 - **UVSR Launcher for Windows 11 — Awaiting Release Validation.** The launcher
   source downloads verified prerequisites, builds the newest public `main`,
   uses the launcher for its default desktop shortcut, checks UVSR and launcher
-  updates independently, and tolerates ordinary connection pauses. Public
-  distribution still requires the permanent code-signing identity and clean
-  Windows 11 release-matrix validation.
+  updates independently, and tolerates ordinary connection pauses. The manual
+  unsigned bootstrap still requires an exact immutable release and clean
+  Windows 11 release-matrix validation; permanent code signing remains future
+  hardening rather than a download prerequisite.
 
 ## Engineering Documentation
 
