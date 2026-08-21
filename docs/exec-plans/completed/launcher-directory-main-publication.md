@@ -123,9 +123,9 @@ Public interface and compatibility contracts:
 
 | Acceptance Criterion | Evidence Required | Command/Experiment | Result/Artifact |
 | --- | --- | --- | --- |
-| Complete path migration | Launcher project under `launcher/**`; only the exact legacy feed remains under `installer/**` | Git inventory, feed mirror verifier, and scoped searches | Passed; old/new feeds are 324 identical bytes, SHA-256 `f74dd689f02e23b91b490625fd7d87bfefcb97817c792bc8dcb4b08212415ae8` |
-| Launcher correctness | Full launcher build, tests, health, metadata, checksum | Renamed `launcher/build.ps1` | Passed; 98/98 tests and health exit 0; dirty preview SHA-256 `55bea4869a07c2236f84c36522e55661ac784190ec933022a3012807522f542b` |
-| Renderer correctness | Release build and complete CTest | Isolated current renderer build | Passed; 50/50 tests; dirty candidate SHA-256 `df6e07245f0e6a86be5b0decf8879b5b19422b3624e83dc8b1b0928c1055a400` |
+| Complete path migration | Launcher project under `launcher/**`; only the exact legacy feed remains under `installer/**` | Git inventory, feed mirror verifier, and scoped searches | Passed; committed old/new feeds are 321 identical LF-normalized bytes, SHA-256 `5689fc9d8856c503e5ff48d091825ff59290065986bb915299dfbcc0b96bcd7d` |
+| Launcher correctness | Full launcher build, tests, health, metadata, checksum | Renamed `launcher/build.ps1` | Passed from committed code SHA `639fd74f`: 98/98 tests, health exit 0, and launcher SHA-256 `df775ca75cbb54c534f109553299b644cf593237fc7cfb98e561c4c75c1d472f` |
+| Renderer correctness | Release build and complete CTest | Isolated current renderer build | Passed from committed code SHA `639fd74f`: 50/50 tests, exact package validation, and renderer SHA-256 `8b53f9c72ed1c04d0f83f68c24b48df0d1923e80faa41164dcdd4a93f62c4497` |
 | Identity safety | Unique version/sequence and exact input lock | Renamed verifier against `42c2036` | Passed; 1.1.12 sequence 13, lock `cf44419e0f933a6fb57b35c94cb2b27fbd402346763897074ee6fb91236d861d` |
 | Repository hygiene | Title Case, counts, legal, diff, and status checks | Repository validators | Passed before final staging; final staged checks remain mandatory |
 | Publication | Remote main exactly equals verified commit and Actions pass | Git and GitHub inspection | Required immediately after the publication commit; result recorded in task handoff |
