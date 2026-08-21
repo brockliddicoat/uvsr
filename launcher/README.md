@@ -355,9 +355,9 @@ or feed until that source-first gate passes. The current 1.1.12 sequence-13
 source candidate is only an unsigned local preview; setting the permanent signer changes
 a locked input and requires another unique identity, lock, build, and complete
 verification pass. The live sequence-2 bootstrap cannot build the
-minimum-sequence-4 source and cannot self-update without a pinned signer; step 8
+minimum-sequence-4 source and cannot self-update without a pinned signer; step 9
 therefore requires a manual signed-launcher bootstrap. The ordinary
-consumer-first order in step 9 applies only to a future source contract that
+consumer-first order in step 10 applies only to a future source contract that
 raises its minimum launcher sequence.
 
 1. Choose the permanent Authenticode identity and set
@@ -371,31 +371,45 @@ raises its minimum launcher sequence.
    11 x64 virtual machines.
 4. Sign the final launcher, verify its Authenticode chain and pinned signer, then
    regenerate its size and SHA-256. Never use the pre-signing checksum.
-5. Create the immutable GitHub Release tag
-   `uvsr-launcher-v<version>` and upload the exact signed executable and its
-   checksum.
+5. Enable immutable releases before creating this release; the setting applies
+   only to future releases. Create a draft for `uvsr-launcher-v<version>` that
+   targets the exact verified 40-character commit, upload only the signed
+   executable and checksum, validate their inventory and digests, then publish
+   it as a stable immutable release. Never target mutable `main` or publish the
+   draft without both assets.
 6. While public renderer source is still compatible with the prior launcher,
-   publish a feed-only canonical camelCase update with the final release sequence,
-   version, size, and SHA-256. Update the canonical `launcher/` feed and its
-   byte-identical legacy `installer/` mirror in the same commit. Publish them
-   only after the immutable release asset is independently re-downloadable.
-7. Run `build.ps1 -PublishedArtifactPath <signed-launcher>` after the feed update;
-   it rechecks the signed file's bytes, product metadata, and embedded release
-   identity health check against that feed.
-8. Validate the feed and artifact from a clean Windows 11 VM. The first launcher
-   shipped with an empty signer pin cannot self-update by design, so that one-time
-   bootstrap requires users to open the newly signed launcher manually. Confirm
-   that the new pinned launcher can perform future signed updates, then allow the
-   bootstrap release to propagate.
-9. For a future renderer source that raises its minimum launcher sequence, only
-   after the compatible launcher is available, publish that renderer source.
-   Confirm that public `main` contains
+   prepare a release-state branch that advances the canonical camelCase feed's
+   sequence, version, size, and SHA-256. Update its byte-identical legacy
+   `installer/` mirror in the same commit, then run
+   `python tools/sync_launcher_readme_download.py --set-from-feed` so the root
+   README names that exact immutable versioned asset. Never use GitHub's mutable
+   latest-release URL or an Actions artifact for the human download. Open a pull
+   request; do not merge or directly push this release state yet.
+7. Configure Launcher README Download as a required check on the protected
+   publication branch. It runs on every pull request and performs a safe no-op
+   for unrelated changes. For this feed-changing pull request, also require the
+   path-triggered Windows 11 Launcher workflow to run and pass. The checks verify
+   the release attestation, feed mirror, downloaded bytes, source identity and
+   signer pin, x64 product metadata, health check, and generated README link.
+8. On the still-unmerged release-state branch, run
+   `build.ps1 -PublishedArtifactPath <signed-launcher>` and the final clean
+   Windows 11 VM install/repair checks. Merge only after every check passes.
+9. After the protected merge, require both raw feed URLs and the root README on
+   public `main` to converge on the reviewed commit, then repeat an unauthenticated
+   download and health check. The first launcher shipped with an empty signer pin
+    cannot self-update by design, so the one-time bootstrap requires users to open
+    the newly signed launcher manually. Confirm that the new pinned launcher can
+    perform future signed updates as immediate post-publication verification;
+    do not make a separate release announcement until that check passes.
+10. For a future renderer source that raises its minimum launcher sequence, only
+    after the compatible launcher is available, publish that renderer source.
+    Confirm that public `main` contains
    `cmake/uvsr-launcher-build-contract-v1.json`, that the commit-specific raw URL
    works, and that its values match the launcher's compiled contract. The Noto
    transition keeps the existing minimum and must already have passed the
    source-first gate above.
-10. Recheck a fresh install and a renderer repair from the new launcher on a clean
-    Windows 11 VM before advertising the renderer update.
+11. Recheck a fresh install and a renderer repair from the new launcher on a clean
+     Windows 11 VM before advertising the renderer update.
 
 Publishing, signing, tagging, and changing GitHub Releases are explicit release
 actions and are not performed by the local build script.

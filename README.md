@@ -13,11 +13,11 @@ production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 129,955 non-blank source lines.
+**First-Party Lines of Code:** 130,478 non-blank source lines.
 
 **Third-Party Lines of Code:** 386,164 non-blank source lines.
 
-**Total Lines of Code:** 516,119 non-blank source lines.
+**Total Lines of Code:** 516,642 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -101,9 +101,12 @@ launcher cannot build the current minimum-sequence-4 renderer source, so it
 must not be used for a fresh installation.
 
 When the permanent signing identity and clean Windows 11 release validation are
-complete, the compatible bootstrap will be published at:
+complete, the generated block below will name the exact immutable versioned
+release recorded by the canonical launcher feed.
 
->[UVSR Launcher Release Asset](https://github.com/brockliddicoat/uvsr/releases/latest/download/UVSR-Launcher-Windows-11-x64.exe)
+<!-- uvsr-launcher-download:start -->
+> No compatible signed UVSR Launcher is public yet.
+<!-- uvsr-launcher-download:end -->
 
 After that compatible signed bootstrap is published, opening the one file will
 start the launcher. Its shortcut is selected by default, transient downloads
@@ -115,8 +118,8 @@ Update checks come from:
 - `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-feed-v1.json`
 - `https://api.github.com/repos/brockliddicoat/uvsr/git/ref/heads/main`
 - `https://raw.githubusercontent.com/brockliddicoat/uvsr/<commit>/cmake/uvsr-launcher-build-contract-v1.json`
-- `https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe`
-  and falls back to `uvsr-launcher-latest` if the versioned tag is temporarily
+- The immutable versioned GitHub Release asset named by that feed. The launcher
+  falls back to `uvsr-launcher-latest` if the versioned tag is temporarily
   unavailable.
 
 Launchers built from the renamed source use the canonical `launcher/` feed

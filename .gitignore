@@ -11,6 +11,8 @@
 *.user
 *.suo
 *.vcxproj.user
+**/__pycache__/
+*.py[cod]
 
 # Generated local artifacts.
 /work/

@@ -1,6 +1,6 @@
 # UVSR Agent Guide
 
-Agent policy version: `2026-08-11.1`.
+Agent policy version: `2026-08-21.1`.
 
 ## Product and Scope
 
@@ -737,6 +737,22 @@ Agent policy version: `2026-08-11.1`.
 - Update `README.md` whenever a change affects user-visible behavior, defaults,
   controls, required assets, build/test/run steps, or intentional omissions.
   Remove stale claims instead of preserving historical behavior.
+- Treat the marked launcher-download block in `README.md` as generated release
+  state. A launcher publication is incomplete unless the canonical and legacy
+  feeds and that block identify the same immutable
+  `uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe` asset. Run
+  `python tools/sync_launcher_readme_download.py --set-from-feed` in the feed
+  publication change, followed by `--self-test` and `--check`. Never use a
+  mutable `releases/latest` URL, `uvsr-launcher-latest`, a draft or prerelease,
+  or a temporary Actions artifact as the human download. When no compatible
+  signed release passes the feed, byte, signature, metadata, and health gates,
+  keep the generated block unavailable with `--set-unavailable`.
+- Publish launcher feed and README release-state changes only through a pull
+  request whose target branch requires Launcher README Download. Because a feed
+  change also triggers Windows 11 Launcher, require that path-triggered build to
+  pass on the release pull request before merging. If the branch protection is
+  absent, stop before publication; a post-push failure cannot retract an already
+  public bad link.
 - Update `docs/pbr-foundation.md` when the material contract, G-buffer packing,
   BSDF equations, debug views, limitations, or extension path changes.
 - Prefer extensive, high-signal code comments that preserve implementation
