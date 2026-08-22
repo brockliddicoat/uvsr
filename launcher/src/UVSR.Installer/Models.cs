@@ -103,15 +103,35 @@ internal sealed record LauncherPackageManifest(
     long ExecutableSize,
     DateTimeOffset InstalledUtc);
 
+internal sealed record LauncherUpdateFeedEnvelope(
+    int SchemaVersion,
+    string KeyId,
+    string PayloadBase64,
+    string SignatureBase64);
+
 internal sealed record LauncherFeed(
+    int SchemaVersion,
+    string ProductId,
+    string Channel,
+    long ReleaseSequence,
+    string Version,
+    string SourceCommit,
+    LauncherFeedArtifact Artifact);
+
+internal sealed record LauncherFeedArtifact(
+    string Name,
+    long Size,
+    string Sha256);
+
+internal sealed record LegacyLauncherFeed(
     int SchemaVersion,
     string ProductId,
     string? Channel,
     long ReleaseSequence,
     string Version,
-    LauncherFeedArtifact Artifact);
+    LegacyLauncherFeedArtifact Artifact);
 
-internal sealed record LauncherFeedArtifact(
+internal sealed record LegacyLauncherFeedArtifact(
     string Name,
     long Size,
     string Sha256);

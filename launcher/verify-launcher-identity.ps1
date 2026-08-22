@@ -21,11 +21,14 @@ $binaryInputs = @(
     'launcher/src/UVSR.Installer',
     'launcher/build.ps1',
     'launcher/generate-renderer-source-bridge.ps1',
+    'launcher/new-launcher-update-feed.ps1',
     'launcher/global.json',
     'launcher/tests/launcher-feed-alias-tests.ps1',
+    'launcher/tests/launcher-update-feed-tests.ps1',
     'launcher/tests/renderer-source-bridge-verifier-tests.ps1',
     'launcher/verify-launcher-feed-alias.ps1',
     'launcher/verify-launcher-identity.ps1',
+    'launcher/verify-launcher-update-feed.ps1',
     'cmake/uvsr-launcher-build-contract-v1.json',
     'LICENSE.md'
 )

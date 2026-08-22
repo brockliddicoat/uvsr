@@ -12,7 +12,14 @@ internal static partial class ProductConstants
     internal const string RepositoryMainApi =
         "https://api.github.com/repos/brockliddicoat/uvsr/git/ref/heads/main";
     internal const string LauncherFeedUrl =
+        "https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-update-feed-v2.json";
+    internal const string LegacyLauncherFeedUrl =
         "https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-feed-v1.json";
+    internal const int LauncherUpdateFeedSchemaVersion = 2;
+    internal const string LauncherUpdateFeedKeyId =
+        "uvsr-launcher-update-p256-2026-01";
+    internal const string LauncherUpdateFeedPublicKeySpkiBase64 =
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEATbHkDwYIS0nMut5h9Q6m67qfabhuK+VRo6mDW1UlwZQIfeLI7zc1aKblCclkfgd8DDU0LcblFgTFdvoAWgCYg==";
     internal const string RepositoryRawUrl =
         "https://raw.githubusercontent.com/brockliddicoat/uvsr";
     internal const string RendererBuildContractRelativePath =
@@ -21,8 +28,8 @@ internal static partial class ProductConstants
         "uvsr-windows-dx12-stable-619-v1";
     internal const int RendererBuildContractSchemaVersion = 1;
     internal const string PinnedDxcDate = "2026_02_20";
-    internal const string LauncherVersion = "1.1.12";
-    internal const long LauncherReleaseSequence = 13;
+    internal const string LauncherVersion = "1.1.13";
+    internal const long LauncherReleaseSequence = 14;
     internal const int D3D12AgilitySdkVersion = 619;
     internal const string LauncherExecutableName = "UVSR Launcher.exe";
     internal const string LauncherArtifactName = "UVSR-Launcher-Windows-11-x64.exe";
@@ -33,14 +40,10 @@ internal static partial class ProductConstants
     internal const long MaximumStateBytes = 64 * 1024;
     internal const long MaximumPackageManifestBytes = 16L * 1024 * 1024;
     internal const long MaximumLauncherFeedBytes = 16L * 1024;
+    internal const long MaximumLauncherFeedPayloadBytes = 8L * 1024;
     internal const long MaximumRendererBuildContractBytes = 16L * 1024;
     internal const long MaximumLauncherBytes = 256L * 1024 * 1024;
     internal const long MaximumReleaseSequence = 9_007_199_254_740_991L;
-    // A public release must replace this empty value with the SHA-256 of
-    // its permanent Authenticode signer certificate before self-update is enabled.
-    // The launcher fails closed while no publisher identity is configured.
-    internal const string LauncherPublisherSpkiSha256 = "";
-
     internal static readonly ToolPackage Git = new(
         "Git for Windows MinGit",
         "2.55.0.4",

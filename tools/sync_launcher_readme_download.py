@@ -8,7 +8,9 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 
@@ -17,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_README = ROOT / "README.md"
 DEFAULT_CANONICAL_FEED = ROOT / "launcher" / "launcher-feed-v1.json"
 DEFAULT_LEGACY_FEED = ROOT / "installer" / "launcher-feed-v1.json"
+DEFAULT_UPDATE_FEED = ROOT / "launcher" / "launcher-update-feed-v2.json"
+DEFAULT_UPDATE_FEED_VERIFIER = ROOT / "launcher" / "verify-launcher-update-feed.ps1"
 DEFAULT_RENDERER_CONTRACT = ROOT / "cmake" / "uvsr-launcher-build-contract-v1.json"
 START_MARKER = "<!-- uvsr-launcher-download:start -->"
 END_MARKER = "<!-- uvsr-launcher-download:end -->"
@@ -28,14 +32,25 @@ RELEASE_PREFIX = (
 SIGNED_LINK_LABEL_PREFIX = "Download UVSR Launcher v"
 UNSIGNED_LINK_LABEL_PREFIX = "Download Unsigned UVSR Launcher v"
 UNSIGNED_LINK_LABEL_SUFFIX = " (unsigned manual bootstrap)"
+UNSIGNED_FEED_LINK_LABEL_SUFFIX = " (unsigned; signed-feed updates)"
 UNSIGNED_CHECKSUM_LABEL = "SHA-256 checksum"
 UNSIGNED_DISCLOSURE = (
     "> Not Authenticode-signed. Windows may warn. Launcher self-updates are disabled."
 )
+UNSIGNED_FEED_DISCLOSURE = (
+    "> Not Authenticode-signed. Windows may warn. Launcher updates are authorized "
+    "by UVSR’s pinned signed feed and exact immutable release identity."
+)
 STATE_UNAVAILABLE = "unavailable"
 STATE_UNSIGNED = "unsigned"
+STATE_UNSIGNED_FEED = "unsigned-feed"
 STATE_SIGNED = "signed"
-STATE_KINDS = {STATE_UNAVAILABLE, STATE_UNSIGNED, STATE_SIGNED}
+STATE_KINDS = {
+    STATE_UNAVAILABLE,
+    STATE_UNSIGNED,
+    STATE_UNSIGNED_FEED,
+    STATE_SIGNED,
+}
 LATEST_ROUTE = f"/releases/latest/download/{ARTIFACT_NAME}".encode("ascii")
 LATEST_ALIAS_ROUTE = (
     f"/releases/download/uvsr-launcher-latest/{ARTIFACT_NAME}"
@@ -117,6 +132,13 @@ def unsigned_link(version: str) -> str:
     )
 
 
+def unsigned_feed_link(version: str) -> str:
+    return (
+        f"> [{UNSIGNED_LINK_LABEL_PREFIX}{version}{UNSIGNED_FEED_LINK_LABEL_SUFFIX}]"
+        f"({release_url(version)})"
+    )
+
+
 def unsigned_checksum_link(version: str) -> str:
     return f"> [{UNSIGNED_CHECKSUM_LABEL}]({release_url(version)}.sha256)"
 
@@ -129,6 +151,16 @@ def render_block(kind: str, version: str | None, newline: bytes) -> bytes:
         lines = (START_MARKER, UNAVAILABLE_MESSAGE, END_MARKER)
     elif state.kind == STATE_SIGNED:
         lines = (START_MARKER, published_link(state.version), END_MARKER)
+    elif state.kind == STATE_UNSIGNED_FEED:
+        lines = (
+            START_MARKER,
+            unsigned_feed_link(state.version),
+            ">",
+            unsigned_checksum_link(state.version),
+            ">",
+            UNSIGNED_FEED_DISCLOSURE,
+            END_MARKER,
+        )
     else:
         lines = (
             START_MARKER,
@@ -139,7 +171,7 @@ def render_block(kind: str, version: str | None, newline: bytes) -> bytes:
             UNSIGNED_DISCLOSURE,
             END_MARKER,
         )
-    return newline.join(part.encode("ascii") for part in lines)
+    return newline.join(part.encode("utf-8") for part in lines)
 
 
 def marker_line_bounds(data: bytes, marker: bytes, position: int) -> tuple[int, int]:
@@ -254,6 +286,105 @@ def read_feed(canonical_path: Path, legacy_path: Path) -> dict[str, object]:
     return parse_feed(canonical)
 
 
+def parse_verified_update_payload(data: bytes) -> dict[str, object]:
+    if not 1 <= len(data) <= 8 * 1024:
+        raise SyncError("verified launcher update payload exceeds its strict size limit")
+    try:
+        text = data.decode("utf-8")
+        value = json.loads(text, object_pairs_hook=reject_duplicate_json_properties)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SyncError(
+            f"verified launcher update payload is not strict UTF-8 JSON: {error}"
+        ) from error
+
+    payload = require_exact_keys(
+        value,
+        {
+            "schemaVersion",
+            "productId",
+            "channel",
+            "releaseSequence",
+            "version",
+            "sourceCommit",
+            "artifact",
+        },
+        "update payload",
+    )
+    artifact = require_exact_keys(
+        payload["artifact"], {"name", "size", "sha256"}, "update artifact"
+    )
+    sequence = payload["releaseSequence"]
+    version = payload["version"]
+    source_commit = payload["sourceCommit"]
+    size = artifact["size"]
+    sha256 = artifact["sha256"]
+    if not isinstance(version, str):
+        raise SyncError("verified launcher update version is not a string")
+    validate_version(version)
+    if (
+        type(payload["schemaVersion"]) is not int
+        or payload["schemaVersion"] != 2
+        or payload["productId"] != PRODUCT_ID
+        or payload["channel"] != "stable"
+        or type(sequence) is not int
+        or not 1 <= sequence <= MAXIMUM_RELEASE_SEQUENCE
+        or not isinstance(source_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", source_commit) is None
+        or artifact["name"] != ARTIFACT_NAME
+        or type(size) is not int
+        or not 1 <= size <= MAXIMUM_LAUNCHER_BYTES
+        or not isinstance(sha256, str)
+        or SHA256_PATTERN.fullmatch(sha256) is None
+    ):
+        raise SyncError("verified launcher update payload identity is not canonical")
+    return payload
+
+
+def read_verified_update_feed(path: Path, verifier: Path) -> dict[str, object]:
+    for candidate, description in (
+        (path, "launcher update feed"),
+        (verifier, "launcher update feed verifier"),
+    ):
+        if candidate.is_symlink():
+            raise SyncError(f"refusing to use a symlink as the {description}: {candidate}")
+        if not candidate.is_file():
+            raise SyncError(f"the {description} is missing at {candidate}")
+    powershell = shutil.which("pwsh")
+    if powershell is None:
+        raise SyncError("pwsh is required to verify the signed launcher update feed")
+    try:
+        result = subprocess.run(
+            [
+                powershell,
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-File",
+                str(verifier),
+                "-Path",
+                str(path),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="strict",
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError) as error:
+        raise SyncError(f"launcher update feed verification could not run: {error}") from error
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise SyncError(
+            "launcher update feed verification failed"
+            + (f": {detail}" if detail else "")
+        )
+    lines = result.stdout.splitlines()
+    if len(lines) != 1 or not lines[0]:
+        raise SyncError("launcher update feed verifier emitted unexpected output")
+    return parse_verified_update_payload(lines[0].encode("utf-8"))
+
+
 def parse_renderer_contract(data: bytes) -> dict[str, object]:
     if not 1 <= len(data) <= MAXIMUM_RENDERER_CONTRACT_BYTES:
         raise SyncError("renderer build contract exceeds its strict size limit")
@@ -353,10 +484,10 @@ def parse_readme(data: bytes) -> ParsedReadme:
         )
 
     try:
-        block_text = block.decode("ascii")
+        block_text = block.decode("utf-8")
         normalized = block_text.replace("\r\n", "\n")
     except UnicodeDecodeError as error:
-        raise SyncError("README launcher download block must contain only ASCII") from error
+        raise SyncError("README launcher download block must be strict UTF-8") from error
 
     signed_pattern = re.compile(
         re.escape(START_MARKER)
@@ -370,39 +501,50 @@ def parse_readme(data: bytes) -> ParsedReadme:
         + r"\)\n"
         + re.escape(END_MARKER)
     )
-    unsigned_pattern = re.compile(
-        re.escape(START_MARKER)
-        + r"\n> \["
-        + re.escape(UNSIGNED_LINK_LABEL_PREFIX)
-        + r"(?P<label_version>[^\]\r\n]+)"
-        + re.escape(UNSIGNED_LINK_LABEL_SUFFIX)
-        + r"\]\("
-        + re.escape(RELEASE_PREFIX)
-        + r"(?P<version>[^/\r\n]+)/"
-        + re.escape(ARTIFACT_NAME)
-        + r"\)\n>\n> \["
-        + re.escape(UNSIGNED_CHECKSUM_LABEL)
-        + r"\]\("
-        + re.escape(RELEASE_PREFIX)
-        + r"(?P<checksum_version>[^/\r\n]+)/"
-        + re.escape(ARTIFACT_NAME)
-        + r"\.sha256\)\n>\n"
-        + re.escape(UNSIGNED_DISCLOSURE)
-        + r"\n"
-        + re.escape(END_MARKER)
+    def unsigned_pattern(suffix: str, disclosure: str) -> re.Pattern[str]:
+        return re.compile(
+            re.escape(START_MARKER)
+            + r"\n> \["
+            + re.escape(UNSIGNED_LINK_LABEL_PREFIX)
+            + r"(?P<label_version>[^\]\r\n]+)"
+            + re.escape(suffix)
+            + r"\]\("
+            + re.escape(RELEASE_PREFIX)
+            + r"(?P<version>[^/\r\n]+)/"
+            + re.escape(ARTIFACT_NAME)
+            + r"\)\n>\n> \["
+            + re.escape(UNSIGNED_CHECKSUM_LABEL)
+            + r"\]\("
+            + re.escape(RELEASE_PREFIX)
+            + r"(?P<checksum_version>[^/\r\n]+)/"
+            + re.escape(ARTIFACT_NAME)
+            + r"\.sha256\)\n>\n"
+            + re.escape(disclosure)
+            + r"\n"
+            + re.escape(END_MARKER)
+        )
+
+    unsigned_manual_pattern = unsigned_pattern(
+        UNSIGNED_LINK_LABEL_SUFFIX, UNSIGNED_DISCLOSURE
+    )
+    unsigned_feed_pattern = unsigned_pattern(
+        UNSIGNED_FEED_LINK_LABEL_SUFFIX, UNSIGNED_FEED_DISCLOSURE
     )
     kind = STATE_SIGNED
     match = signed_pattern.fullmatch(normalized)
     if match is None:
         kind = STATE_UNSIGNED
-        match = unsigned_pattern.fullmatch(normalized)
+        match = unsigned_manual_pattern.fullmatch(normalized)
+    if match is None:
+        kind = STATE_UNSIGNED_FEED
+        match = unsigned_feed_pattern.fullmatch(normalized)
     if match is None:
         raise SyncError("README launcher download block is noncanonical")
     version = validate_version(match.group("version"))
     label_version = validate_version(match.group("label_version"))
     if label_version != version:
         raise SyncError("README launcher download label and URL versions differ")
-    if kind == STATE_UNSIGNED:
+    if kind in (STATE_UNSIGNED, STATE_UNSIGNED_FEED):
         checksum_version = validate_version(match.group("checksum_version"))
         if checksum_version != version:
             raise SyncError(
@@ -410,7 +552,7 @@ def parse_readme(data: bytes) -> ParsedReadme:
             )
     if block != render_block(kind, version, newline):
         raise SyncError("README launcher download block is noncanonical")
-    expected_references = 2 if kind == STATE_UNSIGNED else 1
+    expected_references = 2 if kind in (STATE_UNSIGNED, STATE_UNSIGNED_FEED) else 1
     validate_launcher_artifact_ownership(
         data, block_start, block_end, expected_references
     )
@@ -531,6 +673,10 @@ def self_test() -> None:
                 STATE_UNSIGNED,
                 render_block(STATE_UNSIGNED, "1.2.3", b"\r\n"),
             ),
+            (
+                STATE_UNSIGNED_FEED,
+                render_block(STATE_UNSIGNED_FEED, "1.2.3", b"\r\n"),
+            ),
         ):
             if not set_state(readme, kind, "1.2.3"):
                 raise RuntimeError(f"{kind} launcher update reported no change")
@@ -553,7 +699,7 @@ def self_test() -> None:
             if set_state(readme, kind, "1.2.3"):
                 raise RuntimeError(f"identical {kind} update rewrote the README")
 
-        unsigned = readme.read_bytes()
+        unsigned = render_block(STATE_UNSIGNED, "1.2.3", b"\r\n")
         for required_text in (
             b"(unsigned manual bootstrap)",
             b".exe.sha256)",
@@ -564,6 +710,19 @@ def self_test() -> None:
             if required_text not in unsigned:
                 raise RuntimeError(
                     f"unsigned launcher disclosure lost {required_text!r}"
+                )
+        unsigned_feed = render_block(STATE_UNSIGNED_FEED, "1.2.3", b"\r\n")
+        for required_text in (
+            b"(unsigned; signed-feed updates)",
+            b".exe.sha256)",
+            b"Not Authenticode-signed.",
+            b"Windows may warn.",
+            "UVSR’s pinned signed feed".encode("utf-8"),
+            b"exact immutable release identity.",
+        ):
+            if required_text not in unsigned_feed:
+                raise RuntimeError(
+                    f"unsigned-feed launcher disclosure lost {required_text!r}"
                 )
 
         if not set_state(readme, STATE_UNAVAILABLE, None):
@@ -581,6 +740,9 @@ def self_test() -> None:
         )
         expect_sync_error(
             lambda: DownloadState(STATE_SIGNED, None), "inconsistent"
+        )
+        expect_sync_error(
+            lambda: DownloadState(STATE_UNSIGNED_FEED, None), "inconsistent"
         )
 
         missing = b"# UVSR\n"
@@ -663,6 +825,14 @@ def self_test() -> None:
         expect_sync_error(
             lambda: parse_readme(duplicate_unsigned), "owned only"
         )
+        duplicate_unsigned_feed = (
+            render_block(STATE_UNSIGNED_FEED, "1.2.3", b"\n")
+            + b"\n"
+            + unsigned_checksum_link("1.2.3").encode("ascii")
+        )
+        expect_sync_error(
+            lambda: parse_readme(duplicate_unsigned_feed), "owned only"
+        )
 
         for unsafe_destination in (
             "https://github.com/brockliddicoat/uvsr/releases/download/other-tag/"
@@ -716,6 +886,22 @@ def self_test() -> None:
         expect_sync_error(
             lambda: parse_readme(missing_disclosure), "noncanonical"
         )
+        mismatched_unsigned_feed_label = render_block(
+            STATE_UNSIGNED_FEED, "1.2.3", b"\n"
+        ).replace(
+            b"Download Unsigned UVSR Launcher v1.2.3",
+            b"Download Unsigned UVSR Launcher v1.2.4",
+        )
+        expect_sync_error(
+            lambda: parse_readme(mismatched_unsigned_feed_label),
+            "versions differ",
+        )
+        missing_feed_disclosure = render_block(
+            STATE_UNSIGNED_FEED, "1.2.3", b"\n"
+        ).replace(UNSIGNED_FEED_DISCLOSURE.encode("utf-8"), b"> Unsigned.")
+        expect_sync_error(
+            lambda: parse_readme(missing_feed_disclosure), "noncanonical"
+        )
 
         valid_feed = {
             "schemaVersion": 1,
@@ -753,6 +939,37 @@ def self_test() -> None:
         legacy_feed.write_bytes(feed_bytes + b"\n")
         expect_sync_error(
             lambda: read_feed(canonical_feed, legacy_feed), "byte-identical"
+        )
+
+        valid_update_payload = {
+            "schemaVersion": 2,
+            "productId": PRODUCT_ID,
+            "channel": "stable",
+            "releaseSequence": 8,
+            "version": "1.2.4",
+            "sourceCommit": "c" * 40,
+            "artifact": {
+                "name": ARTIFACT_NAME,
+                "size": 5678,
+                "sha256": "d" * 64,
+            },
+        }
+        update_payload_bytes = json.dumps(
+            valid_update_payload, separators=(",", ":")
+        ).encode("utf-8")
+        if parse_verified_update_payload(update_payload_bytes)["releaseSequence"] != 8:
+            raise RuntimeError("verified update payload lost its release sequence")
+        expect_sync_error(
+            lambda: parse_verified_update_payload(
+                update_payload_bytes.replace(b'"channel":"stable"', b'"channel":"preview"')
+            ),
+            "identity",
+        )
+        expect_sync_error(
+            lambda: parse_verified_update_payload(
+                update_payload_bytes.replace(b'"sourceCommit"', b'"SourceCommit"')
+            ),
+            "properties",
         )
 
         valid_contract = {
@@ -814,7 +1031,9 @@ def main() -> int:
     action.add_argument("--check", action="store_true")
     action.add_argument("--set-version", metavar="X.Y.Z")
     action.add_argument("--set-unsigned-version", metavar="X.Y.Z")
+    action.add_argument("--set-unsigned-feed-version", metavar="X.Y.Z")
     action.add_argument("--set-from-feed", action="store_true")
+    action.add_argument("--set-from-update-feed", action="store_true")
     action.add_argument("--set-unavailable", action="store_true")
     action.add_argument("--self-test", action="store_true")
     action.add_argument("--print-feed-json", action="store_true")
@@ -825,6 +1044,12 @@ def main() -> int:
         "--canonical-feed", type=Path, default=DEFAULT_CANONICAL_FEED
     )
     parser.add_argument("--legacy-feed", type=Path, default=DEFAULT_LEGACY_FEED)
+    parser.add_argument("--update-feed", type=Path, default=DEFAULT_UPDATE_FEED)
+    parser.add_argument(
+        "--update-feed-verifier",
+        type=Path,
+        default=DEFAULT_UPDATE_FEED_VERIFIER,
+    )
     parser.add_argument(
         "--renderer-contract", type=Path, default=DEFAULT_RENDERER_CONTRACT
     )
@@ -876,6 +1101,15 @@ def main() -> int:
             feed = read_feed(arguments.canonical_feed, arguments.legacy_feed)
             version = str(feed["version"])
             kind = STATE_SIGNED
+        elif arguments.set_from_update_feed:
+            payload = read_verified_update_feed(
+                arguments.update_feed, arguments.update_feed_verifier
+            )
+            version = str(payload["version"])
+            kind = STATE_UNSIGNED_FEED
+        elif arguments.set_unsigned_feed_version is not None:
+            version = arguments.set_unsigned_feed_version
+            kind = STATE_UNSIGNED_FEED
         elif arguments.set_unsigned_version is not None:
             version = arguments.set_unsigned_version
             kind = STATE_UNSIGNED

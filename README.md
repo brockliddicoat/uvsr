@@ -13,11 +13,11 @@ production-focused deferred PBR path, and independently testable visibility,
 anti-aliasing, shadow, and diagnostic systems.
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 130,763 non-blank source lines.
+**First-Party Lines of Code:** 131,016 non-blank source lines.
 
 **Third-Party Lines of Code:** 386,164 non-blank source lines.
 
-**Total Lines of Code:** 516,927 non-blank source lines.
+**Total Lines of Code:** 517,180 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -101,9 +101,11 @@ minimum-sequence-4 renderer source, so it must not be used for a fresh
 installation.
 
 The generated block below names the exact immutable unsigned Windows 11 manual
-bootstrap. Windows may identify it as coming from an unknown publisher. The
-download is not launcher self-update authority; automatic launcher updates
-remain governed by the separate checked feed and publisher policy.
+bootstrap. Windows may identify it as coming from an unknown publisher. This
+1.1.12 download predates authenticated unsigned updates and is not launcher
+self-update authority. Launcher 1.1.13 and newer instead authenticate update
+metadata with UVSR's pinned P-256 key, then independently verify the exact
+immutable release, executable hash, identity, architecture, and health result.
 
 <!-- uvsr-launcher-download:start -->
 > [Download Unsigned UVSR Launcher v1.1.12 (unsigned manual bootstrap)](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.1.12/UVSR-Launcher-Windows-11-x64.exe)
@@ -115,23 +117,31 @@ remain governed by the separate checked feed and publisher policy.
 
 Opening the unsigned manual bootstrap starts the launcher. Its shortcut is
 selected by default, transient downloads resume or retry safely, and Update can
-install or repair UVSR Engine. Launcher self-updates remain disabled for this
-unsigned bootstrap.
+install or repair UVSR Engine. Launcher self-updates remain disabled in 1.1.12;
+install the first feed-capable launcher manually once, after which Update can
+install newer authenticated unsigned launcher releases.
 
-Update checks come from:
+The feed-capable launcher line uses these checked addresses:
 
-- `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-feed-v1.json`
+- `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-update-feed-v2.json`
 - `https://api.github.com/repos/brockliddicoat/uvsr/git/ref/heads/main`
 - `https://raw.githubusercontent.com/brockliddicoat/uvsr/<commit>/cmake/uvsr-launcher-build-contract-v1.json`
-- The immutable versioned GitHub Release asset named by that feed. The launcher
-  falls back to `uvsr-launcher-latest` if the versioned tag is temporarily
-  unavailable.
+- The exact immutable versioned GitHub Release asset named by the authenticated
+  feed payload. There is no mutable latest-release fallback.
 
-Launchers built from the renamed source use the canonical `launcher/` feed
-address above. The legacy
+The version-2 feed is a strict signed-metadata envelope; its decoded payload
+binds the product, stable channel, monotonically increasing release sequence,
+semantic version, exact source commit, filename, size, and SHA-256. The
+launcher executable remains explicitly unsigned, so Windows may warn, but
+repository content or an unsigned mutable JSON edit cannot authorize an update
+without the separately pinned update key.
+
+The retained version-1 files are frozen compatibility endpoints for older
+launchers. The legacy
 `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/installer/launcher-feed-v1.json`
-address remains a byte-identical compatibility mirror for already-released
-launchers that compiled that path into their executable.
+address remains byte-identical to
+`https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-feed-v1.json`
+for already-released launchers that compiled either path into their executable.
 
 The update dialog and copied details include the exact checked URL, launcher
 versions and release sequences, and the specific schema, identity, HTTP, or

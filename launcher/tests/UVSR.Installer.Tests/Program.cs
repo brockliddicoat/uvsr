@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Drawing;
 using System.Diagnostics;
@@ -75,6 +76,9 @@ internal static class Program
         ("direct process completion contains detached descendants", DirectParentExitContainsDescendant),
         ("Git child environment drops redirection variables", GitEnvironmentIsIsolated),
         ("managed Git configuration removes URL rewrites", GitConfigurationIsReplaced),
+        ("source resolution uses exact blobless Git arguments", GitSourceResolutionArgumentsAreExact),
+        ("partial-clone configuration is exact and fail-closed", PartialCloneConfigurationIsExact),
+        ("ignored Git object filters fail closed", IgnoredGitObjectFilterIsRejected),
         ("managed source recreation discards poisoned Git metadata", SourceCachePoisonIsDiscarded),
         ("Git retry classification separates transient failures", GitRetryClassificationIsNarrow),
         ("Git ancestry classification preserves operational failures", GitAncestryClassificationIsExact),
@@ -95,8 +99,8 @@ internal static class Program
         ("launcher visual roles remain fixed and accessible", LauncherVisualContractIsStable),
         ("embedded launcher typography is exact and licensed", LauncherTypographyIsExact),
         ("launcher font roles preserve their exact weights", LauncherFontRolesAreStable),
-        ("launcher feed parsing is strict and deterministic", LauncherFeedParsingIsStrict),
-        ("checked-in launcher feed matches the strict production schema", CheckedInLauncherFeedIsValid),
+        ("authenticated launcher feed verification is strict and deterministic", LauncherFeedParsingIsStrict),
+        ("legacy launcher feed remains frozen and parseable", CheckedInLauncherFeedIsValid),
         ("update checks identify live feed and source release skew", UpdateCheckDiagnosticsAreExact),
         ("GitHub main reference parsing is strict", MainReferenceParsingIsStrict),
         ("launcher state rejects rollback and path data", LauncherStateValidationIsStrict),
@@ -112,7 +116,8 @@ internal static class Program
         ("retained launcher packages recover a damaged pointer", LauncherInspectionFindsRecoveryPackage),
         ("locked launcher state blocks activation without mutation", LockedLauncherStateBlocksActivation),
         ("launcher cleanup preserves unverified packages", LauncherCleanupPreservesUnverifiedPackages),
-        ("launcher publisher configuration is fail-closed or pinned", LauncherPublisherConfigurationIsValid),
+        ("launcher unsigned executable trust is exact", LauncherUnsignedExecutableTrustIsExact),
+        ("launcher update metadata binds exact source identity", LauncherUpdateMetadataIsExact),
         ("launcher copy wording is concise and accessible", LauncherCopyWordingIsConcise),
         ("launcher version metadata agrees across build inputs", LauncherVersionMetadataAgrees)
     };
@@ -237,7 +242,7 @@ internal static class Program
             string.Empty, string.Empty);
         ProcessRunner runner = new();
         SourceManager source = new(paths, runner);
-        source.WriteSafeRepositoryConfig();
+        source.WriteSafeRepositoryConfig(partialClone: true);
         InstallLog log = new(paths.LogsDirectory, Console.WriteLine);
         SourceResolution resolution = new(RendererSourceBridge.SourceCommit,
             RendererSourceBridge.PublicBaseCommit, false, false,
@@ -1958,6 +1963,144 @@ internal static class Program
         Assert(!actual.Contains("insteadOf", StringComparison.OrdinalIgnoreCase));
         Assert(!actual.Contains("worktree", StringComparison.OrdinalIgnoreCase));
         Assert(actual.Contains(ProductConstants.RepositoryUrl, StringComparison.Ordinal));
+        Assert(actual.Contains("repositoryformatversion = 0", StringComparison.Ordinal));
+        Assert(!actual.Contains("promisor", StringComparison.OrdinalIgnoreCase));
+        Assert(!actual.Contains("partialclonefilter", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void GitSourceResolutionArgumentsAreExact()
+    {
+        const string sourceDirectory = @"C:\UVSR managed source";
+        string selected = new('a', 40);
+        string movedMain = new('b', 40);
+        string installed = new('c', 40);
+
+        Assert(SourceManager.BuildInitialFetchArguments(sourceDirectory).SequenceEqual(
+            new[]
+            {
+                "-C", sourceDirectory, "fetch", "--force", "--prune", "--no-tags",
+                "--filter=blob:none", "--depth=1", "origin",
+                $"+{ProductConstants.RepositoryMainRef}:refs/remotes/origin/main"
+            }));
+        Assert(SourceManager.BuildHistoryFetchArguments(sourceDirectory).SequenceEqual(
+            new[]
+            {
+                "-C", sourceDirectory, "fetch", "--filter=blob:none", "--unshallow",
+                "--no-tags", "origin", ProductConstants.RepositoryMainRef
+            }));
+        string[] checkout = SourceManager.BuildCheckoutArguments(sourceDirectory,
+            selected);
+        Assert(checkout.SequenceEqual(new[]
+        {
+            "-C", sourceDirectory, "checkout", "--detach", "--force", selected
+        }));
+        string[] ancestry = SourceManager.BuildAncestryArguments(sourceDirectory,
+            installed, selected);
+        Assert(ancestry.SequenceEqual(new[]
+        {
+            "-C", sourceDirectory, "merge-base", "--is-ancestor", installed,
+            selected
+        }));
+        Assert(!checkout.Contains(movedMain));
+        Assert(!ancestry.Contains(movedMain));
+
+        string manager = File.ReadAllText(Path.Combine(RepositoryRoot(), "launcher",
+            "src", "UVSR.Installer", "SourceManager.cs"));
+        string resolve = SourceMethodBody(manager,
+            "internal async Task<SourceResolution> ResolveMainAsync",
+            "internal static bool ClassifyAncestryExitCode");
+        Assert(resolve.Contains("Resetting UVSR source cache", StringComparison.Ordinal));
+        Assert(resolve.Contains("Initializing secure UVSR source checkout",
+            StringComparison.Ordinal));
+        Assert(resolve.Contains("Resolving public UVSR main", StringComparison.Ordinal));
+        Assert(resolve.Contains("Checking UVSR update history", StringComparison.Ordinal));
+        Assert(resolve.Contains("\"init\", \"--initial-branch=main\"",
+            StringComparison.Ordinal));
+        Assert(Regex.Matches(resolve,
+            Regex.Escape("\"rev-parse\", \"refs/remotes/origin/main\"")).Count == 1);
+        Assert(resolve.Contains("installedPublicCommit, publicCommit",
+            StringComparison.Ordinal));
+        Assert(!resolve.Contains("\"remote\", \"add\"", StringComparison.Ordinal));
+        Assert(!resolve.Contains("\"remote\", \"set-url\"", StringComparison.Ordinal));
+        Assert(!resolve.Contains("\"config\", \"core.longpaths\"",
+            StringComparison.Ordinal));
+
+        string prepare = SourceMethodBody(manager,
+            "internal async Task PrepareExactSourceAsync",
+            "internal async Task BuildAsync");
+        Assert(prepare.Contains("Downloading exact UVSR source files",
+            StringComparison.Ordinal));
+        Assert(prepare.Contains("GitNetworkAsync", StringComparison.Ordinal));
+        Assert(prepare.Contains("ValidatePartialCloneRepositoryConfiguration",
+            StringComparison.Ordinal));
+    }
+
+    private static void PartialCloneConfigurationIsExact()
+    {
+        using TestDirectory test = new();
+        InstallerPaths paths = InstallerPaths.Create(test.Root,
+            Path.Combine(test.Root, "Desktop"), Path.Combine(test.Root, "ProgramsMenu"));
+        string gitDirectory = Path.Combine(paths.SourceDirectory, ".git");
+        string objectsInfo = Path.Combine(gitDirectory, "objects", "info");
+        Directory.CreateDirectory(objectsInfo);
+        SourceManager source = new(paths, new ProcessRunner());
+        source.WriteSafeRepositoryConfig(partialClone: true);
+        source.ValidatePartialCloneRepositoryConfiguration();
+
+        string config = Path.Combine(gitDirectory, "config");
+        string canonical = File.ReadAllText(config);
+        Assert(canonical.Contains("repositoryformatversion = 1", StringComparison.Ordinal));
+        Assert(canonical.Contains("promisor = true", StringComparison.Ordinal));
+        Assert(canonical.Contains("partialclonefilter = blob:none", StringComparison.Ordinal));
+        Assert(!canonical.Contains("[extensions]", StringComparison.OrdinalIgnoreCase));
+
+        void RejectConfig(string mutated)
+        {
+            File.WriteAllText(config, mutated, new UTF8Encoding(false));
+            Expect<InstallerException>(() =>
+                source.ValidatePartialCloneRepositoryConfiguration());
+            File.WriteAllText(config, canonical, new UTF8Encoding(false));
+        }
+
+        RejectConfig(canonical.Replace(ProductConstants.RepositoryUrl,
+            "https://attacker.invalid/uvsr.git", StringComparison.Ordinal));
+        RejectConfig(canonical.Replace("promisor = true", "promisor = false",
+            StringComparison.Ordinal));
+        RejectConfig(canonical.Replace("partialclonefilter = blob:none",
+            "partialclonefilter = blob:limit=1", StringComparison.Ordinal));
+        RejectConfig(canonical.Replace("repositoryformatversion = 1",
+            "repositoryformatversion = 0", StringComparison.Ordinal));
+        RejectConfig(canonical + "[remote \"backup\"]\n" +
+            "\turl = https://attacker.invalid/uvsr.git\n");
+        RejectConfig(canonical + "[include]\n\tpath = C:/outside/config\n");
+        RejectConfig(canonical + "[extensions]\n\tpartialClone = origin\n");
+        RejectConfig(canonical + "[core]\n");
+
+        string alternates = Path.Combine(objectsInfo, "alternates");
+        File.WriteAllText(alternates, @"C:\outside\objects");
+        Expect<InstallerException>(() =>
+            source.ValidatePartialCloneRepositoryConfiguration());
+        File.Delete(alternates);
+        source.ValidatePartialCloneRepositoryConfiguration();
+    }
+
+    private static void IgnoredGitObjectFilterIsRejected()
+    {
+        ProcessResult ignored = new(0, string.Empty,
+            "warning: filtering not recognized by server, ignoring");
+        Assert(SourceManager.IndicatesIgnoredObjectFilter(ignored));
+        Expect<InstallerException>(() => SourceManager.RejectIgnoredObjectFilter(ignored));
+
+        ProcessResult unsupported = new(1, string.Empty,
+            "fatal: server does not support filter capability");
+        Assert(SourceManager.IndicatesIgnoredObjectFilter(unsupported));
+        Expect<InstallerException>(() =>
+            SourceManager.RejectIgnoredObjectFilter(unsupported));
+
+        ProcessResult normal = new(0, string.Empty,
+            "From https://github.com/brockliddicoat/uvsr");
+        Assert(!SourceManager.IndicatesIgnoredObjectFilter(normal));
+        SourceManager.RejectIgnoredObjectFilter(normal);
     }
 
     private static void SourceCachePoisonIsDiscarded()
@@ -2723,54 +2866,170 @@ internal static class Program
 
     private static void LauncherFeedParsingIsStrict()
     {
-        string valid = ValidLauncherFeedJson();
-        LauncherFeed feed = LauncherManager.ParseAndValidateFeed(
-            System.Text.Encoding.UTF8.GetBytes(valid));
+        const string keyId = "fixture-p256-key";
+        using ECDsa signer = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        byte[] trustedSpki = signer.ExportSubjectPublicKeyInfo();
+        LauncherFeed expected = ValidLauncherFeed();
+        byte[] valid = SignedLauncherFeedJson(expected, signer, keyId);
+        LauncherFeed feed = LauncherManager.ParseAndValidateFeed(valid,
+            trustedSpki, keyId);
         Assert(feed.Version == "1.1.0");
         Assert(feed.ReleaseSequence == 1);
+        Assert(feed.SourceCommit == new string('b', 40));
         Assert(LauncherManager.BuildArtifactUri(feed).AbsoluteUri ==
                "https://github.com/brockliddicoat/uvsr/releases/download/" +
                "uvsr-launcher-v1.1.0/UVSR-Launcher-Windows-11-x64.exe");
 
-        string legacyPath = Path.Combine(RepositoryRoot(), "launcher", "tests",
-            "fixtures", "launcher-feed-public-legacy-v1.json");
-        string legacy = File.ReadAllText(legacyPath);
-        LauncherFeed legacyFeed = LauncherManager.ParseAndValidateFeed(
-            Encoding.UTF8.GetBytes(legacy));
-        Assert(legacyFeed.Version == "1.1.1");
-        Assert(legacyFeed.ReleaseSequence == 2);
+        byte[] productionSpki = Convert.FromBase64String(
+            ProductConstants.LauncherUpdateFeedPublicKeySpkiBase64);
+        Assert(Hash(productionSpki) ==
+               "73e4079b971aa69eec69e87b4e581cde0da10d410299f124d8c3092fc0324ed9");
+        using (ECDsa productionKey = ECDsa.Create())
+        {
+            productionKey.ImportSubjectPublicKeyInfo(productionSpki,
+                out int bytesRead);
+            Assert(bytesRead == productionSpki.Length);
+            Assert(productionKey.KeySize == 256);
+        }
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(valid));
 
+        using ECDsa wrongSigner = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(valid,
+            wrongSigner.ExportSubjectPublicKeyInfo(), keyId));
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(valid,
+            trustedSpki, "fixture-wrong-key"));
+
+        LauncherUpdateFeedEnvelope envelope = ReadLauncherFeedEnvelope(valid);
         Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
-            System.Text.Encoding.UTF8.GetBytes(valid.Replace(
-                "\"schemaVersion\":1", "\"schemaVersion\":1,\"schemaVersion\":1"))));
+            SerializeLauncherFeedEnvelope(envelope with { SchemaVersion = 1 }),
+            trustedSpki, keyId));
         Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
-            System.Text.Encoding.UTF8.GetBytes(valid.Replace(
-                "\"channel\":\"stable\"", "\"channel\":\"stable\",\"unknown\":true"))));
-        InstallerException identityFailure = Capture<InstallerException>(() =>
-            LauncherManager.ParseAndValidateFeed(
-                System.Text.Encoding.UTF8.GetBytes(valid.Replace(new string('a', 64),
-                    new string('A', 64)))));
-        Assert(identityFailure.Message.Contains("artifact SHA-256",
-            StringComparison.Ordinal));
-        Assert(!identityFailure.Message.Contains("camelCase", StringComparison.Ordinal));
-        InstallerException legacyIdentityFailure = Capture<InstallerException>(() =>
-            LauncherManager.ParseAndValidateFeed(Encoding.UTF8.GetBytes(
-                legacy.Replace("2b5f092bdf80dcdabca46034f1334f6be374c712400e7bf8d6ae1e672f7a5b36",
-                    new string('A', 64)))));
-        Assert(legacyIdentityFailure.Message.Contains("artifact SHA-256",
-            StringComparison.Ordinal));
-        Assert(!legacyIdentityFailure.Message.Contains("camelCase",
-            StringComparison.Ordinal));
+            SerializeLauncherFeedEnvelope(envelope with { KeyId = "fixture-wrong-key" }),
+            trustedSpki, keyId));
+        byte[] wrongSignature = Convert.FromBase64String(envelope.SignatureBase64);
+        wrongSignature[0] ^= 0x80;
         Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
-            System.Text.Encoding.UTF8.GetBytes(valid.Replace("\"version\":\"1.1.0\"",
-                "\"version\":\"01.1.0\""))));
+            SerializeLauncherFeedEnvelope(envelope with
+            {
+                SignatureBase64 = Convert.ToBase64String(wrongSignature)
+            }), trustedSpki, keyId));
         Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
-            Encoding.UTF8.GetBytes(legacy.Replace("\"Artifact\"", "\"artifact\""))));
+            SerializeLauncherFeedEnvelope(envelope with
+            {
+                SignatureBase64 = Convert.ToBase64String(new byte[63])
+            }), trustedSpki, keyId));
+
+        byte[] changedPayload = JsonSerializer.SerializeToUtf8Bytes(
+            expected with { Version = "1.1.1" }, JsonStore.Options);
         Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
-            Encoding.UTF8.GetBytes(legacy.Replace("\"SchemaVersion\": 1",
-                "\"SchemaVersion\": 1,\n  \"schemaVersion\": 1"))));
+            SerializeLauncherFeedEnvelope(envelope with
+            {
+                PayloadBase64 = Convert.ToBase64String(changedPayload)
+            }), trustedSpki, keyId));
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+            SerializeLauncherFeedEnvelope(envelope with { PayloadBase64 = "not-base64" }),
+            trustedSpki, keyId));
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+            SerializeLauncherFeedEnvelope(envelope with { SignatureBase64 = "not-base64" }),
+            trustedSpki, keyId));
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+            SerializeLauncherFeedEnvelope(envelope with
+            {
+                PayloadBase64 = " " + envelope.PayloadBase64
+            }), trustedSpki, keyId));
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+            SerializeLauncherFeedEnvelope(envelope with
+            {
+                SignatureBase64 = envelope.SignatureBase64 + " "
+            }), trustedSpki, keyId));
+
+        string outerJson = Encoding.UTF8.GetString(valid);
+        string duplicateOuter = outerJson.Replace("\"schemaVersion\": 2,",
+            "\"schemaVersion\": 2,\n  \"schemaVersion\": 2,",
+            StringComparison.Ordinal);
+        Assert(duplicateOuter != outerJson);
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+            Encoding.UTF8.GetBytes(duplicateOuter), trustedSpki, keyId));
+        string unknownOuter = outerJson.Replace("\"keyId\":",
+            "\"unknown\": true,\n  \"keyId\":", StringComparison.Ordinal);
+        Assert(unknownOuter != outerJson);
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+            Encoding.UTF8.GetBytes(unknownOuter), trustedSpki, keyId));
+        string wrongOuterCasing = outerJson.Replace("\"payloadBase64\"",
+            "\"PayloadBase64\"", StringComparison.Ordinal);
+        Assert(wrongOuterCasing != outerJson);
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+            Encoding.UTF8.GetBytes(wrongOuterCasing), trustedSpki, keyId));
+
+        byte[] payload = JsonSerializer.SerializeToUtf8Bytes(expected,
+            JsonStore.Options);
+        string payloadJson = Encoding.UTF8.GetString(payload);
+        string duplicatePayload = payloadJson.Replace("\"schemaVersion\": 2,",
+            "\"schemaVersion\": 2,\n  \"schemaVersion\": 2,",
+            StringComparison.Ordinal);
+        Assert(duplicatePayload != payloadJson);
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+            SignedLauncherFeedPayload(Encoding.UTF8.GetBytes(duplicatePayload),
+                signer, keyId), trustedSpki, keyId));
+        string unknownPayload = payloadJson.Replace("\"channel\": \"stable\",",
+            "\"channel\": \"stable\",\n  \"unknown\": true,",
+            StringComparison.Ordinal);
+        Assert(unknownPayload != payloadJson);
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+            SignedLauncherFeedPayload(Encoding.UTF8.GetBytes(unknownPayload),
+                signer, keyId), trustedSpki, keyId));
+        string wrongPayloadCasing = payloadJson.Replace("\"sourceCommit\"",
+            "\"SourceCommit\"", StringComparison.Ordinal);
+        Assert(wrongPayloadCasing != payloadJson);
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+            SignedLauncherFeedPayload(Encoding.UTF8.GetBytes(wrongPayloadCasing),
+                signer, keyId), trustedSpki, keyId));
+
+        foreach (LauncherFeed invalid in new[]
+                 {
+                     expected with { SchemaVersion = 1 },
+                     expected with { ProductId = ProductConstants.ProductId.ToUpperInvariant() },
+                     expected with { Channel = "unsigned" },
+                     expected with { ReleaseSequence = 0 },
+                     expected with
+                     {
+                         ReleaseSequence = ProductConstants.MaximumReleaseSequence + 1
+                     },
+                     expected with { Version = "01.1.0" },
+                     expected with { SourceCommit = expected.SourceCommit.ToUpperInvariant() },
+                     expected with
+                     {
+                         Artifact = expected.Artifact with { Name = "wrong.exe" }
+                     },
+                     expected with
+                     {
+                         Artifact = expected.Artifact with { Size = 0 }
+                     },
+                     expected with
+                     {
+                         Artifact = expected.Artifact with
+                         {
+                             Sha256 = expected.Artifact.Sha256.ToUpperInvariant()
+                         }
+                     }
+                 })
+            Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+                SignedLauncherFeedJson(invalid, signer, keyId), trustedSpki, keyId));
+
+        byte[] oversizedPayload = Encoding.UTF8.GetBytes(
+            "{\"padding\":\"" +
+            new string('x', (int)ProductConstants.MaximumLauncherFeedPayloadBytes) +
+            "\"}");
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
+            SignedLauncherFeedPayload(oversizedPayload, signer, keyId),
+            trustedSpki, keyId));
         Expect<InstallerException>(() => LauncherManager.ParseAndValidateFeed(
             new byte[ProductConstants.MaximumLauncherFeedBytes + 1]));
+
+        string managerSource = File.ReadAllText(Path.Combine(RepositoryRoot(),
+            "launcher", "src", "UVSR.Installer", "LauncherManager.cs"));
+        Assert(!managerSource.Contains("uvsr-launcher-latest",
+            StringComparison.Ordinal));
     }
 
     private static void CheckedInLauncherFeedIsValid()
@@ -2782,10 +3041,12 @@ internal static class Program
         byte[] canonicalFeed = File.ReadAllBytes(feedPath);
         byte[] legacyFeed = File.ReadAllBytes(legacyFeedPath);
         Assert(canonicalFeed.SequenceEqual(legacyFeed));
-        LauncherFeed feed = LauncherManager.ParseAndValidateFeed(
+        LegacyLauncherFeed feed = LauncherManager.ParseAndValidateLegacyFeed(
             canonicalFeed);
-        Assert(ProductConstants.LauncherFeedUrl ==
+        Assert(ProductConstants.LegacyLauncherFeedUrl ==
                "https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-feed-v1.json");
+        Assert(ProductConstants.LauncherFeedUrl ==
+               "https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-update-feed-v2.json");
         Assert(feed.ProductId == ProductConstants.ProductId);
         Assert(feed.Channel == "stable");
         Assert(feed.ReleaseSequence == 2);
@@ -2795,6 +3056,25 @@ internal static class Program
         Assert(feed.Artifact.Sha256 ==
                "2b5f092bdf80dcdabca46034f1334f6be374c712400e7bf8d6ae1e672f7a5b36");
         Assert(ProductConstants.LauncherReleaseSequence > feed.ReleaseSequence);
+
+        string legacyFixturePath = Path.Combine(root, "launcher", "tests",
+            "fixtures", "launcher-feed-public-legacy-v1.json");
+        string legacyFixture = File.ReadAllText(legacyFixturePath);
+        LegacyLauncherFeed legacy = LauncherManager.ParseAndValidateLegacyFeed(
+            Encoding.UTF8.GetBytes(legacyFixture));
+        Assert(legacy.ReleaseSequence == feed.ReleaseSequence);
+        Assert(legacy.Version == feed.Version);
+        Assert(legacy.Artifact.Sha256 == feed.Artifact.Sha256);
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateLegacyFeed(
+            Encoding.UTF8.GetBytes(legacyFixture.Replace("\"Artifact\"",
+                "\"artifact\"", StringComparison.Ordinal))));
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateLegacyFeed(
+            Encoding.UTF8.GetBytes(legacyFixture.Replace("\"SchemaVersion\": 1",
+                "\"SchemaVersion\": 1,\n  \"schemaVersion\": 1",
+                StringComparison.Ordinal))));
+        Expect<InstallerException>(() => LauncherManager.ParseAndValidateLegacyFeed(
+            Encoding.UTF8.GetBytes(legacyFixture.Replace(feed.Artifact.Sha256,
+                feed.Artifact.Sha256.ToUpperInvariant(), StringComparison.Ordinal))));
 
         string build = File.ReadAllText(Path.Combine(root, "launcher", "build.ps1"));
         const string aliasVerification =
@@ -2815,9 +3095,15 @@ internal static class Program
 
     private static void UpdateCheckDiagnosticsAreExact()
     {
-        string legacyPath = Path.Combine(RepositoryRoot(), "launcher", "tests",
-            "fixtures", "launcher-feed-public-legacy-v1.json");
-        byte[] legacyFeed = File.ReadAllBytes(legacyPath);
+        const string keyId = "fixture-update-check-key";
+        using ECDsa signer = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        byte[] trustedSpki = signer.ExportSubjectPublicKeyInfo();
+        LauncherFeed published = ValidLauncherFeed() with
+        {
+            ReleaseSequence = 2,
+            Version = "1.1.1"
+        };
+        byte[] signedFeed = SignedLauncherFeedJson(published, signer, keyId);
         byte[] bridgeMainReference = Encoding.UTF8.GetBytes(
             "{\"ref\":\"refs/heads/main\",\"object\":{" +
             "\"type\":\"commit\",\"sha\":\"" +
@@ -2841,14 +3127,15 @@ internal static class Program
                 return source switch
                 {
                     ProductConstants.LauncherFeedUrl =>
-                        Response(request, HttpStatusCode.OK, legacyFeed),
+                        Response(request, HttpStatusCode.OK, signedFeed),
                     ProductConstants.RepositoryMainApi =>
                         Response(request, HttpStatusCode.OK, bridgeMainReference),
                     _ => throw new InvalidOperationException(
                         $"Unexpected update-check source '{source}'.")
                 };
             }), FastDownloadPolicy(1));
-        LauncherManager manager = new(paths, new ProcessRunner(), downloads);
+        LauncherManager manager = new(paths, new ProcessRunner(), downloads,
+            trustedSpki, keyId);
         InstallLog log = new(paths.LogsDirectory);
         UpdateCheckResult result = manager.CheckForUpdatesAsync(
             new OwnerMarker(ProductConstants.SchemaVersion, ProductConstants.ProductId,
@@ -2908,7 +3195,8 @@ internal static class Program
         Assert(bridgeUpdate.Uvsr.UvsrCommit == RendererSourceBridge.SourceCommit);
 
         string details = File.ReadAllText(log.Path);
-        Assert(details.Contains($"Checking UVSR Launcher update source: " +
+        Assert(details.Contains(
+            $"Checking authenticated unsigned UVSR Launcher update source: " +
             ProductConstants.LauncherFeedUrl, StringComparison.Ordinal));
         Assert(details.Contains($"published 1.1.1 sequence 2; result Current",
             StringComparison.Ordinal));
@@ -2920,7 +3208,8 @@ internal static class Program
             StringComparison.Ordinal));
 
         byte[] malformedFeed = Encoding.UTF8.GetBytes(
-            Encoding.UTF8.GetString(legacyFeed).Replace("\"Artifact\"", "\"artifact\""));
+            Encoding.UTF8.GetString(signedFeed).Replace("\"signatureBase64\"",
+                "\"SignatureBase64\"", StringComparison.Ordinal));
         using TestDirectory failureTest = new();
         InstallerPaths failurePaths = InstallerPaths.Create(failureTest.Root,
             Path.Combine(failureTest.Root, "Desktop"),
@@ -2936,7 +3225,7 @@ internal static class Program
                     $"Unexpected update-check source '{unexpected}'.")
             }), FastDownloadPolicy(1));
         LauncherManager failureManager = new(failurePaths, new ProcessRunner(),
-            failureDownloads);
+            failureDownloads, trustedSpki, keyId);
         InstallLog failureLog = new(failurePaths.LogsDirectory);
         UpdateCheckResult failed = failureManager.CheckForUpdatesAsync(
             new OwnerMarker(ProductConstants.SchemaVersion, ProductConstants.ProductId,
@@ -2946,14 +3235,15 @@ internal static class Program
         Assert(failed.Launcher.State == ComponentUpdateState.CheckFailed);
         Assert(failed.Launcher.Detail.Contains(ProductConstants.LauncherFeedUrl,
             StringComparison.Ordinal));
-        Assert(failed.Launcher.Detail.Contains("required canonical camelCase",
-            StringComparison.Ordinal));
+        Assert(failed.Launcher.Detail.Contains("feed envelope",
+            StringComparison.OrdinalIgnoreCase));
         Assert(File.ReadAllText(failureLog.Path).Contains(
-            $"Launcher update check failed at {ProductConstants.LauncherFeedUrl}",
+            $"Authenticated unsigned launcher update check failed at " +
+            ProductConstants.LauncherFeedUrl,
             StringComparison.Ordinal));
 
-        UpdateCheckResult httpFailure = RunUpdateCheckFixture(legacyFeed,
-            nonBridgeMainReference, contractSource,
+        UpdateCheckResult httpFailure = RunUpdateCheckFixture(signedFeed,
+            trustedSpki, keyId, nonBridgeMainReference, contractSource,
             request => Response(request, HttpStatusCode.InternalServerError,
                 Array.Empty<byte>()), out string httpFailureLog);
         Assert(httpFailure.Launcher.State == ComponentUpdateState.Current);
@@ -2965,8 +3255,8 @@ internal static class Program
         Assert(httpFailureLog.Contains($"UVSR update check failed at {contractSource}",
             StringComparison.Ordinal));
 
-        UpdateCheckResult tlsFailure = RunUpdateCheckFixture(legacyFeed,
-            nonBridgeMainReference, contractSource,
+        UpdateCheckResult tlsFailure = RunUpdateCheckFixture(signedFeed,
+            trustedSpki, keyId, nonBridgeMainReference, contractSource,
             _ => throw new HttpRequestException("fixture TLS rejection",
                 new AuthenticationException("fixture certificate rejected")),
             out string tlsFailureLog);
@@ -2985,6 +3275,8 @@ internal static class Program
 
     private static UpdateCheckResult RunUpdateCheckFixture(
         byte[] launcherFeed,
+        byte[] launcherFeedPublicKeySpki,
+        string launcherFeedKeyId,
         byte[] mainReference,
         string contractSource,
         Func<HttpRequestMessage, HttpResponseMessage> contractResponse,
@@ -3004,7 +3296,8 @@ internal static class Program
                 var unexpected => throw new InvalidOperationException(
                     $"Unexpected update-check source '{unexpected}'.")
             }), FastDownloadPolicy(1));
-        LauncherManager manager = new(paths, new ProcessRunner(), downloads);
+        LauncherManager manager = new(paths, new ProcessRunner(), downloads,
+            launcherFeedPublicKeySpki, launcherFeedKeyId);
         InstallLog log = new(paths.LogsDirectory);
         UpdateCheckResult result = manager.CheckForUpdatesAsync(
             new OwnerMarker(ProductConstants.SchemaVersion, ProductConstants.ProductId,
@@ -3326,15 +3619,142 @@ internal static class Program
         Assert(File.Exists(Path.Combine(aliasRoot, "sentinel.user")));
     }
 
-    private static void LauncherPublisherConfigurationIsValid()
+    private static void LauncherUnsignedExecutableTrustIsExact()
     {
-        string pin = ProductConstants.LauncherPublisherSpkiSha256;
-        Assert(string.IsNullOrEmpty(pin) || ProductConstants.HashRegex().IsMatch(pin));
-        if (string.IsNullOrEmpty(pin))
+        Assert(ProductConstants.LauncherUpdateFeedKeyId ==
+               "uvsr-launcher-update-p256-2026-01");
+        Assert(ProductConstants.LauncherUpdateFeedSchemaVersion == 2);
+        NativeMethods.RequireUnsignedLauncherAuthenticodeStatus(
+            NativeMethods.TrustENoSignature);
+        InstallerException signed = Capture<InstallerException>(() =>
+            NativeMethods.RequireUnsignedLauncherAuthenticodeStatus(0));
+        Assert(signed.Message.Contains("unexpectedly had an Authenticode signature",
+            StringComparison.Ordinal));
+        InstallerException malformed = Capture<InstallerException>(() =>
+            NativeMethods.RequireUnsignedLauncherAuthenticodeStatus(
+                unchecked((int)0x800B0003)));
+        Assert(malformed.Message.Contains("0x800B0003", StringComparison.Ordinal));
+
+        using TestDirectory test = new();
+        string WritePeFixture(string name, byte[] payload)
         {
-            Expect<InstallerException>(() =>
-                NativeMethods.VerifyLauncherPublisherSignature("does-not-exist.exe"));
+            string path = Path.Combine(test.Root, name);
+            File.WriteAllBytes(path, payload);
+            return path;
         }
+
+        string zeroCertificateTable = WritePeFixture("zero-certificate-table.exe",
+            PeCertificateTableFixture());
+        NativeMethods.VerifyNoPeCertificateTable(zeroCertificateTable);
+
+        string certificateOffset = WritePeFixture("certificate-offset.exe",
+            PeCertificateTableFixture(certificateOffset: 0x200));
+        InstallerException offsetFailure = Capture<InstallerException>(() =>
+            NativeMethods.VerifyNoPeCertificateTable(certificateOffset));
+        Assert(offsetFailure.Message.Contains("Certificate Table metadata",
+            StringComparison.Ordinal));
+
+        string certificateSize = WritePeFixture("certificate-size.exe",
+            PeCertificateTableFixture(certificateSize: 0x80));
+        InstallerException sizeFailure = Capture<InstallerException>(() =>
+            NativeMethods.VerifyNoPeCertificateTable(certificateSize));
+        Assert(sizeFailure.Message.Contains("Certificate Table metadata",
+            StringComparison.Ordinal));
+
+        byte[] truncatedOptionalHeader = PeCertificateTableFixture();
+        Array.Resize(ref truncatedOptionalHeader, truncatedOptionalHeader.Length - 1);
+        Expect<InstallerException>(() => NativeMethods.VerifyNoPeCertificateTable(
+            WritePeFixture("truncated-optional-header.exe", truncatedOptionalHeader)));
+
+        byte[] unsupportedOptionalHeader = PeCertificateTableFixture();
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            unsupportedOptionalHeader.AsSpan(0x80 + 24), 0x0107);
+        InstallerException unsupportedFailure = Capture<InstallerException>(() =>
+            NativeMethods.VerifyNoPeCertificateTable(WritePeFixture(
+                "unsupported-optional-header.exe", unsupportedOptionalHeader)));
+        Assert(unsupportedFailure.Message.Contains("unsupported PE optional-header magic",
+            StringComparison.Ordinal));
+
+        byte[] undersizedOptionalHeader = PeCertificateTableFixture();
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            undersizedOptionalHeader.AsSpan(0x80 + 20), 0x90);
+        Expect<InstallerException>(() => NativeMethods.VerifyNoPeCertificateTable(
+            WritePeFixture("undersized-optional-header.exe", undersizedOptionalHeader)));
+
+        byte[] overflowingDirectories = PeCertificateTableFixture();
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            overflowingDirectories.AsSpan(0x80 + 20), 0x98);
+        Expect<InstallerException>(() => NativeMethods.VerifyNoPeCertificateTable(
+            WritePeFixture("overflowing-directories.exe", overflowingDirectories)));
+
+        string unsupportedDirectoryCount = WritePeFixture(
+            "unsupported-directory-count.exe",
+            PeCertificateTableFixture(directoryCount: 17));
+        Expect<InstallerException>(() => NativeMethods.VerifyNoPeCertificateTable(
+            unsupportedDirectoryCount));
+
+        string unsignedTestHost = Path.Combine(AppContext.BaseDirectory,
+            "UVSR.Installer.Tests.exe");
+        Assert(File.Exists(unsignedTestHost));
+        NativeMethods.VerifyLauncherIsAuthenticodeUnsigned(unsignedTestHost);
+
+        string malformedProgram = Path.Combine(test.Root, "malformed.exe");
+        File.WriteAllBytes(malformedProgram, Encoding.ASCII.GetBytes("not a PE file"));
+        Expect<InstallerException>(() =>
+            NativeMethods.VerifyLauncherIsAuthenticodeUnsigned(malformedProgram));
+
+        string manager = File.ReadAllText(Path.Combine(RepositoryRoot(), "launcher",
+            "src", "UVSR.Installer", "LauncherManager.cs"));
+        string download = SourceMethodBody(manager,
+            "internal async Task<LauncherState> DownloadAndStageAsync",
+            "internal Guid Activate");
+        Assert(Regex.Matches(download,
+            Regex.Escape("NativeMethods.VerifyLauncherIsAuthenticodeUnsigned")).Count == 1);
+        Assert(download.Contains("feed.Artifact.Sha256",
+            StringComparison.Ordinal));
+        Assert(download.Contains("ValidateFileMetadata(downloaded, feed)",
+            StringComparison.Ordinal));
+        Assert(download.Contains("\"--launcher-health-check\"",
+            StringComparison.Ordinal));
+        Assert(download.Contains("StageExecutable(downloaded",
+            StringComparison.Ordinal));
+        Assert(!download.Contains("uvsr-launcher-latest",
+            StringComparison.Ordinal));
+        Assert(!manager.Contains("VerifyLauncherPublisherSignature",
+            StringComparison.Ordinal));
+    }
+
+    private static void LauncherUpdateMetadataIsExact()
+    {
+        LauncherFeed feed = ValidLauncherFeed() with
+        {
+            ReleaseSequence = ProductConstants.LauncherReleaseSequence + 1,
+            Version = "1.1.14"
+        };
+        string productVersion = feed.Version + "+" + feed.SourceCommit;
+        LauncherManager.ValidateFileMetadata("UVSR Launcher", productVersion,
+            feed.Version + ".0", feed);
+        Expect<InstallerException>(() => LauncherManager.ValidateFileMetadata(
+            "UVSR launcher", productVersion, feed.Version + ".0", feed));
+        Expect<InstallerException>(() => LauncherManager.ValidateFileMetadata(
+            "UVSR Launcher", feed.Version, feed.Version + ".0", feed));
+        Expect<InstallerException>(() => LauncherManager.ValidateFileMetadata(
+            "UVSR Launcher", feed.Version + "+" + new string('c', 40),
+            feed.Version + ".0", feed));
+        Expect<InstallerException>(() => LauncherManager.ValidateFileMetadata(
+            "UVSR Launcher", productVersion, feed.Version, feed));
+
+        LauncherReleaseIdentity current = new(
+            ProductConstants.LauncherReleaseSequence,
+            ProductConstants.LauncherVersion, new string('c', 64));
+        ComponentUpdateStatus status = LauncherManager.CreateLauncherUpdateStatus(
+            current, recordedStateHealthy: true, feed);
+        Assert(status.State == ComponentUpdateState.UpdateAvailable);
+        Assert(status.Detail.Contains("authenticated unsigned update feed",
+            StringComparison.Ordinal));
+        Assert(status.Detail.Contains("not Authenticode-signed",
+            StringComparison.Ordinal));
+        Assert(status.Detail.Contains("exact SHA-256", StringComparison.Ordinal));
     }
 
     private static void LauncherCopyWordingIsConcise()
@@ -3358,13 +3778,13 @@ internal static class Program
             "UVSR.Installer", "app.manifest"));
         Assert(project.Contains($"<Version>{ProductConstants.LauncherVersion}</Version>",
             StringComparison.Ordinal));
-        Assert(project.Contains("<FileVersion>1.1.12.0</FileVersion>",
+        Assert(project.Contains("<FileVersion>1.1.13.0</FileVersion>",
             StringComparison.Ordinal));
-        Assert(project.Contains("<AssemblyVersion>1.1.12.0</AssemblyVersion>",
+        Assert(project.Contains("<AssemblyVersion>1.1.13.0</AssemblyVersion>",
             StringComparison.Ordinal));
-        Assert(manifest.Contains("version=\"1.1.12.0\"", StringComparison.Ordinal));
-        Assert(ProductConstants.LauncherVersion == "1.1.12");
-        Assert(ProductConstants.LauncherReleaseSequence == 13);
+        Assert(manifest.Contains("version=\"1.1.13.0\"", StringComparison.Ordinal));
+        Assert(ProductConstants.LauncherVersion == "1.1.13");
+        Assert(ProductConstants.LauncherReleaseSequence == 14);
         Assert(Version.Parse(ProductConstants.LauncherVersion) >
                Version.Parse("1.1.11"));
         Assert(ProductConstants.LauncherReleaseSequence > 12);
@@ -3835,13 +4255,84 @@ internal static class Program
     private static string Hash(byte[] payload) =>
         Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant();
 
-    private static string ValidLauncherFeedJson() =>
-        "{\"schemaVersion\":1," +
-        "\"productId\":\"" + ProductConstants.ProductId + "\"," +
-        "\"channel\":\"stable\",\"releaseSequence\":1," +
-        "\"version\":\"1.1.0\",\"artifact\":{" +
-        "\"name\":\"UVSR-Launcher-Windows-11-x64.exe\"," +
-        "\"size\":1024,\"sha256\":\"" + new string('a', 64) + "\"}}";
+    private static byte[] PeCertificateTableFixture(
+        uint certificateOffset = 0,
+        uint certificateSize = 0,
+        ushort optionalHeaderMagic = 0x020B,
+        uint directoryCount = 16)
+    {
+        const int peOffset = 0x80;
+        const int optionalHeaderStart = peOffset + 24;
+        bool isPe32 = optionalHeaderMagic == 0x010B;
+        ushort optionalHeaderSize = isPe32 ? (ushort)0xE0 : (ushort)0xF0;
+        int directoryCountOffset = isPe32 ? 0x5C : 0x6C;
+        int dataDirectoriesOffset = isPe32 ? 0x60 : 0x70;
+        byte[] payload = new byte[optionalHeaderStart + optionalHeaderSize];
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(0), 0x5A4D);
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(0x3C), peOffset);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(peOffset),
+            0x00004550);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(peOffset + 4),
+            0x8664);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(peOffset + 20),
+            optionalHeaderSize);
+        BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(optionalHeaderStart),
+            optionalHeaderMagic);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            payload.AsSpan(optionalHeaderStart + directoryCountOffset),
+            directoryCount);
+        const int securityDirectoryIndex = 4;
+        int securityDirectoryOffset = optionalHeaderStart + dataDirectoriesOffset +
+                                      securityDirectoryIndex * 8;
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            payload.AsSpan(securityDirectoryOffset), certificateOffset);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            payload.AsSpan(securityDirectoryOffset + 4), certificateSize);
+        return payload;
+    }
+
+    private static LauncherFeed ValidLauncherFeed() => new(
+        ProductConstants.LauncherUpdateFeedSchemaVersion,
+        ProductConstants.ProductId,
+        "stable",
+        1,
+        "1.1.0",
+        new string('b', 40),
+        new LauncherFeedArtifact(ProductConstants.LauncherArtifactName,
+            1024, new string('a', 64)));
+
+    private static byte[] SignedLauncherFeedJson(
+        LauncherFeed feed,
+        ECDsa signer,
+        string keyId) =>
+        SignedLauncherFeedPayload(
+            JsonSerializer.SerializeToUtf8Bytes(feed, JsonStore.Options),
+            signer, keyId);
+
+    private static byte[] SignedLauncherFeedPayload(
+        byte[] payload,
+        ECDsa signer,
+        string keyId)
+    {
+        byte[] signature = signer.SignData(payload, HashAlgorithmName.SHA256,
+            DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+        Assert(signature.Length == 64);
+        return SerializeLauncherFeedEnvelope(new LauncherUpdateFeedEnvelope(
+            ProductConstants.LauncherUpdateFeedSchemaVersion,
+            keyId,
+            Convert.ToBase64String(payload),
+            Convert.ToBase64String(signature)));
+    }
+
+    private static LauncherUpdateFeedEnvelope ReadLauncherFeedEnvelope(
+        byte[] data) =>
+        JsonSerializer.Deserialize<LauncherUpdateFeedEnvelope>(data,
+            JsonStore.Options) ?? throw new InvalidOperationException(
+            "The launcher feed fixture envelope was empty.");
+
+    private static byte[] SerializeLauncherFeedEnvelope(
+        LauncherUpdateFeedEnvelope envelope) =>
+        JsonSerializer.SerializeToUtf8Bytes(envelope, JsonStore.Options);
 
     private static void CreateJunction(string link, string target)
     {

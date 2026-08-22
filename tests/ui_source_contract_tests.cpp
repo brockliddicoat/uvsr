@@ -308,6 +308,35 @@ namespace
             cmakeSource,
             "8B802D79F256D29B45AD253323D212FA14CA952A20DCD227CFBCDB3D140BFE7C",
             "ProggyClean MIT notice configure-time SHA-256 contract");
+
+        const std::filesystem::path geistRoot =
+            root / "assets" / "fonts" / "geist";
+        const std::vector<unsigned char> geistLicense =
+            ReadBinaryFile(geistRoot / "LICENSE.txt");
+        Require(
+            geistLicense.size() == 4383u,
+            "the transitional Geist OFL must have its exact upstream size.");
+        Require(
+            std::count(geistLicense.begin(), geistLicense.end(), '\r') == 0 &&
+                std::count(geistLicense.begin(), geistLicense.end(), '\n') == 93,
+            "the transitional Geist OFL must remain checkout-invariant LF text.");
+        Require(
+            ReadFile(geistRoot / ".gitattributes") ==
+                "LICENSE.txt text eol=lf -whitespace\n",
+            "the transitional Geist OFL must be forced to LF in every checkout.");
+        const std::string_view geistContract = ExtractSection(
+            cmakeSource,
+            "\"${UVSR_UI_TRANSITION_LICENSE_SOURCE}\"",
+            "if (UVSR_BUILD_APPLICATION)",
+            "transitional Geist OFL configure-time contract");
+        RequireOrdered(
+            geistContract,
+            {
+                "4383",
+                "F945605B4B9424D6A8E6AB2E4D54ADE0E053B8E6B91636344C60F991D5689801",
+                "transitional Geist OFL 1.1 compatibility notice"
+            },
+            "transitional Geist OFL configure-time contract");
     }
 
     std::vector<std::string> ParseQuotedStrings(std::string_view source)

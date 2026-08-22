@@ -147,9 +147,14 @@ redirect loops, and HTTPS-to-HTTP downgrades are handled explicitly. The final
 file is always checked from byte zero before promotion.
 
 Git network operations use four bounded attempts, Git's 90-second low-speed
-guard, and an HTTP/1.1 fallback for known HTTP/2 transport failures. The complete
-history is fetched when ancestry must be checked, avoiding false history-rewrite
-warnings for older valid installations.
+guard, and an HTTP/1.1 fallback for known HTTP/2 transport failures. A fresh
+source cache fetches only the selected public `main` tip with `blob:none`, then
+materializes the exact checked revision on demand. The launcher validates the
+partial-clone origin, promisor, filter, object-store, and repository format
+before trusting that cache. When an existing installation needs ancestry
+classification, the launcher still obtains full commit and tree history but
+keeps blobs deferred. This makes tip resolution and ancestry checks metadata
+only while preserving rewrite detection.
 
 Microsoft Build Tools payloads remain under Microsoft's signed setup and catalog
 trust boundary. The launcher can resume the supported layout-acquisition phase
@@ -161,18 +166,19 @@ A failed check, download, build, or candidate health check leaves the active UVS
 and launcher packages unchanged. Details distinguish a stalled connection from
 local storage, access, signature, and permanent HTTP failures.
 
-## Manual Bootstrap Download
+## Manual-Only Launcher Download
 
-The root README may link one explicitly unsigned manual bootstrap independently
-from the launcher self-update feed. The link uses the exact immutable
+The root README may link the explicitly unsigned 1.1.12 manual-only launcher
+independently from launcher self-update metadata. The link uses the exact immutable
 `uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe` prerelease asset and
 also exposes its SHA-256 checksum. The executable must be labeled unsigned;
 Windows may show an unknown-publisher or SmartScreen warning.
 
 The manual bootstrap can install, update, launch, repair, and remove UVSR Engine.
-It is not authority for launcher self-update. Both feed files and the compiled
-publisher policy remain unchanged, so a launcher with no pinned publisher still
-fails closed when asked to download another launcher version.
+Version 1.1.12 is not authority for launcher self-update and cannot acquire that
+capability retroactively. Users open the first feed-capable launcher manually
+once. Launcher 1.1.13 and newer can then authenticate and install later unsigned
+launcher versions through the version-2 signed-metadata feed.
 
 ## Launcher Updates and Update Source
 
@@ -186,49 +192,47 @@ installation. Invalid or tampered installed pointers are never followed. An
 interrupted combined launcher-plus-UVSR update retains its UVSR continuation
 until a valid launcher package completes it.
 
-The fixed public feed is
-`launcher/launcher-feed-v1.json` on the public `main` branch:
-`https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-feed-v1.json`.
-It names one
-immutable GitHub Release asset and is parsed with strict size, duplicate-field,
-unknown-field, version, sequence, filename, and hash validation.
+Feed-capable launchers use the public update feed at
+`launcher/launcher-update-feed-v2.json` on public `main`:
+`https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-update-feed-v2.json`.
+It is a strict four-field JSON envelope containing `schemaVersion`, `keyId`,
+`payloadBase64`, and `signatureBase64`. The launcher rejects duplicate,
+unknown, mixed-case, missing, oversized, or malformed fields before decoding.
+The signature is ECDSA P-256 with SHA-256 and a fixed 64-byte IEEE-P1363 value;
+the key ID and SubjectPublicKeyInfo are compiled into the launcher.
+The production key ID is `uvsr-launcher-update-p256-2026-01`; the compiled SPKI
+SHA-256 is
+`73e4079b971aa69eec69e87b4e581cde0da10d410299f124d8c3092fc0324ed9`.
 
-The former address at `installer/launcher-feed-v1.json` is a permanent
-compatibility endpoint for released launchers that compiled that exact raw URL.
-It is a regular file whose bytes must always equal the canonical `launcher/`
-feed. The build, contract suite, and GitHub workflow reject a missing or unequal
-mirror. Every feed-only publication must update both paths in the same commit;
-the mirror is never a redirect or an independently edited release record.
-
-New feeds use the exact camelCase field names `schemaVersion`, `productId`,
-`channel`, `releaseSequence`, `version`, and `artifact`. Launchers also accept
-the original v1 feed's exact PascalCase schema as a whole-document compatibility
-format. Mixed casing, duplicate aliases, and unknown fields remain invalid.
-
-The launcher reads that feed first, then downloads the launcher package from:
+The decoded UTF-8 payload is another strict JSON document. It binds schema
+version 2, the immutable UVSR product ID, channel `stable`, release sequence,
+semantic version, exact 40-character source commit, and artifact name, byte
+size, and lowercase SHA-256. The release sequence must increase, and the exact
+versioned release URL is derived rather than accepted from downloaded data:
 
 `https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe`
 
-where `<version>` comes from the same `version` value in the canonical feed (for example,
-`uvsr-launcher-v1.1.1`).
+The downloaded executable must remain Authenticode `NotSigned`; a signed or
+certificate-bearing file is not silently accepted under this unsigned-release
+policy. The launcher independently verifies the exact size and SHA-256, x64 PE
+architecture, ProductVersion `<version>+<sourceCommit>`, FileVersion
+`<version>.0`, and launcher health identity before activation. There is no
+`uvsr-launcher-latest` fallback. The prior Authenticode-oriented version-1 feed
+cannot authorize this unsigned update line.
 
-If that exact versioned release tag is not available yet, the launcher also
-supports `uvsr-launcher-latest` as a compatibility fallback for update recovery.
-
-A launcher self-update release must also have a valid Authenticode chain whose
-signer public key matches the SHA-256 SPKI pin compiled into the launcher.
-Repository control and a feed hash alone are not accepted as self-update
-publisher identity. Local and manual-bootstrap builds intentionally leave that
-pin unset and fail closed for launcher downloads; they can still install,
-launch, update, repair, and remove UVSR Engine.
+`launcher/launcher-feed-v1.json` and the former
+`installer/launcher-feed-v1.json` address are permanent, frozen compatibility
+records for already-released launchers. They remain regular byte-identical
+files; the build, contract suite, and GitHub workflow reject a missing or
+unequal pair. They are never repurposed as unsigned-update authority.
 
 ## Update Check Diagnostics
 
 The launcher normally checks three exact public addresses and records each
 complete URL before downloading it:
 
-- Launcher release feed:
-  `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-feed-v1.json`
+- Launcher signed-metadata update feed:
+  `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-update-feed-v2.json`
 - Current renderer commit:
   `https://api.github.com/repos/brockliddicoat/uvsr/git/ref/heads/main`
 - Renderer build contract for the resolved commit:
@@ -243,15 +247,16 @@ contract request was made.
 
 Details are written under `%LOCALAPPDATA%\UVSR Installer\logs` in files named
 `uvsr-launcher-<date>-<time>-<id>.log`. The update dialog and copied details show
-the exact launcher feed URL, the running and published launcher version and
-release sequence, the exact renderer-contract URL, and the specific transport,
-HTTP, schema, or identity failure. A generic connection message is not used for
-a schema or release-compatibility problem.
+the exact launcher feed URL, authenticated key ID, running and published
+launcher version and release sequence, source commit, exact renderer-contract
+URL, and the specific transport, HTTP, schema, signature, or identity failure.
+A generic connection message is not used for a schema, signature, or
+release-compatibility problem.
 
-Launchers released before the directory rename report the permanent
-`installer/launcher-feed-v1.json` compatibility address instead. It contains
-the same checked release record as the canonical URL, so either logged address
-can be inspected directly.
+Launchers released before the new signed-metadata protocol report one of the
+permanent version-1 compatibility addresses instead. Those frozen files contain
+the same historical record, so either logged version-1 address can still be
+inspected directly, but it does not authorize current unsigned updates.
 
 | Visible Result | Meaning And Recovery |
 | --- | --- |
@@ -335,8 +340,9 @@ launcher\artifacts\UVSR-Launcher-Windows-11-x64.exe
 launcher\artifacts\UVSR-Launcher-Windows-11-x64.exe.sha256
 ```
 
-The build first verifies that the canonical and legacy feed files are exact
-mirrors, verifies the frozen exact bridge in check-only mode, and verifies
+The build first verifies that the two frozen version-1 feed files are exact
+mirrors, verifies any present version-2 feed signature and payload, verifies the
+frozen exact bridge in check-only mode, and verifies
 `launcher/launcher-input-lock-v1.json`. That lock binds
 all launcher binary inputs to one semantic version and release sequence using
 checkout-invariant bytes. Any binary-input change requires both identity values
@@ -346,22 +352,23 @@ builds derive that comparison base from the default branch or first parent;
 `-IdentityBaseCommit` supplies an explicit full commit when release automation
 has a stronger base.
 
-The public feed is a record of the final signed bytes, not the local unsigned
-publish output. Release verification can pass `-PublishedArtifactPath` to check
-the size and SHA-256 of the final signed artifact after the feed records that
-same release identity. This keeps source-identity validation independent from
-Authenticode's expected byte changes.
+The version-2 public feed authenticates the final `NotSigned` executable's exact
+size, SHA-256, immutable source commit, version, and release sequence. Release
+verification can pass `-PublishedArtifactPath` to check that final artifact
+after the signed feed records the same identity. The feed's P-256 signature is
+metadata authority; it does not imply an Authenticode publisher signature on
+the executable.
 
 The `Windows 11 Launcher` workflow also runs the production source-preparation
 path against the exact compatibility bridge and pinned recursive submodules,
 then performs the same unsigned CI build. Its 14-day workflow artifact is a test
 candidate, not a public self-update release.
 
-## Unsigned Manual Bootstrap Release Checklist
+## Unsigned Manual-Only Release Checklist
 
-The unsigned manual bootstrap is a separate public-download contract. It does
-not change the launcher self-update feed or make unsigned executables acceptable
-as launcher updates.
+The unsigned 1.1.12 manual-only launcher is a separate public-download contract. It does
+not change any launcher feed or make unsigned executables acceptable as launcher
+updates without the later signed-metadata protocol.
 
 1. Build the launcher from one exact 40-character commit and pass the complete
    launcher, renderer-source compatibility, package, and clean Windows 11
@@ -378,7 +385,7 @@ as launcher updates.
    immutable prerelease. Never upload the expiring Actions ZIP itself.
 5. On a new release-state branch, run
    `python tools/sync_launcher_readme_download.py --set-unsigned-version
-   <version>`. Leave both launcher feed files byte-for-byte unchanged.
+   <version>`. Leave all launcher feeds byte-for-byte unchanged.
 6. Open a pull request and require Launcher README Download. It verifies the
    immutable release and tag, source identity and input lock, public renderer
    compatibility, two-asset inventory, attestation, bytes and checksum, x64
@@ -387,71 +394,56 @@ as launcher updates.
    download, checksum, metadata, unsigned-status, and health verification from
    public `main` before announcing the bootstrap.
 
-## Signed Self-Update Release Checklist
+## Authenticated Unsigned Self-Update Release Checklist
 
-For a future signed self-update line, first prove that the retained exact
-sequence-9 transition candidate can build and stage the dual-output Noto
-renderer source, then publish that source. Do not configure and publish the
-final pinned launcher or feed until that source-first gate passes. Setting the
-permanent signer changes a locked input and requires another unique identity,
-lock, build, and complete verification pass. The live sequence-2 bootstrap
-cannot build the minimum-sequence-4 source or self-update without a pinned
-signer. The ordinary consumer-first order in step 10 applies only to a future
-source contract that raises its minimum launcher sequence.
+The first feed-capable launcher is a one-time update bootstrap because version
+1.1.12 permanently rejects every launcher update. Two newer identities are
+required to prove the new path immediately: publish the bootstrap first, then
+publish a later update target and advertise it through signed metadata.
 
-1. Choose the permanent Authenticode identity and set
-   `LauncherPublisherSpkiSha256` to its lowercase SHA-256 SPKI pin.
-2. Build and run the complete contract suite and exact source-bridge preparation
-   smoke at the release commit. For a bridge-bearing transition, also complete
-   the isolated source-build and package smoke before signing.
-3. Exercise fresh install, interrupted and resumed downloads, launcher-only and
-   combined updates, repair, UAC cancellation, restart-required setup, Launch,
-   and both launcher and Apps & Features uninstall on disposable clean Windows
-   11 x64 virtual machines.
-4. Sign the final launcher, verify its Authenticode chain and pinned signer, then
-   regenerate its size and SHA-256. Never use the pre-signing checksum.
-5. Enable immutable releases before creating this release; the setting applies
-   only to future releases. Create a draft for `uvsr-launcher-v<version>` that
-   targets the exact verified 40-character commit, upload only the signed
-   executable and checksum, validate their inventory and digests, then publish
-   it as a stable immutable release. Never target mutable `main` or publish the
-   draft without both assets.
-6. While public renderer source is still compatible with the prior launcher,
-   prepare a release-state branch that advances the canonical camelCase feed's
-   sequence, version, size, and SHA-256. Update its byte-identical legacy
-   `installer/` mirror in the same commit, then run
-   `python tools/sync_launcher_readme_download.py --set-from-feed` so the root
-   README names that exact immutable versioned asset. Never use GitHub's mutable
-   latest-release URL or an Actions artifact for the human download. Open a pull
-   request; do not merge or directly push this release state yet.
-7. Configure Launcher README Download as a required check on the protected
-   publication branch. It runs on every pull request and performs a safe no-op
-   for unrelated changes. For this feed-changing pull request, also require the
-   path-triggered Windows 11 Launcher workflow to run and pass. The checks verify
-   the release attestation, feed mirror, downloaded bytes, source identity and
-   signer pin, x64 product metadata, health check, and generated README link.
-8. On the still-unmerged release-state branch, run
-   `build.ps1 -PublishedArtifactPath <signed-launcher>` and the final clean
-   Windows 11 VM install/repair checks. Merge only after every check passes.
-9. After the protected merge, require both raw feed URLs and the root README on
-   public `main` to converge on the reviewed commit, then repeat an unauthenticated
-   download and health check. The first launcher shipped with an empty signer pin
-    cannot self-update by design, so the one-time bootstrap requires users to open
-    the newly signed launcher manually. Confirm that the new pinned launcher can
-    perform future signed updates as immediate post-publication verification;
-    do not make a separate release announcement until that check passes.
-10. For a future renderer source that raises its minimum launcher sequence, only
-    after the compatible launcher is available, publish that renderer source.
-    Confirm that public `main` contains
-   `cmake/uvsr-launcher-build-contract-v1.json`, that the commit-specific raw URL
-   works, and that its values match the launcher's compiled contract. The Noto
-   transition keeps the existing minimum and must already have passed the
-   source-first gate above.
-11. Recheck a fresh install and a renderer repair from the new launcher on a clean
-     Windows 11 VM before advertising the renderer update.
+1. Commit the pinned update key, strict version-2 verifier, source-install
+   repair, and blobless source resolver under one new launcher version and
+   release sequence. Run the complete launcher, native, package, source-build,
+   bridge, and clean Windows 11 install/repair checks.
+2. Build the executable from the exact protected-main merge commit. Require x64,
+   exact ProductVersion and FileVersion, the matching health identity,
+   Authenticode `NotSigned` with no embedded certificates, and a canonical
+   checksum file.
+3. Create an immutable `uvsr-launcher-v<version>` prerelease targeting that
+   exact 40-character commit. Upload only the executable and checksum, verify
+   their GitHub attestations and anonymous downloads, and leave the version-2
+   feed unchanged. This release is the one-time manual bootstrap.
+4. Advance the launcher version and release sequence again through a protected
+   pull request. In the same release-state lineage, create a version-2 feed for
+   the first bootstrap so its verification path is exercised before another
+   release is advertised. Never modify either frozen version-1 feed.
+5. Build the second executable from its exact protected-main merge commit and
+   publish another immutable `NotSigned` prerelease with the same two-asset,
+   attestation, checksum, architecture, metadata, and health gates.
+6. Generate a new signed version-2 payload for the second release with the
+   offline P-256 private key by running
+   `new-launcher-update-feed.ps1 -PrivateKeyPemPath <PEM> -ArtifactPath <EXE>
+   -Version <version> -ReleaseSequence <sequence> -SourceCommit <commit>`.
+   Verify it with `verify-launcher-update-feed.ps1`, then run
+   `python tools/sync_launcher_readme_download.py --set-from-update-feed` to
+   update the generated README block. The private key is never committed,
+   logged, uploaded as an artifact, or accepted from the downloaded feed.
+7. Open a release-state pull request and require Launcher README Download plus
+   the path-triggered Windows 11 Launcher workflow. The checks must resolve the
+   immutable tag to an ancestor of the publication base, validate source
+   identity and the input lock, verify exact release inventory and attestations,
+   download both assets anonymously, require `NotSigned`, and rerun health.
+8. Merge only after every required and launcher check passes. Wait for the raw
+   version-2 feed and generated README block on public `main` to converge, then
+   repeat the anonymous byte, checksum, metadata, unsigned-status, and health
+   verification.
+9. Manually bootstrap the first feed-capable launcher on a clean Windows 11
+   machine, use its Update flow to activate the later identity, and verify that
+   a healthy existing UVSR Engine package remains intact. Do not claim launcher
+   update support until this public-artifact test passes.
 
-Publishing, signing, tagging, and changing GitHub Releases are explicit release
-actions and are not performed by the local build script.
+Publishing, signing update metadata, tagging, and changing GitHub Releases are
+explicit release actions and are not performed by the local build script.
 
 ## Network and Hardware Requirements
 

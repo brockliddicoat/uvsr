@@ -739,26 +739,33 @@ Agent policy version: `2026-08-21.2`.
   Remove stale claims instead of preserving historical behavior.
 - Treat the marked launcher-download block in `README.md` as generated release
   state. It may be unavailable, name an explicitly unsigned manual bootstrap,
-  or name a future feed-backed signed release. For an unsigned manual bootstrap,
+  name an unsigned release authenticated by the pinned launcher-update feed, or
+  name a future Authenticode-signed release. For an unsigned manual bootstrap,
   run `python tools/sync_launcher_readme_download.py --set-unsigned-version
   <version>` only after an immutable versioned prerelease passes the exact
   commit, attestation, byte, checksum, unsigned-signature, x64 metadata, and
   health gates. That link is not launcher self-update authority and does not
-  change either feed. For a future signed launcher publication, the canonical
-  and legacy feeds and the block must identify the same immutable
-  `uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe` asset; run
-  `--set-from-feed` in the feed publication change. Always follow a generated
-  update with `--self-test` and `--check`. Never use a mutable `releases/latest`
-  URL, `uvsr-launcher-latest`, a draft, or a temporary Actions artifact as the
-  human download. When no verified release passes its applicable gates, keep
-  the generated block neutral and unavailable with `--set-unavailable`.
+  change a feed. Run `--set-from-update-feed` for a feed-backed unsigned release
+  only after the strict version-2 update-feed envelope and payload have a valid
+  P-256 signature from the pinned update key and identify the same immutable,
+  `NotSigned` release. `--set-unsigned-feed-version` exists for controlled
+  release validation but must name that same verified feed version.
+  Any future Authenticode publication requires a separately reviewed protocol;
+  it must not repurpose the frozen version-1 compatibility feeds. Always follow
+  a generated update with `--self-test` and `--check`. Never use a
+  mutable `releases/latest` URL, `uvsr-launcher-latest`, a draft, or a temporary
+  Actions artifact as the human download. When no verified release passes its
+  applicable gates, keep the generated block neutral and unavailable with
+  `--set-unavailable`.
 - Publish launcher feed and README release-state changes only through a pull
   request whose target branch requires Launcher README Download. Because a feed
   change also triggers Windows 11 Launcher, require that path-triggered build to
   pass on the release pull request before merging. If the branch protection is
   absent, stop before publication; a post-push failure cannot retract an already
-  public bad link. An unsigned manual-bootstrap link follows the same protected
-  pull-request rule even though it intentionally leaves both feeds unchanged.
+  public bad link. Unsigned manual-bootstrap and signed-metadata unsigned links
+  follow the same protected pull-request rule. A manual bootstrap intentionally
+  leaves every feed unchanged; a signed-metadata link must match the exact
+  version-2 feed committed in that pull request.
 - Update `docs/pbr-foundation.md` when the material contract, G-buffer packing,
   BSDF equations, debug views, limitations, or extension path changes.
 - Prefer extensive, high-signal code comments that preserve implementation

@@ -1445,8 +1445,8 @@ uvsr_require_exact_ui_asset(
     "ProggyClean MIT license notice")
 uvsr_require_exact_ui_asset(
     "${UVSR_UI_TRANSITION_LICENSE_SOURCE}"
-    4476
-    "336949B89D706C480F5807F4CA1AC0484CAD93FFC2765818526F6035572970AC"
+    4383
+    "F945605B4B9424D6A8E6AB2E4D54ADE0E053B8E6B91636344C60F991D5689801"
     "transitional Geist OFL 1.1 compatibility notice")
 
 if (UVSR_BUILD_APPLICATION)

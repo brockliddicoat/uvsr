@@ -57,6 +57,14 @@ jobs:
           ./launcher/verify-launcher-feed-alias.ps1
           ./launcher/tests/launcher-feed-alias-tests.ps1
 
+      - name: Verify Signed Launcher Update Feed Tools
+        shell: pwsh
+        run: |
+          ./launcher/tests/launcher-update-feed-tests.ps1
+          if (Test-Path -LiteralPath launcher/launcher-update-feed-v2.json) {
+            ./launcher/verify-launcher-update-feed.ps1 | Out-Null
+          }
+
       - name: Verify Launcher Release Identity Advance
         shell: pwsh
         env:

@@ -60,6 +60,57 @@ function Assert-NoReparseTree {
     }
 }
 
+function Assert-UnsignedPeX64 {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open,
+        [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    $reader = [IO.BinaryReader]::new($stream)
+    try {
+        if ($stream.Length -lt 0x100 -or $reader.ReadUInt16() -ne 0x5A4D) {
+            throw 'The supplied unsigned launcher artifact is not a Windows PE executable.'
+        }
+        $stream.Position = 0x3C
+        $peOffset = $reader.ReadInt32()
+        if ($peOffset -lt 0x40 -or $peOffset -gt $stream.Length - 24) {
+            throw 'The supplied unsigned launcher artifact has an invalid PE header offset.'
+        }
+        $stream.Position = $peOffset
+        if ($reader.ReadUInt32() -ne 0x00004550 -or
+            $reader.ReadUInt16() -ne 0x8664) {
+            throw 'The supplied unsigned launcher artifact is not a Windows x64 executable.'
+        }
+        $stream.Position = $peOffset + 20
+        $optionalHeaderSize = [int]$reader.ReadUInt16()
+        $optionalHeaderOffset = [long]$peOffset + 24
+        if ($optionalHeaderSize -lt 152 -or
+            $optionalHeaderOffset + $optionalHeaderSize -gt $stream.Length) {
+            throw 'The supplied unsigned launcher artifact has a truncated or malformed x64 optional header.'
+        }
+        $stream.Position = $optionalHeaderOffset
+        if ($reader.ReadUInt16() -ne 0x020B) {
+            throw 'The supplied unsigned launcher artifact does not use the required PE32+ optional header.'
+        }
+        $stream.Position = $optionalHeaderOffset + 108
+        $directoryCount = [long]$reader.ReadUInt32()
+        $maximumDirectoryCount = [long](($optionalHeaderSize - 112) / 8)
+        if ($directoryCount -lt 5 -or $directoryCount -gt 16 -or
+            $directoryCount -gt $maximumDirectoryCount) {
+            throw 'The supplied unsigned launcher artifact has an invalid PE32+ data-directory table.'
+        }
+        $stream.Position = $optionalHeaderOffset + 144
+        $certificateTableOffset = $reader.ReadUInt32()
+        $certificateTableSize = $reader.ReadUInt32()
+        if ($certificateTableOffset -ne 0 -or $certificateTableSize -ne 0) {
+            throw 'The supplied unsigned launcher artifact contains an embedded PE certificate table.'
+        }
+    }
+    finally {
+        $reader.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function Resolve-LauncherIdentityBase {
     param([string] $RequestedBase)
 
@@ -116,6 +167,20 @@ if (-not [Environment]::Is64BitOperatingSystem) {
 
 & (Join-Path $PSScriptRoot 'verify-launcher-feed-alias.ps1')
 & (Join-Path $PSScriptRoot 'tests\launcher-feed-alias-tests.ps1')
+& (Join-Path $PSScriptRoot 'tests\launcher-update-feed-tests.ps1')
+$updateFeedPath = Join-Path $PSScriptRoot 'launcher-update-feed-v2.json'
+$updateFeed = $null
+if (Test-Path -LiteralPath $updateFeedPath) {
+    if (-not (Test-Path -LiteralPath $updateFeedPath -PathType Leaf)) {
+        throw "The optional launcher update feed is not a regular file at '$updateFeedPath'."
+    }
+    $updateFeedJson = & (Join-Path $PSScriptRoot `
+        'verify-launcher-update-feed.ps1') -Path $updateFeedPath
+    if ([string]::IsNullOrWhiteSpace(($updateFeedJson -join ''))) {
+        throw 'The optional launcher update feed failed strict signature verification.'
+    }
+    $updateFeed = ($updateFeedJson -join "`n") | ConvertFrom-Json
+}
 
 $project = Join-Path $PSScriptRoot 'src\UVSR.Installer\UVSR.Installer.csproj'
 $tests = Join-Path $PSScriptRoot 'tests\UVSR.Installer.Tests\UVSR.Installer.Tests.csproj'
@@ -209,43 +274,94 @@ $currentSequence = [long]::Parse($sequenceMatch.Groups['value'].Value,
     [Globalization.CultureInfo]::InvariantCulture)
 $feedPath = Join-Path $PSScriptRoot 'launcher-feed-v1.json'
 $feed = [IO.File]::ReadAllText($feedPath) | ConvertFrom-Json
-$feedSequence = [long]$feed.releaseSequence
-$feedVersion = [version]([string]$feed.version)
-$parsedCurrentVersion = [version]$currentVersion
-if ($currentSequence -lt $feedSequence -or $parsedCurrentVersion -lt $feedVersion) {
-    throw "Launcher identity $currentVersion sequence $currentSequence is older than published identity $feedVersion sequence $feedSequence."
+$releaseFeeds = @(
+    [pscustomobject]@{
+        Kind = 'signed-v1'
+        Sequence = [long]$feed.releaseSequence
+        Version = [version]([string]$feed.version)
+        VersionText = [string]$feed.version
+        Artifact = $feed.artifact
+        SourceCommit = $null
+    }
+)
+if ($null -ne $updateFeed) {
+    $releaseFeeds += [pscustomobject]@{
+        Kind = 'unsigned-v2'
+        Sequence = [long]$updateFeed.releaseSequence
+        Version = [version]([string]$updateFeed.version)
+        VersionText = [string]$updateFeed.version
+        Artifact = $updateFeed.artifact
+        SourceCommit = [string]$updateFeed.sourceCommit
+    }
 }
-if (($currentSequence -eq $feedSequence) -ne
-    ($parsedCurrentVersion -eq $feedVersion)) {
+$releaseFeeds = @($releaseFeeds | Sort-Object Sequence)
+for ($index = 1; $index -lt $releaseFeeds.Count; $index++) {
+    $previousFeed = $releaseFeeds[$index - 1]
+    $nextFeed = $releaseFeeds[$index]
+    if ($nextFeed.Sequence -le $previousFeed.Sequence -or
+        $nextFeed.Version -le $previousFeed.Version) {
+        throw 'Published launcher feed identities must advance version and release sequence together without overlap.'
+    }
+}
+$publishedFeed = $releaseFeeds[-1]
+$parsedCurrentVersion = [version]$currentVersion
+if ($currentSequence -lt $publishedFeed.Sequence -or
+    $parsedCurrentVersion -lt $publishedFeed.Version) {
+    throw "Launcher identity $currentVersion sequence $currentSequence is older than published identity $($publishedFeed.Version) sequence $($publishedFeed.Sequence)."
+}
+if (($currentSequence -eq $publishedFeed.Sequence) -ne
+    ($parsedCurrentVersion -eq $publishedFeed.Version)) {
     throw 'Launcher version and release sequence must advance together.'
 }
-if ($currentSequence -gt $feedSequence -and
-    $parsedCurrentVersion -le $feedVersion) {
+if ($currentSequence -gt $publishedFeed.Sequence -and
+    $parsedCurrentVersion -le $publishedFeed.Version) {
     throw 'A new launcher release sequence requires a newer semantic version.'
 }
 if (-not [string]::IsNullOrWhiteSpace($PublishedArtifactPath)) {
-    if ($currentSequence -ne $feedSequence -or
-        $parsedCurrentVersion -ne $feedVersion) {
+    $matchingFeeds = @($releaseFeeds | Where-Object {
+            $_.Sequence -eq $currentSequence -and
+            $_.Version -eq $parsedCurrentVersion
+        })
+    if ($matchingFeeds.Count -ne 1) {
         throw 'Final launcher artifact verification requires the checked-in public feed to record the current release identity.'
     }
+    $artifactFeed = $matchingFeeds[0]
     $finalArtifact = [IO.Path]::GetFullPath($PublishedArtifactPath)
     if (-not (Test-Path -LiteralPath $finalArtifact -PathType Leaf)) {
-        throw "The final signed launcher artifact was not found at '$finalArtifact'."
+        throw "The final launcher artifact was not found at '$finalArtifact'."
     }
     $finalHash = (Get-FileHash -LiteralPath $finalArtifact -Algorithm SHA256).Hash.ToLowerInvariant()
     $finalSize = (Get-Item -LiteralPath $finalArtifact).Length
-    if ($finalSize -ne [long]$feed.artifact.size -or
-        $finalHash -ne [string]$feed.artifact.sha256) {
+    if ($finalSize -ne [long]$artifactFeed.Artifact.size -or
+        $finalHash -ne [string]$artifactFeed.Artifact.sha256) {
         throw 'The supplied final launcher artifact does not match the checked-in public feed.'
     }
     $finalMetadata = [Diagnostics.FileVersionInfo]::GetVersionInfo($finalArtifact)
-    $versionWithBuild = "$currentVersion+"
-    if ($finalMetadata.ProductName -ne 'UVSR Launcher' -or
-        [string]::IsNullOrWhiteSpace($finalMetadata.ProductVersion) -or
-        ($finalMetadata.ProductVersion -ne $currentVersion -and
-         -not $finalMetadata.ProductVersion.StartsWith(
-             $versionWithBuild, [StringComparison]::Ordinal))) {
-        throw 'The supplied final launcher artifact does not contain the current launcher product metadata.'
+    if ($artifactFeed.Kind -eq 'unsigned-v2') {
+        if ($finalMetadata.ProductName -ne 'UVSR Launcher' -or
+            $finalMetadata.ProductVersion -ne
+                "$currentVersion+$($artifactFeed.SourceCommit)" -or
+            $finalMetadata.FileVersion -ne "$currentVersion.0") {
+            throw 'The supplied unsigned launcher artifact does not contain its exact source-bound product metadata.'
+        }
+        Assert-UnsignedPeX64 $finalArtifact
+        $authenticode = Get-AuthenticodeSignature -LiteralPath $finalArtifact
+        if ([string]$authenticode.Status -ne 'NotSigned' -or
+            [string]$authenticode.SignatureType -ne 'None' -or
+            $null -ne $authenticode.SignerCertificate -or
+            $null -ne $authenticode.TimeStamperCertificate) {
+            throw 'The supplied unsigned launcher artifact does not have exact Authenticode NotSigned status.'
+        }
+    }
+    else {
+        $versionWithBuild = "$currentVersion+"
+        if ($finalMetadata.ProductName -ne 'UVSR Launcher' -or
+            [string]::IsNullOrWhiteSpace($finalMetadata.ProductVersion) -or
+            ($finalMetadata.ProductVersion -ne $currentVersion -and
+             -not $finalMetadata.ProductVersion.StartsWith(
+                 $versionWithBuild, [StringComparison]::Ordinal))) {
+            throw 'The supplied final launcher artifact does not contain the current launcher product metadata.'
+        }
     }
     $health = Start-Process -FilePath $finalArtifact `
         -ArgumentList @('--launcher-health-check', "$currentSequence", $currentVersion) `
@@ -273,7 +389,7 @@ $checksum = Join-Path $output 'UVSR-Launcher-Windows-11-x64.exe.sha256'
 
 Write-Output "Launcher:  $artifact"
 Write-Output "SHA-256:  $hash"
-Write-Warning 'This local artifact is an unsigned preview. Configure the pinned publisher identity and complete the public release checklist before distribution.'
+Write-Warning 'This local artifact is unsigned. Public distribution requires the pinned signed-feed or signed-release checklist and an immutable exact release.'
 }
 finally {
     if ($locationPushed) {

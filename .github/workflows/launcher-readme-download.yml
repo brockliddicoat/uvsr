@@ -7,19 +7,22 @@ on:
     branches:
       - main
     paths:
+      - ".gitattributes"
       - ".github/workflows/launcher-readme-download.yml"
       - "AGENTS.md"
       - "README.md"
       - "launcher/README.md"
       - "launcher/launcher-feed-v1.json"
+      - "launcher/launcher-update-feed-v2.json"
       - "installer/launcher-feed-v1.json"
+      - "launcher/build.ps1"
       - "launcher/launcher-input-lock-v1.json"
+      - "launcher/new-launcher-update-feed.ps1"
+      - "launcher/tests/launcher-update-feed-tests.ps1"
       - "launcher/verify-launcher-feed-alias.ps1"
       - "launcher/verify-launcher-identity.ps1"
-      - "launcher/src/UVSR.Installer/LauncherTypography.cs"
-      - "launcher/src/UVSR.Installer/Program.cs"
-      - "launcher/src/UVSR.Installer/ProductConstants.cs"
-      - "launcher/src/UVSR.Installer/UVSR.Installer.csproj"
+      - "launcher/verify-launcher-update-feed.ps1"
+      - "launcher/src/UVSR.Installer/**"
       - "cmake/uvsr-launcher-build-contract-v1.json"
       - "tools/sync_launcher_readme_download.py"
 
@@ -50,6 +53,10 @@ jobs:
         run: |
           python tools/sync_launcher_readme_download.py --self-test
           python tools/sync_launcher_readme_download.py --check
+          ./launcher/tests/launcher-update-feed-tests.ps1
+          if (Test-Path -LiteralPath launcher/launcher-update-feed-v2.json) {
+            ./launcher/verify-launcher-update-feed.ps1 | Out-Null
+          }
 
       - name: Detect A Feed Publication Change
         id: feed
@@ -73,24 +80,32 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "The feed comparison base '$base' is not a commit."
           }
-          $changed = @(& git diff --name-only $base HEAD -- `
+          $signedChanged = @(& git diff --name-only $base HEAD -- `
             launcher/launcher-feed-v1.json)
           if ($LASTEXITCODE -ne 0) {
             throw 'Git could not inspect launcher feed changes.'
           }
-          "changed=$(if ($changed.Count -gt 0) { 'true' } else { 'false' })" >> `
+          "signed_changed=$(if ($signedChanged.Count -gt 0) { 'true' } else { 'false' })" >> `
+            $env:GITHUB_OUTPUT
+          $updateChanged = @(& git diff --name-only $base HEAD -- `
+            launcher/launcher-update-feed-v2.json)
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Git could not inspect signed launcher update feed changes.'
+          }
+          "update_changed=$(if ($updateChanged.Count -gt 0) { 'true' } else { 'false' })" >> `
             $env:GITHUB_OUTPUT
           $relevant = @(& git diff --name-only $base HEAD -- `
-            .github/workflows/launcher-readme-download.yml `
+            .gitattributes .github/workflows/launcher-readme-download.yml `
             AGENTS.md README.md launcher/README.md `
             launcher/launcher-feed-v1.json installer/launcher-feed-v1.json `
+            launcher/launcher-update-feed-v2.json launcher/build.ps1 `
             launcher/launcher-input-lock-v1.json `
+            launcher/new-launcher-update-feed.ps1 `
+            launcher/tests/launcher-update-feed-tests.ps1 `
             launcher/verify-launcher-feed-alias.ps1 `
             launcher/verify-launcher-identity.ps1 `
-            launcher/src/UVSR.Installer/LauncherTypography.cs `
-            launcher/src/UVSR.Installer/Program.cs `
-            launcher/src/UVSR.Installer/ProductConstants.cs `
-            launcher/src/UVSR.Installer/UVSR.Installer.csproj `
+            launcher/verify-launcher-update-feed.ps1 `
+            launcher/src/UVSR.Installer `
             cmake/uvsr-launcher-build-contract-v1.json `
             tools/sync_launcher_readme_download.py)
           if ($LASTEXITCODE -ne 0) {
@@ -103,7 +118,8 @@ jobs:
       - name: Validate The Published Launcher Release
         shell: pwsh
         env:
-          FEED_CHANGED: ${{ steps.feed.outputs.changed }}
+          SIGNED_FEED_CHANGED: ${{ steps.feed.outputs.signed_changed }}
+          UPDATE_FEED_CHANGED: ${{ steps.feed.outputs.update_changed }}
           EVENT_NAME: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
           PUBLICATION_BASE: ${{ steps.feed.outputs.base }}
@@ -127,17 +143,18 @@ jobs:
           }
           $readmeState = $readmeStateJson | ConvertFrom-Json
           $stateKind = [string]$readmeState.kind
-          if ($stateKind -notin @('unavailable', 'unsigned', 'signed')) {
+          if ($stateKind -notin @(
+              'unavailable', 'unsigned', 'unsigned-feed', 'signed')) {
             throw 'The README launcher download state kind is not recognized.'
           }
           if ($stateKind -eq 'unavailable') {
             if ([bool]$readmeState.available -or $null -ne $readmeState.version) {
               throw 'The unavailable README launcher state is inconsistent.'
             }
-            if ($env:FEED_CHANGED -eq 'true') {
+            if ($env:SIGNED_FEED_CHANGED -eq 'true' -or
+                $env:UPDATE_FEED_CHANGED -eq 'true') {
               throw ('A launcher feed publication must update the README in the ' +
-                'same change. Run tools/sync_launcher_readme_download.py ' +
-                '--set-from-feed.')
+                'same change using the matching generated state.')
             }
             Write-Host 'UVSR Launcher download is temporarily unavailable.'
             exit 0
@@ -148,17 +165,25 @@ jobs:
             throw 'The available README launcher state is inconsistent.'
           }
           $isSigned = $stateKind -eq 'signed'
-          $isUnsigned = $stateKind -eq 'unsigned'
+          $isManualUnsigned = $stateKind -eq 'unsigned'
+          $isUnsignedFeed = $stateKind -eq 'unsigned-feed'
+          $isUnsigned = $isManualUnsigned -or $isUnsignedFeed
           $version = $readmeVersion
           $sequence = 0L
           $feed = $null
+          $updateFeed = $null
+          $releaseRecord = $null
 
-          if ($isUnsigned) {
-            if ($env:FEED_CHANGED -eq 'true') {
-              throw 'An unsigned manual bootstrap must not change the signed launcher feed.'
+          if ($isManualUnsigned) {
+            if ($env:SIGNED_FEED_CHANGED -eq 'true' -or
+                $env:UPDATE_FEED_CHANGED -eq 'true') {
+              throw 'An unsigned manual bootstrap must not change any launcher update feed.'
             }
           }
-          else {
+          elseif ($isSigned) {
+            if ($env:UPDATE_FEED_CHANGED -eq 'true') {
+              throw 'A signed v1 release state must not change the signed v2 update feed.'
+            }
             $feedJson = & python tools/sync_launcher_readme_download.py `
               --print-feed-json
             if ($LASTEXITCODE -ne 0) {
@@ -167,6 +192,7 @@ jobs:
             $feed = $feedJson | ConvertFrom-Json
             $version = [string]$feed.version
             $sequence = [long]$feed.releaseSequence
+            $releaseRecord = $feed
             if ([long]$feed.schemaVersion -ne 1 -or
                 $version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' -or
                 [string]$feed.productId -ne
@@ -183,7 +209,7 @@ jobs:
               throw "The README launcher version does not match feed version $version."
             }
 
-            if ($env:FEED_CHANGED -eq 'true') {
+            if ($env:SIGNED_FEED_CHANGED -eq 'true') {
               $baseFeedPath = 'launcher/launcher-feed-v1.json'
               & git cat-file -e "$env:PUBLICATION_BASE`:$baseFeedPath" 2>$null
               if ($LASTEXITCODE -ne 0) {
@@ -198,6 +224,71 @@ jobs:
               if ($sequence -le [long]$baseFeed.releaseSequence -or
                   [version]$version -le [version]([string]$baseFeed.version)) {
                 throw 'A launcher feed publication must advance version and sequence.'
+              }
+            }
+          }
+          else {
+            if ($env:SIGNED_FEED_CHANGED -eq 'true') {
+              throw 'An unsigned signed-feed release must not change the legacy signed v1 feed.'
+            }
+            $updateFeedPath = 'launcher/launcher-update-feed-v2.json'
+            if (-not (Test-Path -LiteralPath $updateFeedPath -PathType Leaf)) {
+              throw 'The unsigned-feed README state requires the canonical signed v2 update feed.'
+            }
+            $updateFeedJson = & ./launcher/verify-launcher-update-feed.ps1 `
+              -Path $updateFeedPath
+            $updateFeed = ($updateFeedJson -join "`n") | ConvertFrom-Json
+            $version = [string]$updateFeed.version
+            $sequence = [long]$updateFeed.releaseSequence
+            $releaseRecord = $updateFeed
+            if ($readmeVersion -ne $version) {
+              throw "The README launcher version does not match signed update feed version $version."
+            }
+
+            $v1FeedJson = & python tools/sync_launcher_readme_download.py `
+              --print-feed-json
+            if ($LASTEXITCODE -ne 0) {
+              throw 'The frozen launcher v1 feed failed strict validation.'
+            }
+            $v1Feed = $v1FeedJson | ConvertFrom-Json
+            if ($sequence -le [long]$v1Feed.releaseSequence -or
+                [version]$version -le [version]([string]$v1Feed.version)) {
+              throw 'The signed v2 update feed must advance beyond the frozen v1 feed.'
+            }
+
+            if ($env:UPDATE_FEED_CHANGED -eq 'true') {
+              & git cat-file -e `
+                "$env:PUBLICATION_BASE`:$updateFeedPath" 2>$null
+              if ($LASTEXITCODE -eq 0) {
+                $baseUpdateText = (& git show `
+                  "$env:PUBLICATION_BASE`:$updateFeedPath") -join "`n"
+                if ($LASTEXITCODE -ne 0) {
+                  throw 'The signed v2 update feed at the publication base could not be read.'
+                }
+                $baseUpdatePath = Join-Path $env:RUNNER_TEMP `
+                  "uvsr-launcher-update-base-$([Guid]::NewGuid().ToString('N')).json"
+                try {
+                  [IO.File]::WriteAllText($baseUpdatePath,
+                    $baseUpdateText.TrimEnd("`r", "`n") + "`n",
+                    [Text.UTF8Encoding]::new($false))
+                  $baseUpdateJson = & ./launcher/verify-launcher-update-feed.ps1 `
+                    -Path $baseUpdatePath
+                  $baseUpdate = ($baseUpdateJson -join "`n") | ConvertFrom-Json
+                }
+                finally {
+                  if (Test-Path -LiteralPath $baseUpdatePath -PathType Leaf) {
+                    Remove-Item -LiteralPath $baseUpdatePath -Force
+                  }
+                }
+                if ($sequence -le [long]$baseUpdate.releaseSequence -or
+                    [version]$version -le [version]([string]$baseUpdate.version)) {
+                  throw 'A signed v2 update feed publication must advance version and sequence.'
+                }
+              }
+              elseif ($LASTEXITCODE -ne 128) {
+                # git cat-file reports 128 when the optional v2 feed did not
+                # exist at the publication base.
+                throw 'Git could not inspect the signed v2 update feed at the publication base.'
               }
             }
           }
@@ -288,9 +379,6 @@ jobs:
             'launcher version'
           $sourceSequenceText = Read-UniqueSourceValue $constants `
             'LauncherReleaseSequence\s*=\s*(?<value>[0-9]+);' 'release sequence'
-          $sourcePin = Read-UniqueSourceValue $constants `
-            'LauncherPublisherSpkiSha256\s*=\s*"(?<value>[0-9a-f]{64}|)";' `
-            'publisher pin'
           $sourceSequence = [long]$sourceSequenceText
           if ($sourceProductId -ne
               '0c47a7a8-1ec4-4ffd-b6c4-2f7614181223' -or
@@ -299,14 +387,46 @@ jobs:
             throw 'The launcher identity at the release commit is not canonical.'
           }
           if ($isSigned) {
+            $sourcePin = Read-UniqueSourceValue $constants `
+              'LauncherPublisherSpkiSha256\s*=\s*"(?<value>[0-9a-f]{64}|)";' `
+              'publisher pin'
             if ($sourceProductId -ne [string]$feed.productId -or
                 $sourceSequence -ne $sequence -or
                 $sourcePin -notmatch '^[0-9a-f]{64}$') {
               throw 'The feed does not match the launcher identity at the release commit.'
             }
           }
-          elseif ($sourcePin.Length -ne 0) {
-            throw 'An unsigned manual bootstrap release must have an empty publisher pin.'
+          elseif ($isUnsignedFeed) {
+            if ($sourceProductId -ne [string]$updateFeed.productId -or
+                $sourceSequence -ne $sequence -or
+                $releaseCommit -ne [string]$updateFeed.sourceCommit) {
+              throw 'The signed v2 update payload does not match its exact unsigned launcher source identity.'
+            }
+            $sourceUpdateFeedUrl = Read-UniqueSourceValue $constants `
+              '\binternal\s+const\s+string\s+LauncherFeedUrl\s*=\s*"(?<value>[^"]+)";' `
+              'launcher update feed URL'
+            $sourceLegacyFeedUrl = Read-UniqueSourceValue $constants `
+              '\binternal\s+const\s+string\s+LegacyLauncherFeedUrl\s*=\s*"(?<value>[^"]+)";' `
+              'legacy launcher feed URL'
+            $sourceUpdateSchema = Read-UniqueSourceValue $constants `
+              '\binternal\s+const\s+int\s+LauncherUpdateFeedSchemaVersion\s*=\s*(?<value>[0-9]+);' `
+              'launcher update feed schema version'
+            $sourceUpdateKeyId = Read-UniqueSourceValue $constants `
+              '\binternal\s+const\s+string\s+LauncherUpdateFeedKeyId\s*=\s*"(?<value>[^"]+)";' `
+              'launcher update feed key ID'
+            $sourceUpdatePublicKey = Read-UniqueSourceValue $constants `
+              '\binternal\s+const\s+string\s+LauncherUpdateFeedPublicKeySpkiBase64\s*=\s*"(?<value>[A-Za-z0-9+/=]+)";' `
+              'launcher update feed public key'
+            if ($sourceUpdateFeedUrl -ne
+                  'https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-update-feed-v2.json' -or
+                $sourceLegacyFeedUrl -ne
+                  'https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-feed-v1.json' -or
+                [int]$sourceUpdateSchema -ne 2 -or
+                $sourceUpdateKeyId -ne 'uvsr-launcher-update-p256-2026-01' -or
+                $sourceUpdatePublicKey -ne
+                  'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEATbHkDwYIS0nMut5h9Q6m67qfabhuK+VRo6mDW1UlwZQIfeLI7zc1aKblCclkfgd8DDU0LcblFgTFdvoAWgCYg==') {
+              throw 'The unsigned launcher source does not contain the pinned signed-feed trust contract.'
+            }
           }
           else {
             $sequence = $sourceSequence
@@ -415,9 +535,10 @@ jobs:
               [string]$checksumAsset.digest -notmatch '^sha256:[0-9a-f]{64}$') {
             throw 'The published launcher checksum asset is not canonical.'
           }
-          if ($isSigned -and
-              ([long]$asset.size -ne [long]$feed.artifact.size -or
-               [string]$asset.digest -ne "sha256:$($feed.artifact.sha256)")) {
+          if (($isSigned -or $isUnsignedFeed) -and
+              ([long]$asset.size -ne [long]$releaseRecord.artifact.size -or
+               [string]$asset.digest -ne
+                 "sha256:$($releaseRecord.artifact.sha256)")) {
             throw 'The published launcher asset does not match the canonical feed.'
           }
           $expectedSize = [long]$asset.size
@@ -464,12 +585,13 @@ jobs:
             $stream = [IO.File]::OpenRead($download)
             $reader = [IO.BinaryReader]::new($stream)
             try {
-              if ($reader.ReadUInt16() -ne 0x5A4D) {
+              if ($stream.Length -lt 0x100 -or
+                  $reader.ReadUInt16() -ne 0x5A4D) {
                 throw 'The public launcher is not a Windows PE executable.'
               }
               $stream.Position = 0x3C
               $peOffset = $reader.ReadInt32()
-              if ($peOffset -lt 0x40 -or $peOffset -gt $stream.Length - 6) {
+              if ($peOffset -lt 0x40 -or $peOffset -gt $stream.Length - 24) {
                 throw 'The public launcher has an invalid PE header offset.'
               }
               $stream.Position = $peOffset
@@ -477,10 +599,38 @@ jobs:
                   $reader.ReadUInt16() -ne 0x8664) {
                 throw 'The public launcher is not a Windows x64 executable.'
               }
+              $stream.Position = $peOffset + 20
+              $optionalHeaderSize = [int]$reader.ReadUInt16()
+              $optionalHeaderOffset = [long]$peOffset + 24
+              if ($optionalHeaderSize -lt 152 -or
+                  $optionalHeaderOffset + $optionalHeaderSize -gt
+                    $stream.Length) {
+                throw 'The public launcher has a truncated or malformed x64 optional header.'
+              }
+              $stream.Position = $optionalHeaderOffset
+              if ($reader.ReadUInt16() -ne 0x020B) {
+                throw 'The public launcher does not use the required PE32+ optional header.'
+              }
+              $stream.Position = $optionalHeaderOffset + 108
+              $directoryCount = [long]$reader.ReadUInt32()
+              $maximumDirectoryCount =
+                [long](($optionalHeaderSize - 112) / 8)
+              if ($directoryCount -lt 5 -or $directoryCount -gt 16 -or
+                  $directoryCount -gt $maximumDirectoryCount) {
+                throw 'The public launcher has an invalid PE32+ data-directory table.'
+              }
+              $stream.Position = $optionalHeaderOffset + 144
+              $certificateTableOffset = $reader.ReadUInt32()
+              $certificateTableSize = $reader.ReadUInt32()
             }
             finally {
               $reader.Dispose()
               $stream.Dispose()
+            }
+            if ($isUnsigned -and
+                ($certificateTableOffset -ne 0 -or
+                 $certificateTableSize -ne 0)) {
+              throw 'The unsigned launcher release contains an embedded PE certificate table.'
             }
 
             $signature = Get-AuthenticodeSignature -LiteralPath $download
@@ -513,7 +663,7 @@ jobs:
                 [string]$signature.SignatureType -ne 'None' -or
                 $null -ne $signature.SignerCertificate -or
                 $null -ne $signature.TimeStamperCertificate) {
-              throw ('The unsigned manual bootstrap must have exact Authenticode ' +
+              throw ('The unsigned launcher release must have exact Authenticode ' +
                 'NotSigned status with no signer or timestamp certificate.')
             }
 

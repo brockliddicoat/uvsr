@@ -17,6 +17,7 @@ assets/noise/*.bin -diff -text
 /assets/fonts/noto-sans/*.ttf -diff -text
 /assets/fonts/noto-sans/OFL.txt text eol=lf -whitespace
 /assets/fonts/proggy-clean/ProggyClean-MIT.txt text eol=lf
+/assets/fonts/geist/.gitattributes text eol=lf
 
 # Launcher release inputs use checkout-invariant bytes so embedded source
 # checksums and the immutable input lock are reproducible on every Windows host.
@@ -24,13 +25,17 @@ assets/noise/*.bin -diff -text
 /LICENSE.md text eol=lf
 /launcher/build.ps1 text eol=lf
 /launcher/generate-renderer-source-bridge.ps1 text eol=lf
+/launcher/new-launcher-update-feed.ps1 text eol=lf
 /launcher/global.json text eol=lf
 /launcher/src/UVSR.Installer/** text eol=lf
 /launcher/src/UVSR.Installer/RendererBridges/*.patch -diff -text -eol
 /launcher/tests/renderer-source-bridge-verifier-tests.ps1 text eol=lf
 /launcher/tests/launcher-feed-alias-tests.ps1 text eol=lf
+/launcher/tests/launcher-update-feed-tests.ps1 text eol=lf
 /launcher/verify-launcher-feed-alias.ps1 text eol=lf
 /launcher/verify-launcher-identity.ps1 text eol=lf
+/launcher/verify-launcher-update-feed.ps1 text eol=lf
 /launcher/launcher-feed-v1.json text eol=lf
+/launcher/launcher-update-feed-v2.json text eol=lf
 /installer/launcher-feed-v1.json text eol=lf
 /cmake/uvsr-launcher-build-contract-v1.json text eol=lf

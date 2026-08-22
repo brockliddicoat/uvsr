@@ -39,15 +39,27 @@ internal sealed class LauncherManager
     private readonly InstallerPaths _paths;
     private readonly ProcessRunner _runner;
     private readonly DownloadManager _downloads;
+    private readonly byte[] _launcherFeedPublicKeySpki;
+    private readonly string _launcherFeedKeyId;
 
     internal LauncherManager(
         InstallerPaths paths,
         ProcessRunner runner,
-        DownloadManager downloads)
+        DownloadManager downloads,
+        byte[]? launcherFeedPublicKeySpki = null,
+        string? launcherFeedKeyId = null)
     {
+        if ((launcherFeedPublicKeySpki is null) != (launcherFeedKeyId is null))
+            throw new ArgumentException(
+                "A launcher update feed test key and key identity must be supplied together.");
         _paths = paths;
         _runner = runner;
         _downloads = downloads;
+        _launcherFeedPublicKeySpki = launcherFeedPublicKeySpki?.ToArray() ??
+            Convert.FromBase64String(
+                ProductConstants.LauncherUpdateFeedPublicKeySpkiBase64);
+        _launcherFeedKeyId = launcherFeedKeyId ??
+            ProductConstants.LauncherUpdateFeedKeyId;
     }
 
     internal LauncherState? TryReadState(Guid installationId)
@@ -166,7 +178,7 @@ internal sealed class LauncherManager
     {
         ComponentUpdateStatus launcher;
         progress?.Report(new InstallerProgress("Checking UVSR Launcher",
-            "Looking for a newer launcher release."));
+            "Authenticating the unsigned launcher update feed."));
         try
         {
             LauncherFeed feed = await DownloadLauncherFeedAsync(progress, log,
@@ -187,7 +199,7 @@ internal sealed class LauncherManager
                     currentIdentity);
             launcher = CreateLauncherUpdateStatus(currentIdentity,
                 recordedStateHealthy, feed);
-            log.Write($"Launcher update feed validated at " +
+            log.Write($"Authenticated unsigned launcher update feed validated at " +
                       $"{ProductConstants.LauncherFeedUrl}: running/defensible " +
                       $"{currentIdentity.Version} sequence {currentIdentity.ReleaseSequence}; " +
                       $"published {feed.Version} sequence {feed.ReleaseSequence}; " +
@@ -196,12 +208,12 @@ internal sealed class LauncherManager
         catch (Exception ex) when (ex is InstallerException or IOException or UnauthorizedAccessException)
         {
             string reason = InstallLog.DescribeException(ex);
-            log.Write($"Launcher update check failed at " +
+            log.Write($"Authenticated unsigned launcher update check failed at " +
                       $"{ProductConstants.LauncherFeedUrl}: {reason}");
             launcher = new ComponentUpdateStatus(UpdateComponent.Launcher,
                 ComponentUpdateState.CheckFailed,
                 TryCurrentLauncherVersion(marker.InstallationId), null,
-                $"UVSR Launcher update check failed at " +
+                $"UVSR Launcher authenticated unsigned update check failed at " +
                 $"{ProductConstants.LauncherFeedUrl}. Running launcher: " +
                 $"{ProductConstants.LauncherVersion} (sequence " +
                 $"{ProductConstants.LauncherReleaseSequence}). Reason: {reason}");
@@ -317,30 +329,16 @@ internal sealed class LauncherManager
             $"launcher-{feed.ReleaseSequence}-{feed.Artifact.Sha256}.exe");
         Uri artifact = BuildArtifactUri(feed);
         progress?.Report(new InstallerProgress("Downloading UVSR Launcher",
-            $"Downloading UVSR Launcher {feed.Version}."));
-        try
-        {
-            await _downloads.DownloadAndVerifyAsync(artifact, downloaded,
-                feed.Artifact.Sha256, ProductConstants.MaximumLauncherBytes,
-                progress, log, cancellationToken,
-                NativeMethods.VerifyLauncherPublisherSignature,
-                "Downloading UVSR Launcher");
-        }
-        catch (InstallerException ex) when (IsUnavailableArtifactError(ex))
-        {
-            log.Write("Versioned UVSR Launcher release tag is unavailable; falling back to " +
-                      "uvsr-launcher-latest.");
-            Uri fallback = BuildLatestArtifactUri(feed);
-            await _downloads.DownloadAndVerifyAsync(fallback, downloaded,
-                feed.Artifact.Sha256, ProductConstants.MaximumLauncherBytes,
-                progress, log, cancellationToken,
-                NativeMethods.VerifyLauncherPublisherSignature,
-                "Downloading UVSR Launcher");
-        }
+            $"Downloading authenticated unsigned UVSR Launcher {feed.Version}."));
+        await _downloads.DownloadAndVerifyAsync(artifact, downloaded,
+            feed.Artifact.Sha256, ProductConstants.MaximumLauncherBytes,
+            progress, log, cancellationToken,
+            NativeMethods.VerifyLauncherIsAuthenticodeUnsigned,
+            "Downloading UVSR Launcher");
         if (new FileInfo(downloaded).Length != feed.Artifact.Size)
             throw new InstallerException("The launcher download did not match its published size.");
         ValidatePeX64(downloaded);
-        ValidateFileMetadata(downloaded, feed.Version);
+        ValidateFileMetadata(downloaded, feed);
         using CancellationTokenSource healthTimeout =
             CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         healthTimeout.CancelAfter(TimeSpan.FromSeconds(15));
@@ -722,25 +720,46 @@ internal sealed class LauncherManager
 
     internal static LauncherFeed ParseAndValidateFeed(byte[] data)
     {
+        LauncherFeed feed = LauncherUpdateFeedVerifier.VerifyAndParse(data);
+        ValidateFeed(feed);
+        return feed;
+    }
+
+    internal static LauncherFeed ParseAndValidateFeed(
+        byte[] data,
+        byte[] trustedPublicKeySpki,
+        string trustedKeyId)
+    {
+        LauncherFeed feed = LauncherUpdateFeedVerifier.VerifyAndParse(data,
+            trustedPublicKeySpki, trustedKeyId);
+        ValidateFeed(feed);
+        return feed;
+    }
+
+    internal static LegacyLauncherFeed ParseAndValidateLegacyFeed(byte[] data)
+    {
         if (data.LongLength is <= 0 or > ProductConstants.MaximumLauncherFeedBytes)
-            throw new InstallerException("The launcher update feed was empty or too large.");
+            throw new InstallerException(
+                "The legacy launcher update feed was empty or too large.");
         try
         {
-            RejectDuplicateJsonProperties(data);
-            if (TryDeserializeFeed(data, JsonStore.Options,
-                    out LauncherFeed? canonical, out Exception? canonicalFailure))
+            LauncherUpdateFeedVerifier.RejectDuplicateJsonProperties(data);
+            if (TryDeserializeLegacyFeed(data, JsonStore.Options,
+                    out LegacyLauncherFeed? canonical,
+                    out Exception? canonicalFailure))
             {
-                ValidateFeed(canonical!);
+                ValidateLegacyFeed(canonical!);
                 return canonical!;
             }
-            if (TryDeserializeFeed(data, LegacyLauncherFeedOptions,
-                    out LauncherFeed? legacy, out Exception? legacyFailure))
+            if (TryDeserializeLegacyFeed(data, LegacyLauncherFeedOptions,
+                    out LegacyLauncherFeed? legacy,
+                    out Exception? legacyFailure))
             {
-                ValidateFeed(legacy!);
+                ValidateLegacyFeed(legacy!);
                 return legacy!;
             }
             throw new InstallerException(
-                "The launcher update feed did not use the required canonical " +
+                "The legacy launcher update feed did not use the required canonical " +
                 "camelCase or supported legacy PascalCase schema. Canonical " +
                 $"schema: {canonicalFailure!.Message} Legacy schema: " +
                 $"{legacyFailure!.Message}",
@@ -752,25 +771,26 @@ internal sealed class LauncherManager
         }
         catch (Exception ex) when (ex is JsonException or InvalidOperationException)
         {
-            throw new InstallerException("The launcher update feed was invalid.", ex);
+            throw new InstallerException(
+                "The legacy launcher update feed was invalid.", ex);
         }
     }
 
-    private static LauncherFeed DeserializeFeed(
+    private static LegacyLauncherFeed DeserializeLegacyFeed(
         byte[] data,
         JsonSerializerOptions options) =>
-        JsonSerializer.Deserialize<LauncherFeed>(data, options)
+        JsonSerializer.Deserialize<LegacyLauncherFeed>(data, options)
         ?? throw new JsonException("The feed was empty.");
 
-    private static bool TryDeserializeFeed(
+    private static bool TryDeserializeLegacyFeed(
         byte[] data,
         JsonSerializerOptions options,
-        out LauncherFeed? feed,
+        out LegacyLauncherFeed? feed,
         out Exception? failure)
     {
         try
         {
-            feed = DeserializeFeed(data, options);
+            feed = DeserializeLegacyFeed(data, options);
             failure = null;
             return true;
         }
@@ -798,17 +818,23 @@ internal sealed class LauncherManager
                 $"Running UVSR Launcher {currentIdentity.Version} (sequence " +
                 $"{currentIdentity.ReleaseSequence}) is newer than published " +
                 $"{feed.Version} (sequence {feed.ReleaseSequence}). No launcher " +
-                $"update is needed. Checked {ProductConstants.LauncherFeedUrl}.",
+                $"update is needed. Checked the authenticated unsigned update " +
+                $"feed at {ProductConstants.LauncherFeedUrl}.",
             ComponentUpdateState.Current =>
                 $"UVSR Launcher {currentIdentity.Version} (sequence " +
-                $"{currentIdentity.ReleaseSequence}) is up to date. Checked " +
+                $"{currentIdentity.ReleaseSequence}) is up to date. Checked the " +
+                $"authenticated unsigned update feed at " +
                 $"{ProductConstants.LauncherFeedUrl}.",
             ComponentUpdateState.RepairNeeded =>
                 $"UVSR Launcher needs to restore its installed files using the " +
-                $"validated release record at {ProductConstants.LauncherFeedUrl}.",
+                $"authenticated unsigned update feed at " +
+                $"{ProductConstants.LauncherFeedUrl}. The executable is not " +
+                "Authenticode-signed; the feed signature authenticates its exact SHA-256.",
             _ =>
                 $"UVSR Launcher {feed.Version} (sequence {feed.ReleaseSequence}) " +
-                $"is available from {ProductConstants.LauncherFeedUrl}."
+                $"is available from the authenticated unsigned update feed at " +
+                $"{ProductConstants.LauncherFeedUrl}. The executable is not " +
+                "Authenticode-signed; the feed signature authenticates its exact SHA-256."
         };
         return new ComponentUpdateStatus(UpdateComponent.Launcher, state,
             currentIdentity.Version, feed.Version, detail, feed);
@@ -820,7 +846,7 @@ internal sealed class LauncherManager
             throw new InstallerException("GitHub returned an invalid UVSR update record.");
         try
         {
-            RejectDuplicateJsonProperties(data);
+            LauncherUpdateFeedVerifier.RejectDuplicateJsonProperties(data);
             using JsonDocument document = JsonDocument.Parse(data);
             JsonElement root = document.RootElement;
             string reference = root.GetProperty("ref").GetString() ?? string.Empty;
@@ -845,20 +871,9 @@ internal sealed class LauncherManager
     internal static Uri BuildArtifactUri(LauncherFeed feed)
     {
         ValidateFeed(feed);
-        return BuildReleaseArtifactUri(feed, $"uvsr-launcher-v{feed.Version}");
-    }
-
-    internal static Uri BuildLatestArtifactUri(LauncherFeed feed)
-    {
-        ValidateFeed(feed);
-        return BuildReleaseArtifactUri(feed, "uvsr-launcher-latest");
-    }
-
-    private static Uri BuildReleaseArtifactUri(LauncherFeed feed, string releaseTag)
-    {
-        ValidateFeed(feed);
         return new Uri("https://github.com/brockliddicoat/uvsr/releases/download/" +
-                       $"{releaseTag}/{ProductConstants.LauncherArtifactName}");
+                       $"uvsr-launcher-v{feed.Version}/" +
+                       ProductConstants.LauncherArtifactName);
     }
 
     private static bool IsUnavailableArtifactError(InstallerException ex)
@@ -872,13 +887,16 @@ internal sealed class LauncherManager
         InstallLog log,
         CancellationToken cancellationToken)
     {
-        string path = Path.Combine(_paths.DownloadsDirectory, "launcher-feed-v1.json");
-        log.Write($"Checking UVSR Launcher update source: " +
+        string path = Path.Combine(_paths.DownloadsDirectory,
+            "launcher-update-feed-v2.json");
+        log.Write($"Checking authenticated unsigned UVSR Launcher update source: " +
                   $"{ProductConstants.LauncherFeedUrl}.");
         await _downloads.DownloadAndVerifyAsync(new Uri(ProductConstants.LauncherFeedUrl),
             path, null, ProductConstants.MaximumLauncherFeedBytes, progress, log,
             cancellationToken, phase: "Checking UVSR Launcher");
-        return ParseAndValidateFeed(await File.ReadAllBytesAsync(path, cancellationToken));
+        return ParseAndValidateFeed(
+            await File.ReadAllBytesAsync(path, cancellationToken),
+            _launcherFeedPublicKeySpki, _launcherFeedKeyId);
     }
 
     private async Task<string> DownloadMainCommitAsync(
@@ -1330,15 +1348,15 @@ internal sealed class LauncherManager
     {
         if (feed is null)
             throw new InstallerException("The launcher update feed was empty.");
-        if (feed.SchemaVersion != ProductConstants.LauncherSchemaVersion)
+        if (feed.SchemaVersion != ProductConstants.LauncherUpdateFeedSchemaVersion)
             throw new InstallerException(
-                $"The launcher update feed schema version was {feed.SchemaVersion}; expected {ProductConstants.LauncherSchemaVersion}.");
+                $"The launcher update feed schema version was {feed.SchemaVersion}; " +
+                $"expected {ProductConstants.LauncherUpdateFeedSchemaVersion}.");
         if (!string.Equals(feed.ProductId, ProductConstants.ProductId,
-                StringComparison.OrdinalIgnoreCase))
+                StringComparison.Ordinal))
             throw new InstallerException(
                 "The launcher update feed product identity did not match UVSR Launcher.");
-        if (!string.IsNullOrWhiteSpace(feed.Channel) &&
-            !string.Equals(feed.Channel, "stable", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(feed.Channel, "stable", StringComparison.Ordinal))
             throw new InstallerException(
                 $"The launcher update feed channel '{feed.Channel}' was not supported.");
         if (feed.ReleaseSequence is < 1 or > ProductConstants.MaximumReleaseSequence)
@@ -1349,6 +1367,10 @@ internal sealed class LauncherManager
             !feed.Version.Split('.').All(part => int.TryParse(part, out _)))
             throw new InstallerException(
                 $"The launcher update feed version '{feed.Version}' was invalid.");
+        if (string.IsNullOrWhiteSpace(feed.SourceCommit) ||
+            !ProductConstants.CommitRegex().IsMatch(feed.SourceCommit))
+            throw new InstallerException(
+                "The launcher update feed source commit was invalid.");
         if (feed.Artifact is null)
             throw new InstallerException(
                 "The launcher update feed did not contain an artifact identity.");
@@ -1362,6 +1384,49 @@ internal sealed class LauncherManager
             !ProductConstants.HashRegex().IsMatch(feed.Artifact.Sha256))
             throw new InstallerException(
                 "The launcher update feed artifact SHA-256 was invalid.");
+    }
+
+    private static void ValidateLegacyFeed(LegacyLauncherFeed feed)
+    {
+        if (feed is null)
+            throw new InstallerException("The legacy launcher update feed was empty.");
+        if (feed.SchemaVersion != ProductConstants.LauncherSchemaVersion)
+            throw new InstallerException(
+                $"The legacy launcher update feed schema version was " +
+                $"{feed.SchemaVersion}; expected " +
+                $"{ProductConstants.LauncherSchemaVersion}.");
+        if (!string.Equals(feed.ProductId, ProductConstants.ProductId,
+                StringComparison.OrdinalIgnoreCase))
+            throw new InstallerException(
+                "The legacy launcher update feed product identity did not match UVSR Launcher.");
+        if (!string.IsNullOrWhiteSpace(feed.Channel) &&
+            !string.Equals(feed.Channel, "stable", StringComparison.OrdinalIgnoreCase))
+            throw new InstallerException(
+                $"The legacy launcher update feed channel '{feed.Channel}' was not supported.");
+        if (feed.ReleaseSequence is < 1 or > ProductConstants.MaximumReleaseSequence)
+            throw new InstallerException(
+                $"The legacy launcher update feed release sequence " +
+                $"{feed.ReleaseSequence} was outside its safe range.");
+        if (string.IsNullOrWhiteSpace(feed.Version) ||
+            !ProductConstants.StableVersionRegex().IsMatch(feed.Version) ||
+            !feed.Version.Split('.').All(part => int.TryParse(part, out _)))
+            throw new InstallerException(
+                $"The legacy launcher update feed version '{feed.Version}' was invalid.");
+        if (feed.Artifact is null)
+            throw new InstallerException(
+                "The legacy launcher update feed did not contain an artifact identity.");
+        if (feed.Artifact.Name != ProductConstants.LauncherArtifactName)
+            throw new InstallerException(
+                $"The legacy launcher update feed artifact name " +
+                $"'{feed.Artifact.Name}' was invalid.");
+        if (feed.Artifact.Size is <= 0 or > ProductConstants.MaximumLauncherBytes)
+            throw new InstallerException(
+                $"The legacy launcher update feed artifact size " +
+                $"{feed.Artifact.Size} was outside its safe range.");
+        if (string.IsNullOrWhiteSpace(feed.Artifact.Sha256) ||
+            !ProductConstants.HashRegex().IsMatch(feed.Artifact.Sha256))
+            throw new InstallerException(
+                "The legacy launcher update feed artifact SHA-256 was invalid.");
     }
 
     private static void ValidateActivationRecord(
@@ -1407,46 +1472,41 @@ internal sealed class LauncherManager
     private static void ValidateFileMetadata(string path, string expectedVersion)
     {
         FileVersionInfo info = FileVersionInfo.GetVersionInfo(path);
+        bool productVersionMatches = string.Equals(info.ProductVersion,
+                                         expectedVersion, StringComparison.Ordinal) ||
+                                     info.ProductVersion?.StartsWith(
+                                         expectedVersion + "+",
+                                         StringComparison.Ordinal) == true;
         if (!string.Equals(info.ProductName, "UVSR Launcher", StringComparison.Ordinal) ||
-            string.IsNullOrWhiteSpace(info.ProductVersion) ||
-            !info.ProductVersion.StartsWith(expectedVersion, StringComparison.Ordinal))
-            throw new InstallerException("The launcher file had unexpected product metadata.");
+            !productVersionMatches ||
+            !string.Equals(info.FileVersion, expectedVersion + ".0",
+                StringComparison.Ordinal))
+            throw new InstallerException(
+                "The launcher file had unexpected product metadata.");
     }
 
-    private static void RejectDuplicateJsonProperties(ReadOnlySpan<byte> data)
+    private static void ValidateFileMetadata(string path, LauncherFeed feed)
     {
-        Utf8JsonReader reader = new(data, new JsonReaderOptions
-        {
-            AllowTrailingCommas = false,
-            CommentHandling = JsonCommentHandling.Disallow,
-            MaxDepth = 32
-        });
-        Stack<HashSet<string>?> scopes = new();
-        while (reader.Read())
-        {
-            switch (reader.TokenType)
-            {
-                case JsonTokenType.StartObject:
-                    scopes.Push(new HashSet<string>(StringComparer.Ordinal));
-                    break;
-                case JsonTokenType.StartArray:
-                    scopes.Push(null);
-                    break;
-                case JsonTokenType.EndObject:
-                case JsonTokenType.EndArray:
-                    if (scopes.Count == 0)
-                        throw new JsonException("Unbalanced JSON scope.");
-                    scopes.Pop();
-                    break;
-                case JsonTokenType.PropertyName:
-                    if (scopes.Count == 0 || scopes.Peek() is not HashSet<string> names ||
-                        !names.Add(reader.GetString() ?? string.Empty))
-                        throw new JsonException("Duplicate JSON property.");
-                    break;
-            }
-        }
-        if (scopes.Count != 0)
-            throw new JsonException("Incomplete JSON document.");
+        FileVersionInfo info = FileVersionInfo.GetVersionInfo(path);
+        ValidateFileMetadata(info.ProductName, info.ProductVersion,
+            info.FileVersion, feed);
+    }
+
+    internal static void ValidateFileMetadata(
+        string? productName,
+        string? productVersion,
+        string? fileVersion,
+        LauncherFeed feed)
+    {
+        ValidateFeed(feed);
+        string expectedProductVersion = $"{feed.Version}+{feed.SourceCommit}";
+        string expectedFileVersion = $"{feed.Version}.0";
+        if (!string.Equals(productName, "UVSR Launcher", StringComparison.Ordinal) ||
+            !string.Equals(productVersion, expectedProductVersion,
+                StringComparison.Ordinal) ||
+            !string.Equals(fileVersion, expectedFileVersion,
+                StringComparison.Ordinal))
+            throw new InstallerException("The launcher file had unexpected product metadata.");
     }
 }
 
