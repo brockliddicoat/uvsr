@@ -3057,6 +3057,26 @@ internal static class Program
                "2b5f092bdf80dcdabca46034f1334f6be374c712400e7bf8d6ae1e672f7a5b36");
         Assert(ProductConstants.LauncherReleaseSequence > feed.ReleaseSequence);
 
+        string updateFeedPath = Path.Combine(root, "launcher",
+            "launcher-update-feed-v2.json");
+        LauncherFeed updateFeed = LauncherManager.ParseAndValidateFeed(
+            File.ReadAllBytes(updateFeedPath));
+        Assert(updateFeed.ProductId == ProductConstants.ProductId);
+        Assert(updateFeed.Channel == "stable");
+        Assert(updateFeed.ReleaseSequence == 14);
+        Assert(updateFeed.Version == "1.1.13");
+        Assert(updateFeed.SourceCommit ==
+               "6837da7ae5a5df7d27425d09a7d272f218f4bbf5");
+        Assert(updateFeed.Artifact.Name == ProductConstants.LauncherArtifactName);
+        Assert(updateFeed.Artifact.Size == 59_060_884);
+        Assert(updateFeed.Artifact.Sha256 ==
+               "3b0e9c5826b03fa78288541b11bc6d2a5d745e450597b110d9d1b4d65be223d5");
+        Assert(LauncherManager.BuildArtifactUri(updateFeed).AbsoluteUri ==
+               "https://github.com/brockliddicoat/uvsr/releases/download/" +
+               "uvsr-launcher-v1.1.13/UVSR-Launcher-Windows-11-x64.exe");
+        Assert(ProductConstants.LauncherReleaseSequence >
+               updateFeed.ReleaseSequence);
+
         string legacyFixturePath = Path.Combine(root, "launcher", "tests",
             "fixtures", "launcher-feed-public-legacy-v1.json");
         string legacyFixture = File.ReadAllText(legacyFixturePath);
@@ -3729,7 +3749,7 @@ internal static class Program
         LauncherFeed feed = ValidLauncherFeed() with
         {
             ReleaseSequence = ProductConstants.LauncherReleaseSequence + 1,
-            Version = "1.1.14"
+            Version = "1.1.15"
         };
         string productVersion = feed.Version + "+" + feed.SourceCommit;
         LauncherManager.ValidateFileMetadata("UVSR Launcher", productVersion,
@@ -3778,13 +3798,13 @@ internal static class Program
             "UVSR.Installer", "app.manifest"));
         Assert(project.Contains($"<Version>{ProductConstants.LauncherVersion}</Version>",
             StringComparison.Ordinal));
-        Assert(project.Contains("<FileVersion>1.1.13.0</FileVersion>",
+        Assert(project.Contains("<FileVersion>1.1.14.0</FileVersion>",
             StringComparison.Ordinal));
-        Assert(project.Contains("<AssemblyVersion>1.1.13.0</AssemblyVersion>",
+        Assert(project.Contains("<AssemblyVersion>1.1.14.0</AssemblyVersion>",
             StringComparison.Ordinal));
-        Assert(manifest.Contains("version=\"1.1.13.0\"", StringComparison.Ordinal));
-        Assert(ProductConstants.LauncherVersion == "1.1.13");
-        Assert(ProductConstants.LauncherReleaseSequence == 14);
+        Assert(manifest.Contains("version=\"1.1.14.0\"", StringComparison.Ordinal));
+        Assert(ProductConstants.LauncherVersion == "1.1.14");
+        Assert(ProductConstants.LauncherReleaseSequence == 15);
         Assert(Version.Parse(ProductConstants.LauncherVersion) >
                Version.Parse("1.1.11"));
         Assert(ProductConstants.LauncherReleaseSequence > 12);

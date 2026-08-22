@@ -284,12 +284,15 @@ try {
             $stream.Dispose()
         }
         $verifier = Join-Path $PSScriptRoot 'verify-launcher-update-feed.ps1'
-        $verifyArguments = @('-Path', $temporaryPath)
-        if ($AllowTestKey) {
-            $verifyArguments += @('-AllowTestKey', '-TestKeyId', $keyId,
-                '-TestPublicKeySpkiBase64', $publicKeySpkiBase64)
+        $verifyParameters = @{
+            Path = $temporaryPath
         }
-        $verifiedPayload = & $verifier @verifyArguments
+        if ($AllowTestKey) {
+            $verifyParameters.AllowTestKey = $true
+            $verifyParameters.TestKeyId = $keyId
+            $verifyParameters.TestPublicKeySpkiBase64 = $publicKeySpkiBase64
+        }
+        $verifiedPayload = & $verifier @verifyParameters
         if (($verifiedPayload -join "`n") -cne $payload.TrimEnd("`n")) {
             throw 'The generated launcher update feed did not round-trip exactly.'
         }
