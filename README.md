@@ -96,30 +96,29 @@ when UVSR is already present.
 
 The launcher flow is intended to handle prerequisites, build the newest public
 `main`, and keep launcher updates separate from the renderer installation. The
-currently published sequence-2 launcher cannot build the current
+legacy sequence-2 launcher cannot build the current
 minimum-sequence-4 renderer source, so it must not be used for a fresh
 installation.
 
-The generated block below names the exact immutable unsigned Windows 11 manual
-bootstrap. Windows may identify it as coming from an unknown publisher. This
-1.1.12 download predates authenticated unsigned updates and is not launcher
-self-update authority. Launcher 1.1.13 and newer instead authenticate update
-metadata with UVSR's pinned P-256 key, then independently verify the exact
-immutable release, executable hash, identity, architecture, and health result.
+The generated block below names the exact immutable unsigned Windows 11
+feed-capable bootstrap. Windows may identify it as coming from an unknown
+publisher. Launcher 1.1.13 and newer authenticate update metadata with UVSR's
+pinned P-256 key, then independently verify the exact immutable release,
+executable hash, identity, architecture, and health result.
 
 <!-- uvsr-launcher-download:start -->
-> [Download Unsigned UVSR Launcher v1.1.12 (unsigned manual bootstrap)](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.1.12/UVSR-Launcher-Windows-11-x64.exe)
+> [Download Unsigned UVSR Launcher v1.1.13 (unsigned; signed-feed updates)](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.1.13/UVSR-Launcher-Windows-11-x64.exe)
 >
-> [SHA-256 checksum](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.1.12/UVSR-Launcher-Windows-11-x64.exe.sha256)
+> [SHA-256 checksum](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.1.13/UVSR-Launcher-Windows-11-x64.exe.sha256)
 >
-> Not Authenticode-signed. Windows may warn. Launcher self-updates are disabled.
+> Not Authenticode-signed. Windows may warn. Launcher updates are authorized by UVSR’s pinned signed feed and exact immutable release identity.
 <!-- uvsr-launcher-download:end -->
 
-Opening the unsigned manual bootstrap starts the launcher. Its shortcut is
-selected by default, transient downloads resume or retry safely, and Update can
-install or repair UVSR Engine. Launcher self-updates remain disabled in 1.1.12;
-install the first feed-capable launcher manually once, after which Update can
-install newer authenticated unsigned launcher releases.
+Opening the unsigned bootstrap starts the launcher. Its shortcut is selected by
+default, transient downloads resume or retry safely, and Update can install or
+repair UVSR Engine. Install 1.1.13 manually once because 1.1.12 cannot update
+itself; after that, Update can install newer authenticated unsigned launcher
+releases.
 
 The feed-capable launcher line uses these checked addresses:
 

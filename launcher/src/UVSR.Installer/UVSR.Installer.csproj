@@ -17,9 +17,9 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <DebugType>embedded</DebugType>
-    <Version>1.1.13</Version>
-    <FileVersion>1.1.13.0</FileVersion>
-    <AssemblyVersion>1.1.13.0</AssemblyVersion>
+    <Version>1.1.14</Version>
+    <FileVersion>1.1.14.0</FileVersion>
+    <AssemblyVersion>1.1.14.0</AssemblyVersion>
     <Product>UVSR Launcher</Product>
     <Description>Installs, launches, updates, and removes UVSR on Windows 11.</Description>
     <Company>UVSR</Company>

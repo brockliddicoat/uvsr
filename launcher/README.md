@@ -166,19 +166,19 @@ A failed check, download, build, or candidate health check leaves the active UVS
 and launcher packages unchanged. Details distinguish a stalled connection from
 local storage, access, signature, and permanent HTTP failures.
 
-## Manual-Only Launcher Download
+## Unsigned Launcher Download
 
-The root README may link the explicitly unsigned 1.1.12 manual-only launcher
-independently from launcher self-update metadata. The link uses the exact immutable
+The root README links the explicitly unsigned 1.1.13 feed-capable launcher. The
+link uses the exact immutable
 `uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe` prerelease asset and
-also exposes its SHA-256 checksum. The executable must be labeled unsigned;
-Windows may show an unknown-publisher or SmartScreen warning.
+also exposes its SHA-256 checksum. The executable is labeled unsigned; Windows
+may show an unknown-publisher or SmartScreen warning.
 
-The manual bootstrap can install, update, launch, repair, and remove UVSR Engine.
+The bootstrap can install, update, launch, repair, and remove UVSR Engine.
 Version 1.1.12 is not authority for launcher self-update and cannot acquire that
-capability retroactively. Users open the first feed-capable launcher manually
-once. Launcher 1.1.13 and newer can then authenticate and install later unsigned
-launcher versions through the version-2 signed-metadata feed.
+capability retroactively. Users open 1.1.13 manually once; it and newer versions
+can then authenticate and install later unsigned launchers through the
+version-2 signed-metadata feed.
 
 ## Launcher Updates and Update Source
 

@@ -204,14 +204,23 @@ try {
     $payload = New-TestPayload
     $validBytes = New-TestEnvelopeBytes $key $payload
     $validPath = Write-Fixture 'valid' $validBytes
-    $verified = (Invoke-TestVerifier $validPath $publicKey) -join "`n"
+    $testVerifierParameters = @{
+        Path = $validPath
+        AllowTestKey = $true
+        TestKeyId = $testKeyId
+        TestPublicKeySpkiBase64 = $publicKey
+    }
+    $verified = (& $verifier @testVerifierParameters) -join "`n"
     if ($verified -cne $payload.TrimEnd("`n")) {
         throw 'The valid launcher update feed did not emit its exact signed payload JSON.'
     }
 
+    $productionVerifierParameters = @{
+        Path = $validPath
+    }
     $productionRejected = $false
     try {
-        & $verifier -Path $validPath | Out-Null
+        & $verifier @productionVerifierParameters | Out-Null
     }
     catch {
         if (-not $_.Exception.Message.Contains(
@@ -414,6 +423,27 @@ try {
             -not $contract.Text.Contains('0x020B', [StringComparison]::Ordinal)) {
             throw "The $($contract.Name) lost the unsigned PE certificate-table gate."
         }
+    }
+
+    $signerSource = [IO.File]::ReadAllText($signer)
+    $namedVerifierMap = [regex]::Matches($signerSource,
+        '\$verifyParameters\s*=\s*@\{\s*Path\s*=\s*\$temporaryPath\s*\}',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant -bor
+        [Text.RegularExpressions.RegexOptions]::Singleline)
+    $testVerifierMap = [regex]::Matches($signerSource,
+        'if\s*\(\$AllowTestKey\)\s*\{\s*' +
+        '\$verifyParameters\.AllowTestKey\s*=\s*\$true\s*' +
+        '\$verifyParameters\.TestKeyId\s*=\s*\$keyId\s*' +
+        '\$verifyParameters\.TestPublicKeySpkiBase64\s*=\s*' +
+        '\$publicKeySpkiBase64\s*\}',
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant -bor
+        [Text.RegularExpressions.RegexOptions]::Singleline)
+    if ($namedVerifierMap.Count -ne 1 -or $testVerifierMap.Count -ne 1 -or
+        -not $signerSource.Contains(
+            '$verifiedPayload = & $verifier @verifyParameters',
+            [StringComparison]::Ordinal) -or
+        $signerSource.Contains('@verifyArguments', [StringComparison]::Ordinal)) {
+        throw 'The launcher feed signer lost its named verifier-parameter splat.'
     }
 
     Write-Output 'Launcher update feed verifier tests passed.'
