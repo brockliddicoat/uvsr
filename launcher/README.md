@@ -168,17 +168,17 @@ local storage, access, signature, and permanent HTTP failures.
 
 ## Unsigned Launcher Download
 
-The root README links the explicitly unsigned 1.1.13 feed-capable launcher. The
-link uses the exact immutable
+The root README links the current explicitly unsigned feed-capable launcher.
+The link uses the exact immutable
 `uvsr-launcher-v<version>/UVSR-Launcher-Windows-11-x64.exe` prerelease asset and
 also exposes its SHA-256 checksum. The executable is labeled unsigned; Windows
 may show an unknown-publisher or SmartScreen warning.
 
 The bootstrap can install, update, launch, repair, and remove UVSR Engine.
 Version 1.1.12 is not authority for launcher self-update and cannot acquire that
-capability retroactively. Users open 1.1.13 manually once; it and newer versions
-can then authenticate and install later unsigned launchers through the
-version-2 signed-metadata feed.
+capability retroactively. Users open the current feed-capable download manually
+once; launcher 1.1.13 and newer can then authenticate and install later unsigned
+launchers through the version-2 signed-metadata feed.
 
 ## Launcher Updates and Update Source
 
