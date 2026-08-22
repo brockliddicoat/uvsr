@@ -54,8 +54,8 @@ internal sealed class SourceManager
         InstallLog log,
         CancellationToken cancellationToken)
     {
-        progress?.Report(new InstallerProgress("Checking public UVSR main",
-            "Contacting GitHub and resolving one exact source revision."));
+        progress?.Report(new InstallerProgress("Resetting UVSR source cache",
+            "Removing the previous launcher-managed source checkout."));
         SafePaths.RejectReparsePathChain(_paths.CacheDirectory,
             "managed UVSR cache directory");
         Directory.CreateDirectory(_paths.CacheDirectory);
@@ -65,35 +65,25 @@ internal sealed class SourceManager
         // persistent replace refs, filters, grafts, submodule gitfiles, and local
         // configuration can never survive from an earlier or interrupted run.
         RecreateManagedSourceDirectory();
-        await GitRequiredAsync(tools.Git, new[] { "init", _paths.SourceDirectory },
+        progress?.Report(new InstallerProgress("Initializing secure UVSR source checkout",
+            "Creating a new launcher-managed Git repository."));
+        await GitRequiredAsync(tools.Git, new[] { "init", "--initial-branch=main",
+                _paths.SourceDirectory },
             _paths.CacheDirectory, tools, log, cancellationToken,
             "UVSR Launcher could not initialize its managed UVSR source checkout.");
-        await GitRequiredAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
-            "remote", "add", "origin", ProductConstants.RepositoryUrl },
-            _paths.CacheDirectory, tools, log, cancellationToken,
-            "UVSR Launcher could not configure the public UVSR source address.");
-
         WriteSafeRepositoryConfig();
 
-        await GitRequiredAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
-            "remote", "set-url", "origin", ProductConstants.RepositoryUrl },
-            _paths.CacheDirectory, tools, log, cancellationToken,
-            "The managed UVSR source remote could not be secured.");
-        await GitRequiredAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
-            "config", "core.longpaths", "true" }, _paths.CacheDirectory, tools,
-            log, cancellationToken, "Git could not enable Windows long-path support.");
-
-        ProcessResult fetch = await GitNetworkAsync(tools.Git, new[]
-        {
-            "-C", _paths.SourceDirectory, "fetch", "--force", "--prune", "--no-tags",
-            "--depth=1", "origin",
-            $"+{ProductConstants.RepositoryMainRef}:refs/remotes/origin/main"
-        }, _paths.CacheDirectory, tools, progress, log, cancellationToken,
-            "Downloading UVSR source");
+        ProcessResult fetch = await GitNetworkAsync(tools.Git,
+            BuildInitialFetchArguments(_paths.SourceDirectory),
+            _paths.CacheDirectory, tools, progress, log, cancellationToken,
+            "Resolving public UVSR main",
+            "Downloading exact commit metadata without file contents");
+        RejectIgnoredObjectFilter(fetch);
         if (fetch.ExitCode != 0)
             throw new InstallerException(
                 "GitHub's public UVSR main branch remained unavailable after several automatic attempts. " +
                 "The installed version was preserved; try again in a moment.");
+        ValidatePartialCloneRepositoryConfiguration();
 
         ProcessResult revision = await GitAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
             "rev-parse", "refs/remotes/origin/main" }, _paths.CacheDirectory,
@@ -125,17 +115,22 @@ internal sealed class SourceManager
             if (!string.Equals(installedPublicCommit, publicCommit,
                     StringComparison.Ordinal))
             {
-                ProcessResult deepen = await GitNetworkAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
-                    "fetch", "--unshallow", "--no-tags", "origin", ProductConstants.RepositoryMainRef },
+                ProcessResult deepen = await GitNetworkAsync(tools.Git,
+                    BuildHistoryFetchArguments(_paths.SourceDirectory),
                     _paths.CacheDirectory, tools, progress, log, cancellationToken,
-                    "Checking update history");
+                    "Checking UVSR update history",
+                    "Downloading commit and tree history without file contents",
+                    ValidatePartialCloneRepositoryConfiguration);
+                RejectIgnoredObjectFilter(deepen);
                 if (deepen.ExitCode != 0)
                     throw new InstallerException(
                         "The launcher could not verify UVSR's update history after several automatic attempts. " +
                         "The installed version was preserved.");
-                ProcessResult ancestry = await GitAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
-                    "merge-base", "--is-ancestor", installedPublicCommit,
-                    publicCommit }, _paths.CacheDirectory, tools, log,
+                ValidatePartialCloneRepositoryConfiguration();
+                ProcessResult ancestry = await GitAsync(tools.Git,
+                    BuildAncestryArguments(_paths.SourceDirectory,
+                        installedPublicCommit, publicCommit),
+                    _paths.CacheDirectory, tools, log,
                     cancellationToken);
                 nonFastForward = ClassifyAncestryExitCode(ancestry.ExitCode);
             }
@@ -160,6 +155,40 @@ internal sealed class SourceManager
             "Git could not verify UVSR's update history. The installed version was preserved; choose Update again to retry.")
     };
 
+    internal static string[] BuildInitialFetchArguments(string sourceDirectory) =>
+        new[]
+        {
+            "-C", sourceDirectory, "fetch", "--force", "--prune", "--no-tags",
+            "--filter=blob:none", "--depth=1", "origin",
+            $"+{ProductConstants.RepositoryMainRef}:refs/remotes/origin/main"
+        };
+
+    internal static string[] BuildHistoryFetchArguments(string sourceDirectory) =>
+        new[]
+        {
+            "-C", sourceDirectory, "fetch", "--filter=blob:none", "--unshallow",
+            "--no-tags", "origin", ProductConstants.RepositoryMainRef
+        };
+
+    internal static string[] BuildCheckoutArguments(
+        string sourceDirectory,
+        string selectedPublicCommit) =>
+        new[]
+        {
+            "-C", sourceDirectory, "checkout", "--detach", "--force",
+            selectedPublicCommit
+        };
+
+    internal static string[] BuildAncestryArguments(
+        string sourceDirectory,
+        string installedPublicCommit,
+        string selectedPublicCommit) =>
+        new[]
+        {
+            "-C", sourceDirectory, "merge-base", "--is-ancestor",
+            installedPublicCommit, selectedPublicCommit
+        };
+
     internal async Task PrepareExactSourceAsync(
         ToolPaths tools,
         SourceResolution resolution,
@@ -168,12 +197,20 @@ internal sealed class SourceManager
         CancellationToken cancellationToken)
     {
         ValidateResolution(resolution);
+        ProcessResult checkout = await GitNetworkAsync(tools.Git,
+            BuildCheckoutArguments(_paths.SourceDirectory,
+                resolution.PublicBaseCommit),
+            _paths.CacheDirectory, tools, progress, log, cancellationToken,
+            "Downloading exact UVSR source files",
+            $"Materializing files for {resolution.PublicBaseCommit[..7]}",
+            ValidatePartialCloneRepositoryConfiguration);
+        if (checkout.ExitCode != 0)
+            throw new InstallerException(
+                "The exact UVSR source files remained unavailable after several automatic attempts. " +
+                "Any installed UVSR version was preserved.");
+        ValidatePartialCloneRepositoryConfiguration();
         progress?.Report(new InstallerProgress("Preparing UVSR source",
-            $"Checking out {resolution.SourceCommit[..7]} and its pinned dependencies."));
-        await GitRequiredAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
-            "checkout", "--detach", "--force", resolution.PublicBaseCommit },
-            _paths.CacheDirectory,
-            tools, log, cancellationToken, "The exact UVSR source revision could not be checked out.");
+            $"Validating {resolution.SourceCommit[..7]} and its pinned dependencies."));
         await GitRequiredAsync(tools.Git, new[] { "-C", _paths.SourceDirectory,
             "clean", "-ffdqx" }, _paths.CacheDirectory, tools, log, cancellationToken,
             "The launcher-owned UVSR source cache could not be cleaned.");
@@ -198,7 +235,8 @@ internal sealed class SourceManager
             new[] { "-C", _paths.SourceDirectory, "submodule", "update", "--init",
                 "--recursive", "--force", "--depth=1" },
             _paths.CacheDirectory, tools, progress, log, cancellationToken,
-            "Downloading UVSR dependencies");
+            "Downloading UVSR dependencies",
+            "Downloading pinned dependency source");
         if (submoduleUpdate.ExitCode != 0)
             throw new InstallerException(
                 "UVSR's pinned source dependencies remained unavailable after several automatic attempts.");
@@ -936,7 +974,9 @@ internal sealed class SourceManager
         IProgress<InstallerProgress>? progress,
         InstallLog log,
         CancellationToken cancellationToken,
-        string phase)
+        string phase,
+        string attemptDetail,
+        Action? validateBeforeAttempt = null)
     {
         string[] stableArguments = arguments.ToArray();
         ProcessResult? last = null;
@@ -944,6 +984,9 @@ internal sealed class SourceManager
         for (int attempt = 1; attempt <= 4; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            validateBeforeAttempt?.Invoke();
+            progress?.Report(new InstallerProgress(phase,
+                $"{attemptDetail} (attempt {attempt} of 4)."));
             last = await GitAsync(git, stableArguments, workingDirectory,
                 tools, log, cancellationToken, forceHttp11);
             if (last.ExitCode == 0 || !IsTransientNetworkFailure(last))
@@ -989,6 +1032,23 @@ internal sealed class SourceManager
     internal static bool ContainsHttp2Failure(ProcessResult result) =>
         (result.StandardError + "\n" + result.StandardOutput).Contains(
             "HTTP/2", StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IndicatesIgnoredObjectFilter(ProcessResult result)
+    {
+        string text = result.StandardError + "\n" + result.StandardOutput;
+        return text.Contains("filtering not recognized by server",
+                   StringComparison.OrdinalIgnoreCase) ||
+               text.Contains("server does not support filter",
+                   StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static void RejectIgnoredObjectFilter(ProcessResult result)
+    {
+        if (IndicatesIgnoredObjectFilter(result))
+            throw new InstallerException(
+                "GitHub did not honor the launcher's required filtered UVSR source request. " +
+                "The installed version was preserved; try again after GitHub source access recovers.");
+    }
 
     private static string SummarizeNetworkFailure(ProcessResult result)
     {
@@ -1141,7 +1201,91 @@ internal sealed class SourceManager
         }
     }
 
-    internal void WriteSafeRepositoryConfig()
+    internal void ValidatePartialCloneRepositoryConfiguration()
+    {
+        string gitDirectory = Path.Combine(_paths.SourceDirectory, ".git");
+        if (!Directory.Exists(gitDirectory))
+            throw new InstallerException(
+                "The managed UVSR partial source repository is missing.");
+        SafePaths.RejectReparsePathChain(gitDirectory, "managed UVSR Git data");
+        string configPath = Path.Combine(gitDirectory, "config");
+        SafePaths.RejectReparsePathChain(configPath, "managed UVSR Git configuration");
+        if (!File.Exists(configPath))
+            throw new InstallerException(
+                "The managed UVSR partial source configuration is missing.");
+
+        Dictionary<string, string> actual = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> sections = new(StringComparer.Ordinal);
+        string? section = null;
+        foreach (string rawLine in File.ReadAllLines(configPath))
+        {
+            string line = rawLine.Trim();
+            if (line.Length == 0)
+                continue;
+            if (line.StartsWith('[') && line.EndsWith(']'))
+            {
+                string parsedSection = line switch
+                {
+                    "[core]" => "core",
+                    "[remote \"origin\"]" => "remote.origin",
+                    _ => throw new InstallerException(
+                        "The managed UVSR partial source configuration contains an unsupported section.")
+                };
+                if (!sections.Add(parsedSection))
+                    throw new InstallerException(
+                        "The managed UVSR partial source configuration contains a duplicate section.");
+                section = parsedSection;
+                continue;
+            }
+            int separator = line.IndexOf('=');
+            if (section is null || separator <= 0 || separator == line.Length - 1)
+                throw new InstallerException(
+                    "The managed UVSR partial source configuration is malformed.");
+            string key = section + "." + line[..separator].Trim();
+            string value = line[(separator + 1)..].Trim();
+            if (!actual.TryAdd(key, value))
+                throw new InstallerException(
+                    "The managed UVSR partial source configuration contains a duplicate setting.");
+        }
+
+        Dictionary<string, string> expected = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["core.repositoryformatversion"] = "1",
+            ["core.filemode"] = "false",
+            ["core.bare"] = "false",
+            ["core.logallrefupdates"] = "true",
+            ["core.symlinks"] = "false",
+            ["core.ignorecase"] = "true",
+            ["core.longpaths"] = "true",
+            ["remote.origin.url"] = ProductConstants.RepositoryUrl,
+            ["remote.origin.fetch"] =
+                $"+{ProductConstants.RepositoryMainRef}:refs/remotes/origin/main",
+            ["remote.origin.promisor"] = "true",
+            ["remote.origin.partialclonefilter"] = "blob:none"
+        };
+        if (actual.Count != expected.Count || expected.Any(pair =>
+                !actual.TryGetValue(pair.Key, out string? value) ||
+                !string.Equals(value, pair.Value, StringComparison.Ordinal)))
+            throw new InstallerException(
+                "The managed UVSR partial source configuration did not match the exact public GitHub origin and blobless filter contract.");
+
+        string objectsInfo = Path.Combine(gitDirectory, "objects", "info");
+        SafePaths.RejectReparsePathChain(objectsInfo,
+            "managed UVSR partial object metadata");
+        SafePaths.RejectReparsePathChain(Path.Combine(gitDirectory, "info"),
+            "managed UVSR Git information");
+        SafePaths.RejectReparsePathChain(Path.Combine(gitDirectory, "refs"),
+            "managed UVSR Git references");
+        if (File.Exists(Path.Combine(objectsInfo, "alternates")) ||
+            File.Exists(Path.Combine(objectsInfo, "http-alternates")) ||
+            File.Exists(Path.Combine(gitDirectory, "info", "grafts")) ||
+            File.Exists(Path.Combine(gitDirectory, "info", "attributes")) ||
+            Directory.Exists(Path.Combine(gitDirectory, "refs", "replace")))
+            throw new InstallerException(
+                "The managed UVSR partial source repository contains unsupported alternate or replacement object metadata.");
+    }
+
+    internal void WriteSafeRepositoryConfig(bool partialClone = false)
     {
         string gitDirectory = Path.Combine(_paths.SourceDirectory, ".git");
         if (!Directory.Exists(gitDirectory))
@@ -1150,7 +1294,7 @@ internal sealed class SourceManager
         string config = Path.Combine(gitDirectory, "config");
         string contents =
             "[core]\n" +
-            "\trepositoryformatversion = 0\n" +
+            $"\trepositoryformatversion = {(partialClone ? 1 : 0)}\n" +
             "\tfilemode = false\n" +
             "\tbare = false\n" +
             "\tlogallrefupdates = true\n" +
@@ -1159,7 +1303,10 @@ internal sealed class SourceManager
             "\tlongpaths = true\n" +
             "[remote \"origin\"]\n" +
             $"\turl = {ProductConstants.RepositoryUrl}\n" +
-            $"\tfetch = +{ProductConstants.RepositoryMainRef}:refs/remotes/origin/main\n";
+            $"\tfetch = +{ProductConstants.RepositoryMainRef}:refs/remotes/origin/main\n" +
+            (partialClone
+                ? "\tpromisor = true\n\tpartialclonefilter = blob:none\n"
+                : string.Empty);
         string temporary = config + $".{Guid.NewGuid():N}.tmp";
         try
         {

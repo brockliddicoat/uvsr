@@ -10,6 +10,12 @@ internal static class NativeMethods
     private const byte VerNtWorkstation = 1;
     private const uint TokenQuery = 0x0008;
     private const int TokenElevation = 20;
+    private const ushort Pe32OptionalHeaderMagic = 0x010B;
+    private const ushort Pe32PlusOptionalHeaderMagic = 0x020B;
+    private const uint PeSignature = 0x00004550;
+    private const uint MinimumSecurityDirectoryCount = 5;
+    private const uint MaximumSupportedDataDirectoryCount = 16;
+    internal const int TrustENoSignature = unchecked((int)0x800B0100);
     private static readonly Guid WintrustActionGenericVerifyV2 =
         new("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
 
@@ -129,6 +135,144 @@ internal static class NativeMethods
 
     internal static void VerifyAuthenticodeSignature(string path)
     {
+        int result = GetAuthenticodeTrustStatus(path);
+        if (result != 0)
+            throw new InstallerException(
+                "The downloaded program did not have a valid Windows signature.");
+    }
+
+    internal static void VerifyLauncherIsAuthenticodeUnsigned(string path)
+    {
+        InspectLauncherCertificateTable(path, verifyWindowsTrust: true);
+    }
+
+    internal static void VerifyNoPeCertificateTable(string path)
+    {
+        InspectLauncherCertificateTable(path, verifyWindowsTrust: false);
+    }
+
+    internal static void RequireUnsignedLauncherAuthenticodeStatus(int result)
+    {
+        if (result == TrustENoSignature)
+            return;
+        if (result == 0)
+            throw new InstallerException(
+                "The launcher update executable unexpectedly had an Authenticode " +
+                "signature. UVSR accepts only the exact unsigned release bytes " +
+                "authenticated by its update feed.");
+        throw new InstallerException(
+            $"The launcher update executable did not have the required Windows " +
+            $"NotSigned status (HRESULT = 0x{unchecked((uint)result):X8}). It may " +
+            "be signed, malformed, or altered.");
+    }
+
+    private static void InspectLauncherCertificateTable(
+        string path,
+        bool verifyWindowsTrust)
+    {
+        try
+        {
+            using FileStream stream = new(path, FileMode.Open, FileAccess.Read,
+                FileShare.Read);
+            VerifyNoPeCertificateTable(stream);
+            if (verifyWindowsTrust)
+                RequireUnsignedLauncherAuthenticodeStatus(
+                    GetAuthenticodeTrustStatus(path));
+        }
+        catch (InstallerException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+                                   EndOfStreamException)
+        {
+            throw new InstallerException(
+                "The launcher update executable could not be inspected as a complete Windows PE file.",
+                ex);
+        }
+    }
+
+    private static void VerifyNoPeCertificateTable(FileStream stream)
+    {
+        if (stream.Length < 0x40)
+            throw new InstallerException(
+                "The launcher update executable had a truncated DOS header.");
+        using BinaryReader reader = new(stream, System.Text.Encoding.UTF8,
+            leaveOpen: true);
+        if (reader.ReadUInt16() != 0x5A4D)
+            throw new InstallerException(
+                "The launcher update executable did not have a valid DOS header.");
+        stream.Position = 0x3C;
+        int peOffset = reader.ReadInt32();
+        long optionalHeaderStart = (long)peOffset + 24;
+        if (peOffset < 0x40 || optionalHeaderStart > stream.Length)
+            throw new InstallerException(
+                "The launcher update executable had an invalid PE header offset.");
+
+        stream.Position = peOffset;
+        if (reader.ReadUInt32() != PeSignature)
+            throw new InstallerException(
+                "The launcher update executable did not have a valid PE signature.");
+        stream.Position = (long)peOffset + 20;
+        ushort optionalHeaderSize = reader.ReadUInt16();
+        long optionalHeaderEnd = optionalHeaderStart + optionalHeaderSize;
+        if (optionalHeaderEnd < optionalHeaderStart ||
+            optionalHeaderEnd > stream.Length)
+            throw new InstallerException(
+                "The launcher update executable had a truncated optional header.");
+
+        stream.Position = optionalHeaderStart;
+        ushort magic = reader.ReadUInt16();
+        int directoryCountOffset;
+        int dataDirectoriesOffset;
+        int minimumOptionalHeaderSize;
+        switch (magic)
+        {
+            case Pe32OptionalHeaderMagic:
+                directoryCountOffset = 0x5C;
+                dataDirectoriesOffset = 0x60;
+                minimumOptionalHeaderSize = 0x88;
+                break;
+            case Pe32PlusOptionalHeaderMagic:
+                directoryCountOffset = 0x6C;
+                dataDirectoriesOffset = 0x70;
+                minimumOptionalHeaderSize = 0x98;
+                break;
+            default:
+                throw new InstallerException(
+                    $"The launcher update executable used unsupported PE optional-header " +
+                    $"magic 0x{magic:X4}.");
+        }
+        if (optionalHeaderSize < minimumOptionalHeaderSize)
+            throw new InstallerException(
+                "The launcher update executable optional header was too small for its Certificate Table.");
+
+        stream.Position = optionalHeaderStart + directoryCountOffset;
+        uint directoryCount = reader.ReadUInt32();
+        if (directoryCount is < MinimumSecurityDirectoryCount or
+            > MaximumSupportedDataDirectoryCount)
+            throw new InstallerException(
+                $"The launcher update executable declared an unsupported PE data-directory count " +
+                $"of {directoryCount}.");
+        long requiredOptionalHeaderSize = dataDirectoriesOffset +
+                                          directoryCount * 8L;
+        if (requiredOptionalHeaderSize > optionalHeaderSize)
+            throw new InstallerException(
+                "The launcher update executable data directories exceeded its optional header.");
+
+        const int securityDirectoryIndex = 4;
+        stream.Position = optionalHeaderStart + dataDirectoriesOffset +
+                          securityDirectoryIndex * 8L;
+        uint certificateFileOffset = reader.ReadUInt32();
+        uint certificateSize = reader.ReadUInt32();
+        if (certificateFileOffset != 0 || certificateSize != 0)
+            throw new InstallerException(
+                "The launcher update executable contained Certificate Table metadata. " +
+                "UVSR accepts only an unsigned PE with a zero Certificate Table offset and size.");
+    }
+
+    private static int GetAuthenticodeTrustStatus(string path)
+    {
         IntPtr filePath = IntPtr.Zero;
         IntPtr fileInfoPointer = IntPtr.Zero;
         IntPtr dataPointer = IntPtr.Zero;
@@ -155,59 +299,14 @@ internal static class NativeMethods
             };
             dataPointer = Marshal.AllocCoTaskMem(Marshal.SizeOf<WintrustData>());
             Marshal.StructureToPtr(data, dataPointer, false);
-            int result = WinVerifyTrust(IntPtr.Zero, WintrustActionGenericVerifyV2, dataPointer);
-            if (result != 0)
-                throw new InstallerException("The downloaded program did not have a valid Windows signature.");
-        }
-        catch (InstallerException)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is CryptographicException or IOException)
-        {
-            throw new InstallerException("The downloaded program signature could not be verified.", ex);
+            return WinVerifyTrust(IntPtr.Zero, WintrustActionGenericVerifyV2,
+                dataPointer);
         }
         finally
         {
             if (dataPointer != IntPtr.Zero) Marshal.FreeCoTaskMem(dataPointer);
             if (fileInfoPointer != IntPtr.Zero) Marshal.FreeCoTaskMem(fileInfoPointer);
             if (filePath != IntPtr.Zero) Marshal.FreeCoTaskMem(filePath);
-        }
-    }
-
-    internal static void VerifyLauncherPublisherSignature(string path)
-    {
-        if (!ProductConstants.HashRegex().IsMatch(
-                ProductConstants.LauncherPublisherSpkiSha256))
-            throw new InstallerException(
-                "UVSR Launcher updates are not enabled for this unsigned preview build.");
-        VerifyAuthenticodeSignature(path);
-        try
-        {
-#pragma warning disable SYSLIB0057 // Authenticode signer extraction has no loader replacement for PE files.
-            using X509Certificate2 certificate = new(X509Certificate.CreateFromSignedFile(path));
-#pragma warning restore SYSLIB0057
-            using AsymmetricAlgorithm key =
-                (AsymmetricAlgorithm?)certificate.GetRSAPublicKey() ??
-                certificate.GetECDsaPublicKey() ??
-                throw new InstallerException(
-                    "The launcher publisher used an unsupported signing key.");
-            string actual = Convert.ToHexString(
-                SHA256.HashData(key.ExportSubjectPublicKeyInfo())).ToLowerInvariant();
-            if (!CryptographicOperations.FixedTimeEquals(
-                    Convert.FromHexString(ProductConstants.LauncherPublisherSpkiSha256),
-                    Convert.FromHexString(actual)))
-                throw new InstallerException(
-                    "The launcher update was signed by an unexpected publisher.");
-        }
-        catch (InstallerException)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is CryptographicException or IOException)
-        {
-            throw new InstallerException(
-                "The launcher publisher signature could not be verified.", ex);
         }
     }
 }
