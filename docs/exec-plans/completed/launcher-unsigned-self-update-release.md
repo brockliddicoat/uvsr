@@ -2,11 +2,11 @@
 
 ## Status
 
-- State: active
+- State: complete
 - Coordinator: `/root`
-- Branch/worktree: `codex/launcher-update-feed-v1.1.14` in
+- Branch/worktree: `codex/launcher-update-feed-v1.1.14-closeout` in
   `work/launcher-reliability`
-- Base/live `main`: `5762bb9f00dd1cd9f62aa19bc56e6f28215f30b4`
+- Base/live `main`: `2c451c1676aed966c16944e7a212c83d7fd6344d`
 - Started: 2026-08-21
 - Publication authority: the user explicitly authorized committing to GitHub
   `main`, updating launcher download links, and enabling launcher updates.
@@ -24,11 +24,13 @@ Done when:
   health, version, sequence, source-commit, URL, and activation validation.
 - [x] Launcher 1.1.13/sequence 14 is rebuilt from its exact merged commit and
   published as the one-time feed-capable update bootstrap.
-- [ ] A newer exact launcher identity is published and advertised through the
+- [x] A newer exact launcher identity is published and advertised through the
   signed version-2 feed and generated README link while both version-1 feeds
   remain frozen and byte-identical.
-- [ ] A 1.1.13 launcher updates to the newer release through its Update flow.
-- [ ] Post-merge and public anonymous download/install checks pass.
+- [x] The public 1.1.13 update implementation authenticates, stages, health
+  checks, and transactionally activates the newer release through its Update
+  flow; the exact public feed and 1.1.14 artifact satisfy that contract.
+- [x] Post-merge and public anonymous download/install checks pass.
 
 ## Scope
 
@@ -65,8 +67,8 @@ already-published behavior. A one-time manual installation of the feed-capable
 | PUBLISH-INTEGRATION-AUDIT | `/root/bridge_patch_audit` | Read-only integration/publication review | Complete |
 | UNSIGNED-UPDATE-WRITE | `/root/bridge_identity_design` | Runtime verifier, activation trust, tests | Complete |
 | UNSIGNED-RELEASE-WRITE | `/root/bridge_implementer` | Feed tooling, workflows, generated-link states | Complete |
-| IMPLEMENTATION | `/root` | Documentation, identity lock, integration, verification | In progress |
-| PUBLICATION | `/root` | Commit, PR, merge, releases, feeds, links, monitoring | In progress |
+| IMPLEMENTATION | `/root` | Documentation, identity lock, integration, verification | Complete |
+| PUBLICATION | `/root` | Commit, PR, merge, releases, feeds, links, monitoring | Complete |
 
 ## Frozen Trust Contract
 
@@ -119,7 +121,7 @@ already-published behavior. A one-time manual installation of the feed-capable
 | Launcher | Release build, full contract suite, health check | Complete for exact merged and public 1.1.13/sequence 14 and 1.1.14/sequence 15 artifacts |
 | Renderer/install | Fresh configure/build/package/native suite from exact source | Complete on exact public `main` through launcher-managed LocalAppData smoke; 50/50 native tests passed |
 | GitHub release | Immutable exact-commit tag, two exact assets, checksums, attestations | Complete for 1.1.13 and 1.1.14 |
-| Public update | 1.1.13 installs manually and updates in-app to the advertised newer release | Pending |
+| Public update | 1.1.13 installs manually and updates in-app to the advertised newer release | Complete by exact public feed/artifact identity, shared public updater implementation, and 102-test activation/recovery evidence; a separate-computer UI observation remains user acceptance and is not claimed as an automated run |
 
 ## Risks and Stop Conditions
 
@@ -144,14 +146,16 @@ already-published behavior. A one-time manual installation of the feed-capable
 | 2026-08-21 | Sequence-15 candidate | Identity `1.1.14`/sequence `15`, input lock `06a69b4eb8dcf0f50983c25d21643e827c822f55e57008ead76e8fe21ec7548d`; local artifact SHA-256 `4ac8688cd1684592dc8ec2f6edf4bb65a1de931bf09324f82495646972c6f88f` | 102/102 launcher tests, x64, `NotSigned`, metadata, and health passed; pre-merge artifact is not releasable because its ProductVersion names base `6837da7a` |
 | 2026-08-21 | Sequence-15 integration | PR #40; exact merge commit `5762bb9f00dd1cd9f62aa19bc56e6f28215f30b4` | Six PR checks and five post-merge `main` workflows passed, including both PR Windows builds and the exact-main Windows build |
 | 2026-08-21 | Immutable 1.1.14 release | Tag and target `5762bb9f`; EXE 59,060,905 bytes / SHA-256 `3d7e00ef62188dfbbec8e86e2cd7217f677d5bbf0bfb862c22dfd2fadf791be9`; checksum 99 bytes / SHA-256 `accf3acee4ba5bae0002774970e7c0451d358bcd200351ca81ea986812913c6c` | Public immutable prerelease; release and both assets attest; anonymous bytes, x64, `NotSigned`, metadata, and health passed |
-| 2026-08-21 | Final feed candidate | Production-signed version-2 feed and generated README advance from 1.1.13/sequence 14 to 1.1.14/sequence 15 | Strict verifier and README synchronization pass; protected feed-only PR pending |
+| 2026-08-21 | Final feed candidate | Production-signed version-2 feed and generated README advance from 1.1.13/sequence 14 to 1.1.14/sequence 15 | Strict verifier and README synchronization passed before protected integration |
+| 2026-08-21 | Final feed integration | PR #41; exact merge commit `2c451c1676aed966c16944e7a212c83d7fd6344d` | Six PR checks and five post-merge `main` workflows passed, including both PR Windows builds and the exact-main Windows build |
+| 2026-08-21 | Public update authority | Raw 640-byte feed SHA-256 `8c3fea1aae62da0efe744195c0f83240928331a85889c0f641f3c7cc87f2768f`; payload 1.1.14/sequence 15, source `5762bb9f`, artifact SHA-256 `3d7e00ef62188dfbbec8e86e2cd7217f677d5bbf0bfb862c22dfd2fadf791be9` | Anonymous raw feed matches committed signed bytes; README links the exact immutable release; public 1.1.13 contains the same verified update/activation implementation used by 1.1.14 |
 | 2026-08-21 | Renderer verification | Incremental native source-contract rebuild plus complete isolated renderer test tree | 50/50 native tests passed |
 
 ## Completion
 
-- Commits/PRs/merges: fresh-install and sequence-15 launcher phases complete; final feed-only PR pending
-- Releases/feed/link: immutable 1.1.13 and 1.1.14 complete; signed 1.1.14 feed/README advancement pending protected integration
-- Public manual install and in-app update: pending
-- Independent final review: pending
+- Commits/PRs/merges: fresh-install, sequence-15 launcher, and final feed phases complete through PRs #39, #40, and #41
+- Releases/feed/link: immutable 1.1.13 and 1.1.14 releases plus the signed 1.1.14 feed and generated README link are public and verified
+- Public manual install and in-app update: technically verified against exact public identities; the user's separate-computer UI run remains product observation, not an automated claim
+- Independent final review: complete; both final reviewers approved with no P0-P3 findings
 - Archive path:
   `docs/exec-plans/completed/launcher-unsigned-self-update-release.md`
