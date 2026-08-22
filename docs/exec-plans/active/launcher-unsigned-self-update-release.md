@@ -4,9 +4,9 @@
 
 - State: active
 - Coordinator: `/root`
-- Branch/worktree: `codex/launcher-unsigned-update-feed` in
+- Branch/worktree: `codex/launcher-update-feed-v1.1.14` in
   `work/launcher-reliability`
-- Base/live `main`: `6837da7ae5a5df7d27425d09a7d272f218f4bbf5`
+- Base/live `main`: `5762bb9f00dd1cd9f62aa19bc56e6f28215f30b4`
 - Started: 2026-08-21
 - Publication authority: the user explicitly authorized committing to GitHub
   `main`, updating launcher download links, and enabling launcher updates.
@@ -116,9 +116,9 @@ already-published behavior. A one-time manual installation of the feed-capable
 | --- | --- | --- |
 | Runtime trust | Unsigned-only candidate, strict feed hash/size/URL/identity/health, rollback rejection | Complete locally; 102/102 launcher tests passed |
 | Backward behavior | 1.1.12 documented as manual-bootstrap-only | Complete; generated README now advertises the feed-capable 1.1.13 bootstrap while retaining the 1.1.12 limitation |
-| Launcher | Release build, full contract suite, health check | Complete for exact merged 1.1.13/sequence 14 artifact; 1.1.14/sequence 15 pending |
+| Launcher | Release build, full contract suite, health check | Complete for exact merged and public 1.1.13/sequence 14 and 1.1.14/sequence 15 artifacts |
 | Renderer/install | Fresh configure/build/package/native suite from exact source | Complete on exact public `main` through launcher-managed LocalAppData smoke; 50/50 native tests passed |
-| GitHub release | Immutable exact-commit tag, two exact assets, checksums, attestations | Complete for 1.1.13; 1.1.14 pending |
+| GitHub release | Immutable exact-commit tag, two exact assets, checksums, attestations | Complete for 1.1.13 and 1.1.14 |
 | Public update | 1.1.13 installs manually and updates in-app to the advertised newer release | Pending |
 
 ## Risks and Stop Conditions
@@ -142,12 +142,15 @@ already-published behavior. A one-time manual installation of the feed-capable
 | 2026-08-21 | Immutable 1.1.13 release | Tag and target `6837da7a`; EXE 59,060,884 bytes / SHA-256 `3b0e9c5826b03fa78288541b11bc6d2a5d745e450597b110d9d1b4d65be223d5`; checksum 99 bytes / SHA-256 `79deef75cd2ec275146ea93b475ef6a5a36e3958e2089059d30a52aa661de949` | Public immutable prerelease; release and both assets attest; anonymous bytes, x64, `NotSigned`, metadata, and health passed |
 | 2026-08-21 | Feed signer repair | Production round trip exposed positional array splatting in the new signer | Replaced with named hashtable splatting and added a regression before creating the first production feed |
 | 2026-08-21 | Sequence-15 candidate | Identity `1.1.14`/sequence `15`, input lock `06a69b4eb8dcf0f50983c25d21643e827c822f55e57008ead76e8fe21ec7548d`; local artifact SHA-256 `4ac8688cd1684592dc8ec2f6edf4bb65a1de931bf09324f82495646972c6f88f` | 102/102 launcher tests, x64, `NotSigned`, metadata, and health passed; pre-merge artifact is not releasable because its ProductVersion names base `6837da7a` |
+| 2026-08-21 | Sequence-15 integration | PR #40; exact merge commit `5762bb9f00dd1cd9f62aa19bc56e6f28215f30b4` | Six PR checks and five post-merge `main` workflows passed, including both PR Windows builds and the exact-main Windows build |
+| 2026-08-21 | Immutable 1.1.14 release | Tag and target `5762bb9f`; EXE 59,060,905 bytes / SHA-256 `3d7e00ef62188dfbbec8e86e2cd7217f677d5bbf0bfb862c22dfd2fadf791be9`; checksum 99 bytes / SHA-256 `accf3acee4ba5bae0002774970e7c0451d358bcd200351ca81ea986812913c6c` | Public immutable prerelease; release and both assets attest; anonymous bytes, x64, `NotSigned`, metadata, and health passed |
+| 2026-08-21 | Final feed candidate | Production-signed version-2 feed and generated README advance from 1.1.13/sequence 14 to 1.1.14/sequence 15 | Strict verifier and README synchronization pass; protected feed-only PR pending |
 | 2026-08-21 | Renderer verification | Incremental native source-contract rebuild plus complete isolated renderer test tree | 50/50 native tests passed |
 
 ## Completion
 
-- Commits/PRs/merges: fresh-install/1.1.13 phase complete; sequence-15 PR pending
-- Releases/feed/link: immutable 1.1.13 and its signed feed/README candidate complete; 1.1.14 publication and feed advancement pending
+- Commits/PRs/merges: fresh-install and sequence-15 launcher phases complete; final feed-only PR pending
+- Releases/feed/link: immutable 1.1.13 and 1.1.14 complete; signed 1.1.14 feed/README advancement pending protected integration
 - Public manual install and in-app update: pending
 - Independent final review: pending
 - Archive path:

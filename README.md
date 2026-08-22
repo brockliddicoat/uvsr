@@ -107,18 +107,18 @@ pinned P-256 key, then independently verify the exact immutable release,
 executable hash, identity, architecture, and health result.
 
 <!-- uvsr-launcher-download:start -->
-> [Download Unsigned UVSR Launcher v1.1.13 (unsigned; signed-feed updates)](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.1.13/UVSR-Launcher-Windows-11-x64.exe)
+> [Download Unsigned UVSR Launcher v1.1.14 (unsigned; signed-feed updates)](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.1.14/UVSR-Launcher-Windows-11-x64.exe)
 >
-> [SHA-256 checksum](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.1.13/UVSR-Launcher-Windows-11-x64.exe.sha256)
+> [SHA-256 checksum](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.1.14/UVSR-Launcher-Windows-11-x64.exe.sha256)
 >
 > Not Authenticode-signed. Windows may warn. Launcher updates are authorized by UVSR’s pinned signed feed and exact immutable release identity.
 <!-- uvsr-launcher-download:end -->
 
 Opening the unsigned bootstrap starts the launcher. Its shortcut is selected by
 default, transient downloads resume or retry safely, and Update can install or
-repair UVSR Engine. Install 1.1.13 manually once because 1.1.12 cannot update
-itself; after that, Update can install newer authenticated unsigned launcher
-releases.
+repair UVSR Engine. Install the current feed-capable launcher manually once
+because 1.1.12 cannot update itself; after that, Update can install newer
+authenticated unsigned launcher releases.
 
 The feed-capable launcher line uses these checked addresses:
 

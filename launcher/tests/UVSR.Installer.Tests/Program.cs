@@ -3063,19 +3063,20 @@ internal static class Program
             File.ReadAllBytes(updateFeedPath));
         Assert(updateFeed.ProductId == ProductConstants.ProductId);
         Assert(updateFeed.Channel == "stable");
-        Assert(updateFeed.ReleaseSequence == 14);
-        Assert(updateFeed.Version == "1.1.13");
+        Assert(updateFeed.ReleaseSequence == 15);
+        Assert(updateFeed.Version == "1.1.14");
         Assert(updateFeed.SourceCommit ==
-               "6837da7ae5a5df7d27425d09a7d272f218f4bbf5");
+               "5762bb9f00dd1cd9f62aa19bc56e6f28215f30b4");
         Assert(updateFeed.Artifact.Name == ProductConstants.LauncherArtifactName);
-        Assert(updateFeed.Artifact.Size == 59_060_884);
+        Assert(updateFeed.Artifact.Size == 59_060_905);
         Assert(updateFeed.Artifact.Sha256 ==
-               "3b0e9c5826b03fa78288541b11bc6d2a5d745e450597b110d9d1b4d65be223d5");
+               "3d7e00ef62188dfbbec8e86e2cd7217f677d5bbf0bfb862c22dfd2fadf791be9");
         Assert(LauncherManager.BuildArtifactUri(updateFeed).AbsoluteUri ==
                "https://github.com/brockliddicoat/uvsr/releases/download/" +
-               "uvsr-launcher-v1.1.13/UVSR-Launcher-Windows-11-x64.exe");
-        Assert(ProductConstants.LauncherReleaseSequence >
+               "uvsr-launcher-v1.1.14/UVSR-Launcher-Windows-11-x64.exe");
+        Assert(ProductConstants.LauncherReleaseSequence ==
                updateFeed.ReleaseSequence);
+        Assert(ProductConstants.LauncherVersion == updateFeed.Version);
 
         string legacyFixturePath = Path.Combine(root, "launcher", "tests",
             "fixtures", "launcher-feed-public-legacy-v1.json");
