@@ -1,16 +1,21 @@
 ![UVSR Engine banner](assets/branding/uvsr-banner.png)
 
+# UVSR
+
 **Unified Visibility Stochastic Rendering Engine**
 
-[![License: polyform noncommercial](https://img.shields.io/badge/license-polyform_noncommercial-8250DF?style=flat-square)](LICENSE.md)
+[![License: Polyform Noncommercial](https://img.shields.io/badge/license-polyform_noncommercial-8250DF?style=flat-square)](LICENSE.md)
 [![Engineering Docs](https://img.shields.io/badge/docs-engineering-238636?style=flat-square&logo=readthedocs&logoColor=white)](#engineering-documentation)
 ![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C?style=flat-square&logo=cplusplus&logoColor=white)
 ![HLSL](https://img.shields.io/badge/HLSL-shaders-C62828?style=flat-square&logo=microsoft&logoColor=white)
 
-UVSR is a focused DirectX 12 research renderer built on NVIDIA's pinned Donut
-framework and NVRHI. It ships with five ready-to-run research scenes, a
-production-focused deferred PBR path, and independently testable visibility,
-anti-aliasing, shadow, and diagnostic systems.
+UVSR is a focused C++17 and HLSL renderer for real-time visibility, lighting,
+and anti-aliasing research. The current product uses DirectX 12, ImGui, and
+pinned NVIDIA Donut and NVRHI dependencies.
+
+This revision builds the renderer as `uvsr.exe`. Its public launcher installs
+UVSR by building renderer source locally; it does not install a prebuilt
+renderer package.
 
 <!-- uvsr-codebase-size:start -->
 **First-Party Lines of Code:** 131,798 non-blank source lines.
@@ -27,84 +32,61 @@ with `tools/update_readme_line_counts.cmd --write`.
 
 ## Renderer Highlights
 
-- **Visibility Bitmask Diffuse Lighting:** A 32-sector mask converts finite-thickness
-  screen-space samples into ambient visibility and one-bounce diffuse
-  transport; newly claimed sectors prevent double-counting.
-- **Shared DXR Transport:** Material-aware inline ray queries drive selective
-  sun, sky, and flashlight visibility plus zero-raster complete path transport
-  through the same alpha-tested world representation.
-- **Configurable Path Tracing:** A Realtime Path Tracer plus first-party
-  clean-room Reservoir Path Tracer seed replay and bounded Reservoir Indirect
-  Lighting rough diffuse-tail reconnection
-  share one Lambert/GGX transport core with NEE, emissive and environment
-  paths, one-to-eight fresh samples per pixel, independently controlled
-  temporal and previous-frame spatial reuse, progressive accumulation, an
-  optional direct reservoir, and transport debug views. A full-resolution
-  Shared Primary Surface can split the direct baseline from indirect transport
-  and provide validated ray-traced depth and motion to TAA, avoiding coarse
-  disocclusion blocks. The ReSTIR subsets do not claim complete NVIDIA
-  namesake or arbitrary full-path reconnection parity.
-- **Ratio Estimators:** Correlated visible and unshadowed RGB responses reduce
-  current-frame ray-traced sun-shadow variance across covered 1x-16x raster
-  receivers; Multisample Adaptive can instead reuse the closest receiver as an
-  explicit lower-cost shadow approximation. Sky visibility separately uses a
-  1-64-sample cosine-hemisphere visible-ray ratio for environment lighting.
-- **Deferred PBR:** A packed G-buffer feeds material-aware lighting, SH9 diffuse
-  IBL, and prefiltered GGX specular IBL; median-luminance exposure feeds AgX.
-- **Composable Anti-Aliasing:** Deferred 2x-16x MSAA, TAA with Filament and
-  Sobol jitter, and display-linear Fast Approximate AA can be combined.
-- **Noise Research Stack:** Deterministic white, blue, and 64-layer
-  spatiotemporal blue-noise textures support global and per-effect sampling.
-- **Physical Diagnostic Flashlight:** A dedicated scene spot light uses shared
-  runtime profile data for its two-lobe beam and finite-emitter ray-traced
-  shadows; photometry, color, shape, emitter size, collision-aware mount, and
-  motion are tunable.
-- **Shared Ray Representation:** One BLAS/TLAS system and master traversal gate
-  serve every ray-query effect without erasing individual settings.
-- **Explicit Lighting Gates:** Ambient Fill and contribution gates make direct
-  and environment composition inspectable without hidden fallback lighting.
-- **Composable Debugging:** Lighting, visibility, buffer inspection, and
-  thread/wave diagnostics remain independently selectable.
-- **Deterministic Verification:** Reference tests and source contracts cover
-  estimators, noise, PBR, anti-aliasing, resources, and the packaged shader
-  bundle.
-- **Authored Interface:** A detached, continuously framed Performance panel,
-  headerless timing tables, an initially open Accumulate Samples section,
-  configurable Amp skin, Material and Interface drawers, deferred dropdowns,
-  exact-input sliders, and slash commands share one animated presentation; Ogg
-  keeps stock ImGui behavior and immediate endpoints.
-- **Compact Runtime Surface:** The build retains 311 first-party shader
-  permutations in 48 staged shader binaries, fourteen Settings drawers, and
-  221 commands without dormant experiments.
-- **Five Packaged Scenes:** Sponza Decorated, Sponza Plain, Bistro Interior,
-  San Miguel, and Classroom Interior ship ready-to-run; Bistro and San Miguel
-  copy glTF buffer views byte-for-byte into standard external buffers below
-  GitHub's per-file limit, with no runtime reconstruction.
-- **Extensive Documentation:** The [engineering library](#engineering-documentation)
-  records architecture, equations, validation, provenance, negative results,
-  and restoration boundaries.
+- A deferred PBR path combines a packed G-buffer, material-aware lighting,
+  diffuse and specular image-based lighting, automatic exposure, and AgX
+  display mapping.
+- Screen-space visibility provides ambient occlusion and one-bounce diffuse
+  illumination. The current tree also contains Realtime Path Tracer, Reservoir
+  Path Tracer, and Reservoir Indirect Lighting modes.
+- Shared inline ray queries support sun shadows, ray-traced sky visibility, and
+  the flashlight's finite-emitter shadows.
+- Deferred 2x, 4x, 8x, and 16x MSAA can be combined with temporal AA and the
+  current spatial anti-aliasing options.
+- White noise, blue noise, and 64-layer spatiotemporal blue-noise assets support
+  per-effect sampling. Six HDR environments provide sky lighting.
+- Five staged scenes are available: Sponza Decorated, Sponza Plain, Bistro
+  Interior, San Miguel, and Classroom Interior.
+- ImGui exposes renderer settings, commands, timing, buffer inspection, and
+  lighting and visibility diagnostics.
 
-## Install on Windows 11
+## Requirements
 
-UVSR Launcher is a self-contained Windows 11 x64 application for people who do
-not have a preconfigured build environment. It downloads and verifies what UVSR
-needs, builds the newest public `main`, and provides Install, Update, Launch, and
-Uninstall from one user-facing window. Install also offers Launch or Reinstall
-when UVSR is already present.
+The supported public path is 64-bit Windows 11. A manual build needs:
 
-## Launcher Availability
+- a hardware DirectX 12 adapter supporting Shader Model 6.5 and a current
+  driver; ray-query effects additionally require DXR 1.1 support;
+- CMake 3.24 or newer;
+- Visual Studio 2022 with the Desktop development with C++ workload and a
+  Windows SDK; and
+- Git with submodule support.
 
-The launcher flow is intended to handle prerequisites, build the newest public
-`main`, and keep launcher updates separate from the renderer installation. The
-legacy sequence-2 launcher cannot build the current
-minimum-sequence-4 renderer source, so it must not be used for a fresh
-installation.
+UVSR activates its packaged Direct3D Agility runtime. The first configure may
+download pinned Microsoft graphics dependencies.
 
-The generated block below names the exact immutable unsigned Windows 11
-feed-capable bootstrap. Windows may identify it as coming from an unknown
-publisher. Launcher 1.1.13 and newer authenticate update metadata with UVSR's
-pinned P-256 key, then independently verify the exact immutable release,
-executable hash, identity, architecture, and health result.
+## Build and Test
+
+From PowerShell:
+
+```powershell
+git clone --recurse-submodules https://github.com/brockliddicoat/uvsr.git
+cd uvsr
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
+.\build\bin\uvsr.exe
+```
+
+CMake stages the executable, compiled shaders, scenes, environments, fonts, and
+notices under `build\bin`. See
+[Advanced Settings](docs/advanced-settings.md) for build variants, controls,
+commands, and the complete validation workflow.
+
+## Launcher
+
+UVSR Launcher is a self-contained Windows 11 x64 frontend for install, update,
+launch, repair, and uninstall. It downloads verified prerequisites and source,
+then builds an exact public `main` revision on the user's computer. Visual
+Studio Build Tools can require several gigabytes and administrator approval.
 
 <!-- uvsr-launcher-download:start -->
 > [Download Unsigned UVSR Launcher v1.1.14 (unsigned; signed-feed updates)](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.1.14/UVSR-Launcher-Windows-11-x64.exe)
@@ -114,114 +96,32 @@ executable hash, identity, architecture, and health result.
 > Not Authenticode-signed. Windows may warn. Launcher updates are authorized by UVSR’s pinned signed feed and exact immutable release identity.
 <!-- uvsr-launcher-download:end -->
 
-Opening the unsigned bootstrap starts the launcher. Its shortcut is selected by
-default, transient downloads resume or retry safely, and Update can install or
-repair UVSR Engine. Install the current feed-capable launcher manually once
-because 1.1.12 cannot update itself; after that, Update can install newer
-authenticated unsigned launcher releases.
-
-The feed-capable launcher line uses these checked addresses:
-
-- `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-update-feed-v2.json`
-- `https://api.github.com/repos/brockliddicoat/uvsr/git/ref/heads/main`
-- `https://raw.githubusercontent.com/brockliddicoat/uvsr/<commit>/cmake/uvsr-launcher-build-contract-v1.json`
-- The exact immutable versioned GitHub Release asset named by the authenticated
-  feed payload. There is no mutable latest-release fallback.
-
-The version-2 feed is a strict signed-metadata envelope; its decoded payload
-binds the product, stable channel, monotonically increasing release sequence,
-semantic version, exact source commit, filename, size, and SHA-256. The
-launcher executable remains explicitly unsigned, so Windows may warn, but
-repository content or an unsigned mutable JSON edit cannot authorize an update
-without the separately pinned update key.
-
-The retained version-1 files are frozen compatibility endpoints for older
-launchers. The legacy
-`https://raw.githubusercontent.com/brockliddicoat/uvsr/main/installer/launcher-feed-v1.json`
-address remains byte-identical to
-`https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/launcher-feed-v1.json`
-for already-released launchers that compiled either path into their executable.
-
-The update dialog and copied details include the exact checked URL, launcher
-versions and release sequences, and the specific schema, identity, HTTP, or
-connection failure. Persistent logs are under
-`%LOCALAPPDATA%\UVSR Installer\logs`; the [launcher guide](launcher/README.md#update-check-diagnostics)
-explains each result and recovery path.
-
-The first source build may take several minutes and may ask for administrator
-approval for Microsoft's signed C++ Build Tools setup; UVSR source and build
-commands always remain unelevated. See the [launcher guide](launcher/README.md)
-for its exact trust, ownership, recovery, and public-release contracts.
-
-## Build and Run
-
-Requires Windows with a hardware DirectX 12 Shader Model 6.5-capable GPU and
-current driver, CMake 3.31 or newer, Visual Studio with a C++17-capable MSVC
-toolchain, and Git with submodule support. UVSR activates and verifies its
-packaged stable Direct3D Agility runtime rather than depending on the machine's
-inbox runtime. Configure, build every Release target, run the deterministic
-tests, and open the persistent launcher menu from PowerShell:
-
-```powershell
-git clone --recurse-submodules https://github.com/brockliddicoat/uvsr.git
-cd uvsr
-cmake -S . -B build
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
-.\LaunchUVSR.cmd -Menu
-```
-
-Press `1` to launch `uvsr.exe` or `2` to select it in File Explorer. The menu
-reports whether Windows accepted each request and then presents both choices
-again, so it remains available after the renderer closes.
-
-The first configure may download Microsoft's Direct3D 12 Agility SDK. Optional
-build variants and the complete validation workflow are documented below.
+The bootstrap remains unsigned, so an authenticated update feed does not remove
+Windows' unknown-publisher warning. Use the exact current download above rather
+than an older bootstrap. The [launcher guide](launcher/README.md) documents its
+source-build flow, trust boundary, recovery behavior, and development checks.
 
 ## Engineering Documentation
 
-- [Complete Control Scheme and Developer Workflows](docs/advanced-settings.md)
-  covers the full control scheme, Settings drawers, command interface, build
-  variants, and validation flows.
-- [PBR Foundation](docs/pbr-foundation.md) defines material inputs, G-buffer
-  packing, lighting equations, IBL, contribution gates, validation, and
-  extension points.
-- [Path Tracing Transport](docs/path-tracing-transport.md) defines the supported
-  complete-transport boundary, shared integrator, solver policies, accumulation,
-  history invalidation, denoising, capability gates, and extension rules.
-- [Screen Space Visibility](docs/screen-space-visibility.md) documents the
-  shared diffuse traversal, estimators, reconstruction, memory contracts,
-  supported quality profiles, and validation boundary.
-- [Ratio Estimation](docs/ratio-estimation.md) distinguishes correlated sun
-  shadow estimation from the sky visible-ray ratio and documents their
-  sampling, single-ray routes, ray safety, composition, and limits.
-- [Noise Sampling and Asset Provenance](docs/noise.md) defines global
-  inheritance, effect overrides, precomputed assets, centered sampling,
-  temporal progression, and provenance.
-- [Temporal Aliasing Options](docs/temporal-aa-options.md) defines temporal,
-  fast approximate, and multisample composition, history behavior, and
-  coordinate conventions.
-- [Engine Cutdown Archive](docs/postmortem/engine-cutdowns/README.md) keeps the
-  dated shader and renderer cutdown reports, their measurements, complete
-  removal inventories, and restoration boundaries.
-- [Visibility Estimator Validation](docs/visibility-estimator-validation.md)
-  records the shared C++/HLSL measure contracts and deterministic fixtures.
-- [GPU Clock Normalization](docs/performance/gpu-clock-normalization.md)
-  describes an advisory same-GPU trend estimate while preserving raw clean-run
-  GPU time as the official score.
-- [Environment Catalog](assets/environments/README.md) lists imported HDR
-  radiance sources, hashes, licenses, and calibrated default exposures.
-- [Experiment Postmortems](docs/postmortem/) preserve retired work, negative
-  results, reusable evidence, and explicit restart conditions.
+- [Screen-Space Visibility](docs/screen-space-visibility.md) and
+  [Ratio Estimation](docs/ratio-estimation.md) define visibility and shadow
+  algorithms.
+- [PBR Foundation](docs/pbr-foundation.md) and
+  [Path-Tracing Transport](docs/path-tracing-transport.md) define lighting and
+  transport contracts.
+- [Temporal Aliasing Options](docs/temporal-aa-options.md) and
+  [Noise Sampling](docs/noise.md) cover anti-aliasing, histories, and stochastic
+  inputs.
+- [Scene Catalog](assets/scenes/README.md) and
+  [Environment Catalog](assets/environments/README.md) record packaged assets,
+  provenance, and licenses.
+- [Legal Guide](legal/README.md) records third-party notices, license scope,
+  and contributor terms.
 
 ## Licensing
 
-- **Community Use:** UVSR's first-party code is source-available under the
-  [Polyform Noncommercial License](LICENSE.md). Noncommercial use and
-  modification are welcome; when sharing, preserve the license and Required
-  Notice.
-- **Commercial Use:** Commercial use or sublicensing requires a separate
-  written agreement. [Contact the UVSR project](mailto:brockliddicoat@gmail.com).
-- **Legal Details:** Third-party material remains under its own terms. See the
-  [Legal Guide](legal/README.md) for the full scope, documentation registry,
-  commercial-readiness notes, and contributor agreement.
+UVSR first-party code is source-available under the
+[Polyform Noncommercial License](LICENSE.md). Commercial use or sublicensing
+requires a separate written agreement. Third-party code and assets remain under
+their own terms; consult the [Legal Guide](legal/README.md) before
+redistribution.
