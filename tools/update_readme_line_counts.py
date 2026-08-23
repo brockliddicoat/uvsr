@@ -99,6 +99,7 @@ OVERRIDE_GROUPS = (
         ROOT / "donut" / "nvrhi",
         (
             ROOT / "overrides" / "nvrhi-stable-directx-headers.patch",
+            ROOT / "overrides" / "nvrhi-d3d12-portability.patch",
         ),
     ),
 )

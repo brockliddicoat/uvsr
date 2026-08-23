@@ -2527,10 +2527,11 @@ int main(int argc, char** argv)
     passed &= ExpectContains(
         boundedSceneUpload,
         "m_ui.Representation.allowRayTraversal &&\n"
+            "                m_BindlessLayout &&\n"
             "                ((m_ui.Lighting == LightingSolution::PathTracing &&\n"
             "                    GetPathTracingSceneDomainStatus() !=\n"
             "                        PathTracingSceneDomainStatus::Unsupported) ||",
-        "scene loading front-loads supported Path Tracing world representations");
+        "scene loading front-loads only supported bindless Path Tracing world representations");
 
     const std::string_view sceneLoaded = ExtractSection(
         viewer,

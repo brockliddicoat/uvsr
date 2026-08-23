@@ -770,11 +770,20 @@ namespace uvsr
                 ShaderMacro("UVSR_PT_RTXDI", rtxdiVariant == 0u ? "0" : "1"),
                 ShaderMacro("UVSR_PT_NEE_MODE", NeeModes[neeVariant])
             };
+            const std::string shaderDebugName =
+                "uvsr/path_tracing_cs.hlsl [solver=" +
+                std::to_string(solverVariant) + ", rtxdi=" +
+                std::to_string(rtxdiVariant) + ", nee=" +
+                std::to_string(neeVariant) + "]";
+            nvrhi::ShaderDesc shaderDescription;
+            shaderDescription
+                .setShaderType(nvrhi::ShaderType::Compute)
+                .setDebugName(shaderDebugName);
             m_Shaders[variant] = shaderFactory->CreateShader(
                 "uvsr/path_tracing_cs.hlsl",
                 "main",
                 &defines,
-                nvrhi::ShaderType::Compute);
+                shaderDescription);
             if (!m_Shaders[variant] || !m_BindingLayout)
                 continue;
 
@@ -803,11 +812,19 @@ namespace uvsr
                     rtxdiVariant == 0u ? "0" : "1"),
                 ShaderMacro("UVSR_PT_NEE_MODE", NeeModes[neeVariant])
             };
+            const std::string shaderDebugName =
+                "uvsr/path_tracing_primary_surface_cs.hlsl [rtxdi=" +
+                std::to_string(rtxdiVariant) + ", nee=" +
+                std::to_string(neeVariant) + "]";
+            nvrhi::ShaderDesc shaderDescription;
+            shaderDescription
+                .setShaderType(nvrhi::ShaderType::Compute)
+                .setDebugName(shaderDebugName);
             m_PrimaryShaders[variant] = shaderFactory->CreateShader(
                 "uvsr/path_tracing_primary_surface_cs.hlsl",
                 "main",
                 &defines,
-                nvrhi::ShaderType::Compute);
+                shaderDescription);
             if (!m_PrimaryShaders[variant] || !m_PrimaryBindingLayout)
                 continue;
             nvrhi::ComputePipelineDesc pipelineDescription;
