@@ -211,12 +211,22 @@ uvsr_stage_patched_sources(
 set(UVSR_NVRHI_D3D12_OVERRIDE_DIR
     "${CMAKE_BINARY_DIR}/uvsr_nvrhi_d3d12_overrides")
 set(UVSR_NVRHI_D3D12_PATCH_FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/nvrhi-stable-directx-headers.patch")
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/nvrhi-stable-directx-headers.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/nvrhi-d3d12-portability.patch")
 uvsr_stage_patched_sources(
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/nvrhi"
     "${UVSR_NVRHI_D3D12_PATCH_FILES}"
     "${UVSR_NVRHI_D3D12_OVERRIDE_DIR}"
-    src/d3d12/d3d12-constants.cpp)
+    src/d3d12/d3d12-constants.cpp
+    src/d3d12/d3d12-compute.cpp
+    src/d3d12/d3d12-graphics.cpp
+    src/d3d12/d3d12-meshlets.cpp
+    src/d3d12/d3d12-raytracing.cpp
+    src/d3d12/d3d12-resource-bindings.cpp)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/nvrhi-d3d12-diagnostics.h"
+    "${UVSR_NVRHI_D3D12_OVERRIDE_DIR}/src/d3d12/uvsr-d3d12-diagnostics.h"
+    COPYONLY)
 
 # Keep NVRHI's headers on the same stable DirectX release line as UVSR's
 # app-local Agility runtime. The pinned dependency remains pristine; this
@@ -227,7 +237,12 @@ uvsr_replace_target_sources(
     nvrhi_d3d12
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/nvrhi"
     "${UVSR_NVRHI_D3D12_OVERRIDE_DIR}"
-    src/d3d12/d3d12-constants.cpp)
+    src/d3d12/d3d12-constants.cpp
+    src/d3d12/d3d12-compute.cpp
+    src/d3d12/d3d12-graphics.cpp
+    src/d3d12/d3d12-meshlets.cpp
+    src/d3d12/d3d12-raytracing.cpp
+    src/d3d12/d3d12-resource-bindings.cpp)
 target_include_directories(nvrhi_d3d12 PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/donut/nvrhi/src/d3d12")
 uvsr_replace_target_sources(
@@ -740,6 +755,13 @@ target_compile_definitions(
 add_test(
     NAME uvsr_gpu_capabilities_reference
     COMMAND uvsr_gpu_capabilities_tests)
+
+add_executable(uvsr_d3d12_portability_source_contract_tests
+    tests/d3d12_portability_source_contract_tests.cpp)
+add_test(
+    NAME uvsr_d3d12_portability_source_contract
+    COMMAND uvsr_d3d12_portability_source_contract_tests
+        "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(uvsr_windows_executable_path_tests
     tests/windows_executable_path_tests.cpp)

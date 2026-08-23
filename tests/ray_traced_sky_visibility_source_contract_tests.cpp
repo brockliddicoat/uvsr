@@ -650,9 +650,11 @@ namespace
                 "raytracedskyvisibilityselected||"
                 "(pathtracingselected&&"
                     "pathtracingscenedomainsupported&&"
+                    "m_pathtracingpass&&"
+                    "m_pathtracingpass->issupported()&&"
                     "m_ui.representation.allowraytraversal);",
             "the shared TLAS consumer gate must include every ray traversing "
-            "visibility producer and complete path transport");
+            "visibility producer and a materialized, supported path transport pass");
         RequireAbsent(
             representationSelection,
             "m_sunlight",

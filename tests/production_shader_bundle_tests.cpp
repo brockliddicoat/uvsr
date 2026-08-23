@@ -295,7 +295,8 @@ int main(int argc, char** argv)
             config,
             "path_tracing_primary_surface_cs.hlsl -T cs -E main "
                 "-D UVSR_PT_RTXDI={0,1} "
-                "-D UVSR_PT_NEE_MODE={0,1,2}") == 1u,
+                "-D UVSR_PT_NEE_MODE={0,1,2} "
+                "--compilerOptionsDXIL \"-res-may-alias\"") == 1u,
         "production must package the shared primary/direct RTXDI and NEE matrix");
     passed &= Check(
         CountExactLines(
@@ -318,7 +319,8 @@ int main(int argc, char** argv)
             "path_tracing_cs.hlsl -T cs -E main "
                 "-D UVSR_PT_SOLVER={0,1,2} "
                 "-D UVSR_PT_RTXDI={0,1} "
-                "-D UVSR_PT_NEE_MODE={0,1,2}") == 1u,
+                "-D UVSR_PT_NEE_MODE={0,1,2} "
+                "--compilerOptionsDXIL \"-res-may-alias\"") == 1u,
         "production must package the complete solver, RTXDI, and NEE path-transport matrix");
     passed &= Check(
         CountExactLines(

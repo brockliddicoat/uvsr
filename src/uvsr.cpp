@@ -25,6 +25,7 @@
 #include <array>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <chrono>
 #include <cerrno>
@@ -161,6 +162,200 @@ static void ApplyProcessPriority()
     }
 }
 
+static std::mutex g_EngineLogMutex;
+static std::ofstream g_EngineLog;
+static log::Callback g_EngineLogDownstream;
+static std::chrono::steady_clock::time_point g_EngineLogLastFlush;
+static std::chrono::steady_clock::time_point g_EngineLogLastMessageWrite;
+static log::Severity g_EngineLogLastSeverity = log::Severity::None;
+static std::string g_EngineLogLastMessage;
+static uint64_t g_EngineLogSuppressedRepeatCount = 0;
+
+static const char* GetLogSeverityName(log::Severity severity)
+{
+    switch (severity)
+    {
+    case log::Severity::Debug: return "debug";
+    case log::Severity::Info: return "info";
+    case log::Severity::Warning: return "warning";
+    case log::Severity::Error: return "error";
+    case log::Severity::Fatal: return "fatal";
+    default: return "none";
+    }
+}
+
+static void InitializeEngineDiagnosticLog()
+{
+    PWSTR localAppData = nullptr;
+    const HRESULT folderResult = SHGetKnownFolderPath(
+        FOLDERID_LocalAppData,
+        KF_FLAG_CREATE,
+        nullptr,
+        &localAppData);
+    if (FAILED(folderResult) || !localAppData)
+    {
+        log::warning(
+            "UVSR could not locate LocalAppData for its engine diagnostic "
+            "log (HRESULT 0x%08lX)",
+            static_cast<unsigned long>(folderResult));
+        return;
+    }
+
+    const std::filesystem::path logPath =
+        std::filesystem::path(localAppData) / "UVSR" / "logs" /
+        "uvsr-engine.log";
+    CoTaskMemFree(localAppData);
+
+    std::error_code directoryError;
+    std::filesystem::create_directories(
+        logPath.parent_path(), directoryError);
+    if (directoryError)
+    {
+        log::warning(
+            "UVSR could not create its engine diagnostic log directory: %s",
+            directoryError.message().c_str());
+        return;
+    }
+
+    g_EngineLog.open(
+        logPath,
+        std::ios::out | std::ios::trunc);
+    if (!g_EngineLog)
+    {
+        log::warning(
+            "UVSR could not open its engine diagnostic log: %s",
+            logPath.u8string().c_str());
+        return;
+    }
+
+    g_EngineLogDownstream = log::GetCallback();
+    log::SetCallback([](log::Severity severity, const char* message)
+    {
+        {
+            std::lock_guard<std::mutex> lock(g_EngineLogMutex);
+            const auto monotonicNow = std::chrono::steady_clock::now();
+            const char* safeMessage = message ? message : "";
+            const auto writeLine = [](log::Severity lineSeverity,
+                                      const std::string& lineMessage)
+            {
+                const std::time_t now = std::time(nullptr);
+                std::tm localTime{};
+                localtime_s(&localTime, &now);
+                g_EngineLog
+                    << std::put_time(&localTime, "%Y-%m-%d %H:%M:%S")
+                    << " [" << GetLogSeverityName(lineSeverity) << "] "
+                    << lineMessage << '\n';
+            };
+
+            const bool repeatedWarning =
+                severity == log::Severity::Warning &&
+                g_EngineLogLastSeverity == severity &&
+                g_EngineLogLastMessage == safeMessage;
+            const bool suppressRepeatedWarning = repeatedWarning &&
+                monotonicNow - g_EngineLogLastMessageWrite <
+                    std::chrono::seconds(5);
+            bool wroteLine = false;
+            if (suppressRepeatedWarning)
+            {
+                ++g_EngineLogSuppressedRepeatCount;
+            }
+            else
+            {
+                if (g_EngineLogSuppressedRepeatCount > 0)
+                {
+                    writeLine(
+                        log::Severity::Warning,
+                        "Previous warning repeated " +
+                            std::to_string(g_EngineLogSuppressedRepeatCount) +
+                            " additional times");
+                    g_EngineLogSuppressedRepeatCount = 0;
+                }
+
+                writeLine(severity, safeMessage);
+                g_EngineLogLastSeverity = severity;
+                g_EngineLogLastMessage = safeMessage;
+                g_EngineLogLastMessageWrite = monotonicNow;
+                wroteLine = true;
+            }
+
+            const bool urgent = severity == log::Severity::Error ||
+                severity == log::Severity::Fatal;
+            if (urgent || (wroteLine &&
+                monotonicNow - g_EngineLogLastFlush >=
+                    std::chrono::seconds(1)))
+            {
+                // Keep startup/device-loss evidence durable without forcing a
+                // filesystem flush for high-frequency renderer warnings.
+                g_EngineLog.flush();
+                g_EngineLogLastFlush = monotonicNow;
+            }
+        }
+        if (g_EngineLogDownstream)
+            g_EngineLogDownstream(severity, message);
+    });
+    log::info(
+        "Engine diagnostic log: %s",
+        logPath.u8string().c_str());
+}
+
+static void ConfigureD3D12DeviceRemovedDiagnostics(bool enableDiagnostics)
+{
+    if (!enableDiagnostics)
+    {
+        log::info(
+            "D3D12 DRED collection is available with -debug; production "
+            "startup keeps its system-controlled performance setting");
+        return;
+    }
+
+    ID3D12Debug* debugController = nullptr;
+    const HRESULT debugResult = D3D12GetDebugInterface(
+        IID_PPV_ARGS(&debugController));
+    if (SUCCEEDED(debugResult) && debugController)
+    {
+        // This must happen before SelectGraphicsAdapter creates its probe
+        // devices. Donut repeats the call for the final device harmlessly.
+        debugController->EnableDebugLayer();
+        debugController->Release();
+    }
+    else
+    {
+        log::warning(
+            "The D3D12 debug layer is unavailable before adapter probing "
+            "(HRESULT 0x%08lX)",
+            static_cast<unsigned long>(debugResult));
+    }
+
+    ID3D12DeviceRemovedExtendedDataSettings* settings = nullptr;
+    const HRESULT settingsResult = D3D12GetDebugInterface(
+        IID_PPV_ARGS(&settings));
+    if (FAILED(settingsResult) || !settings)
+    {
+        log::warning(
+            "D3D12 device-removed diagnostics are unavailable "
+            "(HRESULT 0x%08lX)",
+            static_cast<unsigned long>(settingsResult));
+        return;
+    }
+
+    settings->SetAutoBreadcrumbsEnablement(
+        D3D12_DRED_ENABLEMENT_FORCED_ON);
+    settings->SetPageFaultEnablement(
+        D3D12_DRED_ENABLEMENT_FORCED_ON);
+    ID3D12DeviceRemovedExtendedDataSettings1* settings1 = nullptr;
+    if (SUCCEEDED(settings->QueryInterface(IID_PPV_ARGS(&settings1))) &&
+        settings1)
+    {
+        settings1->SetBreadcrumbContextEnablement(
+            D3D12_DRED_ENABLEMENT_FORCED_ON);
+        settings1->Release();
+    }
+    settings->Release();
+    log::info(
+        "Enabled D3D12 automatic breadcrumbs, page-fault tracking, and "
+        "available breadcrumb contexts before device creation");
+}
+
 struct GpuAdapterChoice
 {
     int adapterIndex = -1;
@@ -170,6 +365,13 @@ struct GpuAdapterChoice
     uint32_t deviceId = 0;
     bool usesSharedSystemMemory = false;
     uint32_t highestShaderModel = 0;
+    uint32_t highestFeatureLevel = 0;
+    uint32_t rootSignatureVersion = 0;
+    uint32_t resourceBindingTier = 0;
+    uint32_t rayTracingTier = 0;
+    uint32_t adapterLuidLowPart = 0;
+    int32_t adapterLuidHighPart = 0;
+    uint64_t driverVersion = 0;
 };
 
 constexpr float UiBackgroundBlurPixels = 4.f;
@@ -1729,16 +1931,32 @@ public:
                 m_SceneDir.generic_string().c_str());
         }
 
-        nvrhi::BindlessLayoutDesc bindlessLayoutDescription;
-        bindlessLayoutDescription.visibility = nvrhi::ShaderType::Compute;
-        bindlessLayoutDescription.firstSlot = 0u;
-        bindlessLayoutDescription.maxCapacity = 65536u;
-        bindlessLayoutDescription.registerSpaces = {
-            nvrhi::BindingLayoutItem::RawBuffer_SRV(1),
-            nvrhi::BindingLayoutItem::Texture_SRV(2)
-        };
-        m_BindlessLayout = GetDevice()->createBindlessLayout(
-            bindlessLayoutDescription);
+        const auto activeAdapter = std::find_if(
+            m_ui.GpuAdapterChoices.begin(),
+            m_ui.GpuAdapterChoices.end(),
+            [this](const GpuAdapterChoice& adapter)
+            {
+                return adapter.adapterIndex ==
+                    m_ui.ActiveGpuAdapterIndex;
+            });
+        const uint32_t resourceBindingTier =
+            activeAdapter != m_ui.GpuAdapterChoices.end()
+                ? activeAdapter->resourceBindingTier
+                : 0u;
+        if (SupportsBindlessResourceTables(resourceBindingTier))
+        {
+            nvrhi::BindlessLayoutDesc bindlessLayoutDescription;
+            bindlessLayoutDescription.visibility =
+                nvrhi::ShaderType::Compute;
+            bindlessLayoutDescription.firstSlot = 0u;
+            bindlessLayoutDescription.maxCapacity = 65536u;
+            bindlessLayoutDescription.registerSpaces = {
+                nvrhi::BindingLayoutItem::RawBuffer_SRV(1),
+                nvrhi::BindingLayoutItem::Texture_SRV(2)
+            };
+            m_BindlessLayout = GetDevice()->createBindlessLayout(
+                bindlessLayoutDescription);
+        }
         if (m_BindlessLayout)
         {
             m_DescriptorTable =
@@ -1749,8 +1967,11 @@ public:
         else
         {
             log::warning(
-                "Bindless scene resources are unavailable; ray-traced "
-                "material visibility will remain disabled");
+                "Bindless scene resources require D3D12 Resource Binding "
+                "Tier 2; this adapter reports tier %u. Ray-query effects "
+                "are disabled while the Shader Model 6.5 baseline remains "
+                "available",
+                resourceBindingTier);
         }
         m_TextureCache = std::make_shared<TextureCache>(
             GetDevice(),
@@ -1775,16 +1996,6 @@ public:
         m_CommandList = GetDevice()->createCommandList();
         m_WorldSpaceRepresentation =
             std::make_unique<WorldSpaceRepresentation>(GetDevice());
-        m_PathTracingPass = std::make_unique<PathTracingPass>(
-            GetDevice(),
-            m_ShaderFactory,
-            m_BindlessLayout);
-        m_PathTracingStablePlaneResolvePass =
-            std::make_unique<PathTracingStablePlaneResolvePass>(
-                GetDevice(),
-                m_ShaderFactory);
-        m_PathTracingPass->SetSpatialPathResolveSupported(
-            m_PathTracingStablePlaneResolvePass->IsSupported());
         m_LightingAccumulationPass =
             std::make_unique<LightingAccumulationPass>(
                 GetDevice(),
@@ -3901,6 +4112,26 @@ public:
         }
     }
 
+    void EnsurePathTracingPass()
+    {
+        if (m_PathTracingPass)
+            return;
+
+        m_PathTracingPass = std::make_unique<PathTracingPass>(
+            GetDevice(),
+            m_ShaderFactory,
+            m_BindlessLayout);
+        if (!m_PathTracingPass->IsSupported())
+            return;
+
+        m_PathTracingStablePlaneResolvePass =
+            std::make_unique<PathTracingStablePlaneResolvePass>(
+                GetDevice(),
+                m_ShaderFactory);
+        m_PathTracingPass->SetSpatialPathResolveSupported(
+            m_PathTracingStablePlaneResolvePass->IsSupported());
+    }
+
     void EnsureHeitzRatioEstimatorShadowPass()
     {
         if (!m_ui.Representation.allowRayTraversal ||
@@ -3923,6 +4154,7 @@ public:
             !m_ui.Flashlight.castShadows ||
             !m_Flashlight ||
             !ShouldSubmitFlashlight(m_FlashlightTransition) ||
+            !m_BindlessLayout ||
             m_RayTracedFlashlightShadowPass ||
             !RayTracedFlashlightShadowPass::IsDeviceSupported(GetDevice()))
         {
@@ -4134,6 +4366,7 @@ public:
         {
             const bool worldRepresentationRequested =
                 m_ui.Representation.allowRayTraversal &&
+                m_BindlessLayout &&
                 ((m_ui.Lighting == LightingSolution::PathTracing &&
                     GetPathTracingSceneDomainStatus() !=
                         PathTracingSceneDomainStatus::Unsupported) ||
@@ -4142,6 +4375,7 @@ public:
                 (m_ui.FlashlightEnabled &&
                     m_ui.Flashlight.castShadows &&
                     m_Flashlight &&
+                    m_BindlessLayout &&
                     RayTracedFlashlightShadowPass::IsDeviceSupported(
                         GetDevice())) ||
                 (m_ui.RayTracedSkyVisibility.enabled &&
@@ -4226,6 +4460,8 @@ public:
 
         const bool pathTracingSelected =
             m_ui.Lighting == LightingSolution::PathTracing;
+        if (pathTracingSelected)
+            EnsurePathTracingPass();
         const PathTracingSceneDomainStatus pathTracingSceneDomainStatus =
             pathTracingSelected
             ? GetPathTracingSceneDomainStatus()
@@ -4394,6 +4630,8 @@ public:
 
             if (m_ui.ShaderReloadRequested)
             {
+                const bool recreatePathTracingPass =
+                    pathTracingSelected && bool(m_PathTracingPass);
                 m_HeitzRatioEstimatorShadowPass.reset();
                 m_RayTracedFlashlightShadowPass.reset();
                 m_RayTracedSkyVisibilityPass.reset();
@@ -4410,16 +4648,8 @@ public:
                 m_PathTemporalMotion = nullptr;
                 m_LightingAccumulationPass.reset();
                 m_ShaderFactory->ClearCache();
-                m_PathTracingPass = std::make_unique<PathTracingPass>(
-                    GetDevice(),
-                    m_ShaderFactory,
-                    m_BindlessLayout);
-                m_PathTracingStablePlaneResolvePass =
-                    std::make_unique<PathTracingStablePlaneResolvePass>(
-                        GetDevice(),
-                        m_ShaderFactory);
-                m_PathTracingPass->SetSpatialPathResolveSupported(
-                    m_PathTracingStablePlaneResolvePass->IsSupported());
+                if (recreatePathTracingPass)
+                    EnsurePathTracingPass();
                 m_LightingAccumulationPass =
                     std::make_unique<LightingAccumulationPass>(
                         GetDevice(),
@@ -4515,6 +4745,8 @@ public:
             rayTracedSkyVisibilitySelected ||
             (pathTracingSelected &&
                 pathTracingSceneDomainSupported &&
+                m_PathTracingPass &&
+                m_PathTracingPass->IsSupported() &&
                 m_ui.Representation.allowRayTraversal);
         const uint64_t worldRepresentationGenerationBefore =
             m_WorldSpaceRepresentation
@@ -6721,7 +6953,7 @@ public:
 
     bool HasHeitzRatioEstimatorHardwareSupport() const
     {
-        return m_WorldSpaceRepresentation &&
+        return m_BindlessLayout && m_WorldSpaceRepresentation &&
             m_WorldSpaceRepresentation->IsSupported() &&
             HeitzRatioEstimatorShadowPass::IsDeviceSupported(GetDevice());
     }
@@ -6733,7 +6965,7 @@ public:
 
     bool HasRayTracedSkyVisibilityHardwareSupport() const
     {
-        return m_WorldSpaceRepresentation &&
+        return m_BindlessLayout && m_WorldSpaceRepresentation &&
             m_WorldSpaceRepresentation->IsSupported() &&
             RayTracedSkyVisibilityPass::IsDeviceSupported(GetDevice());
     }
@@ -25948,6 +26180,66 @@ bool SelectGraphicsAdapter(
             continue;
         }
 
+        constexpr std::array<D3D_FEATURE_LEVEL, 5> FeatureLevels = {
+            D3D_FEATURE_LEVEL_12_2,
+            D3D_FEATURE_LEVEL_12_1,
+            D3D_FEATURE_LEVEL_12_0,
+            D3D_FEATURE_LEVEL_11_1,
+            D3D_FEATURE_LEVEL_11_0
+        };
+        D3D12_FEATURE_DATA_FEATURE_LEVELS featureLevels{};
+        featureLevels.NumFeatureLevels =
+            static_cast<UINT>(FeatureLevels.size());
+        featureLevels.pFeatureLevelsRequested = FeatureLevels.data();
+        const HRESULT featureLevelResult = testDevice->CheckFeatureSupport(
+            D3D12_FEATURE_FEATURE_LEVELS,
+            &featureLevels,
+            sizeof(featureLevels));
+        const uint32_t highestFeatureLevel = SUCCEEDED(featureLevelResult)
+            ? static_cast<uint32_t>(featureLevels.MaxSupportedFeatureLevel)
+            : static_cast<uint32_t>(deviceParams.featureLevel);
+        if (!SupportsRequiredFeatureLevel(highestFeatureLevel))
+        {
+            log::warning(
+                "Rejected graphics adapter %zu: %s because it does not "
+                "support the D3D12 feature-level 11.0 baseline",
+                index,
+                adapter.name.c_str());
+            continue;
+        }
+
+        D3D12_FEATURE_DATA_ROOT_SIGNATURE rootSignature{};
+        rootSignature.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_1;
+        if (FAILED(testDevice->CheckFeatureSupport(
+                D3D12_FEATURE_ROOT_SIGNATURE,
+                &rootSignature,
+                sizeof(rootSignature))))
+        {
+            rootSignature.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
+        }
+
+        D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
+        const uint32_t resourceBindingTier = SUCCEEDED(
+            testDevice->CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS,
+                &options,
+                sizeof(options)))
+            ? static_cast<uint32_t>(options.ResourceBindingTier)
+            : 0u;
+        D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5{};
+        const uint32_t rayTracingTier = SUCCEEDED(
+            testDevice->CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS5,
+                &options5,
+                sizeof(options5)))
+            ? static_cast<uint32_t>(options5.RaytracingTier)
+            : 0u;
+
+        LARGE_INTEGER driverVersion{};
+        const HRESULT driverVersionResult = adapter1->CheckInterfaceSupport(
+            __uuidof(IDXGIDevice),
+            &driverVersion);
+
         bool usesSharedSystemMemory = false;
         D3D12_FEATURE_DATA_ARCHITECTURE1 architecture{};
         architecture.NodeIndex = 0;
@@ -25971,15 +26263,25 @@ bool SelectGraphicsAdapter(
             }
         }
 
-        adapterChoices.push_back(GpuAdapterChoice{
-            static_cast<int>(index),
-            adapter.name,
-            adapter.dedicatedVideoMemory,
-            adapterDescription.VendorId,
-            adapterDescription.DeviceId,
-            usesSharedSystemMemory,
-            highestShaderModel
-        });
+        GpuAdapterChoice choice;
+        choice.adapterIndex = static_cast<int>(index);
+        choice.name = adapter.name;
+        choice.dedicatedVideoMemory = adapter.dedicatedVideoMemory;
+        choice.vendorId = adapterDescription.VendorId;
+        choice.deviceId = adapterDescription.DeviceId;
+        choice.usesSharedSystemMemory = usesSharedSystemMemory;
+        choice.highestShaderModel = highestShaderModel;
+        choice.highestFeatureLevel = highestFeatureLevel;
+        choice.rootSignatureVersion =
+            static_cast<uint32_t>(rootSignature.HighestVersion);
+        choice.resourceBindingTier = resourceBindingTier;
+        choice.rayTracingTier = rayTracingTier;
+        choice.adapterLuidLowPart = adapterDescription.AdapterLuid.LowPart;
+        choice.adapterLuidHighPart = adapterDescription.AdapterLuid.HighPart;
+        choice.driverVersion = SUCCEEDED(driverVersionResult)
+            ? static_cast<uint64_t>(driverVersion.QuadPart)
+            : 0u;
+        adapterChoices.push_back(std::move(choice));
 
         if (automaticSelection &&
             (bestAdapterIndex < 0 || adapter.dedicatedVideoMemory > bestDedicatedVideoMemory))
@@ -26050,6 +26352,36 @@ bool SelectGraphicsAdapter(
             (selectedChoice->highestShaderModel >> 4u) & 0xFu,
             selectedChoice->highestShaderModel & 0xFu);
     }
+    const uint16_t driverProduct = static_cast<uint16_t>(
+        selectedChoice->driverVersion >> 48u);
+    const uint16_t driverVersion = static_cast<uint16_t>(
+        selectedChoice->driverVersion >> 32u);
+    const uint16_t driverSubVersion = static_cast<uint16_t>(
+        selectedChoice->driverVersion >> 16u);
+    const uint16_t driverBuild = static_cast<uint16_t>(
+        selectedChoice->driverVersion);
+    log::info(
+        "Selected adapter capabilities: feature level 0x%04X, root "
+        "signature 1.%u, Resource Binding Tier %u, DXR tier %u, "
+        "LUID %08X:%08X, driver %u.%u.%u.%u, optional ray-query path %s",
+        selectedChoice->highestFeatureLevel,
+        selectedChoice->rootSignatureVersion >
+                static_cast<uint32_t>(D3D_ROOT_SIGNATURE_VERSION_1_0)
+            ? 1u
+            : 0u,
+        selectedChoice->resourceBindingTier,
+        selectedChoice->rayTracingTier,
+        static_cast<uint32_t>(selectedChoice->adapterLuidHighPart),
+        selectedChoice->adapterLuidLowPart,
+        driverProduct,
+        driverVersion,
+        driverSubVersion,
+        driverBuild,
+        SupportsOptionalRayQueryRendering(
+            selectedChoice->resourceBindingTier,
+            selectedChoice->rayTracingTier)
+            ? "enabled"
+            : "disabled");
     return true;
 }
 
@@ -26211,6 +26543,7 @@ int WINAPI WinMain(
     LPSTR,
     int)
 {
+    InitializeEngineDiagnosticLog();
     ApplyProcessPriority();
     constexpr nvrhi::GraphicsAPI api = nvrhi::GraphicsAPI::D3D12;
 
@@ -26219,6 +26552,7 @@ int WINAPI WinMain(
     deviceParams.backBufferHeight = 1080;
     deviceParams.swapChainSampleCount = 1;
     deviceParams.swapChainBufferCount = 3;
+    deviceParams.featureLevel = D3D_FEATURE_LEVEL_11_0;
     deviceParams.startFullscreen = false;
     deviceParams.enablePerMonitorDPI = true;
     deviceParams.supportExplicitDisplayScaling = true;
@@ -26233,6 +26567,8 @@ int WINAPI WinMain(
     {
         return 1;
     }
+    ConfigureD3D12DeviceRemovedDiagnostics(
+        deviceParams.enableDebugRuntime);
 
     DeviceManager* deviceManager = DeviceManager::Create(api);
     std::vector<GpuAdapterChoice> adapterChoices;
