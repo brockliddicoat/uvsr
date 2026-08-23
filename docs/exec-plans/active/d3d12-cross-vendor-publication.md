@@ -2,7 +2,7 @@
 
 ## Status
 
-- State: active
+- State: integration
 - Coordinator: `/root`
 - Project/integration branch and worktree: `codex/d3d12-cross-vendor-startup` in `work/d3d12-cross-vendor-startup`
 - Base commit: `13bd1f2ce9afb344cfe9e4b3b611ee8fe599bacd`
@@ -17,9 +17,9 @@ Xe3 package to Grant without changing the immutable launcher release contract.
 
 Done when:
 
-- [ ] The task-owned source is committed and the feature branch is pushed.
-- [ ] The exact `3D9B359F53F487D4307E6477A8F584F9902EA6F69BD3E7C0BEBE0A3CD5BF079E` executable is preserved in a validated portable ZIP.
-- [ ] The ZIP is uploaded to Google Drive, shared with `grantliddi@gmail.com`, and its verified link is emailed with launch and log instructions.
+- [x] The task-owned source is committed and the feature branch is pushed.
+- [x] The exact `3D9B359F53F487D4307E6477A8F584F9902EA6F69BD3E7C0BEBE0A3CD5BF079E` executable is preserved in a validated portable ZIP.
+- [x] The ZIP is uploaded to Google Drive, shared with `grantliddi@gmail.com`, and its verified link is emailed with launch and log instructions.
 - [ ] Public-`main` integration is completed through the protected pull-request workflow if separately authorized.
 
 ## Scope
@@ -53,9 +53,13 @@ Shared hotspots reserved for the coordinator:
 ## Baseline
 
 - Canonical repository/remote: `https://github.com/brockliddicoat/uvsr.git`, protected `main`.
-- Local versus remote state: task HEAD and live `origin/main` both
-  `13bd1f2ce9afb344cfe9e4b3b611ee8fe599bacd`; the task branch has reviewed uncommitted changes and no remote branch.
-- Verified source commit/build: exact reviewed dirty diff over the base; Release executable SHA-256 `3D9B359F53F487D4307E6477A8F584F9902EA6F69BD3E7C0BEBE0A3CD5BF079E`.
+- Local versus remote state: renderer commit
+  `63243721fead2578995ea9e0018cf449ee1f4b1d` is pushed on
+  `origin/codex/d3d12-cross-vendor-startup`; live `origin/main` remains the base
+  `13bd1f2ce9afb344cfe9e4b3b611ee8fe599bacd`.
+- Verified source commit/build: renderer commit `63243721fead2578995ea9e0018cf449ee1f4b1d`
+  contains the exact reviewed source diff; the frozen Release executable SHA-256 is
+  `3D9B359F53F487D4307E6477A8F584F9902EA6F69BD3E7C0BEBE0A3CD5BF079E`.
 - Known pre-existing failures: no Xe3 hardware is available locally; Grant's Galaxy Book 6 is the external acceptance machine.
 
 ## Dependencies and Interfaces
@@ -64,7 +68,7 @@ Shared hotspots reserved for the coordinator:
 | --- | --- | --- | --- |
 | UVSR Launcher | Existing immutable v1.1.14 release; renderer source follows public `main` | Confirmed | Fresh install/update |
 | GitHub `main` | Protected pull request plus strict `Launcher README Download` check | Pending separate authorization | Launcher update path |
-| Portable package | Installer payload layout from `PayloadPackager.cs` | In progress | Grant's Xe3 test |
+| Portable package | Installer payload layout from `PayloadPackager.cs` | Complete | Grant's Xe3 test |
 
 Public interface, ABI, shader binding, resource layout, serialized setting, or
 asset/package contracts:
@@ -78,10 +82,10 @@ asset/package contracts:
 
 | Task ID | Owner | Branch/Worktree | Base | Write Scope | Dependencies | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| Publication coordination | `/root` | Current task worktree | `13bd1f2c` | Exact staging, commit, push, package, upload, email | Read-only audits | Active |
+| Publication coordination | `/root` | Current task worktree | `13bd1f2c` | Exact staging, commit, push, package, upload, email | Read-only audits | Integration |
 | GitHub provenance audit | `portability_research` | Shared, read-only | `13bd1f2c` | None | Live remote | Complete |
 | Launcher/test audit | `test_audit` | Shared, read-only | `13bd1f2c` | None | Repository contracts | Complete |
-| Package inventory audit | `startup_trace` | Shared, read-only | `13bd1f2c` | None | Build outputs | Active |
+| Package inventory audit | `startup_trace` | Shared, read-only | `13bd1f2c` | None | Build outputs | Complete |
 
 ## Integration Order
 
@@ -94,11 +98,11 @@ asset/package contracts:
 
 | Acceptance Criterion | Evidence Required | Command/Experiment | Result/Artifact |
 | --- | --- | --- | --- |
-| Exact executable | SHA-256 equals the user-named value before and after staging | `Get-FileHash` | Pending |
-| Source publication | Remote feature ref equals the local commit | `git ls-remote` | Pending |
-| Portable ZIP integrity | Required inventory present and archive test passes | package contract check plus `7z t` | Pending |
-| Drive delivery | Uploaded-file metadata and sharing readback | Google Drive connector | Pending |
-| Email delivery | Gmail send result | Gmail connector | Pending |
+| Exact executable | SHA-256 equals the user-named value before and after staging | `Get-FileHash` | Passed before staging, after staging, and after archive extraction |
+| Source publication | Remote feature ref contains the renderer commit | `git ls-remote` | Renderer commit pushed; final documentation-head readback follows |
+| Portable ZIP integrity | Required inventory present and archive test passes | package contract check plus `7z t` | Passed: 433 files, 1,459,954,504 bytes; ZIP SHA-256 `3A370A2F93963CD79FDF1DCB05AEC9F241126AB34E1E1B3B05F8C974759D8709` |
+| Drive delivery | Uploaded-file metadata and sharing readback | Google Drive connector | Passed: 1,042,588,152-byte object; Grant is a reader; object is not public |
+| Email delivery | Gmail send result | Gmail connector | Passed: message returned with the `SENT` label |
 
 ## Decisions
 
@@ -121,11 +125,13 @@ Stop and ask the user if:
 
 ## Completion
 
-- Final integrated commit: pending
-- Verification summary: pending
+- Final integrated commit: pending protected-`main` authorization and pull request
+- Feature renderer commit: `63243721fead2578995ea9e0018cf449ee1f4b1d`
+- Verification summary: feature push, exact package inventory, ZIP test and hash,
+  Drive metadata/permission readback, and Gmail `SENT` evidence passed
 - Independent review: renderer diff already reviewed clean; publication audits complete
 - Coming Soon/documentation update: renderer documentation already included in the reviewed diff
-- Pushed/PR/merged, or intentionally local: pending
-- Remaining experiments or follow-ups: external Xe3 acceptance
-- Active ownership released: pending
+- Pushed/PR/merged, or intentionally local: feature branch pushed; no pull request or merge created
+- Remaining experiments or follow-ups: protected-`main` integration authorization and external Xe3 acceptance
+- Active ownership released: retained only for the pending protected-`main` integration decision
 - Archived to completed/abandoned path: pending
