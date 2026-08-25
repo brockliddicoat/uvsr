@@ -24,11 +24,11 @@ The retained behavior is deliberately narrower:
 - finite-emitter lighting, four-ray soft shadows, alpha-tested ray traversal,
   and the flashlight's independent denoising path remain intact.
 
-This rollback is local to the active lighting, denoising, and controls
-candidate. It was developed from published feature-branch commit
-`f892c17e33c007db69ca10f055bd7e59301b37d0`; that commit already contained an
-earlier proximity-retraction version, so returning only to that commit would
-not have removed the rejected behavior.
+Feature-lineage commit `f892c17e33c007db69ca10f055bd7e59301b37d0`
+already contained an earlier proximity-retraction version, so it is not a
+rollback checkpoint. No exact rejected-candidate executable hash or immutable
+source checkpoint was recorded. This rejection decision and its requirements
+are preserved at `e29a41245dbd0e6fd7a819d2341646419ab76e72`.
 
 ## User-Observed Failure
 
@@ -269,9 +269,11 @@ and open-space transitions. Test slow and fast pans at 30, 60, 120, and 144 Hz.
 No future design should merge based only on scalar unit tests; it needs a
 recorded continuous trajectory and direct visual acceptance in these scenes.
 
-## Rollback Verification
+## Rollback Verification Boundary
 
-The rollback is complete only when all of the following are true:
+No immutable artifact identity or bound runtime capture survives for the
+rollback candidate, so this record does not claim executable-level completion.
+A future implementation is complete only when all of the following are true:
 
 - searches find no live receiver, proximity, mount-extension, temporal-action,
   or movement-diagnostic implementation;
@@ -280,9 +282,6 @@ The rollback is complete only when all of the following are true:
   pass;
 - Standard and NRD Release builds pass the complete test suite and shader
   packaging checks;
-- the rebuilt NRD candidate is launched for product review; and
+- the exact renderer package is exercised for product review; and
 - runtime review confirms wall penetration remains prevented and the factory
   flashlight is pure white.
-
-Automated results and the exact candidate executable are recorded in the active
-execution plan for the broader lighting, denoising, and controls work.

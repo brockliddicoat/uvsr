@@ -2,20 +2,18 @@
 
 ## Record
 
-- Relationship: Implementation Study
-- Status: Current Documentation Claim
-- Confidence: Uncertain
+- Relationship: Contextual Reference
+- Status: Current reference; no copied-code or adapted-code claim
+- Confidence: Confirmed reference
 - Upstream: [Wicked Engine](https://github.com/turanszkij/WickedEngine)
 - Revision: Not recorded
 - Governing Terms: Upstream MIT License
 
 ## UVSR Relationship
 
-Current documentation calls some lower-level temporal policies “Wicked
-Engine-derived,” but no exact revision, file, source header, or copied block is
-identified. Earlier wording described only a comparable cost class. Until the
-lineage is clarified, this record treats Wicked Engine as an implementation
-reference and does not claim adapted code.
+Current documentation identifies only a comparable policy class. No exact
+revision, file, source header, or copied block is identified, so this record
+does not claim adapted code.
 
 ## Evidence
 
@@ -24,6 +22,5 @@ reference and does not claim adapted code.
 
 ## Commercial Clearance
 
-If code or recognizable data was adapted, record the exact upstream revision
-and preserve its MIT notice. If not, change “derived” to accurate reference-only
-language.
+If future work adapts code or recognizable data, record the exact upstream
+revision and preserve its MIT notice.

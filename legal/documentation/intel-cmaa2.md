@@ -21,11 +21,8 @@ history.
 
 - Introduction commit `58813cb94054738fc25ff2493444fbdb3dce7d98`
 - Settings expansion commit `a9a3dd10d7c8cf21e23c6642f1f93f4a7142192f`
-- Last preparation base carrying the implementation:
-  `54a57b08a462ad83979ccc8912570f2c6cc7ea03`
-- Canonical removal revision: none yet. The removal is composed locally into
-  the integration candidate based on
-  `3bc13fd3c170d746366f01404a7c4b726efdcab9`; publication remains pending.
+- Recovery commit `e29a41245dbd0e6fd7a819d2341646419ab76e72`
+  contains the last retained implementation and notices.
 
 ## Commercial Clearance
 

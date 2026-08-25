@@ -7,18 +7,20 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 
 namespace donut::engine
 {
     class IView;
-    class ShaderFactory;
     class SpotLight;
 }
 
 namespace uvsr
 {
+    class RendererShaderFactory;
+
     struct RayTracedFlashlightShadowInputs
     {
         nvrhi::ITexture* depth = nullptr;
@@ -28,15 +30,23 @@ namespace uvsr
 
     struct RayTracedFlashlightShadowResult
     {
+        // Per-covered-receiver R8 visibility: Texture2D at 1x and
+        // Texture2DArray at MSAA, where slice N belongs to raster sample N.
         nvrhi::ITexture* visibility = nullptr;
+        // Coherent closest-covered-receiver visibility and hit distance for
+        // the single-surface AO/GI and denoising path.
+        nvrhi::ITexture* closestVisibility = nullptr;
         nvrhi::ITexture* hitDistance = nullptr;
         const donut::engine::SpotLight* light = nullptr;
+        uint32_t receiverSampleCount = 0u;
         bool dispatched = false;
         bool stochastic = false;
 
         [[nodiscard]] explicit operator bool() const
         {
-            return visibility != nullptr && light != nullptr;
+            return visibility != nullptr && closestVisibility != nullptr &&
+                light != nullptr && receiverSampleCount != 0u &&
+                dispatched;
         }
     };
 
@@ -48,7 +58,7 @@ namespace uvsr
 
         RayTracedFlashlightShadowPass(
             nvrhi::IDevice* device,
-            const std::shared_ptr<donut::engine::ShaderFactory>&
+            const std::shared_ptr<RendererShaderFactory>&
                 shaderFactory,
             nvrhi::IBindingLayout* bindlessLayout);
 
@@ -86,14 +96,17 @@ namespace uvsr
         nvrhi::BindingLayoutHandle m_HitDistanceBindingLayout;
         nvrhi::SamplerHandle m_MaterialSampler;
         nvrhi::BufferHandle m_ConstantBuffer;
-        nvrhi::ShaderHandle m_VisibilityShader;
-        nvrhi::ShaderHandle m_HitDistanceShader;
-        nvrhi::ComputePipelineHandle m_VisibilityPipeline;
-        nvrhi::ComputePipelineHandle m_HitDistancePipeline;
-        nvrhi::BindingSetHandle m_VisibilityBindingSet;
-        nvrhi::BindingSetHandle m_HitDistanceBindingSet;
+        std::array<nvrhi::ShaderHandle, 5> m_VisibilityShaders;
+        std::array<nvrhi::ShaderHandle, 5> m_HitDistanceShaders;
+        std::array<nvrhi::ComputePipelineHandle, 5>
+            m_VisibilityPipelines;
+        std::array<nvrhi::ComputePipelineHandle, 5>
+            m_HitDistancePipelines;
+        std::array<nvrhi::BindingSetHandle, 5> m_VisibilityBindingSets;
+        std::array<nvrhi::BindingSetHandle, 5> m_HitDistanceBindingSets;
 
         nvrhi::TextureHandle m_OutputVisibility;
+        nvrhi::TextureHandle m_OutputClosestVisibility;
         nvrhi::TextureHandle m_OutputHitDistance;
 
         nvrhi::rt::IAccelStruct* m_BoundTlas = nullptr;
@@ -109,6 +122,7 @@ namespace uvsr
             const RayTracedFlashlightShadowInputs& inputs,
             bool outputHitDistance);
         [[nodiscard]] bool EnsureBindingSet(
+            uint32_t variant,
             const RayTracedFlashlightShadowInputs& inputs,
             const RayTracedMaterialVisibilityInputs& materialVisibility,
             nvrhi::rt::IAccelStruct* worldTlas,

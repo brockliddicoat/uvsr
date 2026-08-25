@@ -1,5 +1,3 @@
-using System.Text.Json.Serialization;
-
 namespace UvsrInstaller;
 
 internal enum InstallerOperation
@@ -34,7 +32,11 @@ internal sealed record InstallState(
     int SchemaVersion,
     Guid InstallationId,
     string ActiveVersionId,
+    long ReleaseSequence,
     string Commit,
+    string SettingsHash,
+    string EngineVersion,
+    string ArtifactSha256,
     string ExecutableSha256,
     bool DesktopShortcut,
     DateTimeOffset InstalledUtc)
@@ -44,10 +46,16 @@ internal sealed record InstallState(
         if (SchemaVersion != ProductConstants.SchemaVersion ||
             InstallationId != expectedInstallationId ||
             string.IsNullOrWhiteSpace(ActiveVersionId) ||
-            string.IsNullOrWhiteSpace(Commit) ||
-            string.IsNullOrWhiteSpace(ExecutableSha256) ||
             !ProductConstants.VersionIdRegex().IsMatch(ActiveVersionId) ||
+            ReleaseSequence is < 1 or > ProductConstants.MaximumReleaseSequence ||
+            string.IsNullOrWhiteSpace(Commit) ||
             !ProductConstants.CommitRegex().IsMatch(Commit) ||
+            string.IsNullOrWhiteSpace(SettingsHash) ||
+            !ProductConstants.SettingsHashRegex().IsMatch(SettingsHash) ||
+            !ProductConstants.IsCanonicalEngineVersion(EngineVersion) ||
+            string.IsNullOrWhiteSpace(ArtifactSha256) ||
+            !ProductConstants.HashRegex().IsMatch(ArtifactSha256) ||
+            string.IsNullOrWhiteSpace(ExecutableSha256) ||
             !ProductConstants.HashRegex().IsMatch(ExecutableSha256))
         {
             throw new InstallerException(
@@ -58,12 +66,15 @@ internal sealed record InstallState(
 
 internal sealed record PackageManifest(
     int SchemaVersion,
-    Guid InstallationId,
-    string VersionId,
-    string Commit,
+    string ProductId,
+    bool Production,
+    string Configuration,
+    long ReleaseSequence,
+    string SourceCommit,
+    string SettingsHash,
+    string EngineVersion,
     string ExecutableSha256,
-    IReadOnlyList<PackageFile> Files,
-    DateTimeOffset BuiltUtc);
+    IReadOnlyList<PackageFile> Files);
 
 internal sealed record PackageFile(string RelativePath, long Size, string Sha256);
 
@@ -81,7 +92,7 @@ internal sealed record LauncherState(
     {
         if (SchemaVersion != ProductConstants.LauncherSchemaVersion ||
             !string.Equals(ProductId, ProductConstants.ProductId,
-                StringComparison.OrdinalIgnoreCase) ||
+                StringComparison.Ordinal) ||
             InstallationId != expectedInstallationId ||
             ReleaseSequence is < 1 or > ProductConstants.MaximumReleaseSequence ||
             string.IsNullOrWhiteSpace(Version) ||
@@ -103,7 +114,7 @@ internal sealed record LauncherPackageManifest(
     long ExecutableSize,
     DateTimeOffset InstalledUtc);
 
-internal sealed record LauncherUpdateFeedEnvelope(
+internal sealed record SignedFeedEnvelope(
     int SchemaVersion,
     string KeyId,
     string PayloadBase64,
@@ -123,29 +134,20 @@ internal sealed record LauncherFeedArtifact(
     long Size,
     string Sha256);
 
-internal sealed record LegacyLauncherFeed(
+internal sealed record RendererFeed(
     int SchemaVersion,
     string ProductId,
-    string? Channel,
+    string Channel,
     long ReleaseSequence,
-    string Version,
-    LegacyLauncherFeedArtifact Artifact);
+    string SourceCommit,
+    string SettingsHash,
+    string EngineVersion,
+    RendererFeedArtifact Artifact);
 
-internal sealed record LegacyLauncherFeedArtifact(
+internal sealed record RendererFeedArtifact(
     string Name,
     long Size,
     string Sha256);
-
-internal sealed record RendererBuildContract(
-    int SchemaVersion,
-    string ProductId,
-    string ContractId,
-    long MinimumLauncherReleaseSequence,
-    [property: JsonPropertyName("d3d12AgilitySdkVersion")]
-    string D3D12AgilitySdkVersion,
-    string DirectXHeadersVersion,
-    string DxcVersion,
-    string DxcDate);
 
 internal sealed record LauncherActivationRecord(
     int SchemaVersion,
@@ -174,7 +176,7 @@ internal sealed record ComponentUpdateStatus(
     string? AvailableIdentifier,
     string Detail,
     LauncherFeed? LauncherFeed = null,
-    string? UvsrCommit = null);
+    RendererFeed? RendererFeed = null);
 
 internal sealed record UpdateCheckResult(
     ComponentUpdateStatus Uvsr,
@@ -208,47 +210,6 @@ internal sealed record InstallSnapshot(
     string Summary,
     bool IsDamaged = false);
 
-internal sealed record ToolPaths(
-    string Git,
-    string CMake,
-    string Python,
-    string VisualStudioInstance,
-    string AgilitySdk,
-    string DirectXHeaders,
-    string Dxc);
-
-internal sealed record ToolInstallMarker(
-    int SchemaVersion,
-    string DisplayName,
-    string Version,
-    string Sha256,
-    string ExecutableRelativePath,
-    string ExecutableSha256);
-
-internal sealed record ElevatedProcessIdentity(
-    int ProcessId,
-    long CreationTimeUtcFileTime,
-    string ExecutablePath);
-
-internal sealed record VisualStudioOperationRecord(
-    string Action,
-    string ExecutablePath,
-    string ExecutableSha256,
-    int? ProcessId,
-    long? CreationTimeUtcFileTime,
-    DateTimeOffset StartedUtc);
-
-internal sealed record VisualStudioLayoutRecord(
-    int SchemaVersion,
-    string ProductId,
-    string ComponentSet,
-    string BootstrapperSha256,
-    string ChannelId,
-    string LayoutPath,
-    string Phase,
-    DateTimeOffset StartedUtc,
-    VisualStudioOperationRecord? ActiveOperation = null);
-
 internal sealed record OperationResult(
     string Message,
     InstallState? State,
@@ -257,8 +218,6 @@ internal sealed record OperationResult(
     string? RelaunchLauncherPath = null,
     bool ContinueUvsrUpdate = false,
     Guid? LauncherContinuationId = null);
-
-internal sealed record PromptRequest(string Title, string Message);
 
 internal sealed record InstallerProgress(
     string Phase,
@@ -272,22 +231,7 @@ internal class InstallerException : Exception
     internal InstallerException(string message, Exception inner) : base(message, inner) { }
 }
 
-internal sealed class SourceLauncherCompatibilityException : InstallerException
-{
-    internal SourceLauncherCompatibilityException(string message) : base(message) { }
-    internal SourceLauncherCompatibilityException(string message, Exception inner) :
-        base(message, inner) { }
-}
-
 internal sealed class ShellRollbackException : InstallerException
 {
     internal ShellRollbackException(string message, Exception inner) : base(message, inner) { }
-}
-
-internal sealed class RebootRequiredException : InstallerException
-{
-    internal RebootRequiredException() : base(
-        "Microsoft's build prerequisites were installed successfully, but Windows must restart before UVSR can be built. Restart Windows, then open UVSR Launcher again.")
-    {
-    }
 }

@@ -257,17 +257,14 @@ foreach(mapping IN LISTS UVSR_RUNTIME_SHADER_MAPPINGS)
 endforeach()
 
 file(GLOB_RECURSE
-    UVSR_ACTUAL_RUNTIME_SHADERS
+    UVSR_ACTUAL_RUNTIME_FILES
     LIST_DIRECTORIES false
     RELATIVE "${UVSR_RUNTIME_SHADER_ROOT}"
-    "${UVSR_RUNTIME_SHADER_ROOT}/*.bin")
+    "${UVSR_RUNTIME_SHADER_ROOT}/*")
 list(SORT UVSR_EXPECTED_RELATIVE_PATHS)
-list(SORT UVSR_ACTUAL_RUNTIME_SHADERS)
-set(UVSR_UNEXPECTED_RUNTIME_SHADERS)
-foreach(relative_path IN LISTS UVSR_ACTUAL_RUNTIME_SHADERS)
-    uvsr_validate_relative_shader_path(
-        "${relative_path}"
-        "discovered runtime shader relative path")
+list(SORT UVSR_ACTUAL_RUNTIME_FILES)
+set(UVSR_UNEXPECTED_RUNTIME_FILES)
+foreach(relative_path IN LISTS UVSR_ACTUAL_RUNTIME_FILES)
     set(actual_path "${UVSR_RUNTIME_SHADER_ROOT}/${relative_path}")
     uvsr_normalize_absolute_path("${actual_path}" actual_path)
     uvsr_require_path_within_root(
@@ -289,7 +286,58 @@ foreach(relative_path IN LISTS UVSR_ACTUAL_RUNTIME_SHADERS)
         string(TOLOWER "${relative_path_key}" relative_path_key)
     endif()
     if (NOT relative_path_key IN_LIST UVSR_EXPECTED_RELATIVE_PATH_KEYS)
-        list(APPEND UVSR_UNEXPECTED_RUNTIME_SHADERS "${actual_path}")
+        list(APPEND UVSR_UNEXPECTED_RUNTIME_FILES "${actual_path}")
+        set(UVSR_RUNTIME_SHADER_SYNCHRONIZATION_REQUIRED true)
+    else()
+        uvsr_validate_relative_shader_path(
+            "${relative_path}"
+            "discovered runtime shader relative path")
+    endif()
+endforeach()
+
+set(UVSR_EXPECTED_RUNTIME_DIRECTORIES)
+set(UVSR_EXPECTED_RUNTIME_DIRECTORY_KEYS)
+foreach(relative_path IN LISTS UVSR_EXPECTED_RELATIVE_PATHS)
+    get_filename_component(relative_directory "${relative_path}" DIRECTORY)
+    while(relative_directory)
+        list(APPEND UVSR_EXPECTED_RUNTIME_DIRECTORIES "${relative_directory}")
+        set(relative_directory_key "${relative_directory}")
+        if (WIN32)
+            string(TOLOWER "${relative_directory_key}" relative_directory_key)
+        endif()
+        list(APPEND UVSR_EXPECTED_RUNTIME_DIRECTORY_KEYS
+            "${relative_directory_key}")
+        get_filename_component(relative_directory
+            "${relative_directory}" DIRECTORY)
+    endwhile()
+endforeach()
+list(REMOVE_DUPLICATES UVSR_EXPECTED_RUNTIME_DIRECTORIES)
+list(REMOVE_DUPLICATES UVSR_EXPECTED_RUNTIME_DIRECTORY_KEYS)
+file(GLOB_RECURSE UVSR_RUNTIME_SHADER_ENTRIES
+    LIST_DIRECTORIES true
+    RELATIVE "${UVSR_RUNTIME_SHADER_ROOT}"
+    "${UVSR_RUNTIME_SHADER_ROOT}/*")
+set(UVSR_UNEXPECTED_RUNTIME_DIRECTORIES)
+foreach(relative_entry IN LISTS UVSR_RUNTIME_SHADER_ENTRIES)
+    set(entry_path "${UVSR_RUNTIME_SHADER_ROOT}/${relative_entry}")
+    if (NOT IS_DIRECTORY "${entry_path}")
+        continue()
+    endif()
+    if (IS_SYMLINK "${entry_path}")
+        message(FATAL_ERROR
+            "Refusing a symbolic-link runtime shader directory: ${entry_path}")
+    endif()
+    uvsr_normalize_absolute_path("${entry_path}" entry_path)
+    uvsr_require_path_within_root(
+        "${entry_path}"
+        "${UVSR_RUNTIME_SHADER_ROOT}"
+        "Runtime shader directory")
+    set(relative_entry_key "${relative_entry}")
+    if (WIN32)
+        string(TOLOWER "${relative_entry_key}" relative_entry_key)
+    endif()
+    if (NOT relative_entry_key IN_LIST UVSR_EXPECTED_RUNTIME_DIRECTORY_KEYS)
+        list(APPEND UVSR_UNEXPECTED_RUNTIME_DIRECTORIES "${entry_path}")
         set(UVSR_RUNTIME_SHADER_SYNCHRONIZATION_REQUIRED true)
     endif()
 endforeach()
@@ -308,8 +356,14 @@ if (UVSR_RUNTIME_SHADER_SYNCHRONIZATION_REQUIRED)
             "${target_path}"
             ONLY_IF_DIFFERENT)
     endforeach()
-    foreach(unexpected_shader IN LISTS UVSR_UNEXPECTED_RUNTIME_SHADERS)
-        file(REMOVE "${unexpected_shader}")
+    foreach(unexpected_file IN LISTS UVSR_UNEXPECTED_RUNTIME_FILES)
+        file(REMOVE "${unexpected_file}")
+    endforeach()
+    list(SORT UVSR_UNEXPECTED_RUNTIME_DIRECTORIES ORDER DESCENDING)
+    foreach(unexpected_directory IN LISTS UVSR_UNEXPECTED_RUNTIME_DIRECTORIES)
+        if (EXISTS "${unexpected_directory}")
+            file(REMOVE_RECURSE "${unexpected_directory}")
+        endif()
     endforeach()
     file(TOUCH "${UVSR_RUNTIME_SHADER_STAGE_STAMP}")
     message(STATUS "Repaired the exact UVSR runtime shader bundle")

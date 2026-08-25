@@ -1,0 +1,187 @@
+diff --git a/Source/Denoisers/Reblur_Diffuse.hpp b/Source/Denoisers/Reblur_Diffuse.hpp
+index c43e7c4..f8e780e 100644
+--- a/Source/Denoisers/Reblur_Diffuse.hpp
++++ b/Source/Denoisers/Reblur_Diffuse.hpp
+@@ -51 +51 @@ void nrd::InstanceImpl::Add_ReblurDiffuse(DenoiserData& denoiserData) {
+-    std::array<ShaderMake::ShaderConstant, 2> commonDefines = {{
++    std::array<uvsr::shader_blob::Constant, 2> commonDefines = {{
+@@ -65 +65 @@ void nrd::InstanceImpl::Add_ReblurDiffuse(DenoiserData& denoiserData) {
+-        std::array<ShaderMake::ShaderConstant, 0> defines = {};
++        std::array<uvsr::shader_blob::Constant, 0> defines = {};
+@@ -85 +85 @@ void nrd::InstanceImpl::Add_ReblurDiffuse(DenoiserData& denoiserData) {
+-            std::array<ShaderMake::ShaderConstant, 3> defines = {{
++            std::array<uvsr::shader_blob::Constant, 3> defines = {{
+@@ -202 +202 @@ void nrd::InstanceImpl::Add_ReblurDiffuse(DenoiserData& denoiserData) {
+-            std::array<ShaderMake::ShaderConstant, 3> defines = {{
++            std::array<uvsr::shader_blob::Constant, 3> defines = {{
+diff --git a/Source/Denoisers/Relax_Diffuse.hpp b/Source/Denoisers/Relax_Diffuse.hpp
+index 7ae9ca7..bdc5bef 100644
+--- a/Source/Denoisers/Relax_Diffuse.hpp
++++ b/Source/Denoisers/Relax_Diffuse.hpp
+@@ -45 +45 @@ void nrd::InstanceImpl::Add_RelaxDiffuse(DenoiserData& denoiserData) {
+-    std::array<ShaderMake::ShaderConstant, 2> commonDefines = {{
++    std::array<uvsr::shader_blob::Constant, 2> commonDefines = {{
+@@ -59 +59 @@ void nrd::InstanceImpl::Add_RelaxDiffuse(DenoiserData& denoiserData) {
+-        std::array<ShaderMake::ShaderConstant, 0> defines = {};
++        std::array<uvsr::shader_blob::Constant, 0> defines = {};
+@@ -78 +78 @@ void nrd::InstanceImpl::Add_RelaxDiffuse(DenoiserData& denoiserData) {
+-            std::array<ShaderMake::ShaderConstant, 3> defines = {{
++            std::array<uvsr::shader_blob::Constant, 3> defines = {{
+diff --git a/Source/Denoisers/Sigma_Shadow.hpp b/Source/Denoisers/Sigma_Shadow.hpp
+index a0e630b..aa73be0 100644
+--- a/Source/Denoisers/Sigma_Shadow.hpp
++++ b/Source/Denoisers/Sigma_Shadow.hpp
+@@ -43 +43 @@ void nrd::InstanceImpl::Add_SigmaShadow(DenoiserData& denoiserData) {
+-    std::array<ShaderMake::ShaderConstant, 1> commonDefines = {{
++    std::array<uvsr::shader_blob::Constant, 1> commonDefines = {{
+@@ -69 +69 @@ void nrd::InstanceImpl::Add_SigmaShadow(DenoiserData& denoiserData) {
+-        std::array<ShaderMake::ShaderConstant, 0> defines = {};
++        std::array<uvsr::shader_blob::Constant, 0> defines = {};
+@@ -85 +85 @@ void nrd::InstanceImpl::Add_SigmaShadow(DenoiserData& denoiserData) {
+-        std::array<ShaderMake::ShaderConstant, 0> defines = {};
++        std::array<uvsr::shader_blob::Constant, 0> defines = {};
+@@ -102 +102 @@ void nrd::InstanceImpl::Add_SigmaShadow(DenoiserData& denoiserData) {
+-        std::array<ShaderMake::ShaderConstant, 2> defines = {{
++        std::array<uvsr::shader_blob::Constant, 2> defines = {{
+@@ -126 +126 @@ void nrd::InstanceImpl::Add_SigmaShadow(DenoiserData& denoiserData) {
+-            std::array<ShaderMake::ShaderConstant, 2> defines = {{
++            std::array<uvsr::shader_blob::Constant, 2> defines = {{
+diff --git a/Source/InstanceImpl.cpp b/Source/InstanceImpl.cpp
+index f3069dc..3e0520e 100644
+--- a/Source/InstanceImpl.cpp
++++ b/Source/InstanceImpl.cpp
+@@ -125,18 +124,0 @@ nrd::Result nrd::InstanceImpl::Create(const InstanceCreationDesc& instanceCreati
+-        else if (denoiserDesc.denoiser == Denoiser::REBLUR_DIFFUSE_OCCLUSION)
+-            Add_ReblurDiffuseOcclusion(denoiserData);
+-        else if (denoiserDesc.denoiser == Denoiser::REBLUR_DIFFUSE_SH)
+-            Add_ReblurDiffuseSh(denoiserData);
+-        else if (denoiserDesc.denoiser == Denoiser::REBLUR_SPECULAR)
+-            Add_ReblurSpecular(denoiserData);
+-        else if (denoiserDesc.denoiser == Denoiser::REBLUR_SPECULAR_OCCLUSION)
+-            Add_ReblurSpecularOcclusion(denoiserData);
+-        else if (denoiserDesc.denoiser == Denoiser::REBLUR_SPECULAR_SH)
+-            Add_ReblurSpecularSh(denoiserData);
+-        else if (denoiserDesc.denoiser == Denoiser::REBLUR_DIFFUSE_SPECULAR)
+-            Add_ReblurDiffuseSpecular(denoiserData);
+-        else if (denoiserDesc.denoiser == Denoiser::REBLUR_DIFFUSE_SPECULAR_OCCLUSION)
+-            Add_ReblurDiffuseSpecularOcclusion(denoiserData);
+-        else if (denoiserDesc.denoiser == Denoiser::REBLUR_DIFFUSE_SPECULAR_SH)
+-            Add_ReblurDiffuseSpecularSh(denoiserData);
+-        else if (denoiserDesc.denoiser == Denoiser::REBLUR_DIFFUSE_DIRECTIONAL_OCCLUSION)
+-            Add_ReblurDiffuseDirectionalOcclusion(denoiserData);
+@@ -145,10 +126,0 @@ nrd::Result nrd::InstanceImpl::Create(const InstanceCreationDesc& instanceCreati
+-        else if (denoiserDesc.denoiser == Denoiser::RELAX_DIFFUSE_SH)
+-            Add_RelaxDiffuseSh(denoiserData);
+-        else if (denoiserDesc.denoiser == Denoiser::RELAX_SPECULAR)
+-            Add_RelaxSpecular(denoiserData);
+-        else if (denoiserDesc.denoiser == Denoiser::RELAX_SPECULAR_SH)
+-            Add_RelaxSpecularSh(denoiserData);
+-        else if (denoiserDesc.denoiser == Denoiser::RELAX_DIFFUSE_SPECULAR)
+-            Add_RelaxDiffuseSpecular(denoiserData);
+-        else if (denoiserDesc.denoiser == Denoiser::RELAX_DIFFUSE_SPECULAR_SH)
+-            Add_RelaxDiffuseSpecularSh(denoiserData);
+@@ -157,5 +129 @@ nrd::Result nrd::InstanceImpl::Create(const InstanceCreationDesc& instanceCreati
+-        else if (denoiserDesc.denoiser == Denoiser::SIGMA_SHADOW_TRANSLUCENCY)
+-            Add_SigmaShadowTranslucency(denoiserData);
+-        else if (denoiserDesc.denoiser == Denoiser::REFERENCE)
+-            Add_Reference(denoiserData);
+-        else // Should not be here
++        else
+@@ -227 +195 @@ nrd::Result nrd::InstanceImpl::Create(const InstanceCreationDesc& instanceCreati
+-        std::array<ShaderMake::ShaderConstant, 1> defines = {
++        std::array<uvsr::shader_blob::Constant, 1> defines = {
+@@ -238 +206 @@ nrd::Result nrd::InstanceImpl::Create(const InstanceCreationDesc& instanceCreati
+-        std::array<ShaderMake::ShaderConstant, 1> defines = {
++        std::array<uvsr::shader_blob::Constant, 1> defines = {
+@@ -534,10 +502,6 @@ nrd::Result nrd::InstanceImpl::GetComputeDispatches(const Identifier* identifier
+-        if (denoiserData.desc.denoiser == Denoiser::REBLUR_DIFFUSE || denoiserData.desc.denoiser == Denoiser::REBLUR_DIFFUSE_SH || denoiserData.desc.denoiser == Denoiser::REBLUR_SPECULAR || denoiserData.desc.denoiser == Denoiser::REBLUR_SPECULAR_SH || denoiserData.desc.denoiser == Denoiser::REBLUR_DIFFUSE_SPECULAR || denoiserData.desc.denoiser == Denoiser::REBLUR_DIFFUSE_SPECULAR_SH || denoiserData.desc.denoiser == Denoiser::REBLUR_DIFFUSE_DIRECTIONAL_OCCLUSION)
++        if (denoiserData.desc.denoiser == Denoiser::REBLUR_DIFFUSE)
+             Update_Reblur(denoiserData);
+-        else if (denoiserData.desc.denoiser == Denoiser::REBLUR_DIFFUSE_OCCLUSION || denoiserData.desc.denoiser == Denoiser::REBLUR_SPECULAR_OCCLUSION || denoiserData.desc.denoiser == Denoiser::REBLUR_DIFFUSE_SPECULAR_OCCLUSION)
+-            Update_ReblurOcclusion(denoiserData);
+-        else if (denoiserData.desc.denoiser == Denoiser::RELAX_DIFFUSE || denoiserData.desc.denoiser == Denoiser::RELAX_DIFFUSE_SH || denoiserData.desc.denoiser == Denoiser::RELAX_SPECULAR || denoiserData.desc.denoiser == Denoiser::RELAX_SPECULAR_SH || denoiserData.desc.denoiser == Denoiser::RELAX_DIFFUSE_SPECULAR || denoiserData.desc.denoiser == Denoiser::RELAX_DIFFUSE_SPECULAR_SH)
++        else if (denoiserData.desc.denoiser == Denoiser::RELAX_DIFFUSE)
+             Update_Relax(denoiserData);
+-        else if (denoiserData.desc.denoiser == Denoiser::SIGMA_SHADOW || denoiserData.desc.denoiser == Denoiser::SIGMA_SHADOW_TRANSLUCENCY)
++        else if (denoiserData.desc.denoiser == Denoiser::SIGMA_SHADOW)
+             Update_SigmaShadow(denoiserData);
+-        else if (denoiserData.desc.denoiser == Denoiser::REFERENCE)
+-            Update_Reference(denoiserData);
+diff --git a/Source/InstanceImpl.h b/Source/InstanceImpl.h
+index 9917837..95db74e 100644
+--- a/Source/InstanceImpl.h
++++ b/Source/InstanceImpl.h
+@@ -17 +17 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
+-#include "ShaderMake/ShaderBlob.h"
++#include "shader_blob.h"
+@@ -42 +42 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
+-#    define FillDXBC(blobName, defines, computeShader) ShaderMake::FindPermutationInBlob(g_##blobName##_cs_dxbc, GetCountOf(g_##blobName##_cs_dxbc), defines.data(), (uint32_t)defines.size(), &computeShader.bytecode, (size_t*)&computeShader.size)
++#    define FillDXBC(blobName, defines, computeShader) uvsr::shader_blob::find_permutation(g_##blobName##_cs_dxbc, GetCountOf(g_##blobName##_cs_dxbc), defines.data(), (uint32_t)defines.size(), &computeShader.bytecode, (size_t*)&computeShader.size)
+@@ -48 +48 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
+-#    define FillDXIL(blobName, defines, computeShader) ShaderMake::FindPermutationInBlob(g_##blobName##_cs_dxil, GetCountOf(g_##blobName##_cs_dxil), defines.data(), (uint32_t)defines.size(), &computeShader.bytecode, (size_t*)&computeShader.size)
++#    define FillDXIL(blobName, defines, computeShader) uvsr::shader_blob::find_permutation(g_##blobName##_cs_dxil, GetCountOf(g_##blobName##_cs_dxil), defines.data(), (uint32_t)defines.size(), &computeShader.bytecode, (size_t*)&computeShader.size)
+@@ -54 +54 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
+-#    define FillSPIRV(blobName, defines, computeShader) ShaderMake::FindPermutationInBlob(g_##blobName##_cs_spirv, GetCountOf(g_##blobName##_cs_spirv), defines.data(), (uint32_t)defines.size(), &computeShader.bytecode, (size_t*)&computeShader.size)
++#    define FillSPIRV(blobName, defines, computeShader) uvsr::shader_blob::find_permutation(g_##blobName##_cs_spirv, GetCountOf(g_##blobName##_cs_spirv), defines.data(), (uint32_t)defines.size(), &computeShader.bytecode, (size_t*)&computeShader.size)
+diff --git a/Source/Reblur.cpp b/Source/Reblur.cpp
+index 520a878..f953c7b 100644
+--- a/Source/Reblur.cpp
++++ b/Source/Reblur.cpp
+@@ -76 +76 @@ license agreement from NVIDIA CORPORATION is strictly prohibited.
+-        std::array<ShaderMake::ShaderConstant, 0> defines = {}; \
++        std::array<uvsr::shader_blob::Constant, 0> defines = {}; \
+@@ -438,9 +437,0 @@ void nrd::InstanceImpl::AddSharedConstants_Reblur(const ReblurSettings& settings
+-#include "Denoisers/Reblur_DiffuseDirectionalOcclusion.hpp"
+-#include "Denoisers/Reblur_DiffuseOcclusion.hpp"
+-#include "Denoisers/Reblur_DiffuseSh.hpp"
+-#include "Denoisers/Reblur_DiffuseSpecular.hpp"
+-#include "Denoisers/Reblur_DiffuseSpecularOcclusion.hpp"
+-#include "Denoisers/Reblur_DiffuseSpecularSh.hpp"
+-#include "Denoisers/Reblur_Specular.hpp"
+-#include "Denoisers/Reblur_SpecularOcclusion.hpp"
+-#include "Denoisers/Reblur_SpecularSh.hpp"
+diff --git a/Source/Relax.cpp b/Source/Relax.cpp
+index e7fc7c3..af87f05 100644
+--- a/Source/Relax.cpp
++++ b/Source/Relax.cpp
+@@ -48 +48 @@ constexpr uint32_t RELAX_MAX_ATROUS_PASS_NUM = 8;
+-        std::array<ShaderMake::ShaderConstant, 0> defines = {}; \
++        std::array<uvsr::shader_blob::Constant, 0> defines = {}; \
+@@ -334,5 +333,0 @@ void nrd::InstanceImpl::Update_Relax(const DenoiserData& denoiserData) {
+-#include "Denoisers/Relax_DiffuseSh.hpp"
+-#include "Denoisers/Relax_DiffuseSpecular.hpp"
+-#include "Denoisers/Relax_DiffuseSpecularSh.hpp"
+-#include "Denoisers/Relax_Specular.hpp"
+-#include "Denoisers/Relax_SpecularSh.hpp"
+diff --git a/Source/Sigma.cpp b/Source/Sigma.cpp
+--- a/Source/Sigma.cpp
++++ b/Source/Sigma.cpp
+@@ -167,2 +167 @@
+ #include "Denoisers/Sigma_Shadow.hpp"
+-#include "Denoisers/Sigma_ShadowTranslucency.hpp"
+diff --git a/Source/Wrapper.cpp b/Source/Wrapper.cpp
+index 5660f14..9664b63 100644
+--- a/Source/Wrapper.cpp
++++ b/Source/Wrapper.cpp
+@@ -21 +21 @@ static_assert(NRD_ROUGHNESS_ENCODING >= 0 && NRD_ROUGHNESS_ENCODING < (uint32_t)
+-constexpr std::array<nrd::Denoiser, (size_t)nrd::Denoiser::MAX_NUM> g_NrdSupportedDenoisers = {
++constexpr std::array<nrd::Denoiser, 3> g_NrdSupportedDenoisers = {
+@@ -23,9 +22,0 @@ constexpr std::array<nrd::Denoiser, (size_t)nrd::Denoiser::MAX_NUM> g_NrdSupport
+-    nrd::Denoiser::REBLUR_DIFFUSE_OCCLUSION,
+-    nrd::Denoiser::REBLUR_DIFFUSE_SH,
+-    nrd::Denoiser::REBLUR_SPECULAR,
+-    nrd::Denoiser::REBLUR_SPECULAR_OCCLUSION,
+-    nrd::Denoiser::REBLUR_SPECULAR_SH,
+-    nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR,
+-    nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR_OCCLUSION,
+-    nrd::Denoiser::REBLUR_DIFFUSE_SPECULAR_SH,
+-    nrd::Denoiser::REBLUR_DIFFUSE_DIRECTIONAL_OCCLUSION,
+@@ -33,5 +23,0 @@ constexpr std::array<nrd::Denoiser, (size_t)nrd::Denoiser::MAX_NUM> g_NrdSupport
+-    nrd::Denoiser::RELAX_DIFFUSE_SH,
+-    nrd::Denoiser::RELAX_SPECULAR,
+-    nrd::Denoiser::RELAX_SPECULAR_SH,
+-    nrd::Denoiser::RELAX_DIFFUSE_SPECULAR,
+-    nrd::Denoiser::RELAX_DIFFUSE_SPECULAR_SH,
+@@ -39,2 +24,0 @@ constexpr std::array<nrd::Denoiser, (size_t)nrd::Denoiser::MAX_NUM> g_NrdSupport
+-    nrd::Denoiser::SIGMA_SHADOW_TRANSLUCENCY,
+-    nrd::Denoiser::REFERENCE,

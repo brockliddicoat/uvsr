@@ -10,72 +10,91 @@ internal static class LauncherUpdateFeedVerifier
 
     internal static LauncherFeed VerifyAndParse(byte[] envelopeData) =>
         VerifyAndParse(envelopeData,
-            Convert.FromBase64String(
-                ProductConstants.LauncherUpdateFeedPublicKeySpkiBase64),
-            ProductConstants.LauncherUpdateFeedKeyId);
+            Convert.FromBase64String(ProductConstants.UpdateFeedPublicKeySpkiBase64),
+            ProductConstants.UpdateFeedKeyId);
 
     internal static LauncherFeed VerifyAndParse(
         byte[] envelopeData,
         byte[] trustedPublicKeySpki,
-        string trustedKeyId)
+        string trustedKeyId) =>
+        VerifyAndParse<LauncherFeed>(envelopeData, trustedPublicKeySpki,
+            trustedKeyId, ProductConstants.LauncherUpdateFeedSchemaVersion,
+            "launcher");
+
+    internal static RendererFeed VerifyRendererAndParse(byte[] envelopeData) =>
+        VerifyRendererAndParse(envelopeData,
+            Convert.FromBase64String(ProductConstants.UpdateFeedPublicKeySpkiBase64),
+            ProductConstants.UpdateFeedKeyId);
+
+    internal static RendererFeed VerifyRendererAndParse(
+        byte[] envelopeData,
+        byte[] trustedPublicKeySpki,
+        string trustedKeyId) =>
+        VerifyAndParse<RendererFeed>(envelopeData, trustedPublicKeySpki,
+            trustedKeyId, ProductConstants.RendererUpdateFeedSchemaVersion,
+            "renderer");
+
+    private static T VerifyAndParse<T>(
+        byte[] envelopeData,
+        byte[] trustedPublicKeySpki,
+        string trustedKeyId,
+        int expectedSchemaVersion,
+        string component)
     {
-        if (envelopeData.LongLength is <= 0 or > ProductConstants.MaximumLauncherFeedBytes)
+        if (envelopeData.LongLength is <= 0 or > ProductConstants.MaximumUpdateFeedBytes)
             throw new InstallerException(
-                "The launcher update feed envelope was empty or too large.");
+                $"The {component} update feed envelope was empty or too large.");
         if (trustedPublicKeySpki is null || trustedPublicKeySpki.Length == 0 ||
             string.IsNullOrEmpty(trustedKeyId))
             throw new InstallerException(
-                "The launcher update feed trust configuration was invalid.");
+                $"The {component} update feed trust configuration was invalid.");
 
-        LauncherUpdateFeedEnvelope envelope = DeserializeExact<LauncherUpdateFeedEnvelope>(
-            envelopeData, "The launcher update feed envelope");
-        if (envelope.SchemaVersion != ProductConstants.LauncherUpdateFeedSchemaVersion)
+        SignedFeedEnvelope envelope = DeserializeExact<SignedFeedEnvelope>(
+            envelopeData, $"The {component} update feed envelope");
+        if (envelope.SchemaVersion != expectedSchemaVersion)
             throw new InstallerException(
-                $"The launcher update feed envelope schema version was " +
-                $"{envelope.SchemaVersion}; expected " +
-                $"{ProductConstants.LauncherUpdateFeedSchemaVersion}.");
+                $"The {component} update feed envelope schema version was " +
+                $"{envelope.SchemaVersion}; expected {expectedSchemaVersion}.");
         if (!string.Equals(envelope.KeyId, trustedKeyId, StringComparison.Ordinal))
             throw new InstallerException(
-                $"The launcher update feed key identity '{envelope.KeyId}' was not trusted.");
+                $"The {component} update feed key identity '{envelope.KeyId}' was not trusted.");
 
         byte[] payload = DecodeCanonicalBase64(envelope.PayloadBase64,
-            "payload");
-        if (payload.LongLength is <= 0 or >
-            ProductConstants.MaximumLauncherFeedPayloadBytes)
+            component, "payload");
+        if (payload.LongLength is <= 0 or > ProductConstants.MaximumUpdateFeedPayloadBytes)
             throw new InstallerException(
-                "The launcher update feed payload was empty or too large.");
+                $"The {component} update feed payload was empty or too large.");
         byte[] signature = DecodeCanonicalBase64(envelope.SignatureBase64,
-            "signature");
+            component, "signature");
         if (signature.Length != P256SignatureBytes)
             throw new InstallerException(
-                "The launcher update feed signature did not have the required P-256 size.");
+                $"The {component} update feed signature did not have the required P-256 size.");
 
-        VerifySignature(payload, signature, trustedPublicKeySpki);
-        return DeserializeExact<LauncherFeed>(payload,
-            "The authenticated launcher update feed payload");
+        VerifySignature(payload, signature, trustedPublicKeySpki, component);
+        return DeserializeExact<T>(payload,
+            $"The authenticated {component} update feed payload");
     }
 
     private static void VerifySignature(
         byte[] payload,
         byte[] signature,
-        byte[] trustedPublicKeySpki)
+        byte[] trustedPublicKeySpki,
+        string component)
     {
         try
         {
             using ECDsa verifier = ECDsa.Create();
-            verifier.ImportSubjectPublicKeyInfo(trustedPublicKeySpki,
-                out int bytesRead);
-            ECParameters parameters = verifier.ExportParameters(
-                includePrivateParameters: false);
+            verifier.ImportSubjectPublicKeyInfo(trustedPublicKeySpki, out int bytesRead);
+            ECParameters parameters = verifier.ExportParameters(false);
             if (bytesRead != trustedPublicKeySpki.Length || verifier.KeySize != 256 ||
                 !string.Equals(parameters.Curve.Oid.Value, NistP256CurveOid,
                     StringComparison.Ordinal))
                 throw new InstallerException(
-                    "The launcher update feed signing key was not the required P-256 key.");
+                    $"The {component} update feed signing key was not the required P-256 key.");
             if (!verifier.VerifyData(payload, signature, HashAlgorithmName.SHA256,
                     DSASignatureFormat.IeeeP1363FixedFieldConcatenation))
                 throw new InstallerException(
-                    "The launcher update feed signature was invalid. No launcher update was trusted.");
+                    $"The {component} update feed signature was invalid. No update was trusted.");
         }
         catch (InstallerException)
         {
@@ -84,22 +103,25 @@ internal static class LauncherUpdateFeedVerifier
         catch (Exception ex) when (ex is CryptographicException or ArgumentException)
         {
             throw new InstallerException(
-                "The launcher update feed signing key could not be verified.", ex);
+                $"The {component} update feed signing key could not be verified.", ex);
         }
     }
 
-    private static byte[] DecodeCanonicalBase64(string value, string field)
+    private static byte[] DecodeCanonicalBase64(
+        string value,
+        string component,
+        string field)
     {
         if (string.IsNullOrEmpty(value))
             throw new InstallerException(
-                $"The launcher update feed {field} was empty.");
+                $"The {component} update feed {field} was empty.");
         try
         {
             byte[] decoded = Convert.FromBase64String(value);
             if (!string.Equals(Convert.ToBase64String(decoded), value,
                     StringComparison.Ordinal))
                 throw new InstallerException(
-                    $"The launcher update feed {field} was not canonical Base64.");
+                    $"The {component} update feed {field} was not canonical Base64.");
             return decoded;
         }
         catch (InstallerException)
@@ -109,7 +131,7 @@ internal static class LauncherUpdateFeedVerifier
         catch (FormatException ex)
         {
             throw new InstallerException(
-                $"The launcher update feed {field} was not valid Base64.", ex);
+                $"The {component} update feed {field} was not valid Base64.", ex);
         }
     }
 

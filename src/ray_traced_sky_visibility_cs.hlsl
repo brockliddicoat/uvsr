@@ -1,37 +1,105 @@
 #pragma pack_matrix(row_major)
 
-#include <donut/shaders/binding_helpers.hlsli>
-#include <donut/shaders/gbuffer.hlsli>
+#include "renderer_gpu_helpers.hlsli"
 #include "noise_sampling.hlsli"
 #include "pbr_gbuffer.hlsli"
+#include "ray_origin_contract.h"
 #include "ray_traced_material_visibility.hlsli"
+#include "ray_visibility_trace_contract.h"
+#include "ray_traced_sky_visibility_bindings.h"
 #include "ray_traced_sky_visibility_cb.h"
 #include "sample_accumulation.hlsli"
 
 #ifndef OUTPUT_HIT_DISTANCE
 #define OUTPUT_HIT_DISTANCE 0
 #endif
+#ifndef SKY_VISIBILITY_SAMPLES
+#error SKY_VISIBILITY_SAMPLES must be 1, 2, 4, 8, or 16.
+#endif
 
-cbuffer c_RayTracedSkyVisibility : register(b0)
+cbuffer c_RayTracedSkyVisibility :
+    register(UVSR_SKY_VISIBILITY_CONSTANT_BUFFER_REGISTER)
 {
     RayTracedSkyVisibilityConstants g_SkyVisibility;
 };
 
-RaytracingAccelerationStructure t_WorldBvh : register(t0);
-Texture2D<float> t_Depth : register(t1);
-Texture2D<float4> t_GBufferMaterial : register(t2);
-Texture2D<float4> t_GBufferNormals : register(t3);
-Texture2DArray<float> t_Noise : register(t4);
-Texture2D<uint> t_AttemptMask : register(t5);
+RaytracingAccelerationStructure t_WorldBvh :
+    register(UVSR_SKY_VISIBILITY_WORLD_TLAS_REGISTER);
+#if SKY_VISIBILITY_SAMPLES > 1
+Texture2DMS<float, SKY_VISIBILITY_SAMPLES> t_Depth :
+    register(UVSR_SKY_VISIBILITY_DEPTH_REGISTER);
+Texture2DMS<float4, SKY_VISIBILITY_SAMPLES>
+    t_GBufferMaterial : register(UVSR_SKY_VISIBILITY_MATERIAL_REGISTER);
+Texture2DMS<float4, SKY_VISIBILITY_SAMPLES>
+    t_GBufferNormals : register(UVSR_SKY_VISIBILITY_NORMALS_REGISTER);
+#else
+Texture2D<float> t_Depth : register(UVSR_SKY_VISIBILITY_DEPTH_REGISTER);
+Texture2D<float4> t_GBufferMaterial :
+    register(UVSR_SKY_VISIBILITY_MATERIAL_REGISTER);
+Texture2D<float4> t_GBufferNormals :
+    register(UVSR_SKY_VISIBILITY_NORMALS_REGISTER);
+#endif
+Texture2DArray<float> t_Noise :
+    register(UVSR_SKY_VISIBILITY_NOISE_REGISTER);
+Texture2D<uint> t_AttemptMask :
+    register(UVSR_SKY_VISIBILITY_ATTEMPT_MASK_REGISTER);
 
-RWTexture2D<float> u_Visibility : register(u0);
+#if SKY_VISIBILITY_SAMPLES > 1
+RWTexture2DArray<float> u_Visibility :
+    register(UVSR_SKY_VISIBILITY_OUTPUT_REGISTER);
+#else
+RWTexture2D<float> u_Visibility :
+    register(UVSR_SKY_VISIBILITY_OUTPUT_REGISTER);
+#endif
+RWTexture2D<float> u_ClosestVisibility :
+    register(UVSR_SKY_VISIBILITY_CLOSEST_OUTPUT_REGISTER);
 #if OUTPUT_HIT_DISTANCE
-VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_HitDistance : register(u1);
+RWTexture2D<float> u_HitDistance :
+    register(UVSR_SKY_VISIBILITY_HIT_DISTANCE_OUTPUT_REGISTER);
 #endif
 
 static const float SkyVisibilityTwoPi = 6.28318530717958647692f;
 static const float SkyVisibilityHitDistanceMaximum = 65472.0f;
 static const float SkyVisibilityHitDistanceMiss = 65504.0f;
+
+float SkyVisibilityLoadDepth(int2 pixelPosition, uint sampleIndex)
+{
+#if SKY_VISIBILITY_SAMPLES > 1
+    return t_Depth.Load(pixelPosition, sampleIndex);
+#else
+    return t_Depth[pixelPosition];
+#endif
+}
+
+float4 SkyVisibilityLoadMaterial(int2 pixelPosition, uint sampleIndex)
+{
+#if SKY_VISIBILITY_SAMPLES > 1
+    return t_GBufferMaterial.Load(pixelPosition, sampleIndex);
+#else
+    return t_GBufferMaterial[pixelPosition];
+#endif
+}
+
+float4 SkyVisibilityLoadNormals(int2 pixelPosition, uint sampleIndex)
+{
+#if SKY_VISIBILITY_SAMPLES > 1
+    return t_GBufferNormals.Load(pixelPosition, sampleIndex);
+#else
+    return t_GBufferNormals[pixelPosition];
+#endif
+}
+
+void SkyVisibilityStore(
+    int2 pixelPosition,
+    uint sampleIndex,
+    float visibility)
+{
+#if SKY_VISIBILITY_SAMPLES > 1
+    u_Visibility[uint3(uint2(pixelPosition), sampleIndex)] = visibility;
+#else
+    u_Visibility[pixelPosition] = visibility;
+#endif
+}
 
 bool SkyVisibilityInViewport(uint2 dispatchPosition)
 {
@@ -63,10 +131,12 @@ float SkyVisibilityRadicalInverse(uint index, uint base)
 
 float2 SkyVisibilitySample2D(
     uint2 dispatchPosition,
+    uint receiverSampleIndex,
     uint sampleIndex,
     uint phase)
 {
-    const uint firstDimension = sampleIndex * 2u;
+    const uint firstDimension =
+        receiverSampleIndex * 128u + sampleIndex * 2u;
     const uint sequenceIndex = sampleIndex + 1u;
     const uint2 dispatchExtent =
         uint2(g_SkyVisibility.view.viewportSize);
@@ -88,18 +158,6 @@ float2 SkyVisibilitySample2D(
     return frac(float2(
         SkyVisibilityRadicalInverse(sequenceIndex, 2u),
         SkyVisibilityRadicalInverse(sequenceIndex, 3u)) + noiseShift);
-}
-
-float3 SkyVisibilitySafeGeometricNormal(
-    float3 geometricNormal,
-    float3 viewDirection)
-{
-    float3 safeNormal = PbrSafeNormalize(
-        geometricNormal,
-        viewDirection);
-    if (dot(safeNormal, viewDirection) < 0.0f)
-        safeNormal = -safeNormal;
-    return safeNormal;
 }
 
 float3 SkyVisibilitySampleCosineHemisphere(
@@ -124,59 +182,6 @@ float3 SkyVisibilitySampleCosineHemisphere(
         geometricNormal);
 }
 
-float SkyVisibilityStepDepthTowardCamera(float depth)
-{
-    if (g_SkyVisibility.floatDepth != 0u)
-    {
-        uint bits = asuint(saturate(depth));
-        if (g_SkyVisibility.reverseDepth != 0u)
-            bits = min(bits + 1u, asuint(1.0f));
-        else
-            bits = bits > 0u ? bits - 1u : 0u;
-        float stepped = asfloat(bits);
-        return isfinite(stepped) ? saturate(stepped) : depth;
-    }
-
-    float direction = g_SkyVisibility.reverseDepth != 0u
-        ? 1.0f
-        : -1.0f;
-    return saturate(
-        depth + direction * g_SkyVisibility.depthQuantizationStep);
-}
-
-float SkyVisibilityOffsetFloatComponent(
-    float position,
-    float direction)
-{
-    static const float Origin = 1.0f / 32.0f;
-    static const float FloatScale = 1.0f / 65536.0f;
-    static const float IntegerScale = 256.0f;
-    int integerOffset = int(IntegerScale * direction);
-    float shifted = asfloat(
-        asint(position) + (position < 0.0f
-            ? -integerOffset
-            : integerOffset));
-    return abs(position) < Origin
-        ? position + FloatScale * direction
-        : shifted;
-}
-
-float3 SkyVisibilityOffsetFloatPosition(
-    float3 position,
-    float3 direction)
-{
-    float3 safeDirection = PbrSafeNormalize(
-        direction,
-        float3(0.0f, 0.0f, 1.0f));
-    return float3(
-        SkyVisibilityOffsetFloatComponent(
-            position.x, safeDirection.x),
-        SkyVisibilityOffsetFloatComponent(
-            position.y, safeDirection.y),
-        SkyVisibilityOffsetFloatComponent(
-            position.z, safeDirection.z));
-}
-
 float3 SkyVisibilityPrepareRayOrigin(
     float3 surfacePosition,
     float3 geometricNormal,
@@ -184,10 +189,14 @@ float3 SkyVisibilityPrepareRayOrigin(
     float2 pixelCenter,
     float depth)
 {
-    const float3 safeNormal = SkyVisibilitySafeGeometricNormal(
+    const float3 safeNormal = RayOriginOrientGeometricNormal(
         geometricNormal,
         viewDirection);
-    const float safeDepth = SkyVisibilityStepDepthTowardCamera(depth);
+    const float safeDepth = RayOriginStepDepthTowardCamera(
+        depth,
+        g_SkyVisibility.floatDepth != 0u,
+        g_SkyVisibility.reverseDepth != 0u,
+        g_SkyVisibility.depthQuantizationStep);
     float3 depthStepPosition = ReconstructWorldPosition(
         g_SkyVisibility.view,
         pixelCenter,
@@ -195,18 +204,18 @@ float3 SkyVisibilityPrepareRayOrigin(
     const float depthStepDistance = all(isfinite(depthStepPosition))
         ? length(depthStepPosition - surfacePosition)
         : 0.0f;
-    const float clearance = max(
-        max(g_SkyVisibility.rayBias, 0.0f),
+    const float clearance = ResolveRayOriginClearance(
+        g_SkyVisibility.rayBias,
         depthStepDistance);
-    return SkyVisibilityOffsetFloatPosition(
-        surfacePosition + safeNormal * clearance,
-        safeNormal);
+    return ResolveRayOriginPosition(
+        surfacePosition,
+        safeNormal,
+        clearance);
 }
 
-bool SkyVisibilityTrace(
+RayVisibilityTraceSample SkyVisibilityTrace(
     float3 rayOrigin,
-    float3 direction,
-    out float hitDistance)
+    float3 direction)
 {
     RayDesc ray;
     ray.Origin = rayOrigin;
@@ -229,16 +238,91 @@ bool SkyVisibilityTrace(
     }
     const bool hit = query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
 #if OUTPUT_HIT_DISTANCE
-    if (hit)
-        hitDistance = min(
-            query.CommittedRayT(),
-            SkyVisibilityHitDistanceMaximum);
-    else
-        hitDistance = SkyVisibilityHitDistanceMiss;
+    const float committedRayT = hit ? query.CommittedRayT() : 0.0f;
 #else
-    hitDistance = hit ? 0.0f : SkyVisibilityHitDistanceMiss;
+    const float committedRayT = 0.0f;
 #endif
-    return !hit;
+    return ResolveRayVisibilityTraceSample(
+        hit,
+        committedRayT,
+        OUTPUT_HIT_DISTANCE != 0,
+        SkyVisibilityHitDistanceMaximum,
+        SkyVisibilityHitDistanceMiss);
+}
+
+float2 SkyVisibilityEvaluate(
+    int2 pixelPosition,
+    uint2 dispatchPosition,
+    uint receiverSampleIndex,
+    uint sampleSequencePhase)
+{
+    const float4 normalChannels = SkyVisibilityLoadNormals(
+        pixelPosition,
+        receiverSampleIndex);
+    if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
+        return float2(1.0f, 0.0f);
+
+    const float4 packedMaterial = SkyVisibilityLoadMaterial(
+        pixelPosition,
+        receiverSampleIndex);
+    const PbrGBufferSurfaceNormals surfaceNormals =
+        DecodePbrGBufferSurfaceNormals(
+            normalChannels,
+            packedMaterial);
+    const float depth = SkyVisibilityLoadDepth(
+        pixelPosition,
+        receiverSampleIndex);
+    const float2 pixelCenter = float2(pixelPosition) + 0.5f;
+    const float3 surfacePosition = ReconstructWorldPosition(
+        g_SkyVisibility.view,
+        pixelCenter,
+        depth);
+    if (!all(isfinite(surfacePosition)))
+        return float2(1.0f, 0.0f);
+    const float3 viewIncident = GetIncidentVector(
+        g_SkyVisibility.view.cameraDirectionOrPosition,
+        surfacePosition);
+    const float3 viewDirection = -viewIncident;
+    const float3 geometricNormal = RayOriginOrientGeometricNormal(
+        surfaceNormals.geometricNormal,
+        viewDirection);
+    const float3 rayOrigin = SkyVisibilityPrepareRayOrigin(
+        surfacePosition,
+        surfaceNormals.geometricNormal,
+        viewDirection,
+        pixelCenter,
+        depth);
+
+    const uint sampleCount = max(g_SkyVisibility.sampleCount, 1u);
+    RayVisibilityTraceAggregate aggregate =
+        BeginRayVisibilityTraceAggregate(
+            SkyVisibilityHitDistanceMiss);
+    [loop]
+    for (uint sampleIndex = 0u;
+        sampleIndex < sampleCount;
+        ++sampleIndex)
+    {
+        const float3 direction = SkyVisibilitySampleCosineHemisphere(
+            geometricNormal,
+            SkyVisibilitySample2D(
+                dispatchPosition,
+                receiverSampleIndex,
+                sampleIndex,
+                sampleSequencePhase));
+        aggregate = AccumulateRayVisibilityTraceSample(
+            aggregate,
+            SkyVisibilityTrace(rayOrigin, direction));
+    }
+
+    if (!RayVisibilityTraceAggregateIsComplete(
+        aggregate,
+        sampleCount))
+    {
+        return float2(0.0f, SkyVisibilityHitDistanceMaximum);
+    }
+    return float2(
+        ResolveRayVisibilityTraceAverage(aggregate),
+        aggregate.closestHitDistance);
 }
 
 [numthreads(8, 8, 1)]
@@ -250,85 +334,57 @@ void Generate(uint2 dispatchPosition : SV_DispatchThreadID)
         SkyVisibilityPixelPosition(dispatchPosition);
     const bool sampleScheduleEnabled = UvsrSampleScheduleEnabled(
         g_SkyVisibility.sampleSequenceMode);
-    const uint attemptToken =
-        sampleScheduleEnabled
-            ? t_AttemptMask[pixelPosition]
-            : 0u;
+    const uint attemptToken = sampleScheduleEnabled
+        ? t_AttemptMask[pixelPosition]
+        : 0u;
     if (sampleScheduleEnabled && attemptToken == 0u)
-    {
         return;
-    }
     const uint sampleSequencePhase = UvsrResolveSampleSequencePhase(
         g_SkyVisibility.sampleSequenceMode,
         attemptToken,
         g_SkyVisibility.sampleSequencePhase);
-    const float4 normalChannels = t_GBufferNormals[pixelPosition];
-    if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
-    {
-        u_Visibility[pixelPosition] = 1.0f;
-#if OUTPUT_HIT_DISTANCE
-        u_HitDistance[pixelPosition] = 0.0f;
-#endif
-        return;
-    }
 
-    const float4 packedMaterial = t_GBufferMaterial[pixelPosition];
-    const PbrGBufferSurfaceNormals surfaceNormals =
-        DecodePbrGBufferSurfaceNormals(
-            normalChannels,
-            packedMaterial);
-    const float depth = t_Depth[pixelPosition];
-    const float2 pixelCenter = float2(pixelPosition) + 0.5f;
-    const float3 surfacePosition = ReconstructWorldPosition(
-        g_SkyVisibility.view,
-        pixelCenter,
-        depth);
-    if (!all(isfinite(surfacePosition)))
+    bool foundClosest = false;
+    float closestDepth = 0.0f;
+    float2 closestResult = float2(1.0f, 0.0f);
+    [unroll]
+    for (uint receiverSampleIndex = 0u;
+        receiverSampleIndex < SKY_VISIBILITY_SAMPLES;
+        ++receiverSampleIndex)
     {
-        u_Visibility[pixelPosition] = 1.0f;
-#if OUTPUT_HIT_DISTANCE
-        u_HitDistance[pixelPosition] = 0.0f;
-#endif
-        return;
-    }
-    const float3 viewIncident = GetIncidentVector(
-        g_SkyVisibility.view.cameraDirectionOrPosition,
-        surfacePosition);
-    const float3 viewDirection = -viewIncident;
-    const float3 geometricNormal = SkyVisibilitySafeGeometricNormal(
-        surfaceNormals.geometricNormal,
-        viewDirection);
-    const float3 rayOrigin = SkyVisibilityPrepareRayOrigin(
-        surfacePosition,
-        surfaceNormals.geometricNormal,
-        viewDirection,
-        pixelCenter,
-        depth);
-
-    const uint sampleCount = max(g_SkyVisibility.sampleCount, 1u);
-    uint visibleSampleCount = 0u;
-    float nearestHitDistance = SkyVisibilityHitDistanceMiss;
-    [loop]
-    for (uint sampleIndex = 0u;
-        sampleIndex < sampleCount;
-        ++sampleIndex)
-    {
-        const float3 direction = SkyVisibilitySampleCosineHemisphere(
-            geometricNormal,
-            SkyVisibilitySample2D(
+        const float depth = SkyVisibilityLoadDepth(
+            pixelPosition,
+            receiverSampleIndex);
+        const float4 normals = SkyVisibilityLoadNormals(
+            pixelPosition,
+            receiverSampleIndex);
+        const bool covered = isfinite(depth) && depth > 0.0f &&
+            dot(normals.xyz, normals.xyz) > 1e-12f;
+        const float2 result = covered
+            ? SkyVisibilityEvaluate(
+                pixelPosition,
                 dispatchPosition,
-                sampleIndex,
-                sampleSequencePhase));
-        float hitDistance;
-        if (SkyVisibilityTrace(rayOrigin, direction, hitDistance))
-            ++visibleSampleCount;
-        else
-            nearestHitDistance = min(nearestHitDistance, hitDistance);
+                receiverSampleIndex,
+                sampleSequencePhase)
+            : float2(1.0f, 0.0f);
+        SkyVisibilityStore(
+            pixelPosition,
+            receiverSampleIndex,
+            result.x);
+        const bool depthIsCloser = covered &&
+            (!foundClosest ||
+                (g_SkyVisibility.reverseDepth != 0u
+                    ? depth > closestDepth
+                    : depth < closestDepth));
+        if (depthIsCloser)
+        {
+            foundClosest = true;
+            closestDepth = depth;
+            closestResult = result;
+        }
     }
-
-    u_Visibility[pixelPosition] =
-        float(visibleSampleCount) / float(sampleCount);
+    u_ClosestVisibility[pixelPosition] = closestResult.x;
 #if OUTPUT_HIT_DISTANCE
-    u_HitDistance[pixelPosition] = nearestHitDistance;
+    u_HitDistance[pixelPosition] = closestResult.y;
 #endif
 }

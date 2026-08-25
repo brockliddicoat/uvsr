@@ -145,6 +145,19 @@ namespace uvsr
             method == DenoisingMethodChoice::Sigma;
     }
 
+    [[nodiscard]] constexpr bool IsDenoisingMethodRuntimeAvailable(
+        DenoisingMethodChoice method,
+        bool spatialAvailable,
+        bool thirdPartyAvailable) noexcept
+    {
+        if (method == DenoisingMethodChoice::None)
+            return true;
+        if (IsSpatialDenoisingMethod(method))
+            return spatialAvailable;
+        return IsThirdPartyDenoisingMethod(method) &&
+            thirdPartyAvailable;
+    }
+
     [[nodiscard]] constexpr const char* GetDenoisingQualityLabel(
         DenoisingQuality quality) noexcept
     {

@@ -3,7 +3,7 @@
 #include <cstdint>
 
 #ifndef UVSR_REQUIRED_SHADER_MODEL
-#error UVSR_REQUIRED_SHADER_MODEL must match the ShaderMake target profile.
+#error UVSR_REQUIRED_SHADER_MODEL must match the direct DXC target profile.
 #endif
 
 namespace uvsr

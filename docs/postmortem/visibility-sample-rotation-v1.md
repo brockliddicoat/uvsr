@@ -1,6 +1,6 @@
 # Visibility Sample Rotation v1 Postmortem
 
-Visibility Sample Rotation v1 is a retired local experiment. It is not suitable
+Visibility Sample Rotation v1 is a retired experiment. It is not suitable
 for integration because the user's direct comparison found no visible
 improvement and found the rotation-enabled result worse and noisier, even after
 temporal reconstruction was allowed to gather. A possible convergence advantage
@@ -29,29 +29,22 @@ recover the expected benefit. The user considered that the rotating result might
 eventually be closer to convergence, but neither the observation nor the saved
 evidence established that claim.
 
-The product verdict is therefore negative. Do not promote the current
+The product verdict is therefore negative. Do not promote the rejected
 implementation, describe it as a quality improvement, or cite convergence as a
 demonstrated benefit.
 
 ## Experiment Identity
 
-- Canonical verified base:
+- Verified product base:
   `a7e51b7d3a09e18cc4e5da085b511623a87cc0ac`.
-- Local branch: `codex/sample-rotation-experiment`.
-- Implementation state: source remains uncommitted, unpushed, and never part of
-  Canonical UVSR.
+- Implementation state: the rejected source was never committed and therefore
+  has no immutable recovery point in UVSR history.
 - Documentation state: documentation-only pull request
   [#16](https://github.com/brockliddicoat/uvsr/pull/16) was merged into
-  Canonical `main` at `869e2241a72faf59f11604b5199a96b3c0218788`.
+  commit `869e2241a72faf59f11604b5199a96b3c0218788`.
   The rejected implementation was excluded.
-- Design and technical evidence:
-  [`../visibility-sample-rotation-v1.md`](../visibility-sample-rotation-v1.md).
-- Completed execution record:
-  [`../exec-plans/completed/visibility-sample-rotation-v1.md`](../exec-plans/completed/visibility-sample-rotation-v1.md).
-
-At the time of this postmortem, the rejected source remains only in the task's
-local working tree. Publishing these records does not publish the implementation
-or create an immutable source checkpoint.
+- Design, technical evidence, and the completed execution record are recoverable
+  from `e29a41245dbd0e6fd7a819d2341646419ab76e72`.
 
 ## Original Hypothesis
 
@@ -105,8 +98,8 @@ None of those findings proves a visual-quality or convergence benefit.
 
 ## Product Evaluation
 
-The decisive evidence is the user's direct qualitative comparison of the local
-candidate:
+The decisive evidence is the user's direct qualitative comparison of the
+rejected candidate:
 
 - no visible improvement with sample rotation enabled;
 - visibly worse and noisier output;
@@ -222,7 +215,7 @@ authorize restoring the implementation; ask before reviving it.
 
 ## Required Restart Sequence
 
-1. Start from the newest Canonical verified checkpoint available at that future
+1. Start from the newest verified product checkpoint available at that future
    time. Do not restore the entire rejected working-tree patch.
 2. Reproduce the current negative case with the legacy receiver and a minimal
    rotating prototype before adding controls or compatibility paths.

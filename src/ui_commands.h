@@ -43,10 +43,10 @@ namespace uvsr
     inline constexpr std::string_view UiVisibilityCommandPath = "ui.visible";
     inline constexpr std::string_view UiSceneCommandPath = "scene.current";
     inline constexpr std::string_view UiCameraCommandPath = "camera.mode";
-    inline constexpr std::string_view UiCameraLocationCommandPath =
-        "camera.location";
     inline constexpr std::string_view UiReloadShadersCommandAction =
         "reload-shaders";
+    inline constexpr std::string_view UiSettingsLoadCommandAction =
+        "settings.load";
 
     struct UiCommand
     {
@@ -115,8 +115,8 @@ namespace uvsr
             "ui",
             "scene",
             "camera",
-            "camera-location",
-            "reload-shaders"
+            "reload-shaders",
+            "settings.load"
         };
 
     namespace detail
@@ -408,13 +408,6 @@ namespace uvsr
             return detail::MakeUiCommandSuccess(
                 detail::MakePathAlias(UiCameraCommandPath, lexed.tokens));
         }
-        if (verb == "camera-location")
-        {
-            return detail::MakeUiCommandSuccess(
-                detail::MakePathAlias(
-                    UiCameraLocationCommandPath,
-                    lexed.tokens));
-        }
         if (verb == "ui")
         {
             UiCommand command;
@@ -448,6 +441,38 @@ namespace uvsr
                 UiReloadShadersCommandAction.data(),
                 UiReloadShadersCommandAction.size());
             detail::CopyArguments(lexed.tokens, 1u, command);
+            return detail::MakeUiCommandSuccess(std::move(command));
+        }
+        if (verb == "settings.load")
+        {
+            if (lexed.tokens.size() < 2u)
+            {
+                return detail::MakeUiCommandError(
+                    UiCommandParseError::MissingArgument,
+                    input.size(),
+                    "settings.load requires exactly one snapshot code.");
+            }
+            if (lexed.tokens.size() > 2u)
+            {
+                return detail::MakeUiCommandError(
+                    UiCommandParseError::TooManyArguments,
+                    lexed.tokens[2].begin,
+                    "settings.load accepts exactly one snapshot code.");
+            }
+            if (lexed.tokens[1].text.empty())
+            {
+                return detail::MakeUiCommandError(
+                    UiCommandParseError::EmptyArgument,
+                    lexed.tokens[1].begin,
+                    "settings.load snapshot code cannot be empty.");
+            }
+
+            UiCommand command;
+            command.verb = UiCommandVerb::Run;
+            command.action.assign(
+                UiSettingsLoadCommandAction.data(),
+                UiSettingsLoadCommandAction.size());
+            command.arguments.push_back(lexed.tokens[1].text);
             return detail::MakeUiCommandSuccess(std::move(command));
         }
 
@@ -697,11 +722,6 @@ namespace uvsr
         {
             completion.target = UiCommandCompletionTarget::Value;
             completion.valuePath = "camera.mode";
-        }
-        else if (verb == "camera-location")
-        {
-            completion.target = UiCommandCompletionTarget::Value;
-            completion.valuePath = "camera.location";
         }
         else
             completion.target = UiCommandCompletionTarget::Argument;

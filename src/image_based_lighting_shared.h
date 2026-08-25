@@ -3,8 +3,8 @@
 
 #ifdef __cplusplus
 
-// This file is consumed by ShaderMake as well as C++. Keep standard-library
-// includes in C++ translation units because ShaderMake scans shared includes
+// This file is consumed by direct DXC as well as C++. Keep standard-library
+// includes in C++ translation units because DXC scans shared includes
 // before language-condition evaluation.
 namespace uvsr
 {

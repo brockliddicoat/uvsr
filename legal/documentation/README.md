@@ -44,10 +44,10 @@ license decision before it should be strengthened.
 - [NVIDIA Donut](nvidia-donut.md)
 - [NVIDIA NVRHI](nvidia-nvrhi.md)
 - [Dear ImGui](dear-imgui.md)
-- [NVIDIA ShaderMake](nvidia-shadermake.md)
 - [Microsoft DirectX-Headers](microsoft-directx-headers.md)
 - [Microsoft DirectX Shader Compiler](microsoft-directx-shader-compiler.md)
 - [Microsoft Direct3D 12 Agility SDK](microsoft-direct3d-agility-sdk.md)
+- [Microsoft .NET and Windows Forms](microsoft-dotnet-windows-forms.md)
 - [Microsoft Segoe UI Fonts](microsoft-segoe-ui-fonts.md)
 - [GLFW](glfw.md)
 - [cgltf](cgltf.md)
@@ -60,13 +60,12 @@ license decision before it should be strengthened.
 - [G3D Innovation Engine](g3d-innovation-engine.md)
 - [Stochastic Sobol Generation](stochastic-sobol-generation.md)
 - [NVIDIA NRD](nvidia-nrd.md)
+- [NVIDIA MathLib](nvidia-mathlib.md)
 - [AgX Display Transform](agx-display-transform.md)
 - [Wicked Engine Temporal Anti-Aliasing](wicked-engine-temporal-aa.md)
 
 ## Current Algorithms and Reference Material
 
-- [A Fast and Stable Visibility Ratio Estimator for Correlated Spherical Integrals](heitz-ratio-estimator-shadows.md)
-- [Demofox Blue-Noise Soft Shadows](demofox-blue-noise-soft-shadows.md)
 - [NVIDIA Spatiotemporal Blue Noise](nvidia-spatiotemporal-blue-noise.md)
 - [Screen-Space Indirect Lighting With Visibility Bitmask](screen-space-indirect-lighting-visibility-bitmask.md)
 - [Activision Practical Real-Time Indirect Occlusion](activision-practical-realtime-indirect-occlusion.md)
@@ -74,10 +73,8 @@ license decision before it should be strengthened.
 
 ## Current Assets and Small Data
 
-- [Intel PBR Sponza](intel-pbr-sponza.md)
 - [Amazon Lumberyard Bistro](amazon-lumberyard-bistro.md)
 - [San Miguel 2.1](san-miguel-2-1.md)
-- [Blender Classroom](blender-classroom.md)
 - [Poly Haven Environments](poly-haven-environments.md)
 - [Noto Sans Fonts](noto-sans-fonts.md)
 - [ProggyClean Font](proggy-clean-font.md)
@@ -95,7 +92,6 @@ license decision before it should be strengthened.
 - [Epic Unreal Engine Shadow Systems](epic-unreal-engine-shadow-systems.md)
 - [Complementary Reimagined](complementary-reimagined.md)
 - [Kodak Film-Look References](kodak-film-look-references.md)
-- [Vercel Geist Font](vercel-geist-font.md)
 
 ## Auxiliary Tooling
 

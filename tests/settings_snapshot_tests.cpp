@@ -31,23 +31,112 @@ int main()
             "example.enabled",
             Kind::Boolean,
             Section::General,
-            "on|off")
+            "on|off",
+            true,
+            false,
+            "on")
     };
     constexpr auto ChangedDomainCatalog = std::array{
         Value(
             "example.enabled",
             Kind::Boolean,
             Section::General,
-            "false|true")
+            "false|true",
+            true,
+            false,
+            "on")
+    };
+    constexpr auto ChangedDefaultCatalog = std::array{
+        Value(
+            "example.enabled",
+            Kind::Boolean,
+            Section::General,
+            "on|off",
+            true,
+            false,
+            "off")
+    };
+    constexpr auto ChangedPersistenceCatalog = [BaselineCatalog] {
+        auto catalog = BaselineCatalog;
+        catalog[0].persistence = UiSettingsPersistence::SessionOnly;
+        return catalog;
+    }();
+    constexpr auto SessionDefaultCatalog = [] {
+        auto definition = Value(
+            "example.session",
+            Kind::Boolean,
+            Section::Ui,
+            "on|off",
+            true,
+            false,
+            "off");
+        definition.persistence = UiSettingsPersistence::SessionOnly;
+        return std::array{ definition };
+    }();
+    constexpr auto ChangedSessionDefaultCatalog = [SessionDefaultCatalog] {
+        auto catalog = SessionDefaultCatalog;
+        catalog[0].defaultValue = "on";
+        return catalog;
+    }();
+    constexpr auto ActionCatalog = std::array{
+        Action("example.reset", Section::General, "")
+    };
+    constexpr auto ChangedActionCatalog = [ActionCatalog] {
+        auto catalog = ActionCatalog;
+        catalog[0].domain = "changed-action-domain";
+        return catalog;
+    }();
+    constexpr auto BaselineWithUnrelatedAction = std::array{
+        BaselineCatalog[0],
+        ActionCatalog[0]
+    };
+    constexpr auto ReorderedCatalog = std::array{
+        Value(
+            "example.second",
+            Kind::Integer,
+            Section::General,
+            "0..9",
+            true,
+            false,
+            "2"),
+        BaselineCatalog[0]
+    };
+    constexpr auto CanonicallyOrderedCatalog = std::array{
+        BaselineCatalog[0],
+        ReorderedCatalog[0]
     };
     constexpr SettingsSnapshotSchemaFingerprint BaselineFingerprint =
         BuildSettingsSnapshotSchemaFingerprint(BaselineCatalog);
     constexpr SettingsSnapshotSchemaFingerprint ChangedFingerprint =
         BuildSettingsSnapshotSchemaFingerprint(ChangedDomainCatalog);
+    constexpr SettingsSnapshotSchemaFingerprint ChangedDefaultFingerprint =
+        BuildSettingsSnapshotSchemaFingerprint(ChangedDefaultCatalog);
+    constexpr SettingsSnapshotSchemaFingerprint
+        ChangedPersistenceFingerprint =
+            BuildSettingsSnapshotSchemaFingerprint(
+                ChangedPersistenceCatalog);
     constexpr SettingsSnapshotSchemaFingerprint ChangedPolicyFingerprint =
         BuildSettingsSnapshotSchemaFingerprint(
             BaselineCatalog,
             "synthetic-policy-change");
+    constexpr SettingsSnapshotSchemaFingerprint SessionDefaultFingerprint =
+        BuildSettingsSnapshotSchemaFingerprint(SessionDefaultCatalog);
+    constexpr SettingsSnapshotSchemaFingerprint
+        ChangedSessionDefaultFingerprint =
+            BuildSettingsSnapshotSchemaFingerprint(
+                ChangedSessionDefaultCatalog);
+    constexpr SettingsSnapshotSchemaFingerprint ActionFingerprint =
+        BuildSettingsSnapshotSchemaFingerprint(ActionCatalog);
+    constexpr SettingsSnapshotSchemaFingerprint ChangedActionFingerprint =
+        BuildSettingsSnapshotSchemaFingerprint(ChangedActionCatalog);
+    constexpr SettingsSnapshotSchemaFingerprint
+        BaselineWithUnrelatedActionFingerprint =
+            BuildSettingsSnapshotSchemaFingerprint(
+                BaselineWithUnrelatedAction);
+    constexpr SettingsSnapshotSchemaFingerprint ReorderedFingerprint =
+        BuildSettingsSnapshotSchemaFingerprint(ReorderedCatalog);
+    constexpr SettingsSnapshotSchemaFingerprint CanonicallyOrderedFingerprint =
+        BuildSettingsSnapshotSchemaFingerprint(CanonicallyOrderedCatalog);
     constexpr std::array<SettingsSnapshotSchemaVersionEntry, 1>
         ReservedVersionRegistry = {{
             { 1u, { 1u, 2u } }
@@ -83,7 +172,19 @@ int main()
             CurrentSettingsSnapshotSchemaFingerprint) ==
         SettingsSnapshotVersion);
     static_assert(!(BaselineFingerprint == ChangedFingerprint));
+    static_assert(!(BaselineFingerprint == ChangedDefaultFingerprint));
+    static_assert(!(BaselineFingerprint == ChangedPersistenceFingerprint));
     static_assert(!(BaselineFingerprint == ChangedPolicyFingerprint));
+    static_assert(!(SessionDefaultFingerprint ==
+        ChangedSessionDefaultFingerprint));
+    static_assert(ActionFingerprint == ChangedActionFingerprint);
+    static_assert(BaselineFingerprint ==
+        BaselineWithUnrelatedActionFingerprint);
+    static_assert(ReorderedFingerprint == CanonicallyOrderedFingerprint);
+    static_assert(CurrentSettingsSnapshotSchemaFingerprint ==
+        SettingsSnapshotSchemaFingerprint{
+            0x9c50b0f1515e89d8ull,
+            0x56c8ebb627b86984ull });
     static_assert(!ValidateSettingsSnapshotSchemaRegistry(
         ReservedVersionRegistry));
     static_assert(!ValidateSettingsSnapshotSchemaRegistry(
@@ -100,7 +201,10 @@ int main()
         "example.enabled",
         Kind::Boolean,
         Section::General,
-        "on|off")));
+        "on|off",
+        true,
+        false,
+        "on")));
     static_assert(!IsSettingsSnapshotValue(Value(
         "ui.settings-collapsed",
         Kind::Boolean,

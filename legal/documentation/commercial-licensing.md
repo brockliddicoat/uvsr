@@ -26,12 +26,20 @@ The repository is not presently represented as a commercially clear binary
 bundle. Known issues include:
 
 - San Miguel 2.1 is limited to research and educational use with attribution.
-- The pinned Direct3D 12 Agility SDK `1.717.1-preview` carries prerelease terms
-  that prohibit sharing or distributing its files, while the current build
-  copies its DLLs into runtime output.
-- Optional NVIDIA NRD builds are governed by the separate NVIDIA RTX SDK
-  License Agreement.
+- The pinned Direct3D 12 Agility SDK `1.619.5` permits distribution of its
+  listed object-code files subject to its conditions. UVSR packages only
+  `D3D12Core.dll` plus the complete terms and distributable list; distributors
+  must independently satisfy the significant-functionality, downstream-terms,
+  indemnity, trademark, Windows-use, and licensing restrictions.
+- NVIDIA NRD is a required renderer dependency governed by the separate NVIDIA
+  RTX SDK License Agreement; its MathLib dependency is MIT-licensed.
 - The exact user-supplied Bistro Wine GLB needs its chain of title confirmed.
+- The terms governing PBRT v4's retained San Miguel entry-camera data remain
+  unconfirmed; replace that small camera selection or confirm permission before
+  commercial distribution.
+- Wicked Engine is retained only as a comparable-policy reference because no
+  exact adapted revision or source block is recorded; re-audit and preserve its
+  MIT notice if future evidence establishes implementation lineage.
 - The AgX shader now preserves Benjamin Wrensch's MIT notice, but its immediate
   historical import route and the terms governing the Troy Sobotka data lineage
   still need confirmation.
@@ -49,15 +57,10 @@ Open Font License 1.1 and installs the complete license with the runtime. Any
 distribution must continue to satisfy the OFL's notice, standalone-sale,
 naming, and endorsement conditions.
 
-Transitional build output also carries byte-identical Noto Sans copies under
-historical `CodexUI` paths so the prior launcher can validate the new source.
-Those aliases are Noto Sans under the same OFL, not copied Windows fonts. The
-current launcher removes them, together with the temporary historical Geist OFL
-notice filename, before manifesting a new Noto-only package.
-
 The Ogg interface option uses Dear ImGui's embedded ProggyClean font under the
 MIT License. New packages include Tristan Grimmer's complete copyright and MIT
-notice as `licenses/ProggyClean-MIT.txt`; distributors must preserve that notice.
+notice as `bin/licenses/ProggyClean-MIT.txt`; distributors must preserve that
+notice.
 These permissive font terms do not resolve the independent clearance issues
 listed above.
 

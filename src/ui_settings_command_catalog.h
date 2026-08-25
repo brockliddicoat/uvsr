@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -22,7 +23,6 @@ namespace uvsr
     {
         Ui,
         General,
-        Pathing,
         Representation,
         Noise,
         Visibility,
@@ -37,6 +37,67 @@ namespace uvsr
         Count
     };
 
+    [[nodiscard]] constexpr bool IsUiSettingsRuntimeMutationLocked(
+        UiSettingsCommandSection section,
+        bool sceneBusy) noexcept
+    {
+        return sceneBusy && section != UiSettingsCommandSection::Ui;
+    }
+
+    enum class UiSettingsCommandDispatcher : std::uint8_t
+    {
+        Ui,
+        General,
+        Representation,
+        Noise,
+        Visibility,
+        Denoising,
+        Aliasing,
+        Debug,
+        Sky,
+        Lights,
+        DirectionalShadows,
+        Materials,
+        None
+    };
+
+    [[nodiscard]] constexpr UiSettingsCommandDispatcher
+    ResolveUiSettingsCommandDispatcher(
+        UiSettingsCommandSection section) noexcept
+    {
+        switch (section)
+        {
+        case UiSettingsCommandSection::Ui:
+            return UiSettingsCommandDispatcher::Ui;
+        case UiSettingsCommandSection::General:
+            return UiSettingsCommandDispatcher::General;
+        case UiSettingsCommandSection::Representation:
+            return UiSettingsCommandDispatcher::Representation;
+        case UiSettingsCommandSection::Noise:
+            return UiSettingsCommandDispatcher::Noise;
+        case UiSettingsCommandSection::Visibility:
+            return UiSettingsCommandDispatcher::Visibility;
+        case UiSettingsCommandSection::Denoising:
+            return UiSettingsCommandDispatcher::Denoising;
+        case UiSettingsCommandSection::Aliasing:
+            return UiSettingsCommandDispatcher::Aliasing;
+        case UiSettingsCommandSection::Debug:
+            return UiSettingsCommandDispatcher::Debug;
+        case UiSettingsCommandSection::Sky:
+            return UiSettingsCommandDispatcher::Sky;
+        case UiSettingsCommandSection::Lights:
+            return UiSettingsCommandDispatcher::Lights;
+        case UiSettingsCommandSection::DirectionalShadows:
+            return UiSettingsCommandDispatcher::DirectionalShadows;
+        case UiSettingsCommandSection::Materials:
+            return UiSettingsCommandDispatcher::Materials;
+        case UiSettingsCommandSection::Footer:
+        case UiSettingsCommandSection::Count:
+            return UiSettingsCommandDispatcher::None;
+        }
+        return UiSettingsCommandDispatcher::None;
+    }
+
     enum class UiSettingsCommandVerb : std::uint8_t
     {
         Get = 1u << 0u,
@@ -46,6 +107,47 @@ namespace uvsr
         Run = 1u << 4u
     };
 
+    enum class UiSettingsPersistence : std::uint8_t
+    {
+        SnapshotCatalog,
+        SessionOnly,
+        None
+    };
+
+    struct UiSettingsCanonicalDefault
+    {
+        std::string_view name;
+        std::string_view value;
+    };
+
+#define UVSR_SETTING_DEFAULT(name, value) \
+    UiSettingsCanonicalDefault{ name, value },
+    inline constexpr auto UiSettingsCanonicalDefaults = std::array{
+#include "ui_settings_canonical_defaults.def"
+    };
+#undef UVSR_SETTING_DEFAULT
+
+    [[nodiscard]] constexpr std::string_view FindUiSettingsCanonicalDefault(
+        std::string_view name) noexcept
+    {
+        for (const UiSettingsCanonicalDefault& entry :
+            UiSettingsCanonicalDefaults)
+        {
+            if (entry.name == name)
+                return entry.value;
+        }
+        return {};
+    }
+
+    [[nodiscard]] constexpr UiSettingsPersistence
+    ResolveUiSettingsPersistence(std::string_view name) noexcept
+    {
+        return name == "ui.settings-collapsed" ||
+            name == "material-editor.visible"
+            ? UiSettingsPersistence::SessionOnly
+            : UiSettingsPersistence::SnapshotCatalog;
+    }
+
     struct UiSettingsCommandDefinition
     {
         std::string_view name;
@@ -54,6 +156,9 @@ namespace uvsr
         std::uint8_t supportedVerbs = 0u;
         bool dynamic = false;
         std::string_view domain;
+        UiSettingsPersistence persistence =
+            UiSettingsPersistence::SnapshotCatalog;
+        std::string_view defaultValue;
 
         [[nodiscard]] constexpr bool Supports(UiSettingsCommandVerb verb) const
         {
@@ -67,7 +172,8 @@ namespace uvsr
         UiSettingsCommandSection section,
         std::string_view domain,
         bool supportsReset = true,
-        bool dynamic = false)
+        bool dynamic = false,
+        std::string_view defaultValue = {})
     {
         const auto verb = [](UiSettingsCommandVerb value) {
             return static_cast<std::uint8_t>(value);
@@ -84,7 +190,11 @@ namespace uvsr
                     : 0u) |
                 (supportsReset ? verb(UiSettingsCommandVerb::Reset) : 0u)),
             dynamic,
-            domain
+            domain,
+            ResolveUiSettingsPersistence(name),
+            defaultValue.empty()
+                ? FindUiSettingsCanonicalDefault(name)
+                : defaultValue
         };
     }
 
@@ -99,7 +209,9 @@ namespace uvsr
             section,
             static_cast<std::uint8_t>(UiSettingsCommandVerb::Run),
             false,
-            domain
+            domain,
+            UiSettingsPersistence::None,
+            "<action>"
         };
     }
 
@@ -131,23 +243,8 @@ namespace uvsr
         Value("gpu.adapter", Kind::DynamicSelection, Section::General, "runtime adapter index or unique display name", false, true),
         Value("gpu.adaptive-sync", Kind::Enum, Section::General, "off|vendor-agnostic|nvidia-exclusive"),
         Value("camera.mode", Kind::Enum, Section::General, "freelook|locked"),
-        Value("camera.location", Kind::Enum, Section::General, "piloted|position-1"),
         Value("scene.current", Kind::DynamicSelection, Section::General, "runtime scene filename or unique display name", false, true),
         Action("open-scene-folder", Section::General, "open the active scene directory"),
-
-        // Pathing.
-        Value("pathing.solver", Kind::Enum, Section::Pathing, "rtx-pt|restir-pt|restir-gi"),
-        Value("pathing.nee", Kind::Enum, Section::Pathing, "uniform|power|nee-at"),
-        Value("pathing.max-bounces", Kind::Integer, Section::Pathing, "integer 1..96"),
-        Value("pathing.russian-roulette", Kind::Boolean, Section::Pathing, "on|off"),
-        Value("pathing.nee-candidates", Kind::Integer, Section::Pathing, "integer 1..63"),
-        Value("pathing.samples-per-pixel", Kind::Integer, Section::Pathing, "integer 1..8"),
-        Value("pathing.shared-primary-surface", Kind::Boolean, Section::Pathing, "on|off"),
-        Value("pathing.ser", Kind::Boolean, Section::Pathing, "on|off"),
-        Value("pathing.rtxdi", Kind::Boolean, Section::Pathing, "on|off"),
-        Value("pathing.temporal-reuse", Kind::Boolean, Section::Pathing, "on|off"),
-        Value("pathing.spatial-neighbors", Kind::Integer, Section::Pathing, "integer 0..4"),
-        Value("pathing.reuse-proposals-during-motion", Kind::Boolean, Section::Pathing, "on|off"),
 
         // Representation.
         Value("representation.bvh.build-preference", Kind::Enum, Section::Representation, "fast-trace|balanced|fast-build"),
@@ -160,15 +257,6 @@ namespace uvsr
         Value("noise.resolution", Kind::Enum, Section::Noise, "64x64|128x128|256x256|512x512"),
         Value("noise.animate-samples", Kind::Boolean, Section::Noise, "on|off"),
         Value("noise.accumulate-samples", Kind::Boolean, Section::Noise, "on|off"),
-        Value("noise.accumulation-mode", Kind::Enum, Section::Noise, "progressive|responsive|variance-guided"),
-        Value("noise.accumulation-averaging", Kind::Enum, Section::Noise, "cumulative|exponential"),
-        Value("noise.accumulation-scheduling", Kind::Enum, Section::Noise, "every-pixel|variance-guided"),
-        Value("noise.accumulation-effective-history", Kind::Integer, Section::Noise, "integer 2..4096"),
-        Value("noise.accumulation-history-preset", Kind::Enum, Section::Noise, "quick-preview|responsive|balanced|stable|very-stable|custom (get only)"),
-        Value("noise.accumulation-minimum-samples", Kind::Integer, Section::Noise, "integer 2..256"),
-        Value("noise.accumulation-target-error", Kind::Float, Section::Noise, "float 0.001..0.25"),
-        Value("noise.accumulation-minimum-update-rate", Kind::Float, Section::Noise, "float 0.00390625..1"),
-        Value("noise.accumulation-workload-preset", Kind::Enum, Section::Noise, "full-quality|balanced|performance|maximum-savings|custom (get only)"),
 
         // Visibility.
         Value("visibility.enabled", Kind::Boolean, Section::Visibility, "on|off"),
@@ -218,22 +306,12 @@ namespace uvsr
         Value("denoising.sky.history", Kind::Integer, Section::Denoising, "integer 1..32"),
         Value("denoising.sky.disocclusion", Kind::Float, Section::Denoising, "float 0.001..0.1"),
         Value("denoising.sky.anti-lag", Kind::Float, Section::Denoising, "float 0..1"),
-        Value("denoising.path-tracing.signal-groups", Kind::Integer, Section::Denoising, "integer 1..3; RESTIR supports 1..2"),
-        Value("denoising.path-tracing.resolve-strength", Kind::Float, Section::Denoising, "float 0..1"),
-        Value("denoising.path-tracing.firefly-filter", Kind::Boolean, Section::Denoising, "on|off"),
-        Value("denoising.path-tracing.firefly-threshold", Kind::Float, Section::Denoising, "float 0.01..1000000"),
-        Value("denoising.path-tracing.method", Kind::Enum, Section::Denoising, "raw|spatial-path-resolve"),
-
         // Anti-Aliasing.
         Value("anti-aliasing.taa.enabled", Kind::Boolean, Section::Aliasing, "on|off"),
         Value("anti-aliasing.taa.quality", Kind::Enum, Section::Aliasing, "low|medium|high|ultra"),
         Value("anti-aliasing.taa.jitter-sequence", Kind::Enum, Section::Aliasing, "rotated-grid-4|uniform-helix-4|halton-8|halton-16|halton-32|sobol-32"),
         Value("anti-aliasing.taa.previous-depth", Kind::Enum, Section::Aliasing, "nearest-texel|four-texel-footprint"),
         Value("anti-aliasing.taa.temporal-cost", Kind::Enum, Section::Aliasing, "full-quality|reduced|minimum"),
-        Value("anti-aliasing.taa.motion-source", Kind::Enum, Section::Aliasing, "preset|center|closest-cross|edge-dilation"),
-        Value("anti-aliasing.taa.current-sample", Kind::Enum, Section::Aliasing, "preset|direct|de-jittered"),
-        Value("anti-aliasing.taa.history-filter", Kind::Enum, Section::Aliasing, "preset|bilinear|bicubic|five-tap-bicubic|nine-tap-bicubic"),
-        Value("anti-aliasing.taa.rectification", Kind::Enum, Section::Aliasing, "preset|pair-tristimulus|variance-chroma"),
         Value("anti-aliasing.taa.history.frames", Kind::Integer, Section::Aliasing, "-1 or integer 1..32; -1 uses quality preset"),
         Value("anti-aliasing.taa.history.strength", Kind::Float, Section::Aliasing, "-1 or float 0..2; -1 uses quality preset"),
         Value("anti-aliasing.taa.history.storage", Kind::Enum, Section::Aliasing, "temporal-cost|robust|compact"),
@@ -252,13 +330,11 @@ namespace uvsr
         Value("anti-aliasing.msaa.enabled", Kind::Boolean, Section::Aliasing, "on|off"),
         Value("anti-aliasing.msaa.quality", Kind::Enum, Section::Aliasing, "low|medium|high|ultra"),
         Value("anti-aliasing.msaa.samples", Kind::Enum, Section::Aliasing, "2x|4x|8x|16x"),
-        Value("anti-aliasing.msaa.per-sample-shadows", Kind::Boolean, Section::Aliasing, "on|off"),
 
         // Debug.
         Value("debug.world.materials", Kind::Enum, Section::Debug, "scene|white|white-detail|white-lighting"),
         Value("debug.visibility.view", Kind::Enum, Section::Debug, "final|ambient-visibility|traced-indirect|applied-indirect"),
         Value("debug.pbr.filter", Kind::Enum, Section::Debug, "final|surface-normals|geometry-normals|normal-difference|diffuse-environment|environment-direction|reflected-environment|brdf-response|specular-environment|all-environment-light|specular-visibility|environment-level|sky-visibility"),
-        Value("debug.path-tracing.view", Kind::Enum, Section::Debug, "final|albedo|geometric-normal|shading-normal|sample-count|update-rate|signal-group|direct-reservoir|indirect-reservoir|primary-transport|indirect-transport"),
 
         // Sky.
         Value("sky.environment", Kind::Enum, Section::Sky, "day|bright-overcast|soft-day|night|starry-night|cloudy"),
@@ -277,7 +353,6 @@ namespace uvsr
         Value("sky.visibility.enabled", Kind::Boolean, Section::Sky, "on|off"),
         Value("sky.visibility.diffuse-ibl", Kind::Boolean, Section::Sky, "on|off"),
         Value("sky.visibility.specular-ibl", Kind::Boolean, Section::Sky, "on|off"),
-        Value("sky.visibility.ratio-estimator", Kind::Boolean, Section::Sky, "on|off"),
         Value("sky.visibility.output-hit-distance", Kind::Boolean, Section::Sky, "on|off"),
         Value("sky.visibility.samples-per-pixel", Kind::Enum, Section::Sky, "1|2|4|8|16|32|64"),
         Value("sky.visibility.specify-noise", Kind::Boolean, Section::Sky, "on|off"),
@@ -318,14 +393,6 @@ namespace uvsr
 
         // Directional Shadows.
         Value("shadows.ray-traced.enabled", Kind::Boolean, Section::DirectionalShadows, "on|off"),
-        Value("shadows.ray-traced.ratio-estimator", Kind::Boolean, Section::DirectionalShadows, "on|off"),
-        Value("shadows.ray-traced.output-hit-distance", Kind::Boolean, Section::DirectionalShadows, "on|off"),
-        Value("shadows.ray-traced.hard-shadows", Kind::Boolean, Section::DirectionalShadows, "on|off"),
-        Value("shadows.ray-traced.samples-per-pixel", Kind::Enum, Section::DirectionalShadows, "1|2|4|8|16|32|64"),
-        Value("shadows.ray-traced.specify-noise", Kind::Boolean, Section::DirectionalShadows, "on|off"),
-        Value("shadows.ray-traced.noise-pattern", Kind::Enum, Section::DirectionalShadows, "spatial-white|spatial-blue|spatiotemporal-blue"),
-        Value("shadows.ray-traced.noise-resolution", Kind::Enum, Section::DirectionalShadows, "64x64|128x128|256x256|512x512"),
-        Value("shadows.ray-traced.animate-samples", Kind::Boolean, Section::DirectionalShadows, "on|off"),
         Value("shadows.ray-traced.max-distance", Kind::Enum, Section::DirectionalShadows, "max|32m|16m|8m|4m|2m"),
         Value("shadows.ray-traced.ray-bias", Kind::Float, Section::DirectionalShadows, "world units 0..0.1"),
 
@@ -357,6 +424,53 @@ namespace uvsr
         Action("capture", Section::Footer, "copy the current frame to the clipboard"),
         Action("restart", Section::Footer, "restart UVSR")
     };
+
+    [[nodiscard]] constexpr bool ValidateCanonicalSettingsDefaults() noexcept
+    {
+        for (const UiSettingsCommandDefinition& definition :
+            UiSettingsCommandCatalog)
+        {
+            if (definition.kind != UiSettingsCommandKind::Action &&
+                definition.defaultValue.empty())
+            {
+                return false;
+            }
+        }
+        for (std::size_t index = 0u;
+            index < UiSettingsCanonicalDefaults.size(); ++index)
+        {
+            if (UiSettingsCanonicalDefaults[index].name.empty() ||
+                UiSettingsCanonicalDefaults[index].value.empty())
+            {
+                return false;
+            }
+            std::size_t catalogMatches = 0u;
+            for (const UiSettingsCommandDefinition& definition :
+                UiSettingsCommandCatalog)
+            {
+                if (definition.name ==
+                    UiSettingsCanonicalDefaults[index].name)
+                {
+                    ++catalogMatches;
+                }
+            }
+            if (catalogMatches != 1u)
+                return false;
+            for (std::size_t other = index + 1u;
+                other < UiSettingsCanonicalDefaults.size(); ++other)
+            {
+                if (UiSettingsCanonicalDefaults[index].name ==
+                    UiSettingsCanonicalDefaults[other].name)
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    static_assert(ValidateCanonicalSettingsDefaults(),
+        "Every settings value requires one canonical default");
 
     inline constexpr std::array<std::string_view, 5>
         UiSettingsNavigationExemptions = {

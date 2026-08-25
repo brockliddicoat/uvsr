@@ -34,9 +34,9 @@ namespace uvsr
         return true;
     }
 
-    // Imported Sponza variants use inconsistent node casing and the legacy
-    // HDRI_SKY spelling. Normalize only the two renderer-owned light identities;
-    // preserve every authored lamp name verbatim.
+    // Imported scenes can use inconsistent node casing and the legacy HDRI_SKY
+    // spelling. Normalize only the two renderer-owned light identities; preserve
+    // every authored lamp name verbatim.
     [[nodiscard]] inline std::string NormalizeSceneLightName(
         std::string_view name)
     {

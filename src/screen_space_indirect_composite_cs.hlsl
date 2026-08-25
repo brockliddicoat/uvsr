@@ -1,10 +1,10 @@
 #pragma pack_matrix(row_major)
 
-#include <donut/shaders/binding_helpers.hlsli>
-#include <donut/shaders/gbuffer.hlsli>
-#include <donut/shaders/utils.hlsli>
+#include "renderer_gpu_helpers.hlsli"
 #include "pbr_environment.hlsli"
 #include "pbr_gbuffer.hlsli"
+#include "pbr_lighting_debug_contract.h"
+#include "renderer_environment_bindings.h"
 #include "screen_space_indirect_composite_shared.h"
 #include "screen_space_visibility_cb.h"
 
@@ -20,17 +20,21 @@ Texture2D<float4> t_GBufferDiffuse : register(t3);
 Texture2D<float4> t_GBufferEmissive : register(t4);
 Texture2D<float> t_MaterialAmbientOcclusion : register(t5);
 Texture2D<float4> t_Normal : register(t6);
-TextureCubeArray t_DiffuseEnvironment : register(t7);
+TextureCubeArray t_DiffuseEnvironment :
+    register(UVSR_SCREEN_SPACE_COMPOSITE_DIFFUSE_ENVIRONMENT_REGISTER);
 Texture2D<float4> t_GBufferSpecular : register(t8);
 Texture2D<float> t_Depth : register(t9);
-TextureCubeArray t_SpecularEnvironment : register(t10);
-Texture2D t_EnvironmentBrdf : register(t11);
-Texture2D<float> t_SkyVisibility : register(t12);
+TextureCubeArray t_SpecularEnvironment :
+    register(UVSR_SCREEN_SPACE_COMPOSITE_SPECULAR_ENVIRONMENT_REGISTER);
+Texture2D t_EnvironmentBrdf :
+    register(UVSR_SCREEN_SPACE_COMPOSITE_ENVIRONMENT_BRDF_REGISTER);
+Texture2D<float> t_SkyVisibility :
+    register(UVSR_SCREEN_SPACE_COMPOSITE_SKY_VISIBILITY_REGISTER);
 
 SamplerState s_DiffuseEnvironmentSampler : register(s0);
 SamplerState s_EnvironmentBrdfSampler : register(s1);
 
-VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Output : register(u0);
+RWTexture2D<float4> u_Output : register(u0);
 
 [numthreads(8, 8, 1)]
 void main(uint2 pixel : SV_DispatchThreadID)
@@ -38,16 +42,20 @@ void main(uint2 pixel : SV_DispatchThreadID)
     if (any(pixel >= uint2(g_Visibility.fullResolution)))
         return;
 
+    const uint debugPresentation = ResolvePbrDebugPresentation(
+        g_Visibility.lightingDebugView,
+        g_Visibility.visibilityDebugView);
     float4 normalChannels = t_Normal[pixel];
     if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
     {
-        u_Output[pixel] = g_Visibility.visibilityDebugView == 0u
-            ? t_BaseLighting[pixel]
-            : float4(0.0f, 0.0f, 0.0f, 1.0f);
+        u_Output[pixel] = PbrDebugUsesBlackBackground(
+            g_Visibility.lightingDebugView,
+            g_Visibility.visibilityDebugView)
+            ? float4(0.0f, 0.0f, 0.0f, 1.0f)
+            : t_BaseLighting[pixel];
         return;
     }
-    if (g_Visibility.visibilityDebugView == 0u &&
-        g_Visibility.lightingDebugView != 0u)
+    if (debugPresentation == UVSR_PBR_DEBUG_PRESENT_LIGHTING)
     {
         u_Output[pixel] = t_BaseLighting[pixel];
         return;
@@ -104,15 +112,11 @@ void main(uint2 pixel : SV_DispatchThreadID)
             g_Visibility.specularEnvironmentMipLevels);
     float skyVisibility = 1.0f;
     const bool applySkyVisibilityToDiffuseIbl =
-        g_Visibility.skyVisibilityApplication ==
-            UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL ||
-        g_Visibility.skyVisibilityApplication ==
-            UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
+        SkyVisibilityAppliesToDiffuseIbl(
+            g_Visibility.skyVisibilityApplication);
     const bool applySkyVisibilityToSpecularIbl =
-        g_Visibility.skyVisibilityApplication ==
-            UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL ||
-        g_Visibility.skyVisibilityApplication ==
-            UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
+        SkyVisibilityAppliesToSpecularIbl(
+            g_Visibility.skyVisibilityApplication);
     if (applySkyVisibilityToDiffuseIbl ||
         applySkyVisibilityToSpecularIbl)
     {
@@ -201,11 +205,14 @@ void main(uint2 pixel : SV_DispatchThreadID)
         environmentDiffuse,
         adjustedAmbientVisibility,
         screenSpaceIndirect);
-    if (g_Visibility.visibilityDebugView == 1u)
+    if (g_Visibility.visibilityDebugView ==
+        UVSR_VISIBILITY_DEBUG_AMBIENT_VISIBILITY)
         finalComposite = ambientVisibility.xxx;
-    else if (g_Visibility.visibilityDebugView == 2u)
+    else if (g_Visibility.visibilityDebugView ==
+        UVSR_VISIBILITY_DEBUG_TRACED_INDIRECT)
         finalComposite = indirectDiffuse;
-    else if (g_Visibility.visibilityDebugView == 3u)
+    else if (g_Visibility.visibilityDebugView ==
+        UVSR_VISIBILITY_DEBUG_APPLIED_INDIRECT)
         finalComposite = screenSpaceIndirect;
     if (any(!isfinite(finalComposite)))
         finalComposite = 0.0f;

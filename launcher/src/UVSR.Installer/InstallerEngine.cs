@@ -3,27 +3,79 @@ using System.Runtime.ExceptionServices;
 
 namespace UvsrInstaller;
 
+internal interface IInstallerShell
+{
+    void ValidateCanApply(
+        Guid installationId,
+        LauncherState? previousLauncher,
+        bool desktopShortcut,
+        Guid? transactionId = null);
+    void Apply(
+        Guid installationId,
+        InstallState? rendererState,
+        LauncherState launcherState,
+        InstallLog log,
+        Guid? transactionId = null);
+    void Remove(Guid installationId, InstallLog log);
+    void RemoveTransactionArtifacts(
+        Guid installationId,
+        Guid transactionId,
+        InstallLog log);
+    void Launch(InstallState state);
+}
+
+internal sealed record InstallerEngineServices(
+    Action PlatformCheck,
+    Action<long, bool> DiskSpaceCheck,
+    Func<string, ExactProcessInspection> InspectRendererProcesses,
+    Func<string, bool, ExactProcessInspection> InspectLauncherProcesses,
+    Action<InstallerPaths, Guid, Guid, InstallState?, InstallLog> ScheduleUninstall,
+    Action<Guid> RemoveStagedRegistryEntry)
+{
+    internal static InstallerEngineServices Create(InstallerPaths paths) => new(
+        InstallerEngine.EnsureSupportedPlatform,
+        (archiveBytes, preservingInstalled) =>
+            InstallerEngine.EnsureDiskSpace(paths, archiveBytes,
+                preservingInstalled),
+        ProcessInspector.InspectManagedUvsrProcesses,
+        ProcessInspector.InspectManagedLauncherProcesses,
+        SelfCleanup.Schedule,
+        ShellIntegration.RemoveStagedRegistryEntry);
+}
+
 internal sealed class InstallerEngine : IDisposable
 {
     private readonly InstallerPaths _paths;
     private readonly OwnershipManager _ownership;
-    private readonly ProcessRunner _runner = new();
-    private readonly DownloadManager _downloads = new();
-    private readonly ToolchainManager _toolchain;
-    private readonly SourceManager _source;
+    private readonly DownloadManager _downloads;
     private readonly PayloadPackager _packager;
-    private readonly ShellIntegration _shell;
+    private readonly IInstallerShell _shell;
     private readonly LauncherManager _launcher;
+    private readonly InstallerEngineServices _services;
 
     internal InstallerEngine(InstallerPaths paths)
+        : this(paths, new ShellIntegration(paths), new DownloadManager(),
+            launcherFeedPublicKeySpki: null, launcherFeedKeyId: null,
+            services: null)
+    {
+    }
+
+    internal InstallerEngine(
+        InstallerPaths paths,
+        IInstallerShell shell,
+        DownloadManager downloads,
+        byte[]? launcherFeedPublicKeySpki,
+        string? launcherFeedKeyId,
+        InstallerEngineServices? services)
     {
         _paths = paths;
         _ownership = new OwnershipManager(paths);
-        _toolchain = new ToolchainManager(paths, _runner, _downloads);
-        _source = new SourceManager(paths, _runner);
+        _downloads = downloads;
         _packager = new PayloadPackager(paths);
-        _shell = new ShellIntegration(paths);
-        _launcher = new LauncherManager(paths, _runner, _downloads);
+        _shell = shell;
+        _launcher = new LauncherManager(paths, new ProcessRunner(), _downloads,
+            launcherFeedPublicKeySpki, launcherFeedKeyId);
+        _services = services ?? InstallerEngineServices.Create(paths);
     }
 
     internal static void EnsureSupportedPlatform()
@@ -53,17 +105,17 @@ internal sealed class InstallerEngine : IDisposable
             InstallState state = JsonStore.Read<InstallState>(_paths.StateFile);
             state.Validate(marker.InstallationId);
             string packageRoot = _paths.VersionRoot(state.ActiveVersionId);
-            PackageManifest manifest = JsonStore.Read<PackageManifest>(
-                Path.Combine(packageRoot, ".uvsr-package.json"),
-                ProductConstants.MaximumPackageManifestBytes);
-            if (manifest.InstallationId != marker.InstallationId ||
-                manifest.VersionId != state.ActiveVersionId || manifest.Commit != state.Commit ||
+            PackageManifest manifest = PayloadPackager.ReadManifest(packageRoot);
+            if (manifest.ReleaseSequence != state.ReleaseSequence ||
+                manifest.SourceCommit != state.Commit ||
+                manifest.SettingsHash != state.SettingsHash ||
+                manifest.EngineVersion != state.EngineVersion ||
                 manifest.ExecutableSha256 != state.ExecutableSha256)
                 throw new InstallerException("The active UVSR package record does not match the installed state.");
             PayloadPackager.ValidatePackage(packageRoot, manifest);
             string executable = _paths.VersionExecutable(state.ActiveVersionId);
             return new InstallSnapshot(true, true, marker.InstallationId, state, executable,
-                "UVSR is installed and ready to launch.");
+                $"UVSR Engine {state.EngineVersion} is ready; settings {state.SettingsHash}.");
         }
         catch (InstallerException)
         {
@@ -73,7 +125,7 @@ internal sealed class InstallerEngine : IDisposable
     }
 
     internal ExactProcessInspection InspectRendererProcesses() =>
-        ProcessInspector.InspectManagedUvsrProcesses(_paths.VersionsDirectory);
+        _services.InspectRendererProcesses(_paths.VersionsDirectory);
 
     internal async Task EnsureLauncherReadyAsync(
         bool desktopShortcut,
@@ -81,7 +133,7 @@ internal sealed class InstallerEngine : IDisposable
         Action<string>? logObserver,
         CancellationToken cancellationToken)
     {
-        EnsureSupportedPlatform();
+        _services.PlatformCheck();
         using OperationLock operationLock = OperationLock.Acquire();
         OwnerMarker? existing = _ownership.Inspect();
         if (existing is null)
@@ -103,7 +155,7 @@ internal sealed class InstallerEngine : IDisposable
         Action<string>? logObserver,
         CancellationToken cancellationToken)
     {
-        EnsureSupportedPlatform();
+        _services.PlatformCheck();
         using OperationLock operationLock = OperationLock.Acquire();
         OwnerMarker marker = _ownership.EnsureRoots();
         InstallLog log = new(_paths.LogsDirectory, logObserver);
@@ -134,7 +186,7 @@ internal sealed class InstallerEngine : IDisposable
         Action<string>? logObserver,
         CancellationToken cancellationToken)
     {
-        EnsureSupportedPlatform();
+        _services.PlatformCheck();
         using OperationLock operationLock = OperationLock.Acquire();
         OwnerMarker marker = _ownership.EnsureRoots();
         InstallLog log = new(_paths.LogsDirectory, logObserver);
@@ -198,12 +250,11 @@ internal sealed class InstallerEngine : IDisposable
     internal async Task<OperationResult> ExecuteAsync(
         InstallerOperation operation,
         bool desktopShortcut,
-        Func<PromptRequest, Task<bool>> prompt,
         IProgress<InstallerProgress>? progress,
         Action<string>? logObserver,
         CancellationToken cancellationToken)
     {
-        EnsureSupportedPlatform();
+        _services.PlatformCheck();
         using OperationLock operationLock = OperationLock.Acquire();
         OwnerMarker marker = operation == InstallerOperation.Uninstall
             ? _ownership.Inspect() ?? throw new InstallerException("UVSR is not installed for this Windows user.")
@@ -232,14 +283,22 @@ internal sealed class InstallerEngine : IDisposable
                 ? TryReadValidState(marker.InstallationId)
                 : ReadStateIfPresent(marker.InstallationId);
             ValidateOperation(operation, previousState, originalStateExisted);
-            EnsureDiskSpace(previousState is null ? 20L : 12L);
             _shell.ValidateCanApply(marker.InstallationId, launcherState,
                 desktopShortcut);
 
-            ToolPaths tools = await _toolchain.EnsureAsync(prompt, progress, log, cancellationToken);
-            SourceResolution resolution = await _source.ResolveMainAsync(tools, previousState,
+            RendererFeed feed = await _launcher.DownloadRendererFeedAsync(
                 progress, log, cancellationToken);
-            if (operation == InstallerOperation.Update && resolution.IsAlreadyInstalled)
+            _services.DiskSpaceCheck(
+                feed.Artifact.Size, previousState is not null);
+            ComponentUpdateState feedState =
+                LauncherManager.ClassifyRendererUpdate(Inspect(), feed);
+            if (operation == InstallerOperation.Reinstall &&
+                previousState is not null &&
+                feed.ReleaseSequence < previousState.ReleaseSequence)
+                throw new InstallerException(
+                    "UVSR Launcher refused to replace a newer installed renderer with an older feed sequence.");
+            if (operation == InstallerOperation.Update &&
+                feedState == ComponentUpdateState.Current)
             {
                 InstallState updated = previousState! with { DesktopShortcut = desktopShortcut };
                 Guid shellTransactionId = Guid.NewGuid();
@@ -277,52 +336,35 @@ internal sealed class InstallerEngine : IDisposable
                 if (shellJournalCleared)
                     TryPostCommitCleanup(() => SweepOrphanedVersions(updated, log), log);
                 return new OperationResult(
-                    "UVSR is already up to date with the newest compatible renderer source.", updated,
+                    "UVSR Engine is already at the newest trusted package.", updated,
                     _paths.VersionExecutable(updated.ActiveVersionId));
-            }
-            if (resolution.IsNonFastForward)
-            {
-                string installedPublicCommit =
-                    RendererSourceBridgeRegistry.MapSourceToPublicBase(
-                        previousState!.Commit);
-                bool accepted = await prompt(new PromptRequest(
-                    "Public Main History Changed",
-                    $"The public main branch is no longer a direct continuation of installed public source {installedPublicCommit[..7]}. " +
-                    $"Replace it with current public main {resolution.PublicBaseCommit[..7]}? The installed version remains available unless the replacement builds successfully."));
-                if (!accepted)
-                    throw new InstallerException("The update was cancelled. The installed UVSR version was preserved.");
             }
 
             Guid transactionId = Guid.NewGuid();
             TransactionRecord transaction = new(ProductConstants.SchemaVersion,
-                marker.InstallationId, transactionId, operation, "source", null,
+                marker.InstallationId, transactionId, operation, "download", null,
                 previousState, DateTimeOffset.UtcNow);
             JsonStore.WriteAtomic(_paths.TransactionFile, transaction);
             PackageManifest? manifest = null;
             bool activated = false;
             try
             {
-                await _source.PrepareExactSourceAsync(tools, resolution,
-                    progress, log, cancellationToken);
-                transaction = transaction with { Phase = "build" };
-                JsonStore.WriteAtomic(_paths.TransactionFile, transaction);
-                await _source.BuildAsync(tools, resolution, progress, log,
-                    cancellationToken);
-
-                string versionId = CreateVersionId(resolution.Commit);
+                string archive = await _launcher.DownloadRendererPackageAsync(
+                    feed, progress, log, cancellationToken);
+                string versionId = CreateVersionId(feed.SourceCommit);
                 transaction = transaction with { Phase = "package", CandidateVersionId = versionId };
                 JsonStore.WriteAtomic(_paths.TransactionFile, transaction);
-                progress?.Report(new InstallerProgress("Packaging UVSR",
-                    "Copying only the renderer's required runtime files."));
-                await _source.ValidatePreparedSourceAsync(tools, resolution, log,
-                    cancellationToken);
-                manifest = _packager.Stage(marker.InstallationId, transactionId,
-                    versionId, resolution.Commit, log);
-                _packager.Activate(transactionId, manifest);
+                progress?.Report(new InstallerProgress("Installing UVSR Engine",
+                    "Verifying and unpacking the signed renderer package."));
+                manifest = _packager.StageArchive(transactionId, versionId,
+                    archive, feed, log);
+                _packager.Activate(transactionId, versionId, manifest);
 
                 InstallState newState = new(ProductConstants.SchemaVersion,
-                    marker.InstallationId, versionId, resolution.Commit,
-                    manifest.ExecutableSha256, desktopShortcut, DateTimeOffset.UtcNow);
+                    marker.InstallationId, versionId, feed.ReleaseSequence,
+                    feed.SourceCommit, feed.SettingsHash, feed.EngineVersion,
+                    feed.Artifact.Sha256, manifest.ExecutableSha256,
+                    desktopShortcut, DateTimeOffset.UtcNow);
                 transaction = transaction with { Phase = "activate" };
                 JsonStore.WriteAtomic(_paths.TransactionFile, transaction);
                 JsonStore.WriteAtomic(_paths.StateFile, newState);
@@ -386,10 +428,13 @@ internal sealed class InstallerEngine : IDisposable
                 {
                     try
                     {
-                        string candidate = _paths.VersionRoot(manifest.VersionId);
+                        string candidate = _paths.VersionRoot(
+                            transaction.CandidateVersionId ??
+                            throw new InstallerException(
+                                "The failed renderer transaction lost its candidate identity."));
                         if (Directory.Exists(candidate) &&
                             ProcessInspector.IsConfirmedNotRunning(
-                                ProcessInspector.InspectManagedUvsrProcesses(candidate)))
+                                _services.InspectRendererProcesses(candidate)))
                             SafePaths.DeleteOwnedTree(candidate, _paths.VersionsDirectory);
                     }
                     catch (Exception cleanupFailure)
@@ -461,11 +506,11 @@ internal sealed class InstallerEngine : IDisposable
     {
         _ownership.ValidateBoth(marker.InstallationId);
         ExactProcessInspection running =
-            ProcessInspector.InspectManagedUvsrProcesses(_paths.ProgramRoot);
+            _services.InspectRendererProcesses(_paths.ProgramRoot);
         if (!ProcessInspector.IsConfirmedNotRunning(running))
             throw new InstallerException("UVSR is currently running. Close its window, then choose Uninstall again.");
-        ExactProcessInspection launchers = ProcessInspector.InspectManagedLauncherProcesses(
-            _paths.ProgramRoot, excludeCurrentProcess: true);
+        ExactProcessInspection launchers = _services.InspectLauncherProcesses(
+            _paths.ProgramRoot, true);
         if (!ProcessInspector.IsConfirmedNotRunning(launchers))
             throw new InstallerException(
                 "Another UVSR Launcher window is open. Close it, then choose Uninstall again.");
@@ -479,7 +524,8 @@ internal sealed class InstallerEngine : IDisposable
         JsonStore.WriteAtomic(_paths.TransactionFile, transaction);
         try
         {
-            SelfCleanup.Schedule(_paths, marker.InstallationId, transactionId,
+            _services.ScheduleUninstall(
+                _paths, marker.InstallationId, transactionId,
                 transaction.PreviousState, log);
         }
         catch
@@ -490,7 +536,7 @@ internal sealed class InstallerEngine : IDisposable
         }
         return new OperationResult(
             "UVSR uninstall is ready. Its shortcuts and owned program files will be removed when this window closes. " +
-            "Renderer settings and shared Microsoft prerequisites are preserved.", null, null, true);
+            "Renderer settings are preserved.", null, null, true);
     }
 
     private void CleanupInterruptedRegistryStagingForUninstall(
@@ -508,7 +554,7 @@ internal sealed class InstallerEngine : IDisposable
                 interrupted.TransactionId == Guid.Empty)
                 throw new InstallerException(
                     "The interrupted UVSR Launcher transaction does not prove registry ownership.");
-            ShellIntegration.RemoveStagedRegistryEntry(interrupted.TransactionId);
+            _services.RemoveStagedRegistryEntry(interrupted.TransactionId);
             log.Write("Removed the prior transaction's Apps & Features staging entry before uninstall.");
         }
         catch (InstallerException ex)
@@ -534,7 +580,7 @@ internal sealed class InstallerEngine : IDisposable
             transaction.TransactionId == Guid.Empty ||
             string.IsNullOrWhiteSpace(transaction.Phase) ||
             !Enum.IsDefined(transaction.Operation) ||
-            transaction.Phase is not ("source" or "build" or "package" or
+            transaction.Phase is not ("download" or "package" or
                 "activate" or "shell-activation" or "shell-update" or
                 "uninstall-pending") ||
             (transaction.CandidateVersionId is not null &&
@@ -550,7 +596,7 @@ internal sealed class InstallerEngine : IDisposable
         }
 
         InstallState? current = TryReadValidState(marker.InstallationId);
-        bool preActivation = transaction.Phase is "source" or "build" or "package" ||
+        bool preActivation = transaction.Phase is "download" or "package" ||
             (transaction.Phase == "activate" &&
              current?.ActiveVersionId != transaction.CandidateVersionId);
         if (preActivation)
@@ -560,12 +606,12 @@ internal sealed class InstallerEngine : IDisposable
                 string inactiveCandidate = _paths.VersionRoot(transaction.CandidateVersionId);
                 if (Directory.Exists(inactiveCandidate) &&
                     ProcessInspector.IsConfirmedNotRunning(
-                        ProcessInspector.InspectManagedUvsrProcesses(inactiveCandidate)))
+                        _services.InspectRendererProcesses(inactiveCandidate)))
                     SafePaths.DeleteOwnedTree(inactiveCandidate, _paths.VersionsDirectory);
             }
             CleanupTransactionStaging(transaction.TransactionId, log);
             File.Delete(_paths.TransactionFile);
-            log.Write("Discarded an interrupted pre-activation build so repair can retry cleanly.");
+            log.Write("Discarded an interrupted package stage so repair can retry cleanly.");
             return;
         }
         if (transaction.Phase == "shell-update")
@@ -619,7 +665,7 @@ internal sealed class InstallerEngine : IDisposable
             }
             if (!candidateRemainsActive && Directory.Exists(candidate) &&
                 ProcessInspector.IsConfirmedNotRunning(
-                    ProcessInspector.InspectManagedUvsrProcesses(candidate)))
+                    _services.InspectRendererProcesses(candidate)))
                 SafePaths.DeleteOwnedTree(candidate, _paths.VersionsDirectory);
         }
         else
@@ -754,7 +800,7 @@ internal sealed class InstallerEngine : IDisposable
         if (!Directory.Exists(prior))
             return;
         if (!ProcessInspector.IsConfirmedNotRunning(
-                ProcessInspector.InspectManagedUvsrProcesses(prior)))
+                _services.InspectRendererProcesses(prior)))
         {
             log.Write("The previous UVSR version is still running; its package will be retained for later cleanup.");
             return;
@@ -775,7 +821,7 @@ internal sealed class InstallerEngine : IDisposable
             if (versionId == active.ActiveVersionId ||
                 !ProductConstants.VersionIdRegex().IsMatch(versionId) ||
                 !ProcessInspector.IsConfirmedNotRunning(
-                    ProcessInspector.InspectManagedUvsrProcesses(directory)))
+                    _services.InspectRendererProcesses(directory)))
                 continue;
             SafePaths.DeleteOwnedTree(directory, _paths.VersionsDirectory);
             log.Write($"Removed superseded UVSR package {versionId}.");
@@ -801,11 +847,11 @@ internal sealed class InstallerEngine : IDisposable
     private void ValidateInstalledPackage(Guid installationId, InstallState state)
     {
         string packageRoot = _paths.VersionRoot(state.ActiveVersionId);
-        PackageManifest manifest = JsonStore.Read<PackageManifest>(
-            Path.Combine(packageRoot, ".uvsr-package.json"),
-            ProductConstants.MaximumPackageManifestBytes);
-        if (manifest.InstallationId != installationId ||
-            manifest.VersionId != state.ActiveVersionId || manifest.Commit != state.Commit ||
+        PackageManifest manifest = PayloadPackager.ReadManifest(packageRoot);
+        if (manifest.ReleaseSequence != state.ReleaseSequence ||
+            manifest.SourceCommit != state.Commit ||
+            manifest.SettingsHash != state.SettingsHash ||
+            manifest.EngineVersion != state.EngineVersion ||
             manifest.ExecutableSha256 != state.ExecutableSha256)
             throw new InstallerException("The UVSR package does not match its UVSR Launcher record.");
         PayloadPackager.ValidatePackage(packageRoot, manifest);
@@ -831,15 +877,19 @@ internal sealed class InstallerEngine : IDisposable
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    private void EnsureDiskSpace(long requiredGigabytes)
+    internal static void EnsureDiskSpace(
+        InstallerPaths paths,
+        long archiveBytes,
+        bool preservingInstalled)
     {
-        string root = Path.GetPathRoot(_paths.LocalApplicationData)
+        string root = Path.GetPathRoot(paths.LocalApplicationData)
             ?? throw new InstallerException("Windows could not identify the installation drive.");
         DriveInfo drive = new(root);
-        long required = requiredGigabytes * 1024L * 1024 * 1024;
+        long required = checked(archiveBytes * 2 +
+            (preservingInstalled ? 2L : 1L) * 1024 * 1024 * 1024);
         if (drive.AvailableFreeSpace < required)
             throw new InstallerException(
-                $"UVSR needs at least {requiredGigabytes} GB free on {drive.Name} to download source, build safely, and preserve the current version during activation.");
+                $"UVSR needs at least {required / (1024 * 1024 * 1024) + 1} GB free on {drive.Name} to download, unpack, and activate the renderer package safely.");
     }
 
     private static string CreateVersionId(string commit) =>

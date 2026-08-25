@@ -11,11 +11,6 @@
 
 namespace uvsr
 {
-    enum class DenoiserBackendKind : uint8_t
-    {
-        Nrd
-    };
-
     enum class DenoiserSignalType : uint8_t
     {
         AmbientOcclusion = 0,
@@ -357,8 +352,7 @@ namespace uvsr
         virtual void Shutdown() noexcept = 0;
     };
 
-    [[nodiscard]] std::unique_ptr<IDenoiserBackend> CreateDenoiserBackend(
-        DenoiserBackendKind kind = DenoiserBackendKind::Nrd);
+    [[nodiscard]] std::unique_ptr<IDenoiserBackend> CreateDenoiserBackend();
     [[nodiscard]] std::unique_ptr<IDenoiserBackend>
         CreateDenoiserBackendRegistry(DenoiserSignalBackendFactory factory);
 }

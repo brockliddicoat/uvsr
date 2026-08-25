@@ -1,7 +1,73 @@
+warning: in the working copy of 'src/d3d12/d3d12-backend.h', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/d3d12/d3d12-device.cpp', LF will be replaced by CRLF the next time Git touches it
+diff --git a/src/d3d12/d3d12-backend.h b/src/d3d12/d3d12-backend.h
+index a4e5500632774e90b4f20b86c7d872845cc8662b..5a91f5b6198629efc61cb02258ea2e5ba6e1e0bc 100644
+--- a/src/d3d12/d3d12-backend.h
++++ b/src/d3d12/d3d12-backend.h
+@@ -24,6 +24,8 @@
+ 
+ #include <nvrhi/d3d12.h>
+ 
++#include <mutex>
++
+ #ifndef NVRHI_D3D12_WITH_NVAPI
+ #define NVRHI_D3D12_WITH_NVAPI 0
+ #endif
+@@ -137,7 +139,8 @@ namespace nvrhi::d3d12
+     D3D12_LINEAR_ALGEBRA_MATRIX_LAYOUT convertCoopVecMatrixLayout(coopvec::MatrixLayout layout);
+ #endif
+ 
+-    void WaitForFence(ID3D12Fence* fence, uint64_t value, HANDLE event);
++    [[nodiscard]] bool WaitForFence(
++        ID3D12Fence* fence, uint64_t value, HANDLE event, const Context& context);
+     uint32_t calcSubresource(uint32_t MipSlice, uint32_t ArraySlice, uint32_t PlaneSlice, uint32_t MipLevels, uint32_t ArraySize);
+     void TranslateBlendState(const BlendState& inState, D3D12_BLEND_DESC& outState);
+     void TranslateDepthStencilState(const DepthStencilState& inState, D3D12_DEPTH_STENCIL_DESC& outState);
+@@ -475,6 +478,7 @@ namespace nvrhi::d3d12
+         uint64_t fenceCounter = 0;
+         bool started = false;
+         bool resolved = false;
++        bool failed = false;
+     };
+ 
+     class TimerQuery : public RefCounter<ITimerQuery>
+@@ -488,6 +492,7 @@ namespace nvrhi::d3d12
+ 
+         bool started = false;
+         bool resolved = false;
++        bool failed = false;
+         float time = 0.f;
+ 
+         TimerQuery(DeviceResources& resources)
+@@ -931,6 +936,8 @@ namespace nvrhi::d3d12
+ 
+         std::atomic<uint64_t> lastSubmittedInstance = 0;
+         std::atomic<uint64_t> lastCompletedInstance = 0;
++        std::atomic<bool> completionFailed = false;
++        std::mutex submissionMutex;
+         std::atomic<uint64_t> recordingInstance = 1;
+ 
+         explicit Queue(const Context& context, ID3D12CommandQueue* queue, CommandListLifetimeTrackerHandle&& lifetimeTracker);
+diff --git a/src/d3d12/d3d12-buffer.cpp b/src/d3d12/d3d12-buffer.cpp
+index 298bee164dca0996d3f4173efaefd098ff537982..14e92d5e6150a46136606620fee16d9809b4b89a 100644
+--- a/src/d3d12/d3d12-buffer.cpp
++++ b/src/d3d12/d3d12-buffer.cpp
+@@ -276,7 +276,9 @@ namespace nvrhi::d3d12
+ 
+         if (b->lastUseFence)
+         {
+-            WaitForFence(b->lastUseFence, b->lastUseFenceValue, m_FenceEvent);
++            if (!WaitForFence(
++                b->lastUseFence, b->lastUseFenceValue, m_FenceEvent, m_Context))
++                return nullptr;
+             b->lastUseFence = nullptr;
+         }
+ 
 diff --git a/src/d3d12/d3d12-compute.cpp b/src/d3d12/d3d12-compute.cpp
+index 5c731f0bb54caa4ba9ad1054cc2ac6e5326045bf..ba141623cc20045e7c357f572eb516cd71f0844a 100644
 --- a/src/d3d12/d3d12-compute.cpp
 +++ b/src/d3d12/d3d12-compute.cpp
-@@ -22,6 +22,8 @@
+@@ -23,7 +23,9 @@
  #include "d3d12-backend.h"
  
  #include <nvrhi/common/misc.h>
@@ -10,16 +76,14 @@ diff --git a/src/d3d12/d3d12-compute.cpp b/src/d3d12/d3d12-compute.cpp
 +#include "uvsr-d3d12-diagnostics.h"
  
  namespace nvrhi::d3d12
-@@ -69,6 +71,32 @@ namespace nvrhi::d3d12
+ {
+@@ -71,7 +73,22 @@ namespace nvrhi::d3d12
  
          if (FAILED(hr))
          {
 -            m_Context.error("Failed to create a compute pipeline state object");
 +            const HRESULT removedReason =
 +                m_Context.device->GetDeviceRemovedReason();
-+            const bool deviceRemoved =
-+                uvsr_diagnostics::IsDeviceRemovalFailure(
-+                    hr, removedReason);
 +            std::stringstream ss;
 +            ss << "CreateComputePipelineState failed for shader '"
 +                << (shader->desc.debugName.empty()
@@ -30,21 +94,14 @@ diff --git a/src/d3d12/d3d12-compute.cpp b/src/d3d12/d3d12-compute.cpp
 +                << static_cast<uint32_t>(hr)
 +                << ", GetDeviceRemovedReason = 0x" << std::setw(8)
 +                << static_cast<uint32_t>(removedReason);
-+            if (deviceRemoved)
-+                uvsr_diagnostics::AppendDredDetails(
-+                    ss, m_Context.device);
-+            if (deviceRemoved && m_Context.messageCallback)
-+            {
-+                m_Context.messageCallback->message(
-+                    MessageSeverity::Fatal, ss.str().c_str());
-+            }
-+            else
-+            {
-+                m_Context.error(ss.str());
-+            }
++            if (!uvsr_diagnostics::ReportFailure(
++                ss, hr, removedReason, m_Context.device,
++                m_Context.messageCallback, false))
++                return nullptr;
              return nullptr;
          }
-@@ -81,6 +109,9 @@ namespace nvrhi::d3d12
+ 
+@@ -81,6 +98,9 @@ namespace nvrhi::d3d12
      ComputePipelineHandle Device::createComputePipeline(const ComputePipelineDesc& desc)
      {
          RefCountPtr<RootSignature> pRS = getRootSignature(desc.bindingLayouts, false);
@@ -54,59 +111,496 @@ diff --git a/src/d3d12/d3d12-compute.cpp b/src/d3d12/d3d12-compute.cpp
          RefCountPtr<ID3D12PipelineState> pPSO = createPipelineState(desc, pRS);
  
          if (pPSO == nullptr)
+diff --git a/src/d3d12/d3d12-device.cpp b/src/d3d12/d3d12-device.cpp
+index c2b5525cdd0bec18dc74a4c30d86a428d61a43fc..be2ecfbbaaab1b505c65f187035e7aeb11fcf508 100644
+--- a/src/d3d12/d3d12-device.cpp
++++ b/src/d3d12/d3d12-device.cpp
+@@ -31,6 +31,7 @@
+ #include <cstdlib>  // for _putenv_s (RT validation env-var gate)
+ #include <sstream>
+ #include <iomanip>
++#include "uvsr-d3d12-diagnostics.h"
+ 
+ namespace nvrhi::d3d12
+ {
+@@ -71,16 +72,73 @@ namespace nvrhi::d3d12
+     }
+ #endif
+ 
+-    void WaitForFence(ID3D12Fence* fence, uint64_t value, HANDLE event)
++    bool WaitForFence(
++        ID3D12Fence* fence,
++        uint64_t value,
++        HANDLE event,
++        const Context& context)
+     {
+-        // Test if the fence has been reached
+-        if (fence->GetCompletedValue() < value)
++        const auto reportFailure =
++            [&](const char* operation, HRESULT operationResult)
++            {
++                const HRESULT removedReason =
++                    context.device->GetDeviceRemovedReason();
++                std::stringstream ss;
++                ss << operation << " while waiting for D3D12 fence value "
++                    << value << ", HRESULT = 0x" << std::hex
++                    << std::setw(8) << std::setfill('0')
++                    << static_cast<uint32_t>(operationResult)
++                    << ", GetDeviceRemovedReason = 0x" << std::setw(8)
++                    << static_cast<uint32_t>(removedReason);
++                return uvsr_diagnostics::ReportFailure(
++                    ss, operationResult, removedReason, context.device,
++                    context.messageCallback, true);
++            };
++
++        uvsr_diagnostics::FenceCompletionObservation completion =
++            uvsr_diagnostics::ObserveFenceCompletion(
++            fence->GetCompletedValue());
++        if (completion.failed)
++            return reportFailure(
++                "GetCompletedValue reported device removal",
++                DXGI_ERROR_DEVICE_REMOVED);
++        if (completion.HasReached(value))
++            return true;
++
++        if (!ResetEvent(event))
++            return reportFailure(
++                "ResetEvent failed",
++                HRESULT_FROM_WIN32(GetLastError()));
++
++        const HRESULT eventResult = fence->SetEventOnCompletion(value, event);
++        if (FAILED(eventResult))
++            return reportFailure("SetEventOnCompletion failed", eventResult);
++
++        const DWORD waitResult = WaitForSingleObject(
++            event, uvsr_diagnostics::FenceWaitTimeoutMilliseconds);
++        if (waitResult != WAIT_OBJECT_0)
+         {
+-            // If it's not, wait for it to finish using an event
+-            ResetEvent(event);
+-            fence->SetEventOnCompletion(value, event);
+-            WaitForSingleObject(event, INFINITE);
++            const HRESULT waitFailure = waitResult == WAIT_FAILED
++                ? HRESULT_FROM_WIN32(GetLastError())
++                : HRESULT_FROM_WIN32(ERROR_TIMEOUT);
++            return reportFailure(
++                waitResult == WAIT_TIMEOUT
++                    ? "D3D12 fence wait timed out"
++                    : "D3D12 fence wait failed",
++                waitFailure);
+         }
++
++        completion = uvsr_diagnostics::ObserveFenceCompletion(
++            fence->GetCompletedValue());
++        if (completion.failed)
++            return reportFailure(
++                "GetCompletedValue reported device removal",
++                DXGI_ERROR_DEVICE_REMOVED);
++        if (!completion.HasReached(value))
++            return reportFailure(
++                "D3D12 fence event completed before the requested value",
++                E_FAIL);
++        return true;
+     }
+ 
+ #if NVRHI_D3D12_WITH_LINALG
+@@ -134,19 +192,66 @@ namespace nvrhi::d3d12
+ 
+     uint64_t Queue::updateLastCompletedInstance()
+     {
++        if (completionFailed)
++            return lastCompletedInstance;
++
+         if (lastCompletedInstance < lastSubmittedInstance)
+         {
+-            lastCompletedInstance = fence->GetCompletedValue();
++            const uvsr_diagnostics::FenceCompletionObservation completion =
++                uvsr_diagnostics::ObserveFenceCompletion(
++                    fence->GetCompletedValue());
++            if (completion.failed)
++            {
++                completionFailed = true;
++                const HRESULT removedReason =
++                    m_Context.device->GetDeviceRemovedReason();
++                std::stringstream ss;
++                ss << "Queue fence GetCompletedValue reported device removal"
++                    << ", GetDeviceRemovedReason = 0x" << std::hex
++                    << std::setw(8) << std::setfill('0')
++                    << static_cast<uint32_t>(removedReason);
++                if (!uvsr_diagnostics::ReportFailure(
++                    ss, DXGI_ERROR_DEVICE_REMOVED, removedReason,
++                    m_Context.device, m_Context.messageCallback, true))
++                    return lastCompletedInstance;
++            }
++            lastCompletedInstance = completion.completedValue;
+         }
+         return lastCompletedInstance;
+     }
+ 
+     uint64_t Queue::Signal()
+     {
+-        ++lastSubmittedInstance;
+-        queue->Signal(fence, lastSubmittedInstance);
++        const uvsr_diagnostics::FenceSubmissionObservation submission =
++            uvsr_diagnostics::TrySignalFence(
++                submissionMutex,
++                lastSubmittedInstance,
++                completionFailed,
++                [&](uint64_t candidateValue)
++                {
++                    return queue->Signal(fence, candidateValue);
++                });
++        if (!submission.attempted)
++            return 0u;
++        if (!submission.Succeeded())
++        {
++            const HRESULT removedReason =
++                m_Context.device->GetDeviceRemovedReason();
++            std::stringstream ss;
++            ss << "Queue::Signal failed for candidate fence value "
++                << submission.candidateValue
++                << ", HRESULT = 0x" << std::hex << std::setw(8)
++                << std::setfill('0')
++                << static_cast<uint32_t>(submission.result)
++                << ", GetDeviceRemovedReason = 0x" << std::setw(8)
++                << static_cast<uint32_t>(removedReason);
++            if (!uvsr_diagnostics::ReportFailure(
++                ss, submission.result, removedReason,
++                m_Context.device, m_Context.messageCallback, true))
++                return 0u;
++        }
+ 
+-        return lastSubmittedInstance;
++        return submission.PublishedValue();
+     }
+ 
+     CommandListLifetimeTracker::CommandListLifetimeTracker(Device* device, const Context& context, DeviceResources& resources, CommandQueue executionQueue)
+@@ -161,6 +266,8 @@ namespace nvrhi::d3d12
+     {
+         Queue* pQueue = m_Device->getQueue(m_ExecutionQueue);
+         pQueue->updateLastCompletedInstance();
++        if (pQueue->completionFailed)
++            return;
+ 
+         // Starting from the back of the queue, i.e. oldest submitted command lists,
+         // see if those command lists have finished executing.
+@@ -505,9 +612,16 @@ namespace nvrhi::d3d12
+             if (!pQueue)
+                 continue;
+ 
+-            if (pQueue->updateLastCompletedInstance() < pQueue->lastSubmittedInstance)
++            const uint64_t completedInstance =
++                pQueue->updateLastCompletedInstance();
++            if (pQueue->completionFailed)
++                return false;
++            if (completedInstance < pQueue->lastSubmittedInstance)
+             {
+-                WaitForFence(pQueue->fence, pQueue->lastSubmittedInstance, m_FenceEvent);
++                if (!WaitForFence(
++                    pQueue->fence, pQueue->lastSubmittedInstance,
++                    m_FenceEvent, m_Context))
++                    return false;
+             }
+         }
+ 
+@@ -624,21 +738,37 @@ namespace nvrhi::d3d12
+ 
+         Queue* pQueue = getQueue(executionQueue);
+ 
++        if (pQueue->completionFailed)
++            return 0u;
++
+         pQueue->queue->ExecuteCommandLists(uint32_t(commandListsToExecute.size()), commandListsToExecute.data());
+-        (void)pQueue->Signal();
++        const uint64_t submittedInstance = pQueue->Signal();
++        if (submittedInstance == 0u)
++            return 0u;
+ 
+-        for (size_t i = 0; i < numCommandLists; i++)
++        const HRESULT removedReason =
++            m_Context.device->GetDeviceRemovedReason();
++        if (FAILED(removedReason))
+         {
+-            (void)checked_cast<CommandList*>(pCommandLists[i])->executed(pQueue);
++            pQueue->completionFailed = true;
++            std::stringstream ss;
++            ss << "ExecuteCommandLists observed device removal after fence "
++                << submittedInstance
++                << ", GetDeviceRemovedReason = 0x" << std::hex
++                << std::setw(8) << std::setfill('0')
++                << static_cast<uint32_t>(removedReason);
++            if (!uvsr_diagnostics::ReportFailure(
++                ss, removedReason, removedReason,
++                m_Context.device, m_Context.messageCallback, true))
++                return 0u;
+         }
+ 
+-        HRESULT hr = m_Context.device->GetDeviceRemovedReason();
+-        if (FAILED(hr))
++        for (size_t i = 0; i < numCommandLists; i++)
+         {
+-            m_Context.messageCallback->message(MessageSeverity::Error, "Device Removed!");
++            (void)checked_cast<CommandList*>(pCommandLists[i])->executed(pQueue);
+         }
+ 
+-        return pQueue->lastSubmittedInstance;
++        return submittedInstance;
+     }
+ 
+     void Device::queueWaitForCommandList(CommandQueue waitQueue, CommandQueue executionQueue, uint64_t instanceID)
 diff --git a/src/d3d12/d3d12-graphics.cpp b/src/d3d12/d3d12-graphics.cpp
+index e40c392fa766b752cff2d8794b9937d8b1b30248..ada7e3efe717166d11cfb993d47bf3c7988eed86 100644
 --- a/src/d3d12/d3d12-graphics.cpp
 +++ b/src/d3d12/d3d12-graphics.cpp
-@@ -183,7 +183,9 @@ namespace nvrhi::d3d12
+@@ -23,7 +23,9 @@
+ #include "d3d12-backend.h"
+ 
+ #include <nvrhi/common/misc.h>
++#include <iomanip>
+ #include <sstream>
++#include "uvsr-d3d12-diagnostics.h"
+ 
+ namespace nvrhi::d3d12
+ {
+@@ -161,7 +163,18 @@ namespace nvrhi::d3d12
+ 
+             if (status != NVAPI_OK || pipelineState == nullptr)
+             {
+-                m_Context.error("Failed to create a graphics pipeline state object with NVAPI extensions");
++                const HRESULT removedReason =
++                    m_Context.device->GetDeviceRemovedReason();
++                std::stringstream ss;
++                ss << "NvAPI_D3D12_CreateGraphicsPipelineState failed, "
++                    << "NvAPI_Status = " << static_cast<int32_t>(status)
++                    << ", GetDeviceRemovedReason = 0x" << std::hex
++                    << std::setw(8) << std::setfill('0')
++                    << static_cast<uint32_t>(removedReason);
++                if (!uvsr_diagnostics::ReportFailure(
++                    ss, E_FAIL, removedReason, m_Context.device,
++                    m_Context.messageCallback, false))
++                    return nullptr;
+                 return nullptr;
+             }
+ 
+@@ -173,7 +186,18 @@ namespace nvrhi::d3d12
+ 
+         if (FAILED(hr))
+         {
+-            m_Context.error("Failed to create a graphics pipeline state object");
++            const HRESULT removedReason =
++                m_Context.device->GetDeviceRemovedReason();
++            std::stringstream ss;
++            ss << "CreateGraphicsPipelineState failed, HRESULT = 0x"
++                << std::hex << std::setw(8) << std::setfill('0')
++                << static_cast<uint32_t>(hr)
++                << ", GetDeviceRemovedReason = 0x" << std::setw(8)
++                << static_cast<uint32_t>(removedReason);
++            if (!uvsr_diagnostics::ReportFailure(
++                ss, hr, removedReason, m_Context.device,
++                m_Context.messageCallback, false))
++                return nullptr;
+             return nullptr;
+         }
+ 
+@@ -183,6 +207,8 @@ namespace nvrhi::d3d12
      GraphicsPipelineHandle Device::createGraphicsPipeline(const GraphicsPipelineDesc& desc, FramebufferInfo const& fbinfo)
      {
          RefCountPtr<RootSignature> pRS = getRootSignature(desc.bindingLayouts, desc.inputLayout != nullptr);
--
 +        if (!pRS)
 +            return nullptr;
-+
+ 
          RefCountPtr<ID3D12PipelineState> pPSO = createPipelineState(desc, pRS, fbinfo);
  
-         return createHandleForNativeGraphicsPipeline(pRS, pPSO, desc, fbinfo);
 diff --git a/src/d3d12/d3d12-meshlets.cpp b/src/d3d12/d3d12-meshlets.cpp
+index 00ce9753e9384cae2acce1a4711babe96dfb9555..e7e84008a63e7125d09fbcdf1e2b663f3a188705 100644
 --- a/src/d3d12/d3d12-meshlets.cpp
 +++ b/src/d3d12/d3d12-meshlets.cpp
-@@ -158,7 +158,9 @@ namespace nvrhi::d3d12
+@@ -158,6 +158,8 @@ namespace nvrhi::d3d12
      MeshletPipelineHandle Device::createMeshletPipeline(const MeshletPipelineDesc& desc, FramebufferInfo const& fbinfo)
      {
          RefCountPtr<RootSignature> pRS = getRootSignature(desc.bindingLayouts, false);
--
 +        if (!pRS)
 +            return nullptr;
-+
+ 
          RefCountPtr<ID3D12PipelineState> pPSO = createPipelineState(desc, pRS, fbinfo);
  
-         return createHandleForNativeMeshletPipeline(pRS, pPSO, desc, fbinfo);
+diff --git a/src/d3d12/d3d12-queries.cpp b/src/d3d12/d3d12-queries.cpp
+index 950c0ddda359facb3ab2d5cb23be8d66a8c7ebe3..f18c20d5f224869eacb3f508b369b31c831128e6 100644
+--- a/src/d3d12/d3d12-queries.cpp
++++ b/src/d3d12/d3d12-queries.cpp
+@@ -23,9 +23,28 @@
+ #include "d3d12-backend.h"
+ 
+ #include <nvrhi/common/misc.h>
++#include <iomanip>
++#include <sstream>
++#include "uvsr-d3d12-diagnostics.h"
+ 
+ namespace nvrhi::d3d12
+ {
++    static bool ReportInvalidQueryFenceCompletion(
++        const Context& context,
++        const char* queryType)
++    {
++        const HRESULT removedReason =
++            context.device->GetDeviceRemovedReason();
++        std::stringstream ss;
++        ss << queryType << " fence GetCompletedValue reported device removal"
++            << ", GetDeviceRemovedReason = 0x" << std::hex
++            << std::setw(8) << std::setfill('0')
++            << static_cast<uint32_t>(removedReason);
++        return uvsr_diagnostics::ReportFailure(
++            ss, DXGI_ERROR_DEVICE_REMOVED, removedReason,
++            context.device, context.messageCallback, true);
++    }
++
+     TimerQuery::~TimerQuery()
+     {
+         m_Resources.timerQueries.release(static_cast<int>(beginQueryIndex) / 2);
+@@ -46,11 +65,14 @@ namespace nvrhi::d3d12
+         query->fence = pQueue->fence;
+         query->fenceCounter = pQueue->lastSubmittedInstance;
+         query->resolved = false;
++        query->failed = false;
+     }
+ 
+     bool Device::pollEventQuery(IEventQuery* _query)
+     {
+         EventQuery* query = checked_cast<EventQuery*>(_query);
++        if (query->failed)
++            return false;
+ 
+         if (!query->started)
+             return false;
+@@ -59,8 +81,17 @@ namespace nvrhi::d3d12
+             return true;
+ 
+         assert(query->fence);
+-        
+-        if (query->fence->GetCompletedValue() >= query->fenceCounter)
++        const uvsr_diagnostics::FenceCompletionObservation completion =
++            uvsr_diagnostics::ObserveFenceCompletion(
++                query->fence->GetCompletedValue());
++        if (completion.failed)
++        {
++            query->failed = true;
++            query->fence = nullptr;
++            return ReportInvalidQueryFenceCompletion(
++                m_Context, "Event query");
++        }
++        if (completion.HasReached(query->fenceCounter))
+         {
+             query->resolved = true;
+             query->fence = nullptr;
+@@ -73,12 +104,18 @@ namespace nvrhi::d3d12
+     {
+         EventQuery* query = checked_cast<EventQuery*>(_query);
+ 
+-        if (!query->started || query->resolved)
++        if (!query->started || query->resolved || query->failed)
+             return;
+ 
+         assert(query->fence);
+ 
+-        WaitForFence(query->fence, query->fenceCounter, m_FenceEvent);
++        if (!WaitForFence(
++            query->fence, query->fenceCounter, m_FenceEvent, m_Context))
++        {
++            query->failed = true;
++            query->fence = nullptr;
++            return;
++        }
+     }
+ 
+     void Device::resetEventQuery(IEventQuery* _query)
+@@ -87,6 +124,7 @@ namespace nvrhi::d3d12
+ 
+         query->started = false;
+         query->resolved = false;
++        query->failed = false;
+         query->fence = nullptr;
+     }
+     
+@@ -129,6 +167,8 @@ namespace nvrhi::d3d12
+     bool Device::pollTimerQuery(ITimerQuery* _query)
+     {
+         TimerQuery* query = checked_cast<TimerQuery*>(_query);
++        if (query->failed)
++            return false;
+ 
+         if (!query->started)
+             return false;
+@@ -136,7 +176,17 @@ namespace nvrhi::d3d12
+         if (!query->fence)
+             return true;
+ 
+-        if (query->fence->GetCompletedValue() >= query->fenceCounter)
++        const uvsr_diagnostics::FenceCompletionObservation completion =
++            uvsr_diagnostics::ObserveFenceCompletion(
++                query->fence->GetCompletedValue());
++        if (completion.failed)
++        {
++            query->failed = true;
++            query->fence = nullptr;
++            return ReportInvalidQueryFenceCompletion(
++                m_Context, "Timer query");
++        }
++        if (completion.HasReached(query->fenceCounter))
+         {
+             query->fence = nullptr;
+             return true;
+@@ -148,12 +198,20 @@ namespace nvrhi::d3d12
+     float Device::getTimerQueryTime(ITimerQuery* _query)
+     {
+         TimerQuery* query = checked_cast<TimerQuery*>(_query);
++        if (query->failed)
++            return 0.f;
+ 
+         if (!query->resolved)
+         {
+             if (query->fence)
+             {
+-                WaitForFence(query->fence, query->fenceCounter, m_FenceEvent);
++                if (!WaitForFence(
++                    query->fence, query->fenceCounter, m_FenceEvent, m_Context))
++                {
++                    query->failed = true;
++                    query->fence = nullptr;
++                    return 0.f;
++                }
+                 query->fence = nullptr;
+             }
+ 
+@@ -187,6 +245,7 @@ namespace nvrhi::d3d12
+ 
+         query->started = false;
+         query->resolved = false;
++        query->failed = false;
+         query->time = 0.f;
+         query->fence = nullptr;
+     }
 diff --git a/src/d3d12/d3d12-raytracing.cpp b/src/d3d12/d3d12-raytracing.cpp
+index 622e4cd6d2fa2d76f1f219040bcf24a1c1f8a66a..866b774e740c8ce250b9834f6e0581bf0eb225d9 100644
 --- a/src/d3d12/d3d12-raytracing.cpp
 +++ b/src/d3d12/d3d12-raytracing.cpp
-@@ -1231,7 +1231,9 @@ namespace nvrhi::d3d12
+@@ -1231,6 +1231,8 @@ namespace nvrhi::d3d12
                  if (!localRS)
                  {
                      localRS = buildRootSignature({ shaderDesc.bindingLayout }, false, true);
--
 +                    if (!localRS)
 +                        return nullptr;
-+
+ 
                      BindingLayout* layout = checked_cast<BindingLayout*>(shaderDesc.bindingLayout.Get());
                      pso->maxLocalRootParameters = std::max(pso->maxLocalRootParameters, uint32_t(layout->rootParameters.size()));
-                 }
-@@ -1289,7 +1291,9 @@ namespace nvrhi::d3d12
+@@ -1289,6 +1291,8 @@ namespace nvrhi::d3d12
                  if (!localRS)
                  {
                      localRS = buildRootSignature({ hitGroupDesc.bindingLayout }, false, true);
--
 +                    if (!localRS)
 +                        return nullptr;
-+
+ 
                      BindingLayout* layout = checked_cast<BindingLayout*>(hitGroupDesc.bindingLayout.Get());
                      pso->maxLocalRootParameters = std::max(pso->maxLocalRootParameters, uint32_t(layout->rootParameters.size()));
-                 }
 @@ -1402,6 +1406,9 @@ namespace nvrhi::d3d12
          if (!desc.globalBindingLayouts.empty())
          {
@@ -118,15 +612,18 @@ diff --git a/src/d3d12/d3d12-raytracing.cpp b/src/d3d12/d3d12-raytracing.cpp
              d3dGlobalRootSignature.pGlobalRootSignature = pso->globalRootSignature->getNativeObject(ObjectTypes::D3D12_RootSignature);
  
 diff --git a/src/d3d12/d3d12-resource-bindings.cpp b/src/d3d12/d3d12-resource-bindings.cpp
+index 38c1d22837443258b31b6fbe98c53e66a47f9bfb..057beec66bd566fdb41dc6824f521f0c645479b9 100644
 --- a/src/d3d12/d3d12-resource-bindings.cpp
 +++ b/src/d3d12/d3d12-resource-bindings.cpp
-@@ -25,4 +25,5 @@
+@@ -25,6 +25,7 @@
  #include <nvrhi/common/misc.h>
  #include <sstream>
  #include <iomanip>
 +#include "uvsr-d3d12-diagnostics.h"
  
-@@ -718,9 +718,21 @@ namespace nvrhi::d3d12
+ namespace nvrhi::d3d12
+ {
+@@ -718,9 +719,21 @@ namespace nvrhi::d3d12
                  }
                  else
                  {
@@ -149,8 +646,7 @@ diff --git a/src/d3d12/d3d12-resource-bindings.cpp b/src/d3d12/d3d12-resource-bi
                  }
              }
          }
-@@ -757,8 +769,81 @@ namespace nvrhi::d3d12
-         // Serialize the root signature
+@@ -761,7 +774,80 @@ namespace nvrhi::d3d12
  
          RefCountPtr<ID3DBlob> rsBlob;
          RefCountPtr<ID3DBlob> errorBlob;
@@ -232,38 +728,28 @@ diff --git a/src/d3d12/d3d12-resource-bindings.cpp b/src/d3d12/d3d12-resource-bi
  
          if (FAILED(res))
          {
-@@ -782,7 +868,28 @@ namespace nvrhi::d3d12
+@@ -782,8 +868,18 @@ namespace nvrhi::d3d12
          if (FAILED(res))
          {
              std::stringstream ss;
 -            ss << "CreateRootSignature call failed, HRESULT = 0x" << std::hex << std::setw(8) << res;
+-            m_Context.error(ss.str());
 +            const HRESULT removedReason =
 +                m_Context.device->GetDeviceRemovedReason();
-+            const bool deviceRemoved =
-+                uvsr_diagnostics::IsDeviceRemovalFailure(
-+                    res, removedReason);
 +            ss << "CreateRootSignature failed for root signature 1."
 +                << (rootSignatureSupport.HighestVersion == D3D_ROOT_SIGNATURE_VERSION_1_1 ? 1 : 0)
 +                << ", HRESULT = 0x" << std::hex << std::setw(8)
 +                << std::setfill('0') << static_cast<uint32_t>(res)
 +                << ", GetDeviceRemovedReason = 0x" << std::setw(8)
 +                << static_cast<uint32_t>(removedReason);
--            m_Context.error(ss.str());
-+            if (deviceRemoved)
-+                uvsr_diagnostics::AppendDredDetails(
-+                    ss, m_Context.device);
-+            if (deviceRemoved && m_Context.messageCallback)
-+            {
-+                m_Context.messageCallback->message(
-+                    MessageSeverity::Fatal, ss.str().c_str());
-+            }
-+            else
-+            {
-+                m_Context.error(ss.str());
-+            }
++            if (!uvsr_diagnostics::ReportFailure(
++                ss, res, removedReason, m_Context.device,
++                m_Context.messageCallback, false))
++                return nullptr;
  
              return nullptr;
-@@ -806,7 +913,12 @@ namespace nvrhi::d3d12
+         }
+@@ -806,7 +902,12 @@ namespace nvrhi::d3d12
          if (!rootsig)
          {
              // Does not exist - build a new one, take ownership
@@ -277,8 +763,7 @@ diff --git a/src/d3d12/d3d12-resource-bindings.cpp b/src/d3d12/d3d12-resource-bi
              rootsig->hash = hash;
  
              m_Resources.rootsigCache[hash] = rootsig;
-@@ -1047,8 +1144,18 @@ namespace nvrhi::d3d12
-                 }
+@@ -1048,8 +1149,18 @@ namespace nvrhi::d3d12
                  else if (rootParameterOffset != c_InvalidRootParameterIndex)
                  {
                      DescriptorTable* descriptorTable = checked_cast<DescriptorTable*>(_bindingSet);
@@ -298,8 +783,8 @@ diff --git a/src/d3d12/d3d12-resource-bindings.cpp b/src/d3d12/d3d12-resource-bi
 +                    }
                  }
              }
-@@ -1174,8 +1281,18 @@ namespace nvrhi::d3d12
-                 }
+ 
+@@ -1175,8 +1286,18 @@ namespace nvrhi::d3d12
                  else if (rootParameterOffset != c_InvalidRootParameterIndex)
                  {
                      DescriptorTable* descriptorTable = checked_cast<DescriptorTable*>(_bindingSet);
@@ -319,3 +804,20 @@ diff --git a/src/d3d12/d3d12-resource-bindings.cpp b/src/d3d12/d3d12-resource-bi
 +                    }
                  }
              }
+ 
+diff --git a/src/d3d12/d3d12-texture.cpp b/src/d3d12/d3d12-texture.cpp
+index 65e4b0c95e7c4a899e43a0e26e1f9cc9d20acead..f5ba418f2f56e03b00c73c98ff9c80ee80c27c72 100644
+--- a/src/d3d12/d3d12-texture.cpp
++++ b/src/d3d12/d3d12-texture.cpp
+@@ -892,7 +892,9 @@ namespace nvrhi::d3d12
+ 
+         if (tex->lastUseFence)
+         {
+-            WaitForFence(tex->lastUseFence, tex->lastUseFenceValue, m_FenceEvent);
++            if (!WaitForFence(
++                tex->lastUseFence, tex->lastUseFenceValue, m_FenceEvent, m_Context))
++                return nullptr;
+             tex->lastUseFence = nullptr;
+         }
+ 
+

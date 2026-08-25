@@ -1,11 +1,12 @@
 #include "scene_catalog.h"
 
-#include <donut/core/json.h>
-#include <donut/core/vfs/VFS.h>
+#include "json_document.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <exception>
+#include <limits>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -61,18 +62,27 @@ namespace
     }
 
     std::optional<std::array<float, 3>> ReadFiniteFloat3(
-        const Json::Value& value)
+        const uvsr::json::Value* value)
     {
-        if (!value.isArray() || value.size() != 3u)
+        using Kind = uvsr::json::Value::Kind;
+        if (value == nullptr || value->kind != Kind::Array ||
+            value->array.size() != 3u)
+        {
             return std::nullopt;
+        }
 
         std::array<float, 3> result{};
-        for (Json::ArrayIndex index = 0u; index < 3u; ++index)
+        for (size_t index = 0u; index < 3u; ++index)
         {
-            if (!value[index].isNumeric())
+            const uvsr::json::Value& component = value->array[index];
+            if (component.kind != Kind::Number ||
+                component.number < -double(std::numeric_limits<float>::max()) ||
+                component.number > double(std::numeric_limits<float>::max()))
+            {
                 return std::nullopt;
+            }
 
-            result[index] = value[index].asFloat();
+            result[index] = static_cast<float>(component.number);
             if (!std::isfinite(result[index]))
                 return std::nullopt;
         }
@@ -118,15 +128,16 @@ namespace
     }
 
     std::optional<uvsr::SceneInitialCamera> ReadInitialCamera(
-        const Json::Value& document)
+        const uvsr::json::Value& document)
     {
-        const Json::Value& camera = document["initialCamera"];
-        if (!camera.isObject())
+        using Kind = uvsr::json::Value::Kind;
+        const uvsr::json::Value* camera = document.Find("initialCamera");
+        if (camera == nullptr || camera->kind != Kind::Object)
             return std::nullopt;
 
-        const auto position = ReadFiniteFloat3(camera["position"]);
-        const auto direction = ReadFiniteFloat3(camera["direction"]);
-        const auto up = ReadFiniteFloat3(camera["up"]);
+        const auto position = ReadFiniteFloat3(camera->Find("position"));
+        const auto direction = ReadFiniteFloat3(camera->Find("direction"));
+        const auto up = ReadFiniteFloat3(camera->Find("up"));
         const auto normalizedDirection =
             direction ? NormalizeCameraVector(*direction) : std::nullopt;
         const auto normalizedUp =
@@ -138,12 +149,17 @@ namespace
         }
 
         float verticalFovDegrees = 60.f;
-        const Json::Value& verticalFov = camera["verticalFovDegrees"];
-        if (!verticalFov.isNull())
+        const uvsr::json::Value* verticalFov =
+            camera->Find("verticalFovDegrees");
+        if (verticalFov != nullptr && verticalFov->kind != Kind::Null)
         {
-            if (!verticalFov.isNumeric())
+            if (verticalFov->kind != Kind::Number ||
+                verticalFov->number < -double(std::numeric_limits<float>::max()) ||
+                verticalFov->number > double(std::numeric_limits<float>::max()))
+            {
                 return std::nullopt;
-            verticalFovDegrees = verticalFov.asFloat();
+            }
+            verticalFovDegrees = static_cast<float>(verticalFov->number);
             if (!std::isfinite(verticalFovDegrees) ||
                 verticalFovDegrees <= 1.f ||
                 verticalFovDegrees >= 179.f)
@@ -165,7 +181,12 @@ std::string uvsr::MakeSceneDisplayName(
     const std::filesystem::path& sceneDirectory,
     const std::filesystem::path& fileName)
 {
-    const std::filesystem::path normalizedDirectory = sceneDirectory.lexically_normal();
+    std::filesystem::path normalizedDirectory = sceneDirectory.lexically_normal();
+    if (normalizedDirectory.has_relative_path() &&
+        normalizedDirectory.filename().empty())
+    {
+        normalizedDirectory = normalizedDirectory.parent_path();
+    }
     const std::filesystem::path normalizedFileName = fileName.lexically_normal();
 
     auto directoryComponent = normalizedDirectory.begin();
@@ -188,14 +209,11 @@ std::string uvsr::MakeSceneDisplayName(
 }
 
 std::vector<uvsr::SceneCatalogEntry> uvsr::BuildSceneCatalog(
-    donut::vfs::IFileSystem& fileSystem,
     const std::filesystem::path& sceneDirectory,
     const std::vector<std::string>& discoveredSceneFiles)
 {
-    // Donut deliberately exposes every loadable file it discovers. UVSR adds
-    // only product-level catalog behavior here: a descriptor can name its
-    // launcher and claim its component models, while unrelated glTF/GLB files
-    // remain available exactly as before.
+    // A descriptor can name its launcher and claim its component models, while
+    // unrelated glTF/GLB files remain directly available.
     std::unordered_map<std::string, std::string> descriptorDisplayNames;
     std::unordered_map<std::string, SceneInitialCamera> descriptorInitialCameras;
     std::unordered_set<std::string> descriptorComponents;
@@ -206,13 +224,26 @@ std::vector<uvsr::SceneCatalogEntry> uvsr::BuildSceneCatalog(
         if (!IsDescriptor(normalized))
             continue;
 
-        Json::Value document;
-        if (!donut::json::LoadFromFile(fileSystem, normalized, document) || !document.isObject())
+        json::Value document;
+        try
+        {
+            document = json::Read(normalized);
+        }
+        catch (const std::exception&)
+        {
+            continue;
+        }
+        if (document.kind != json::Value::Kind::Object)
             continue;
 
-        const Json::Value& displayName = document["displayName"];
-        if (displayName.isString() && HasVisibleText(displayName.asString()))
-            descriptorDisplayNames.emplace(ComparisonKey(normalized), displayName.asString());
+        const json::Value* displayName = document.Find("displayName");
+        if (displayName != nullptr &&
+            displayName->kind == json::Value::Kind::String &&
+            HasVisibleText(displayName->string))
+        {
+            descriptorDisplayNames.emplace(
+                ComparisonKey(normalized), displayName->string);
+        }
 
         if (const auto initialCamera = ReadInitialCamera(document))
         {
@@ -221,19 +252,19 @@ std::vector<uvsr::SceneCatalogEntry> uvsr::BuildSceneCatalog(
                 *initialCamera);
         }
 
-        const Json::Value& models = document["models"];
-        if (!models.isArray())
+        const json::Value* models = document.Find("models");
+        if (models == nullptr || models->kind != json::Value::Kind::Array)
             continue;
 
         const std::filesystem::path descriptorDirectory =
             std::filesystem::path(normalized).parent_path();
-        for (const Json::Value& model : models)
+        for (const json::Value& model : models->array)
         {
-            if (!model.isString() || model.asString().empty())
+            if (model.kind != json::Value::Kind::String || model.string.empty())
                 continue;
 
             const std::string component = NormalizePath(
-                descriptorDirectory / std::filesystem::path(model.asString()));
+                descriptorDirectory / std::filesystem::path(model.string));
             descriptorComponents.insert(ComparisonKey(component));
         }
     }
@@ -248,10 +279,9 @@ std::vector<uvsr::SceneCatalogEntry> uvsr::BuildSceneCatalog(
         const std::string key = ComparisonKey(normalized);
         const bool descriptor = IsDescriptor(normalized);
 
-        // A descriptor is always a launcher, even if another descriptor lists
-        // it accidentally. Donut's model array does not support nested scene
-        // descriptors, so hiding one would only make the bad reference harder
-        // to diagnose.
+        // A descriptor is always a launcher. Hiding one because another
+        // descriptor listed it would make the bad nested reference harder to
+        // diagnose.
         if (!descriptor && descriptorComponents.find(key) != descriptorComponents.end())
             continue;
         if (!includedFiles.insert(key).second)

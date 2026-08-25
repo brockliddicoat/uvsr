@@ -1,5 +1,3 @@
-#include <donut/shaders/binding_helpers.hlsli>
-
 #ifndef MSAA_VISIBILITY_SAMPLES
 #error MSAA_VISIBILITY_SAMPLES must be a static 2, 4, 8, or 16.
 #endif
@@ -21,19 +19,12 @@ Texture2DMS<float, MSAA_VISIBILITY_SAMPLES>
 Texture2DMS<float4, MSAA_VISIBILITY_SAMPLES>
     t_MotionVectors : register(t6);
 
-VK_IMAGE_FORMAT("r32f")
 RWTexture2D<float> u_Depth : register(u0);
-VK_IMAGE_FORMAT("rgba16f")
 RWTexture2D<float4> u_Diffuse : register(u1);
-VK_IMAGE_FORMAT("rgba16f")
 RWTexture2D<float4> u_Material : register(u2);
-VK_IMAGE_FORMAT("rgba16f")
 RWTexture2D<float4> u_Normals : register(u3);
-VK_IMAGE_FORMAT("rgba16f")
 RWTexture2D<float4> u_Emissive : register(u4);
-VK_IMAGE_FORMAT("r16f")
 RWTexture2D<float> u_MaterialAmbientOcclusion : register(u5);
-VK_IMAGE_FORMAT("rgba16f")
 RWTexture2D<float4> u_MotionVectors : register(u6);
 
 [numthreads(8, 8, 1)]

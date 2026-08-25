@@ -1,20 +1,15 @@
 #pragma once
 
-#include "sample_accumulation_settings.h"
-
 #include <nvrhi/nvrhi.h>
 
 #include <array>
 #include <cstdint>
 #include <memory>
 
-namespace donut::engine
-{
-    class ShaderFactory;
-}
-
 namespace uvsr
 {
+    class RendererShaderFactory;
+
     enum class LightingSampleSequenceMode : uint32_t
     {
         FramePhase = 0u,
@@ -72,7 +67,7 @@ namespace uvsr
     public:
         LightingAccumulationPass(
             nvrhi::IDevice* device,
-            const std::shared_ptr<donut::engine::ShaderFactory>&
+            const std::shared_ptr<RendererShaderFactory>&
                 shaderFactory);
 
         [[nodiscard]] bool IsValid() const;
@@ -83,9 +78,6 @@ namespace uvsr
             nvrhi::ICommandList* commandList,
             uint32_t width,
             uint32_t height,
-            bool accumulateSamples,
-            const SampleAccumulationSettings& settings,
-            uint64_t schedulingSerial,
             uint64_t historyEpoch);
 
         [[nodiscard]] LightingAccumulationResult Resolve(
@@ -119,7 +111,6 @@ namespace uvsr
         nvrhi::ComputePipelineHandle m_ResolvePipeline;
         std::array<nvrhi::TextureHandle, 2> m_Mean;
         std::array<nvrhi::TextureHandle, 2> m_Count;
-        std::array<nvrhi::TextureHandle, 2> m_ColorVariance;
         nvrhi::TextureHandle m_AttemptMask;
         nvrhi::TextureHandle m_DisabledAttemptMask;
         std::array<nvrhi::BindingSetHandle, 2> m_PrepareBindingSets;
@@ -135,8 +126,6 @@ namespace uvsr
         uint64_t m_PreparedHistoryEpoch = 0u;
         uint32_t m_PreparedWriteIndex = 0u;
         bool m_PreparedResetHistory = true;
-        bool m_PreparedAccumulationEnabled = false;
-        SampleAccumulationSettings m_PreparedSettings;
         bool m_HasHistoryEpoch = false;
     };
 }

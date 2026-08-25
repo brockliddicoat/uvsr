@@ -9,20 +9,21 @@
 
 namespace donut::engine
 {
-    class CommonRenderPasses;
     class ICompositeView;
-    class ShaderFactory;
 }
 namespace uvsr
 {
+    class RendererCommonPasses;
+    class RendererShaderFactory;
+
     class FastApproximateAAPass
     {
     public:
         FastApproximateAAPass(
             nvrhi::IDevice* device,
-            const std::shared_ptr<donut::engine::ShaderFactory>&
+            const std::shared_ptr<RendererShaderFactory>&
                 shaderFactory,
-            const std::shared_ptr<donut::engine::CommonRenderPasses>&
+            const std::shared_ptr<RendererCommonPasses>&
                 commonPasses,
             nvrhi::ITexture* sourceColor);
 
@@ -37,8 +38,7 @@ namespace uvsr
 
     private:
         nvrhi::IDevice* m_Device = nullptr;
-        std::shared_ptr<donut::engine::CommonRenderPasses>
-            m_CommonPasses;
+        std::shared_ptr<RendererCommonPasses> m_CommonPasses;
         uint32_t m_Width = 0u;
         uint32_t m_Height = 0u;
         nvrhi::TextureHandle m_OutputColor;

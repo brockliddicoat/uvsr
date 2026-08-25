@@ -1,15 +1,12 @@
 #include "temporal_aa_reference.h"
+#include "fast_approximate_aa_contract.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <limits>
-#include <string>
 #include <utility>
 
 namespace
@@ -88,20 +85,9 @@ namespace
         return minimum;
     }
 
-    std::string ReadTextFile(const std::filesystem::path& path)
-    {
-        std::ifstream stream(path, std::ios::binary);
-        std::string contents{
-            std::istreambuf_iterator<char>(stream),
-            std::istreambuf_iterator<char>()};
-        contents.erase(
-            std::remove(contents.begin(), contents.end(), '\r'),
-            contents.end());
-        return contents;
-    }
 }
 
-int main(int argc, char** argv)
+int main()
 {
     bool passed = true;
     using Quality = uvsr::AntiAliasingQuality;
@@ -326,14 +312,8 @@ int main(int argc, char** argv)
                 uvsr::FastApproximateAaDefaultDarkEdgeThreshold) &&
             !defaults.msaa.enabled &&
             defaults.msaa.quality == Quality::Medium &&
-            defaults.msaa.sampleCount == 4u &&
-            defaults.msaa.perSampleRayTracedShadows,
+            defaults.msaa.sampleCount == 4u,
         "TAA, FXAA, and MSAA must be independent default-off techniques");
-    uvsr::MsaaSettings changedShadowSampling = defaults.msaa;
-    changedShadowSampling.perSampleRayTracedShadows = false;
-    passed &= Check(
-        !(changedShadowSampling == defaults.msaa),
-        "MSAA equality must include the ray traced shadow sampling policy");
 
     const auto defaultResolved =
         uvsr::ResolveAntiAliasingSettings(defaults);
@@ -463,33 +443,10 @@ int main(int argc, char** argv)
         passed &= Check(
             multisample.quality == qualities[index] &&
                 multisample.sampleCount == multisampleCounts[index] &&
-                multisample.perSampleRayTracedShadows &&
                 uvsr::GetMultisampleQualitySampleCount(
                     qualities[index]) == multisampleCounts[index] &&
                 uvsr::MatchesMultisampleQualityPreset(multisample),
             "Multisample quality must map Low through Ultra to 2x through 16x");
-        passed &= Check(
-            !uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 1u) &&
-                uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 2u) &&
-                uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 4u) &&
-                uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 8u) &&
-                uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 16u),
-            "per-sample ray traced shadows must be active only under MSAA");
-        multisample.perSampleRayTracedShadows = false;
-        passed &= Check(
-            !uvsr::MatchesMultisampleQualityPreset(multisample) &&
-                !uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 1u) &&
-                !uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 2u) &&
-                !uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 4u) &&
-                !uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 8u) &&
-                !uvsr::ShouldUsePerSampleRayTracedShadows(multisample, 16u),
-            "disabling per-sample shadows must mark Multisample Quality custom");
-        uvsr::ApplyMultisampleQualityPreset(
-            multisample, qualities[index]);
-        passed &= Check(
-            multisample.perSampleRayTracedShadows &&
-                uvsr::MatchesMultisampleQualityPreset(multisample),
-            "reapplying Multisample Quality must restore per-sample shadows");
         multisample.sampleCount = multisampleCounts[
             (index + 1u) % multisampleCounts.size()];
         passed &= Check(
@@ -512,6 +469,17 @@ int main(int argc, char** argv)
                     .currentReconstruction ==
                 uvsr::TemporalAaCurrentReconstruction::DeJittered,
         "the four retained TAA quality profiles changed");
+    for (uint32_t index = 0u; index < qualities.size(); ++index)
+    {
+        passed &= Check(
+            uvsr::GetTemporalAaBlendPermutationIndex(
+                uvsr::GetPresetTemporalOptions(qualities[index])) ==
+                    index,
+            "each visible TAA quality must map to one fixed recipe");
+    }
+    passed &= Check(
+        uvsr::TemporalAaBlendPermutationCount == 4u,
+        "TAA must retain exactly four implementation recipes");
 
     uvsr::AntiAliasingSettings fourTexel = defaults;
     fourTexel.temporal.enabled = true;
@@ -523,10 +491,6 @@ int main(int argc, char** argv)
 
     uvsr::AntiAliasingSettings advanced = defaults;
     advanced.temporal.enabled = true;
-    advanced.temporal.algorithmOverrides.motionSource =
-        uvsr::TemporalAaMotionSourceOverride::ClosestCross;
-    advanced.temporal.algorithmOverrides.historyFilter =
-        uvsr::TemporalAaHistoryFilterOverride::NineTapCatmullRom;
     advanced.temporal.algorithmOverrides.historyFrames = 32;
     advanced.temporal.algorithmOverrides.historyStrength = 1.5f;
     advanced.temporal.behaviorOverrides.historyWeight =
@@ -535,14 +499,16 @@ int main(int argc, char** argv)
         uvsr::ResolveAntiAliasingSettings(advanced);
     passed &= Check(
         advancedResolved.temporal.motionSource ==
-                uvsr::TemporalAaMotionSource::ClosestCross &&
+                uvsr::GetPresetTemporalOptions(Quality::Medium)
+                    .motionSource &&
             advancedResolved.temporal.historyFilter ==
-                uvsr::TemporalAaHistoryFilter::NineTapCatmullRom &&
+                uvsr::GetPresetTemporalOptions(Quality::Medium)
+                    .historyFilter &&
             advancedResolved.historyFrames == 32u &&
             NearlyEqual(advancedResolved.historyStrength, 1.5f) &&
             advancedResolved.historyWeight ==
                 uvsr::TemporalAaHistoryWeightPolicy::ImmediateHorizon,
-        "closed Advanced settings must retain supported image controls");
+        "runtime TAA controls must not create arbitrary algorithm recipes");
 
     uvsr::AntiAliasingSettings minimum = defaults;
     minimum.temporal.enabled = true;
@@ -1031,303 +997,81 @@ int main(int argc, char** argv)
                 0.f, 0.f, 0.f, 0.f, 1.01e-6f),
         "stationary history must remain accepted across every Halton-16 raw-depth phase while moving point and legacy Gather bounds stay exact");
 
-    if (argc > 1)
+    nvrhi::TextureDesc fastApproximateSource;
+    fastApproximateSource.width = 1920u;
+    fastApproximateSource.height = 1080u;
+    fastApproximateSource.sampleCount = 1u;
+    fastApproximateSource.dimension = nvrhi::TextureDimension::Texture2D;
+    fastApproximateSource.format = uvsr::FastApproximateAaColorFormat;
+    passed &= Check(
+        uvsr::IsFastApproximateAaSourceCompatible(
+            fastApproximateSource, 1920u, 1080u, true) &&
+            !uvsr::IsFastApproximateAaSourceCompatible(
+                fastApproximateSource, 1920u, 1080u, false),
+        "Fast Approximate must accept only a distinct RGBA16F full-size source");
+    fastApproximateSource.sampleCount = 2u;
+    passed &= Check(
+        !uvsr::IsFastApproximateAaSourceCompatible(
+            fastApproximateSource, 1920u, 1080u, true),
+        "Fast Approximate must reject multisampled input");
+    fastApproximateSource.sampleCount = 1u;
+    fastApproximateSource.dimension = nvrhi::TextureDimension::Texture2DArray;
+    passed &= Check(
+        !uvsr::IsFastApproximateAaSourceCompatible(
+            fastApproximateSource, 1920u, 1080u, true),
+        "Fast Approximate must reject non-2D input");
+    fastApproximateSource.dimension = nvrhi::TextureDimension::Texture2D;
+    fastApproximateSource.format = nvrhi::Format::R16_FLOAT;
+    passed &= Check(
+        !uvsr::IsFastApproximateAaSourceCompatible(
+            fastApproximateSource, 1920u, 1080u, true),
+        "Fast Approximate must reject a non-RGBA16F input format");
+    fastApproximateSource.format = uvsr::FastApproximateAaColorFormat;
+    passed &= Check(
+        !uvsr::IsFastApproximateAaSourceCompatible(
+            fastApproximateSource, 1919u, 1080u, true) &&
+            !uvsr::IsFastApproximateAaSourceCompatible(
+                fastApproximateSource, 1920u, 1079u, true),
+        "Fast Approximate must reject partial-size input");
+
+    const uvsr::FastApproximateAaViewContract completeView = {
+        1u, true, 0u, 1u, 0u, 1u, 0, 0, 1920, 1080
+    };
+    passed &= Check(
+        uvsr::IsFastApproximateAaFullImageView(
+            completeView, 1920u, 1080u),
+        "Fast Approximate rejected its complete planar view");
+    const std::array<uvsr::FastApproximateAaViewContract, 10>
+        incompleteViews = {{
+            { 2u, true, 0u, 1u, 0u, 1u, 0, 0, 1920, 1080 },
+            { 1u, false, 0u, 1u, 0u, 1u, 0, 0, 1920, 1080 },
+            { 1u, true, 1u, 1u, 0u, 1u, 0, 0, 1920, 1080 },
+            { 1u, true, 0u, 2u, 0u, 1u, 0, 0, 1920, 1080 },
+            { 1u, true, 0u, 1u, 1u, 1u, 0, 0, 1920, 1080 },
+            { 1u, true, 0u, 1u, 0u, 2u, 0, 0, 1920, 1080 },
+            { 1u, true, 0u, 1u, 0u, 1u, 1, 0, 1920, 1080 },
+            { 1u, true, 0u, 1u, 0u, 1u, 0, 1, 1920, 1080 },
+            { 1u, true, 0u, 1u, 0u, 1u, 0, 0, 1919, 1080 },
+            { 1u, true, 0u, 1u, 0u, 1u, 0, 0, 1920, 1079 }
+        }};
+    for (const auto& incomplete : incompleteViews)
     {
-        const std::filesystem::path sourceDirectory = argv[1];
-        const std::string temporalPass = ReadTextFile(
-            sourceDirectory / "temporal_aa.cpp");
-        const std::string temporalHeader = ReadTextFile(
-            sourceDirectory / "temporal_aa.h");
-        const std::string temporalOptions = ReadTextFile(
-            sourceDirectory / "temporal_aa_options.h");
-        const std::string qualityShader = ReadTextFile(
-            sourceDirectory / "temporal_aa_blend_cs.hlsl");
-        const std::string minimumShader = ReadTextFile(
-            sourceDirectory / "temporal_aa_minimum_cs.hlsl");
-        const std::string commonShader = ReadTextFile(
-            sourceDirectory / "temporal_aa_common.hlsli");
-        const std::string resolveShader = ReadTextFile(
-            sourceDirectory / "temporal_aa_resolve_cs.hlsl");
-        const std::string fastApproximateHeader = ReadTextFile(
-            sourceDirectory / "fast_approximate_aa.h");
-        const std::string fastApproximateSource = ReadTextFile(
-            sourceDirectory / "fast_approximate_aa.cpp");
-        const std::string fastApproximateShader = ReadTextFile(
-            sourceDirectory / "fast_approximate_aa_ps.hlsl");
-        const std::string fastApproximateAttribution = ReadTextFile(
-            sourceDirectory.parent_path() / "legal" / "documentation" /
-                "google-filament-fxaa.md");
-        const std::string bsdLicense = ReadTextFile(
-            sourceDirectory.parent_path() / "legal" / "licenses" /
-                "BSD-2-Clause.txt");
-        const std::string shaderManifest = ReadTextFile(
-            sourceDirectory / "shaders.cfg");
-        const auto lacksRetiredTaaText = [](const std::string& text)
-        {
-            return text.find("SampleResurrection") == std::string::npos &&
-                text.find("SAMPLE_RESURRECTION") == std::string::npos &&
-                text.find("TemporalAaDebugView") == std::string::npos &&
-                text.find("TAA_DEBUG_VIEW") == std::string::npos &&
-                text.find("FullscreenPixelShader") == std::string::npos &&
-                text.find("TAA_PIXEL_SHADER") == std::string::npos &&
-                text.find("Threads16x8OnePixel") == std::string::npos &&
-                text.find("TAA_COMPUTE_KERNEL") == std::string::npos &&
-                text.find("CacheBlocking") == std::string::npos &&
-                text.find("TAA_EXPORT_SELECTIVE") == std::string::npos;
-        };
         passed &= Check(
-            lacksRetiredTaaText(temporalPass) &&
-                lacksRetiredTaaText(temporalHeader) &&
-                lacksRetiredTaaText(temporalOptions) &&
-                lacksRetiredTaaText(qualityShader) &&
-                lacksRetiredTaaText(minimumShader) &&
-                lacksRetiredTaaText(resolveShader),
-            "retired TAA resurrection, debug, pixel, kernel, or cache paths returned");
-        passed &= Check(
-            qualityShader.find("[numthreads(8, 8, 1)]") !=
-                    std::string::npos &&
-                qualityShader.find("TAA_OPTIMIZED_COMPUTE") !=
-                    std::string::npos &&
-                qualityShader.find("UVSR_TAA_LDS_PACKED") !=
-                    std::string::npos &&
-                qualityShader.find("UVSR_TAA_LDS_SPLIT") ==
-                    std::string::npos,
-            "TAA must retain only 8x8 compute and legacy/packed LDS");
-        passed &= Check(
-            qualityShader.find(
-                    "selection.centerVelocity = selection.velocity.xy;") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "borrowClosest >= 0.5 && centerValid > 0.0;") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "selection.velocity.xy = useClosest") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "const bool centerIsClearedBackground =") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "selection.currentDeviceDepth == 0.0;") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "const int offsets[5] = {\n"
-                    "        0,\n"
-                    "        -int(kColorPitch),\n"
-                    "        int(kColorPitch),\n"
-                    "        -1,\n"
-                    "        1\n"
-                    "    };\n"
-                    "    const float2 pixelOffsets[5] = {\n"
-                    "        float2(0.0, 0.0),\n"
-                    "        float2(0.0, -1.0),\n"
-                    "        float2(0.0, 1.0),\n"
-                    "        float2(-1.0, 0.0),\n"
-                    "        float2(1.0, 0.0)\n"
-                    "    };") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "const bool coverageHandoff =") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "selection.coverageHandoff = 1.0;") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "validationDepthPixel = historyDepthPixel +") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "motion.coverageHandoff < 0.5;") !=
-                    std::string::npos &&
-                qualityShader.find("const bool stationary") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "stationaryDepthBypass = float(stationary);") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "if (stationaryDepthBypass > 0.5)") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "if (colorPositionValid * depthPositionValid == 0.0)") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "float centerDepthPositionValid = stationaryDepthBypass > 0.5") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "? HistoryPointPositionInBounds(centerDepthPosition)") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    ": HistoryPositionInBounds(centerDepthPosition);") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "HistoryPointPositionInBounds(validationDepthPixel)") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "UvsrTemporalPointDepthAccepted(") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "PreDepth.Load(int3(depthPixel, 0))") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "boxMin = min(boxMin, motion.coverageSourceWorking);") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "LoadWorkingColor(closestColorIdx)") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "LoadWorkingColor(candidateIdx)") ==
-                    std::string::npos,
-            "quality TAA must preserve center ownership, validate stationary "
-            "thin-coverage handoff, bypass center-owned stationary raw depth, "
-            "and point-validate moving history");
-        const size_t sampleHistoryStart = qualityShader.find(
-            "HistorySample SampleHistory(");
-        const size_t coverageHandoffFilter = qualityShader.find(
-            "if (coverageHandoff > 0.5)", sampleHistoryStart);
-        const size_t configuredHistoryFilter = qualityShader.find(
-            "#if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_BILINEAR",
-            sampleHistoryStart);
-        passed &= Check(
-            sampleHistoryStart != std::string::npos &&
-                coverageHandoffFilter != std::string::npos &&
-                configuredHistoryFilter != std::string::npos &&
-                coverageHandoffFilter < configuredHistoryFilter &&
-                qualityShader.find(
-                    "motion.coverageHandoff);",
-                    sampleHistoryStart) != std::string::npos,
-            "thin-coverage handoff must reuse only its already validated "
-            "history sample before wider filter depth footprints");
-        passed &= Check(
-            minimumShader.find("const bool stationary") !=
-                    std::string::npos &&
-                minimumShader.find(
-                    "IsPointHistoryPositionInBounds(historyDepthPixel)") !=
-                    std::string::npos &&
-                minimumShader.find(
-                    "prepared.historySupport = 1.0f;") !=
-                    std::string::npos &&
-                minimumShader.find(
-                    "UvsrTemporalDeviceDepthPrecisionValidity(") !=
-                    std::string::npos &&
-                minimumShader.find(
-                    "PreviousDepth.Load(int3(depthPixel, 0))") !=
-                    std::string::npos &&
-                minimumShader.find(
-                    "UvsrTemporalPointDepthAccepted(") !=
-                    std::string::npos,
-            "minimum-cost TAA must bypass stationary raw depth and point-validate moving history");
-        passed &= Check(
-            temporalPass.find(
-                "minimumDefaultBehaviorFlags =\n"
-                "            UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH |\n"
-                "            UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT") !=
-                    std::string::npos &&
-                minimumShader.find(
-                    "kMinimumBehaviorFlags =\n"
-                    "        UVSR_TAA_BEHAVIOR_NEAREST_TEXEL_DEPTH |\n"
-                    "        UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT") !=
-                    std::string::npos,
-            "default Minimum TAA must statically fold Stationary Bypass");
-        passed &= Check(
-                commonShader.find(
-                    "UvsrTemporalFootprintDepthCoherence(") !=
-                    std::string::npos &&
-                commonShader.find(
-                    "filteredPreviousDeviceDepth") !=
-                    std::string::npos &&
-                commonShader.find(
-                    "UvsrTemporalDeviceDepthFartherViewAllowance(") !=
-                    std::string::npos &&
-                commonShader.find(
-                    "float UvsrTemporalPointDepthAccepted(") !=
-                    std::string::npos &&
-                qualityShader.find(
-                    "UvsrTemporalPointDepthAccepted(") !=
-                    std::string::npos &&
-                minimumShader.find(
-                    "UvsrTemporalPointDepthAccepted(") !=
-                    std::string::npos &&
-                temporalPass.find(
-                    "blendConstants.depthStorageFlags = useMinimum") !=
-                    std::string::npos &&
-                temporalPass.find(
-                    "m_Timings.minimumDepthIsR16 ? 2u : 0u") !=
-                    std::string::npos &&
-                minimumShader.find(
-                    "prepared.historySupport = UvsrTemporalDepthAccepted(") !=
-                    std::string::npos &&
-                qualityShader.find("max(5e-4") == std::string::npos &&
-                minimumShader.find("max(5e-4f") == std::string::npos,
-            "all TAA paths must use filtered footprint depth, discontinuity "
-            "confidence, and format-exact history-depth uncertainty");
-        passed &= Check(
-            temporalPass.find("minimumPresentationCompatible") ==
-                    std::string::npos &&
-                temporalPass.find("settings.fastApproximateEnabled") ==
-                    std::string::npos,
-            "Minimum TAA and display-linear FXAA must remain composable");
-        passed &= Check(
-            fastApproximateHeader.find("FastApproximateAAPass") !=
-                    std::string::npos &&
-                fastApproximateSource.find(
-                    "sourceColor == m_OutputColor.Get()") !=
-                    std::string::npos &&
-                fastApproximateSource.find(
-                    "nvrhi::Format::RGBA16_FLOAT") !=
-                    std::string::npos &&
-                fastApproximateSource.find(
-                    "compositeView.GetNumChildViews(ViewType::PLANAR) != 1u") !=
-                    std::string::npos &&
-                fastApproximateShader.find(
-                    "47c86eec22e56d75897e16651eb4d2abd64fc29a") !=
-                    std::string::npos &&
-                fastApproximateShader.find("sqrt(dot(") !=
-                    std::string::npos &&
-                fastApproximateShader.find("0.00006103515625") !=
-                    std::string::npos &&
-                fastApproximateShader.find(
-                    "float4(filtered.rgb, colorCenter.a)") !=
-                    std::string::npos,
-            "Fast Approximate must keep its isolated RGBA16F, perceptual-luma, full-view contract");
-        passed &= Check(
-            fastApproximateAttribution.find(
-                    "47c86eec22e56d75897e16651eb4d2abd64fc29a") !=
-                    std::string::npos &&
-                fastApproximateAttribution.find(
-                    "NVIDIA CORPORATION. ALL RIGHTS RESERVED") !=
-                    std::string::npos &&
-                fastApproximateAttribution.find(
-                    "filament/include/filament/Options.h") !=
-                    std::string::npos &&
-                fastApproximateAttribution.find(
-                    "filament/src/PostProcessManager.cpp") !=
-                    std::string::npos &&
-                fastApproximateAttribution.find(
-                    "filament/src/PostProcessManager.h") !=
-                    std::string::npos &&
-                bsdLicense.find("BSD 2-Clause License") !=
-                    std::string::npos &&
-                bsdLicense.find("Morgan McGuire") !=
-                    std::string::npos,
-            "Filament anti-aliasing source and binary provenance must remain complete");
-        passed &= Check(
-            shaderManifest.find("TAA_SAMPLE_RESURRECTION") ==
-                    std::string::npos &&
-                shaderManifest.find("TAA_COMPUTE_KERNEL") ==
-                    std::string::npos &&
-                shaderManifest.find("TAA_EXPORT_SELECTIVE") ==
-                    std::string::npos &&
-                shaderManifest.find("TAA_LDS_LAYOUT") ==
-                    std::string::npos &&
-                shaderManifest.find("TAA_SHARED_WORK_REUSE") ==
-                    std::string::npos &&
-                shaderManifest.find("TAA_EARLY_HISTORY_REJECTION") ==
-                    std::string::npos &&
-                shaderManifest.find("TAA_OPTIMIZED_COMPUTE") !=
-                    std::string::npos &&
-                shaderManifest.find(
-                    "fast_approximate_aa_ps.hlsl -T ps -E main") !=
-                    std::string::npos,
-            "shader manifests must remove retired TAA dimensions");
+            !uvsr::IsFastApproximateAaFullImageView(
+                incomplete, 1920u, 1080u),
+            "Fast Approximate accepted a partial or multi-view image");
     }
+    passed &= Check(
+        NearlyEqual(
+            uvsr::GetFastApproximateAaPerceptualLuma(1.f, 1.f, 1.f),
+            1.f) &&
+            NearlyEqual(
+                uvsr::GetFastApproximateAaPerceptualLuma(0.f, 0.f, 0.f),
+                0.f) &&
+            NearlyEqual(
+                uvsr::GetFastApproximateAaPerceptualLuma(2.f, -1.f, 0.f),
+                std::sqrt(0.2126f)),
+        "Fast Approximate perceptual luma must saturate before square-root weighting");
 
     return passed ? 0 : 1;
 }

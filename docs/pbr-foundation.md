@@ -2,284 +2,139 @@
 
 ## Product Boundary
 
-UVSR has one PBR material contract and two lighting solutions for opaque and
-alpha-tested surfaces. **Ray Marching** uses the established deferred pipeline.
-**Path Tracing** reconstructs the same supported materials at committed DXR
-triangle hits and follows complete light paths without a raster G-buffer.
-Donut's generic forward, legacy, and deferred lighting permutations are not
-packaged as alternate renderer modes. This keeps material encoding, visibility,
-lighting, and debug interpretation on one contract even though the two
-solutions have different pass topology.
+UVSR has one physically based material contract and two lighting solutions.
+Ray Marching uses deferred raster lighting plus protected visibility effects.
+Path Tracing reconstructs the same supported material data at committed DXR
+triangle hits. Generic forward, legacy, and alternate deferred renderer modes
+are not product choices.
 
-## Material Inputs
+The supported domain is opaque and alpha-tested triangle geometry. Blended and
+transmissive materials remain outside binary ray visibility and complete path
+transport. Adding a material domain requires an explicit renderer contract,
+shared CPU/HLSL representation, resource evidence, and focused rendered tests.
+
+## Materials and Geometry
 
 The retained material model consumes base color, opacity/mask state, metalness
-or reconstructed specular-gloss parameters, roughness, tangent-space normal
-data, emissive color, and material ambient occlusion. Double-sided instances
-preserve a view-facing shading frame without changing their authored material
-identity. Material ambient occlusion remains a Ray Marching ambient-lighting
-input; Path Tracing does not multiply that baked approximation into complete
-transport.
+or reconstructed specular/gloss parameters, roughness, tangent-space normal,
+emissive radiance, material ambient occlusion, and double-sided state. Material
+AO affects ambient Ray Marching response; it is not multiplied into complete
+path transport.
 
-Authored emission is visible material radiance. It is not a recursive
-screen-space diffuse source and has no visibility-owned bounce metadata.
+The packed G-buffer stores the attributes needed by deferred lighting, motion,
+AO/GI, picking, and debug views. Its shading normal drives the BSDF. Its flat,
+view-facing geometric normal comes from the triangle plane and owns hemisphere
+gates and ray-origin offset. Smooth or mapped normals must not weaken separation
+from the actual acceleration-structure triangle.
 
-## G Buffer
+MSAA preserves every covered G-buffer sample through material decode, direct
+lighting, and HDR resolve. Motion and visibility guides exist only when an
+active consumer requires them.
 
-The packed G-buffer stores the values needed by deferred direct lighting,
-environment lighting, material picking, motion, visibility, and debug views.
-MSAA uses multisampled G-buffer attachments and preserves each sample through
-material decode and lighting before resolving HDR radiance.
+## Direct Lighting and Visibility
 
-The normal channels have distinct meanings. The shading normal remains the
-material derived smooth or normal mapped normal used by the BSDF. The geometric
-normal is the view facing raster triangle plane normal derived from world space
-position derivatives. That flat normal drives geometric hemisphere gates and
-ray origin construction, so smooth vertex normals cannot weaken separation from
-the actual BLAS triangle plane.
+Directional, point, spot, and camera-flashlight lights share one analytical
+lighting contract. Diffuse and specular terms use the same prepared surface and
+visibility result for that source. The flashlight remains one analytical spot
+light with its retained two-lobe beam, finite spherical emitter, camera-relative
+motion, collision handling, and independent ray-traced shadows; it is not
+duplicated by a private light or raster-shadow system.
 
-The shared ray-query representation carries only opaque and alpha-tested triangle
-geometry. Its material-aware candidate helper interpolates the exact geometry
-UV and applies base-color alpha plus material cutoff before accepting an
-alpha-tested hit. Blended and transmissive domains are excluded from the binary
-visibility hierarchy. Sun, sky, flashlight, and complete path queries share
-this contract.
+Directional shadows use direct binary ray-query visibility. Their only product
+controls are enable, maximum distance, and ray bias. At 1x the pass traces the
+active receiver. At 2x, 4x, 8x, and 16x MSAA it must trace and apply visibility
+independently for every valid covered sample. Broadcasting one pixel result is
+not correct at mixed-primitive or shadow-boundary coverage.
 
-Resource creation follows active consumers. Motion vectors exist when TAA,
-MSAA closest surface resolve, or an active NRD signal needs them. Visibility
-guides and source radiance exist only while AO or indirect diffuse consumes
-them.
+Alpha-tested candidates commit only when sampled base opacity passes the
+material cutoff. Single-sided backfaces are rejected; double-sided geometry
+remains visible from either side. An unavailable producer must fail visibly or
+use the explicitly defined neutral result, never stale history from another
+light or surface.
 
-## Direct Lighting
+Directional, flashlight, and sky signals keep their supported Raw,
+first-party spatial, and eligible NRD denoising choices. A denoiser may consume
+only a signal and guides with matching extent, ownership, and hit-distance
+semantics. Missing prerequisites leave the raw signal valid. MSAA validation
+must cover every sample count with raw and each eligible filtering route.
 
-Deferred lighting evaluates the scene's supported directional, point, and spot
-lights with shared material gates. The camera flashlight is one analytical spot
-light in that same submission. Its first party two lobe beam profile replaces
-only that exact light's ordinary cone response; there is no duplicate hotspot
-light and no private raster shadow system.
+## Environment, AO, and GI
 
-The flashlight's selectable full angular size controls one analytical spherical
-emitter in both incident-energy evaluation and finite shadow rays. It defaults
-to 2.86 degrees at the one-metre reference distance and spans 0 through 20
-degrees without adding a second light. Positive radius uses projected solid
-angle to keep the near field finite while converging to the authored luminous
-intensity's inverse square result in the far field. Zero radius preserves the
-exact point-light energy and hard center ray. A positive radius traces four
-noise-shifted directions over the emitter's visible spherical cap and averages
-their visibility. The factory beam color is pure linear white. A dedicated
-emitter-aware collision sphere sweeps the authored mount through the camera
-collision hierarchy and resolves stationary overlap when the radius changes.
-Collision may stop or slide the emitter to keep it outside geometry, but it
-does not sample receiver depth, scale the camera offset, or retarget the
-authored beam. Lens sway remains a later direction-only presentation effect and
-cannot feed back into collision or light position. The rejected receiver-driven
-centering experiment is documented in
-[Flashlight Camera Centering v1](postmortem/flashlight-camera-centering-v1.md).
+One selected HDR environment supplies Lambert-convolved SH9 diffuse irradiance,
+GGX-prefiltered specular radiance, the split-sum environment BRDF input, and the
+optional visible background. Diffuse/specular IBL toggles and strengths are
+independent; exposure scales the common source. UVSR retains all six packaged
+HDR sources and has no hidden procedural or hemispherical ambient fallback.
 
-Direct visibility has separate fixed slots for the exact flashlight and primary
-sun pointers. The flashlight slot consumes its finite ray traced scalar
-visibility. The sun slot consumes either the correlated RGB ratio or a raw
-scalar visibility replicated across RGB. A mismatched or unavailable producer
-falls back to neutral white. Each selected visibility is multiplied once into both
-the diffuse and specular contribution of its source light.
+Ray-traced sky visibility can affect diffuse and specular IBL independently and
+retains its enable, hit-distance, sample, noise, distance, bias, and denoising
+controls. A missing environment resolves to zero environment contribution; it
+must not reuse an earlier cube.
 
-For a 1x correlated sun ratio, final direct lighting uses the total-response
-modulation while the optional source-radiance write uses a second diffuse-only
-modulation from the same receiver and emitter samples. This keeps transported
-diffuse energy independent of a glossy material's specular response. The
-one-ray route needs no alternate because its scalar visibility is identical for
-both consumers.
+Screen-space visibility retains every user-facing AO/GI combination, quality,
+resolution, estimator, sampling, precision, noise, and filter choice. AO
+modulates ambient response. One-bounce GI adds current-frame diffuse transport
+from its defined source radiance. Their raw signals and eligible denoiser
+histories remain separate from TAA and from the fixed path-tracer mean.
 
-Under MSAA, Multisample Adaptive **Per-Sample Shadows** defaults on. That policy
-resolves matched evidence independently for every valid covered raster receiver
-while loading coherent per-sample G-buffer attributes. One single-sample RGB
-texture analytically weights those receiver ratios so sample-frequency deferred
-lighting reproduces their resolved total sun response without a per-sample
-output array. A second RGB texture carries the closest reverse-Z receiver's
-diffuse-only ratio. Turning the policy off selects that closest receiver before
-tracing, broadcasts its total factor to final MSAA lighting, and keeps its
-diffuse factor for the auxiliary screen-space GI source. The cheaper route is
-an explicit mixed-surface and shadow-boundary approximation; neither output is
-coverage-scaled or response-weighted a second time.
+## Standard Path Tracer
 
-The screen-space visibility source remains closest-surface rather than fully
-sample-frequency. At mixed-primitive or sparse-coverage pixels, one owner's
-source radiance and indirect correction can still represent more coverage than
-that surface owns. The direct-sun modulation repair prevents unshadowed source
-radiance, but exact heterogeneous-surface GI requires coverage/owner metadata
-or sample-aware traversal.
+The standard tracer bypasses the raster G-buffer, screen-space AO/GI
+composition, selective directional/sky/flashlight passes, TAA, and MSAA. It
+reconstructs material and geometric data directly at committed hits, evaluates
+emission, uniformly selected analytical lights, environment misses, Lambert
+diffuse, and GGX reflection, then advances one cumulative mean/count history
+while its count is below terminal `UINT32_MAX` overflow safety.
 
-At 1x, built-in bilateral shadow denoising can filter hard or soft visibility
-without hit distance. When Shadows selects SIGMA and the required non-hard
-one-ray visibility plus physical hit distance is present, denoised visibility
-replaces that light's raw slot. Sun and flashlight use separate SIGMA signals
-and histories even though they share one visible Denoising policy. A resolved
-MSAA sun result has closest-surface guidance for a potentially heterogeneous
-signal and therefore bypasses every sun denoising method.
+Its fixed recipe is four maximum bounces, at most one fresh sample per pixel per
+frame until that terminal count, and Russian roulette beginning at continuation
+three. The terminal case performs no fresh sample or advance and is not a
+selectable history cap. No configurable transport or accumulation policy
+exists. See [Path Tracing Transport](path-tracing-transport.md).
 
-The primary sun initializes to irradiance `8` and a `0.2` degree full angular
-size. Screen space directional shadows are absent from main. Their implementation
-is preserved only with the CSM and SVSM experimental branch.
+## Tone Mapping and Debugging
 
-## Environment Lighting
+AgX maps scene-linear HDR radiance for display. Optional automatic exposure
+meters a GPU luminance histogram and changes only the exposure multiplier before
+the same display transform. Tone mapping, output transfer, and dithering must
+not enter AO/GI or path-tracer histories.
 
-The global environment provides:
-
-- Lambert-convolved SH9 diffuse irradiance;
-- roughness-prefiltered GGX specular radiance; and
-- a split-sum environment BRDF lookup.
-
-The Sky drawer's Ambient Fill gate explicitly controls diffuse/specular IBL
-without replacing the selected background. UVSR uses one infinite environment;
-local probes, parallax correction, and probe blending are outside the product
-boundary.
-
-Ray Traced Sky Visibility has independent **Effect Diffuse** and **Effect
-Specular** switches, and both default on. When the producer itself is enabled, the resolved
-sky visibility therefore shapes metals and other specular environment response
-as well as diffuse environment irradiance. Denoised sky visibility replaces the
-raw scalar only when its explicitly selected NRD route is eligible.
-
-## Screen Space Visibility Integration
-
-AO modulates the appropriate ambient response. One bounce indirect diffuse
-adds current frame screen space transport from the retained source radiance.
-Both are optional consumers of the same visibility trace.
-
-When configured, AO ReBLUR and GI ReBLUR or ReLAX replace the corresponding raw
-trace outputs before composition. Their histories belong to the optional NRD
-backend, not Screen Space Visibility. Missing hit distance or an unavailable
-backend leaves the raw signal in use. PBR does not consume a depth hierarchy,
-recursive bounce frontiers, or planner metadata. Renderer TAA still operates
-later on the complete scene image.
-
-## Path Tracing Integration
-
-Path Tracing bypasses the G-buffer, deferred lighting, screen-space visibility,
-selective ray-traced visibility, MSAA, and TAA. It reconstructs positions, UVs,
-geometric normals, shading frames, and material parameters directly from the
-committed triangle and the same bindless scene resources used by Ray Marching.
-The shared integrator evaluates and samples Lambert diffuse plus GGX
-metallic-roughness reflection, analytic-light next-event estimation, emissive
-hits, environment misses, geometric-hemisphere validity, and Russian roulette.
-Camera radiance transport does not apply an adjoint importance-mode
-shading-normal factor. Analytic lights and BSDF-reached emissive/environment
-transport are disjoint proposal sets in the current shader, so it does not
-claim an active multiple-importance-sampling combination between overlapping
-techniques.
-
-Zero-radius point and spot lights and zero-angular-size directional lights keep
-their exact delta visibility paths. Positive-radius point and spot lights sample
-the visible sphere with matching solid-angle density, while finite directional
-lights sample their angular disk. Visibility ends at the sampled emitter point,
-and reusable direct-light reservoirs persist the full sample seed so every
-donor is re-evaluated at the receiving surface rather than at the light center.
-
-RTX PT is the reference Monte Carlo solver. Uniform, Power, and UVSR's
-current-vertex adaptive NEE are active. The optional first-party RTXDI-like
-direct reservoir replaces primary-hit NEE and can reuse a compatible
-reprojected prior-frame candidate plus one compatible neighbor around that
-prior-view pixel.
-
-RESTIR PT is an executable seed-replay subset. It projects the current primary
-surface through the prior view, re-integrates deterministic donor seeds at the
-receiving pixel, and combines their indirect suffixes with the current one; it
-has no stored reconnection vertex, hybrid shift, or geometric reconnection.
-RESTIR GI is an executable temporal-checkpoint subset.
-It resamples the current and previous same-pixel local indirect suffixes without
-a cross-pixel secondary-surface transform. Both persist only the current local
-record, add the current primary base exactly once, and remain explicitly
-separate from the optional direct reservoir. They are clean-room UVSR
-implementations, not claims of NVIDIA namesake parity.
-
-The reference running mean uses finite successful contributions, including
-black and misses. **Firefly Clamp (Biased)** deliberately limits a successful
-contribution before it enters that mean, so an image accumulated with the
-filter enabled is not the unclamped reference estimator.
-
-The supported transport boundary intentionally matches the world
-representation: opaque and alpha-tested triangles only. Blended, transmissive,
-subsurface, hair, curve, and participating-media transport remain unsupported
-rather than being silently treated as opaque. The complete architecture,
-solver policies, history rules, and extension boundary are documented in
-[Path Tracing Transport](path-tracing-transport.md).
-
-## Tone Mapping and Output
-
-A neutral AgX transform maps scene-linear HDR radiance for display. Optional
-Auto Exposure builds a 256-bin GPU luminance histogram after TAA, meters the
-median valid luminance, adapts toward 18% middle gray, and supplies the exposure
-multiplier directly to AgX. **Maximum Brightening** and **Maximum Darkening**
-independently bound the automatic target from 0 through 16 EV in each direction.
-Maximum Brightening defaults to 5 EV and Maximum Darkening defaults to 2 EV.
-**Exposure Compensation** adds its -18 through +8 EV
-bias after that bound. **Adjustment Period** spans 0.05 through 5 seconds,
-defaults to 0.20 seconds, and controls the half-life of symmetric EV-space
-adaptation.
-
-When Auto Exposure is disabled, tone mapping selects the exact established
-texture-only, buffer-free AgX presentation, so the optional feature cannot
-alter color. The automatic permutation changes only the scene-linear exposure
-multiplier before that same AgX curve. It does not replace the established AgX
-clamps or add another output transfer. This is a display transform only:
-scene-linear lighting and effect histories remain unchanged. In Ray Marching,
-TAA runs before auto exposure and tone mapping when enabled. Path Tracing uses
-its own scene-linear progressive history and never routes through TAA. Fast
-Approximate AA, when enabled, runs afterward in the display-linear domain.
-Final transfer and dithering are applied at output.
-
-## Debug Contract
-
-The Debug drawer separates presentation from information:
-
-- World selects Default, White, White Detail, or White Lighting.
-- Visibility selects Default, Ambient Visibility, Traced Indirect, or
-  Applied Indirect.
-- Physically Based Lighting selects Default, Surface Normals, Geometry
-  Normals, Normal Difference, Diffuse Environment, Environment Direction,
-  Reflected Environment, Reflectance Response, Specular Environment, All
-  Environment Light, Specular Visibility, Environment Level, or Sky
-  Visibility.
-
-World appearance remains independent from information filters. A Physically
-Based Lighting filter keeps Visibility executing so traced data stays valid,
-while ordinary Visibility composition passes through without contaminating the
-filter. An explicit Visibility view wins when both information selectors are
-active. Removed screen space directional shadow debug state does not remain
-available in main.
-
-Path Tracing replaces the screen-space Visibility and deferred PBR debug bodies
-with transport-owned views of the current first-hit albedo, geometric and
-shading normals, successful-sample count, deterministic update rate, transient
-signal-group classification, current direct-reservoir state, primary transport,
-and indirect transport. Primary Transport contains the first-hit environment,
-emission, and direct-light contribution; Indirect Transport contains the solved
-continuation suffix. Every solver may also persist primary/indirect signal
-groups and first-hit guides for UVSR's spatial-only Spatial Path Resolve; RTX PT
-alone can expose a third diffuse/specular continuation split. Raw output remains
-independent.
-There is no Primary-Surface Replacement stage. Indirect Reservoir displays the
-resampled indirect suffix while an
-effective RESTIR PT seed-replay or RESTIR GI checkpoint policy is active and is
-disabled otherwise. Debug selection preserves estimator settings and the
-history epoch; changing the view forces one all-pixel attempt so transient data
-is coherent, and successful attempts enter the running mean normally.
+Debug views separate world appearance from information. Retained visibility
+views show final, ambient visibility, traced indirect, or applied indirect.
+Retained PBR filters show final output, normals, environment terms, reflectance,
+specular visibility, environment level, or sky visibility. Debug selection may
+change presentation but must not change estimator settings or history ownership.
 
 ## Validation
 
-The PBR boundary is protected by:
+CPU and shader-contract tests cover material decode, geometric/shading-normal
+roles, BSDF equations, light preparation, environment response, and shared
+buffer layouts. Alpha-tested and direct-visibility semantics still require
+production-bound shader or rendered evidence. Scene and provenance tests protect
+Bistro, San Miguel, every HDR environment, and the retained noise set.
 
-- CPU reference tests for material and lighting equations;
-- source contract tests for shared CPU/HLSL layouts, exact sun and flashlight
-  visibility matching, and the flashlight beam profile;
-- shader-package tests proving the forward/legacy families are absent;
-- path-transport contracts for hit reconstruction, shared BSDF evaluation and
-  sampling, finite accumulation, solver policy, and history invalidation;
-- scene and asset contracts for bundled material inputs;
-- AA tests for per-sample deferred MSAA and output ordering; and
-- runtime inspection through the concise Debug views.
+Runtime validation must bind exact source, configuration, settings hash/version,
+executable SHA-256, adapter, scene, camera, resolution, warmup, and capture
+window. Exercise AO/GI combinations; directional shadows at 1x/2x/4x/8x/16x;
+sky and flashlight visibility; both retained scenes; all HDR sources; static,
+motion, disocclusion, resize, material, and lighting changes; and every relevant
+history reset. Compilation, source spelling, or a non-black image is not visual,
+performance, or package proof.
 
-Adding a new material or lighting feature requires a current product control or
-an unavoidable renderer invariant, a shared CPU/HLSL contract, resource
-lifetime evidence, and focused tests. Do not restore a parallel renderer path
-only as an extension point.
+The developer-only `-debug --verify-retained-runtime` diagnostic does not prove
+the production executable. Exact-package proof must install and launch the
+Release package through the trusted launcher, exercise normal product
+interfaces, and preserve the package path, manifest source/configuration,
+engine SHA-256, settings identity, commands, and captures. That local DXR
+hardware matrix remains open until those artifacts exist.
+
+Production exposes interactive ImGui and command-field controls, keyboard
+clipboard screenshots, persistent snapshot codes, and narrow early identity
+and settings JSON diagnostics. Exact-package evidence must independently hash
+and identity-check the engine, use ordinary scene/size arguments and normal
+product settings, and retain settings, camera, captures, and timings. Focused
+external [`pixtool.exe`](https://devblogs.microsoft.com/pix/pixtool/) capture
+and debug-layer replay are additionally required for barrier, lifetime,
+ray-tracing, and Donut-detachment changes; other provenance-bound rendered
+capture routes remain valid. Settings without a normal CLI require an
+authorized interactive local DXR-hardware run.

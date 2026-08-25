@@ -61,6 +61,13 @@ namespace uvsr
         return GetPixelZoomFactor(mode) >= 2u;
     }
 
+    [[nodiscard]] constexpr bool IsPixelZoomPassActive(
+        PixelZoomMode mode,
+        float opacity)
+    {
+        return IsPixelZoomEnabled(mode) && opacity > 0.f;
+    }
+
     [[nodiscard]] constexpr bool IsPixelZoomCompositionIdle(
         PixelZoomMode requested,
         PixelZoomMode rendered,

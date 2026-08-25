@@ -1,5 +1,5 @@
 diff --git a/include/donut/app/ApplicationBase.h b/include/donut/app/ApplicationBase.h
-index e9bfeb6..32d3f24 100644
+index e9bfeb63168342ae5a563b5b274d0f5e41e1ac44..32d3f247bba9d4ec244667536abeddf8d450e52e 100644
 --- a/include/donut/app/ApplicationBase.h
 +++ b/include/donut/app/ApplicationBase.h
 @@ -26,6 +26,7 @@
@@ -20,10 +20,34 @@ index e9bfeb6..32d3f24 100644
  
      protected:
 diff --git a/include/donut/app/DeviceManager.h b/include/donut/app/DeviceManager.h
-index 67fc1f6..0ce4397 100644
+index 67fc1f608014be6f41b919b420e899e6ff7b35b2..050f7398babf22e9ab78d6f2cafe0bc7c87e90c3 100644
 --- a/include/donut/app/DeviceManager.h
 +++ b/include/donut/app/DeviceManager.h
-@@ -300,6 +300,8 @@ namespace donut::app
+@@ -82,6 +82,8 @@ freely, subject to the following restrictions:
+ #include <nvrhi/nvrhi.h>
+ #include <donut/core/log.h>
+ 
++#include "renderer_shell_failure_policy.h"
++
+ #include <list>
+ #include <functional>
+ #include <optional>
+@@ -268,7 +270,13 @@ namespace donut::app
+         void AddRenderPassToBack(IRenderPass *pController);
+         void RemoveRenderPass(IRenderPass *pController);
+ 
+-        void RunMessageLoop();
++        [[nodiscard]] bool RunMessageLoop();
++        [[nodiscard]] bool RecordRuntimeFailure(
++            uvsr::RendererShellOperationResult result);
++        void RequestSkipPresentThisFrame()
++        {
++            m_SkipPresentThisFrame = true;
++        }
+ 
+         // returns the size of the window in screen coordinates
+         void GetWindowDimensions(int& width, int& height);
+@@ -300,12 +308,16 @@ namespace donut::app
          float m_PrevDPIScaleFactorX = 0.f;
          float m_PrevDPIScaleFactorY = 0.f;
          bool m_RequestedVSync = false;
@@ -32,7 +56,24 @@ index 67fc1f6..0ce4397 100644
          bool m_InstanceCreated = false;
          int m_PrevWindowX = 0;
          int m_PrevWindowY = 0;
-@@ -353,6 +355,8 @@ namespace donut::app
+         int m_PrevWindowWidth = 0;
+         int m_PrevWindowHeight = 0;
+         bool m_RequestedRenderUnfocused = true;
++        bool m_SkipPresentThisFrame = false;
++        uvsr::RendererShellFailureLatch m_RuntimeFailure;
+ 
+         double m_AverageFrameTime = 0.0;
+         double m_AverageTimeUpdateInterval = 0.5;
+@@ -330,7 +342,7 @@ namespace donut::app
+         void CreateDepthBuffer();
+ 
+         void Animate(double elapsedTime, bool windowIsFocused);
+-        void Render();
++        [[nodiscard]] uvsr::RendererShellFrameDisposition Render();
+         void UpdateAverageFrameTime(double elapsedTime);
+         bool AnimateRenderPresent();
+         // device-specific methods
+@@ -353,6 +365,8 @@ namespace donut::app
          [[nodiscard]] double GetPreviousFrameTimestamp() const { return m_PreviousFrameTimestamp; }
          void SetFrameTimeUpdateInterval(double seconds) { m_AverageTimeUpdateInterval = seconds; }
          [[nodiscard]] bool IsVsyncEnabled() const { return m_DeviceParams.vsyncEnabled; }
@@ -41,7 +82,18 @@ index 67fc1f6..0ce4397 100644
          virtual void SetVsyncEnabled(bool enabled) { m_RequestedVSync = enabled; /* will be processed later */ }
          virtual void ReportLiveObjects() {}
          void SetEnableRenderDuringWindowMovement(bool val) {m_EnableRenderDuringWindowMovement = val;} 
-@@ -463,6 +467,7 @@ namespace donut::app
+@@ -380,6 +394,10 @@ namespace donut::app
+ 
+         [[nodiscard]] GLFWwindow* GetWindow() const { return m_Window; }
+         [[nodiscard]] uint32_t GetFrameIndex() const { return m_FrameIndex; }
++        [[nodiscard]] bool HasRuntimeFailure() const
++        {
++            return !uvsr::RendererShellCanRunFrame(m_RuntimeFailure);
++        }
+ 
+         virtual nvrhi::ITexture* GetCurrentBackBuffer() = 0;
+         virtual nvrhi::ITexture* GetBackBuffer(uint32_t index) = 0;
+@@ -463,6 +481,7 @@ namespace donut::app
          // all of these pass in GLFW constants as arguments
          // see http://www.glfw.org/docs/latest/input.html
          // return value is true if the event was consumed by this render pass, false if it should be passed on
@@ -49,8 +101,36 @@ index 67fc1f6..0ce4397 100644
          virtual bool KeyboardUpdate(int key, int scancode, int action, int mods) { return false; }
          virtual bool KeyboardCharInput(unsigned int unicode, int mods) { return false; }
          virtual bool MousePosUpdate(double xpos, double ypos) { return false; }
+diff --git a/include/donut/app/DeviceManager_DX12.h b/include/donut/app/DeviceManager_DX12.h
+index 271c96c27b1edab11488be46129ebf7fed7115fe..330f2c91dbee27c5a01a3bc1d5295f44dccb4fe7 100644
+--- a/include/donut/app/DeviceManager_DX12.h
++++ b/include/donut/app/DeviceManager_DX12.h
+@@ -52,6 +52,8 @@ protected:
+     std::vector<nvrhi::TextureHandle>               m_RhiSwapChainBuffers;
+     nvrhi::RefCountPtr<ID3D12Fence>                 m_FrameFence;
+     std::vector<HANDLE>                             m_FrameFenceEvents;
++    std::vector<UINT64>                             m_FrameFenceValues;
++    uvsr::RendererShellTerminalDiagnosticLatch      m_TerminalDiagnostic;
+ 
+     UINT64                                          m_FrameCount = 1;
+ 
+@@ -101,7 +103,11 @@ protected:
+     uint32_t GetBackBufferCount() override;
+     bool BeginFrame() override;
+     bool Present() override;
++    bool RecordD3D12RuntimeFailure(
++        uvsr::RendererShellOperationResult result,
++        bool terminalWithoutDeviceRemoval = false);
+     void Shutdown() override;
+     bool CreateRenderTargets();
+-    void ReleaseRenderTargets();
+-};
+\ No newline at end of file
++    bool WaitForFrameFences();
++    bool ReleaseRenderTargets();
++};
 diff --git a/include/donut/app/UserInterfaceUtils.h b/include/donut/app/UserInterfaceUtils.h
-index 76e27c0..3500d0a 100644
+index 76e27c0e57ea982a4235b113415d59e1300fd8a3..833b39e1a4806a581633a3c65a548310721ae41b 100644
 --- a/include/donut/app/UserInterfaceUtils.h
 +++ b/include/donut/app/UserInterfaceUtils.h
 @@ -39,7 +39,11 @@ namespace donut::app
@@ -67,10 +147,185 @@ index 76e27c0..3500d0a 100644
      bool LightEditor_Directional(engine::DirectionalLight& light);
      bool LightEditor_Point(engine::PointLight& light);
 diff --git a/src/app/DeviceManager.cpp b/src/app/DeviceManager.cpp
-index 7a680ef..bd0cac1 100644
+index 7a680effbbf5b637c3a44ad498a63999c2488e5e..46f103b525f5600d77a77c8d78dbf35518fed1ca 100644
 --- a/src/app/DeviceManager.cpp
 +++ b/src/app/DeviceManager.cpp
-@@ -887,6 +887,13 @@ void DeviceManager::KeyboardUpdate(int key, int scancode, int action, int mods)
+@@ -599,12 +599,19 @@ void DeviceManager::Animate(double elapsedTime, bool windowIsFocused)
+     }
+ }
+ 
+-void DeviceManager::Render()
++uvsr::RendererShellFrameDisposition DeviceManager::Render()
+ {
+     for (auto it : m_vRenderPasses)
+     {
++        const uvsr::RendererShellFrameDisposition disposition =
++            uvsr::GetRendererShellFrameDisposition(
++                m_RuntimeFailure, m_SkipPresentThisFrame);
++        if (disposition != uvsr::RendererShellFrameDisposition::Present)
++            return disposition;
+         it->Render(GetCurrentFramebuffer(it->SupportsDepthBuffer()));
+     }
++    return uvsr::GetRendererShellFrameDisposition(
++        m_RuntimeFailure, m_SkipPresentThisFrame);
+ }
+ 
+ void DeviceManager::UpdateAverageFrameTime(double elapsedTime)
+@@ -632,9 +639,10 @@ bool DeviceManager::ShouldRenderUnfocused() const
+     return false;
+ }
+ 
+-void DeviceManager::RunMessageLoop()
++bool DeviceManager::RunMessageLoop()
+ {
+     m_PreviousFrameTimestamp = glfwGetTime();
++    bool runSucceeded = !m_RuntimeFailure.Failed();
+ 
+ #if DONUT_WITH_AFTERMATH
+     bool dumpingCrash = false;
+@@ -647,9 +655,15 @@ void DeviceManager::RunMessageLoop()
+         if (m_callbacks.beforeFrame) m_callbacks.beforeFrame(*this, m_FrameIndex);
+         glfwPollEvents();
+         UpdateWindowSize();
++        if (HasRuntimeFailure())
++        {
++            runSucceeded = false;
++            break;
++        }
+         bool presentSuccess = AnimateRenderPresent();
+         if (!presentSuccess)
+         {
++            runSucceeded = false;
+ #if DONUT_WITH_AFTERMATH
+             dumpingCrash = true;
+ #endif
+@@ -657,20 +671,51 @@ void DeviceManager::RunMessageLoop()
+         }
+     }
+ 
+-    bool waitSuccess = GetDevice()->waitForIdle();
++    const bool waitSuccess = RecordRuntimeFailure(
++        uvsr::CheckRendererShellBoolean(
++            uvsr::RendererShellOperation::MessageLoopDeviceIdle,
++            GetDevice()->waitForIdle()));
+ #if DONUT_WITH_AFTERMATH
+     dumpingCrash |= !waitSuccess;
+     // wait for Aftermath dump to complete before exiting application
+     if (dumpingCrash && m_DeviceParams.enableAftermath)
+         AftermathCrashDump::WaitForCrashDump();
+ #else
+-    assert(waitSuccess);
+-    (void)waitSuccess;
++    runSucceeded &= waitSuccess;
+ #endif
++    return runSucceeded && !m_RuntimeFailure.Failed();
++}
++
++bool DeviceManager::RecordRuntimeFailure(
++    uvsr::RendererShellOperationResult result)
++{
++    if (result.Succeeded())
++        return true;
++
++    if (m_RuntimeFailure.Record(result))
++    {
++        char message[256] = {};
++        std::snprintf(
++            message,
++            sizeof(message),
++            "UVSR shell %s failed: native result 0x%08x, detail 0x%08x",
++            uvsr::RendererShellOperationName(result.operation),
++            result.nativeResult,
++            result.nativeDetail);
++        nvrhi::IMessageCallback* callback = m_DeviceParams.messageCallback
++            ? m_DeviceParams.messageCallback
++            : &DefaultMessageCallback::GetInstance();
++        callback->message(nvrhi::MessageSeverity::Error, message);
++    }
++    return false;
+ }
+ 
+ bool DeviceManager::AnimateRenderPresent()
+ {
++    if (HasRuntimeFailure())
++        return false;
++    m_SkipPresentThisFrame = false;
++
+     double curTime = glfwGetTime();
+     double elapsedTime = curTime - m_PreviousFrameTimestamp;
+ 
+@@ -701,7 +746,8 @@ bool DeviceManager::AnimateRenderPresent()
+         // while the local variable below becomes the render/present index, which will be different only if m_SkipRenderOnFirstFrame is set
+         if (m_FrameIndex > 0 || !m_SkipRenderOnFirstFrame)
+         {
+-            if (BeginFrame())
++            if (!BeginFrame())
++                return false;
+             {
+                 // first time entering this loop, m_FrameIndex is 1 for m_SkipRenderOnFirstFrame, 0 otherwise;
+                 uint32_t frameIndex = m_FrameIndex;
+@@ -715,21 +761,30 @@ bool DeviceManager::AnimateRenderPresent()
+                 }
+ 
+                 if (m_callbacks.beforeRender) m_callbacks.beforeRender(*this, frameIndex);
+-                Render();
+-                if (m_callbacks.afterRender) m_callbacks.afterRender(*this, frameIndex);
++                const uvsr::RendererShellFrameDisposition disposition =
++                    Render();
++                if (disposition ==
++                    uvsr::RendererShellFrameDisposition::Failed)
++                    return false;
++                if (disposition ==
++                    uvsr::RendererShellFrameDisposition::Present)
++                {
++                    if (m_callbacks.afterRender)
++                        m_callbacks.afterRender(*this, frameIndex);
+ #if DONUT_WITH_STREAMLINE
+-                StreamlineIntegration::Get().RenderEnd(*this);
+-                StreamlineIntegration::Get().PresentStart(*this);
++                    StreamlineIntegration::Get().RenderEnd(*this);
++                    StreamlineIntegration::Get().PresentStart(*this);
+ #endif
+-                if (m_callbacks.beforePresent) m_callbacks.beforePresent(*this, frameIndex);
+-                bool presentSuccess = Present();
+-                if (m_callbacks.afterPresent) m_callbacks.afterPresent(*this, frameIndex);
++                    if (m_callbacks.beforePresent)
++                        m_callbacks.beforePresent(*this, frameIndex);
++                    const bool presentSuccess = Present();
+ #if DONUT_WITH_STREAMLINE
+-                StreamlineIntegration::Get().PresentEnd(*this);
++                    StreamlineIntegration::Get().PresentEnd(*this);
+ #endif
+-                if (!presentSuccess)
+-                {
+-                    return false;
++                    if (!presentSuccess)
++                        return false;
++                    if (m_callbacks.afterPresent)
++                        m_callbacks.afterPresent(*this, frameIndex);
+                 }
+             }
+         }
+@@ -802,6 +857,8 @@ void DeviceManager::UpdateWindowSize()
+         m_DeviceParams.vsyncEnabled = m_RequestedVSync;
+ 
+         ResizeSwapChain();
++        if (HasRuntimeFailure())
++            return;
+         BackBufferResized();
+     }
+ 
+@@ -822,7 +879,8 @@ void DeviceManager::WindowPosCallback(int x, int y)
+     if (m_EnableRenderDuringWindowMovement && m_SwapChainFramebuffers.size() > 0)
+     {
+         if (m_callbacks.beforeFrame) m_callbacks.beforeFrame(*this, m_FrameIndex);
+-        AnimateRenderPresent();
++        if (!AnimateRenderPresent())
++            glfwSetWindowShouldClose(m_Window, GLFW_TRUE);
+     }
+ }
+ 
+@@ -887,6 +945,13 @@ void DeviceManager::KeyboardUpdate(int key, int scancode, int action, int mods)
  
      if (key == GLFW_KEY_ENTER && action == GLFW_PRESS && (mods & GLFW_MOD_ALT))
      {
@@ -85,7 +340,7 @@ index 7a680ef..bd0cac1 100644
          return;
      }
 diff --git a/src/app/UserInterfaceUtils.cpp b/src/app/UserInterfaceUtils.cpp
-index 1808e0c..e524d57 100644
+index 1808e0c95f4cd94453b540f776d41f1a0245fcc1..b6900980906fa1ae2b436e43b4cd8062a51598fd 100644
 --- a/src/app/UserInterfaceUtils.cpp
 +++ b/src/app/UserInterfaceUtils.cpp
 @@ -169,19 +169,30 @@ bool donut::app::FolderDialog(const char* pTitle, const char* pDefaultFolder, st
@@ -139,10 +394,26 @@ index 1808e0c..e524d57 100644
      update |= ImGui::Checkbox("Double-Sided", &material->doubleSided);
      
 diff --git a/src/app/dx12/DeviceManager_DX12.cpp b/src/app/dx12/DeviceManager_DX12.cpp
-index c92cd39..3710bce 100644
+index c92cd3991415b90f0337914a1055723d25b201e8..4153fad0c320bf5f07473eea498c9c59992193e8 100644
 --- a/src/app/dx12/DeviceManager_DX12.cpp
 +++ b/src/app/dx12/DeviceManager_DX12.cpp
-@@ -393,6 +393,7 @@ bool DeviceManager_DX12::CreateSwapChain()
+@@ -49,6 +49,7 @@ freely, subject to the following restrictions:
+ 
+ #include <string>
+ #include <algorithm>
++#include <iomanip>
+ #include <vector>
+ 
+ #include <donut/app/DeviceManager.h>
+@@ -57,6 +58,7 @@ freely, subject to the following restrictions:
+ 
+ 
+ #include <sstream>
++#include "uvsr-d3d12-diagnostics.h"
+ 
+ #if DONUT_WITH_STREAMLINE
+ #include <StreamlineIntegration.h>
+@@ -393,6 +395,7 @@ bool DeviceManager_DX12::CreateSwapChain()
          if (SUCCEEDED(pDxgiFactory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &supported, sizeof(supported))))
              m_TearingSupported = (supported != 0);
      }
@@ -150,7 +421,211 @@ index c92cd39..3710bce 100644
  
      if (m_TearingSupported)
      {
-@@ -576,7 +577,10 @@ bool DeviceManager_DX12::Present()
+@@ -424,6 +427,7 @@ bool DeviceManager_DX12::CreateSwapChain()
+     for(UINT bufferIndex = 0; bufferIndex < m_SwapChainDesc.BufferCount; bufferIndex++)
+     {
+         m_FrameFenceEvents.push_back( CreateEvent(nullptr, false, true, nullptr) );
++        m_FrameFenceValues.push_back(0u);
+     }
+ 
+     return true;
+@@ -431,20 +435,18 @@ bool DeviceManager_DX12::CreateSwapChain()
+ 
+ void DeviceManager_DX12::DestroyDeviceAndSwapChain()
+ {
+-    m_RhiSwapChainBuffers.clear();
+     m_RendererString.clear();
+ 
+-    ReleaseRenderTargets();
++    if (!ReleaseRenderTargets())
++        return;
+ 
+     m_NvrhiDevice = nullptr;
+ 
+-    for (auto fenceEvent : m_FrameFenceEvents)
+-    {
+-        WaitForSingleObject(fenceEvent, INFINITE);
++    for (HANDLE fenceEvent : m_FrameFenceEvents)
+         CloseHandle(fenceEvent);
+-    }
+ 
+     m_FrameFenceEvents.clear();
++    m_FrameFenceValues.clear();
+ 
+     if (m_SwapChain)
+     {
+@@ -489,29 +491,94 @@ bool DeviceManager_DX12::CreateRenderTargets()
+     return true;
+ }
+ 
+-void DeviceManager_DX12::ReleaseRenderTargets()
++bool DeviceManager_DX12::WaitForFrameFences()
+ {
+-    if (m_NvrhiDevice)
++    for (size_t index = 0u; index < m_FrameFenceValues.size(); ++index)
+     {
+-        // Make sure that all frames have finished rendering
+-        m_NvrhiDevice->waitForIdle();
++        const uint64_t expectedValue = m_FrameFenceValues[index];
++        auto completion =
++            nvrhi::d3d12::uvsr_diagnostics::ObserveFenceCompletion(
++                m_FrameFence->GetCompletedValue());
++        if (completion.failed)
++        {
++            return RecordD3D12RuntimeFailure(
++                {
++                    uvsr::RendererShellOperation::ShutdownFrameWait,
++                    static_cast<uint32_t>(DXGI_ERROR_DEVICE_REMOVED),
++                    static_cast<uint32_t>(expectedValue)
++                },
++                true);
++        }
++        if (completion.HasReached(expectedValue))
++            continue;
++
++        const uvsr::RendererShellOperationResult waitResult =
++            uvsr::WaitForRendererShellFence(
++                uvsr::RendererShellOperation::ShutdownFrameWait,
++                [&](uint32_t timeout)
++                {
++                    return WaitForSingleObject(
++                        m_FrameFenceEvents[index], timeout);
++                },
++                []() { return GetLastError(); });
++        if (!RecordD3D12RuntimeFailure(waitResult))
++            return false;
+ 
+-        // Release all in-flight references to the render targets
+-        m_NvrhiDevice->runGarbageCollection();
++        completion =
++            nvrhi::d3d12::uvsr_diagnostics::ObserveFenceCompletion(
++                m_FrameFence->GetCompletedValue());
++        if (completion.failed)
++        {
++            return RecordD3D12RuntimeFailure(
++                {
++                    uvsr::RendererShellOperation::ShutdownFrameWait,
++                    static_cast<uint32_t>(DXGI_ERROR_DEVICE_REMOVED),
++                    static_cast<uint32_t>(expectedValue)
++                },
++                true);
++        }
++        if (!completion.HasReached(expectedValue))
++        {
++            return RecordD3D12RuntimeFailure(
++                {
++                    uvsr::RendererShellOperation::ShutdownFrameWait,
++                    static_cast<uint32_t>(E_FAIL),
++                    static_cast<uint32_t>(expectedValue)
++                },
++                true);
++        }
+     }
++    return true;
++}
+ 
+-    // Set the events so that WaitForSingleObject in OneFrame will not hang later
+-    for(auto e : m_FrameFenceEvents)
+-        SetEvent(e);
+-
+-    // Release the old buffers because ResizeBuffers requires that
+-    m_RhiSwapChainBuffers.clear();
+-    m_SwapChainBuffers.clear();
++bool DeviceManager_DX12::ReleaseRenderTargets()
++{
++    return uvsr::ReleaseRendererShellResources(
++        [&]()
++        {
++            return !m_NvrhiDevice || RecordRuntimeFailure(
++                uvsr::CheckRendererShellBoolean(
++                    uvsr::RendererShellOperation::ShutdownDeviceIdle,
++                    m_NvrhiDevice->waitForIdle()));
++        },
++        [&]() { return !m_FrameFence || WaitForFrameFences(); },
++        [&]()
++        {
++            if (m_NvrhiDevice)
++                m_NvrhiDevice->runGarbageCollection();
++            m_RhiSwapChainBuffers.clear();
++            m_SwapChainBuffers.clear();
++            std::fill(
++                m_FrameFenceValues.begin(),
++                m_FrameFenceValues.end(),
++                0u);
++        });
+ }
+ 
+ void DeviceManager_DX12::ResizeSwapChain()
+ {
+-    ReleaseRenderTargets();
++    if (!ReleaseRenderTargets())
++        return;
+ 
+     if (!m_NvrhiDevice)
+         return;
+@@ -540,9 +607,60 @@ void DeviceManager_DX12::ResizeSwapChain()
+ bool DeviceManager_DX12::BeginFrame()
+ {
+     auto bufferIndex = m_SwapChain->GetCurrentBackBufferIndex();
++    const uint64_t expectedValue = m_FrameFenceValues[bufferIndex];
+ 
+-    WaitForSingleObject(m_FrameFenceEvents[bufferIndex], INFINITE);
++    auto completion =
++        nvrhi::d3d12::uvsr_diagnostics::ObserveFenceCompletion(
++            m_FrameFence->GetCompletedValue());
++    if (completion.failed)
++    {
++        return RecordD3D12RuntimeFailure(
++            {
++                uvsr::RendererShellOperation::BeginFrameWait,
++                static_cast<uint32_t>(DXGI_ERROR_DEVICE_REMOVED),
++                static_cast<uint32_t>(expectedValue)
++            },
++            true);
++    }
++    if (completion.HasReached(expectedValue))
++        return true;
++
++    const uvsr::RendererShellOperationResult waitResult =
++        uvsr::WaitForRendererShellFence(
++            uvsr::RendererShellOperation::BeginFrameWait,
++            [&](uint32_t timeout)
++            {
++                return WaitForSingleObject(
++                    m_FrameFenceEvents[bufferIndex],
++                    timeout);
++            },
++            []() { return GetLastError(); });
++    if (!RecordD3D12RuntimeFailure(waitResult))
++        return false;
+ 
++    completion =
++        nvrhi::d3d12::uvsr_diagnostics::ObserveFenceCompletion(
++            m_FrameFence->GetCompletedValue());
++    if (completion.failed)
++    {
++        return RecordD3D12RuntimeFailure(
++            {
++                uvsr::RendererShellOperation::BeginFrameWait,
++                static_cast<uint32_t>(DXGI_ERROR_DEVICE_REMOVED),
++                static_cast<uint32_t>(expectedValue)
++            },
++            true);
++    }
++    if (!completion.HasReached(expectedValue))
++    {
++        return RecordD3D12RuntimeFailure(
++            {
++                uvsr::RendererShellOperation::BeginFrameWait,
++                static_cast<uint32_t>(E_FAIL),
++                static_cast<uint32_t>(expectedValue)
++            },
++            true);
++    }
+     return true;
+ }
+ 
+@@ -576,15 +694,88 @@ bool DeviceManager_DX12::Present()
      auto bufferIndex = m_SwapChain->GetCurrentBackBufferIndex();
  
      UINT presentFlags = 0;
@@ -161,4 +636,88 @@ index c92cd39..3710bce 100644
 +        m_RequestedPresentAllowTearing)
          presentFlags |= DXGI_PRESENT_ALLOW_TEARING;
  
-     HRESULT result = m_SwapChain->Present(m_DeviceParams.vsyncEnabled ? 1 : 0, presentFlags);
+-    HRESULT result = m_SwapChain->Present(m_DeviceParams.vsyncEnabled ? 1 : 0, presentFlags);
++    const uvsr::RendererShellOperationResult result =
++        uvsr::PresentRendererShellFrame(
++            m_FrameCount,
++            [&]()
++            {
++                return m_SwapChain->Present(
++                    m_DeviceParams.vsyncEnabled ? 1 : 0,
++                    presentFlags);
++            },
++            [&]()
++            {
++                return ResetEvent(m_FrameFenceEvents[bufferIndex])
++                    ? S_OK
++                    : HRESULT_FROM_WIN32(GetLastError());
++            },
++            [&](uint64_t fenceValue)
++            {
++                return m_FrameFence->SetEventOnCompletion(
++                    fenceValue,
++                    m_FrameFenceEvents[bufferIndex]);
++            },
++            [&](uint64_t fenceValue)
++            {
++                return m_GraphicsQueue->Signal(
++                    m_FrameFence,
++                    fenceValue);
++            });
++    if (!RecordD3D12RuntimeFailure(result))
++        return false;
++    m_FrameFenceValues[bufferIndex] = m_FrameCount;
++    return uvsr::AdvanceRendererShellCounter(m_FrameCount, result);
++}
++
++bool DeviceManager_DX12::RecordD3D12RuntimeFailure(
++    uvsr::RendererShellOperationResult result,
++    bool terminalWithoutDeviceRemoval)
++{
++    if (result.Succeeded())
++        return true;
+ 
+-    m_FrameFence->SetEventOnCompletion(m_FrameCount, m_FrameFenceEvents[bufferIndex]);
+-    m_GraphicsQueue->Signal(m_FrameFence, m_FrameCount);
+-    m_FrameCount++;
+-    return SUCCEEDED(result);
++    const HRESULT operationResult =
++        static_cast<HRESULT>(result.nativeResult);
++    const HRESULT removedReason = m_Device12
++        ? m_Device12->GetDeviceRemovedReason()
++        : operationResult;
++    const bool deviceRemoved =
++        nvrhi::d3d12::uvsr_diagnostics::IsDeviceRemovalFailure(
++            operationResult,
++            removedReason);
++    if (deviceRemoved || terminalWithoutDeviceRemoval)
++    {
++        (void)m_RuntimeFailure.Record(result);
++        if (!m_TerminalDiagnostic.ShouldReport(true))
++            return false;
++        std::stringstream message;
++        message << "UVSR shell "
++            << uvsr::RendererShellOperationName(result.operation)
++            << " failed, HRESULT = 0x" << std::hex << std::setw(8)
++            << std::setfill('0')
++            << static_cast<uint32_t>(operationResult)
++            << ", detail = 0x" << std::setw(8)
++            << result.nativeDetail
++            << ", GetDeviceRemovedReason = 0x" << std::setw(8)
++            << static_cast<uint32_t>(removedReason);
++        nvrhi::IMessageCallback* callback = m_DeviceParams.messageCallback
++            ? m_DeviceParams.messageCallback
++            : &DefaultMessageCallback::GetInstance();
++        return nvrhi::d3d12::uvsr_diagnostics::ReportFailure(
++            message,
++            operationResult,
++            removedReason,
++            m_Device12,
++            callback,
++            terminalWithoutDeviceRemoval);
++    }
++    return RecordRuntimeFailure(result);
+ }
+ 
+ void DeviceManager_DX12::Shutdown()
+

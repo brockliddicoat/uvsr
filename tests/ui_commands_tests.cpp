@@ -72,14 +72,14 @@ int main()
 
     {
         const UiCommandParseResult result = ParseUiCommand(
-            R"(set scene.path "C:\\Scenes\\Sponza Main.json" alpha\ beta 'gamma delta' "")");
+            R"(set scene.path "C:\\Scenes\\Bistro Interior.json" alpha\ beta 'gamma delta' "")");
         const UiCommand& command = RequireSuccess(
             result,
             "quoted and escaped values must tokenize");
         Require(
             command.arguments ==
                 std::vector<std::string>({
-                    R"(C:\Scenes\Sponza Main.json)",
+                    R"(C:\Scenes\Bistro Interior.json)",
                     "alpha beta",
                     "gamma delta",
                     ""
@@ -214,12 +214,12 @@ int main()
             "scene without a value must desugar to get scene.current");
 
         const UiCommand& sceneSet = RequireSuccess(
-            ParseUiCommand("/scene \"Sponza Main\""),
+            ParseUiCommand("/scene \"Bistro Interior\""),
             "scene with a value must parse");
         Require(sceneSet.verb == UiCommandVerb::Set &&
                 sceneSet.path == UiSceneCommandPath &&
                 sceneSet.arguments ==
-                    std::vector<std::string>{ "Sponza Main" },
+                    std::vector<std::string>{ "Bistro Interior" },
             "scene with a value must desugar to set scene.current");
 
         const UiCommand& cameraSet = RequireSuccess(
@@ -231,22 +231,6 @@ int main()
                     std::vector<std::string>{ "first-person" },
             "camera must desugar to set camera.mode");
 
-        const UiCommand& locationGet = RequireSuccess(
-            ParseUiCommand("/camera-location"),
-            "camera-location without values must parse");
-        Require(locationGet.verb == UiCommandVerb::Get &&
-                locationGet.path == UiCameraLocationCommandPath,
-            "camera-location must desugar to get camera.location");
-
-        const UiCommand& locationSet = RequireSuccess(
-            ParseUiCommand("/camera-location 1 2 3"),
-            "camera-location with values must parse");
-        Require(locationSet.verb == UiCommandVerb::Set &&
-                locationSet.path == UiCameraLocationCommandPath &&
-                locationSet.arguments ==
-                    std::vector<std::string>({ "1", "2", "3" }),
-            "camera-location values must remain separate for validation");
-
         const UiCommand& reload = RequireSuccess(
             ParseUiCommand("/reload-shaders changed"),
             "reload-shaders must parse");
@@ -255,6 +239,16 @@ int main()
                 reload.arguments ==
                     std::vector<std::string>{ "changed" },
             "reload-shaders must desugar to a canonical run action");
+
+        const UiCommand& load = RequireSuccess(
+            ParseUiCommand(
+                "/settings.load 0007cbf29ce4842223256c62272e07bb"),
+            "settings.load must parse");
+        Require(load.verb == UiCommandVerb::Run &&
+                load.action == UiSettingsLoadCommandAction &&
+                load.arguments == std::vector<std::string>{
+                    "0007cbf29ce4842223256c62272e07bb" },
+            "settings.load must desugar to one canonical run action");
     }
 
     RequireError("", UiCommandParseError::EmptyInput,
@@ -277,6 +271,14 @@ int main()
         "reset with multiple paths must be rejected");
     RequireError("/run", UiCommandParseError::MissingArgument,
         "run without an action must be rejected");
+    RequireError("/settings.load", UiCommandParseError::MissingArgument,
+        "settings.load without a code must be rejected");
+    RequireError(
+        "/settings.load 0007cbf29ce4842223256c62272e07bb extra",
+        UiCommandParseError::TooManyArguments,
+        "settings.load with multiple operands must be rejected");
+    RequireError(R"(/settings.load "")", UiCommandParseError::EmptyArgument,
+        "settings.load with an empty code must be rejected");
     RequireError("/help one two", UiCommandParseError::TooManyArguments,
         "help with multiple topics must be rejected");
     RequireError("/list one two", UiCommandParseError::TooManyArguments,
@@ -309,16 +311,13 @@ int main()
                 std::vector<std::string_view>({
                     "set",
                     "skin",
-                    "scene"
+                    "scene",
+                    "settings.load"
                 }),
             "verb completion must include canonical verbs and aliases in stable order");
-        Require(UiCommandCompletionMatches(
-                "camera-location",
-                "CAM"),
+        Require(UiCommandCompletionMatches("camera", "CAM"),
             "completion prefix matching must normalize ASCII case");
-        Require(!UiCommandCompletionMatches(
-                "camera-location",
-                "scene"),
+        Require(!UiCommandCompletionMatches("camera", "scene"),
             "completion prefix matching must reject unrelated candidates");
     }
 
@@ -401,8 +400,6 @@ int main()
             GetUiCommandCompletionToken("/camera ", 8u);
         const UiCommandCompletionToken uiValue =
             GetUiCommandCompletionToken("/ui ", 4u);
-        const UiCommandCompletionToken cameraLocationValue =
-            GetUiCommandCompletionToken("/camera-location ", 17u);
         Require(
             skinValue.target == UiCommandCompletionTarget::Value &&
                 skinValue.valuePath == "ui.skin" &&
@@ -410,8 +407,7 @@ int main()
                 fontFamilyValue.valuePath == UiFontFamilyCommandPath &&
                 uiValue.valuePath == "ui.visible" &&
                 sceneValue.valuePath == "scene.current" &&
-                cameraValue.valuePath == "camera.mode" &&
-                cameraLocationValue.valuePath == "camera.location",
+                cameraValue.valuePath == "camera.mode",
             "value aliases must resolve to their canonical Settings paths");
     }
 

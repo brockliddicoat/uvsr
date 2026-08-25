@@ -4,7 +4,7 @@
 #include <string_view>
 #include <system_error>
 
-namespace donut::app
+namespace uvsr
 {
     inline bool ParseCommandLineInt(
         std::string_view text,

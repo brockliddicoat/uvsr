@@ -1,6 +1,8 @@
 #include "direct_light_visibility.h"
 #include "diffuse_environment_math.h"
+#include "pbr_lighting_debug_contract.h"
 #include "pbr_material.h"
+#include "pbr_surface_light_contract.h"
 #include "screen_space_indirect_composite_shared.h"
 #include "screen_space_visibility_defaults.h"
 
@@ -43,60 +45,24 @@ namespace
             Near(actual[2], expected[2], tolerance);
     }
 
-    bool ShouldFlipSurfaceNormals(
-        bool isDoubleSided,
-        bool isFrontFace,
-        float geometricNormalDotView)
+    bool Near(
+        PbrContractFloat3 actual,
+        PbrContractFloat3 expected,
+        float tolerance = 1e-4f)
     {
-        return isDoubleSided
-            ? geometricNormalDotView < 0.f
-            : !isFrontFace;
+        return Near(actual.x, expected.x, tolerance) &&
+            Near(actual.y, expected.y, tolerance) &&
+            Near(actual.z, expected.z, tolerance);
     }
 
-    Color Add(const Color& left, const Color& right)
+    bool Near(
+        PbrDebugFloat3 actual,
+        PbrDebugFloat3 expected,
+        float tolerance = 1e-4f)
     {
-        return {
-            left[0] + right[0],
-            left[1] + right[1],
-            left[2] + right[2]
-        };
-    }
-
-    Color Multiply(const Color& left, const Color& right)
-    {
-        return {
-            left[0] * right[0],
-            left[1] * right[1],
-            left[2] * right[2]
-        };
-    }
-
-    struct DirectSourceComposition
-    {
-        Color finalDirect;
-        Color sourceRadiance;
-    };
-
-    DirectSourceComposition ComposeDirectAndSourceLighting(
-        const Color& directDiffuse,
-        const Color& directSpecular,
-        const Color& totalModulation,
-        const Color& sourceDiffuseModulation,
-        const Color& environmentDiffuse,
-        bool useSourceDiffuseModulation)
-    {
-        const Color finalDirect = Add(
-            Multiply(directDiffuse, totalModulation),
-            Multiply(directSpecular, totalModulation));
-        const Color sourceDirectDiffuse = Multiply(
-            directDiffuse,
-            useSourceDiffuseModulation
-                ? sourceDiffuseModulation
-                : totalModulation);
-        return {
-            finalDirect,
-            Add(sourceDirectDiffuse, environmentDiffuse)
-        };
+        return Near(actual.x, expected.x, tolerance) &&
+            Near(actual.y, expected.y, tolerance) &&
+            Near(actual.z, expected.z, tolerance);
     }
 
     float Alpha(float perceptualRoughness)
@@ -138,22 +104,6 @@ namespace
     {
         return incidentRadiance * bsdf * std::max(cosine, 0.f) *
             std::clamp(visibility, 0.f, 1.f);
-    }
-
-    float AnalyticalPositionalLightIntensity(
-        float luminousIntensity,
-        float distance,
-        float radius)
-    {
-        const float distanceSquared = distance * distance;
-        if (!(std::isfinite(radius) && radius > 0.f))
-            return luminousIntensity / distanceSquared;
-
-        const float halfAngularSize = std::atan(std::min(
-            radius / distance,
-            1.f));
-        return luminousIntensity / (radius * radius) *
-            halfAngularSize * halfAngularSize;
     }
 
     float IndirectComposite(
@@ -221,6 +171,62 @@ namespace
 
 int main()
 {
+    Require(
+        UVSR_PBR_LIGHTING_DEBUG_NONE == 0u &&
+            UVSR_PBR_LIGHTING_DEBUG_SKY_VISIBILITY == 12u &&
+            UVSR_VISIBILITY_DEBUG_FINAL_IMAGE == 0u &&
+            UVSR_VISIBILITY_DEBUG_APPLIED_INDIRECT == 3u,
+        "shared PBR and Visibility debug ordinals match the GPU contract");
+    Require(
+        PbrNeedsSkyVisibilitySample(
+            UVSR_PBR_LIGHTING_DEBUG_SKY_VISIBILITY,
+            false,
+            false) &&
+        PbrNeedsSkyVisibilitySample(
+            UVSR_PBR_LIGHTING_DEBUG_NONE,
+            true,
+            false) &&
+        PbrNeedsSkyVisibilitySample(
+            UVSR_PBR_LIGHTING_DEBUG_NONE,
+            false,
+            true) &&
+        !PbrNeedsSkyVisibilitySample(
+            UVSR_PBR_LIGHTING_DEBUG_NONE,
+            false,
+            false),
+        "sky debug requests the scalar without a probe or IBL application");
+    Require(Near(
+        ResolvePbrSkyVisibilityDebugColor(0.25f),
+        PbrDebugFloat3{ 0.25f, 0.25f, 0.25f }) && Near(
+        ResolvePbrSkyVisibilityDebugColor(
+            std::numeric_limits<float>::quiet_NaN()),
+        PbrDebugFloat3{ 1.f, 1.f, 1.f }),
+        "sky debug is grayscale and non-finite samples fail open to white");
+    Require(
+        ResolvePbrDebugPresentation(
+            UVSR_PBR_LIGHTING_DEBUG_NONE,
+            UVSR_VISIBILITY_DEBUG_FINAL_IMAGE) ==
+                UVSR_PBR_DEBUG_PRESENT_FINAL &&
+        ResolvePbrDebugPresentation(
+            UVSR_PBR_LIGHTING_DEBUG_SKY_VISIBILITY,
+            UVSR_VISIBILITY_DEBUG_FINAL_IMAGE) ==
+                UVSR_PBR_DEBUG_PRESENT_LIGHTING &&
+        ResolvePbrDebugPresentation(
+            UVSR_PBR_LIGHTING_DEBUG_SKY_VISIBILITY,
+            UVSR_VISIBILITY_DEBUG_AMBIENT_VISIBILITY) ==
+                UVSR_PBR_DEBUG_PRESENT_VISIBILITY,
+        "Visibility information filters take precedence over PBR filters");
+    Require(
+        !PbrDebugUsesBlackBackground(
+            UVSR_PBR_LIGHTING_DEBUG_NONE,
+            UVSR_VISIBILITY_DEBUG_FINAL_IMAGE) &&
+        PbrDebugUsesBlackBackground(
+            UVSR_PBR_LIGHTING_DEBUG_SKY_VISIBILITY,
+            UVSR_VISIBILITY_DEBUG_FINAL_IMAGE) &&
+        PbrDebugUsesBlackBackground(
+            UVSR_PBR_LIGHTING_DEBUG_NONE,
+            UVSR_VISIBILITY_DEBUG_TRACED_INDIRECT),
+        "information filters use a neutral black no-surface background");
     for (uint32_t mip = 0u; mip < 9u; ++mip)
     {
         const float normalizedMip = float(mip) / 8.f;
@@ -516,8 +522,7 @@ int main()
     };
     const uvsr::DirectLightVisibilities factors{
         factor0,
-        { texture0, light0,
-            uvsr::DirectLightVisibilityEncoding::RgbRgba16Float }
+        { texture0, light0, 4u }
     };
     Require(factors.flashlight.IsComplete() &&
         factors.sun.IsComplete(),
@@ -547,56 +552,29 @@ int main()
     Require(Near(combinedVisibility, Color{ 0.6f, 0.4f, 0.6f }),
         "both-on composition uses componentwise minimum, not multiplication");
 
-    // A correlated area-light estimator resolves the displayed direct sum
-    // with its total response, but diffuse GI transports only outgoing diffuse.
-    // Keep those factors distinct when a glossy material makes them disagree.
-    const Color directDiffuseResponse{ 8.f, 4.f, 2.f };
-    const Color directSpecularResponse{ 2.f, 6.f, 10.f };
-    const Color totalResponseModulation{ 0.25f, 0.5f, 0.75f };
-    const Color sourceDiffuseModulation{ 0.8f, 0.3f, 0.1f };
-    const Color sourceEnvironmentDiffuse{ 0.2f, 0.4f, 0.8f };
-    const DirectSourceComposition splitComposition =
-        ComposeDirectAndSourceLighting(
-            directDiffuseResponse,
-            directSpecularResponse,
-            totalResponseModulation,
-            sourceDiffuseModulation,
-            sourceEnvironmentDiffuse,
-            true);
-    Require(Near(
-        splitComposition.finalDirect,
-        Color{ 2.5f, 5.f, 9.f }),
-        "final direct diffuse and specular retain total-response modulation");
-    Require(Near(
-        splitComposition.sourceRadiance,
-        Color{ 6.6f, 1.6f, 1.f }),
-        "GI source radiance uses diffuse-response modulation and diffuse environment");
-
-    const DirectSourceComposition ordinaryComposition =
-        ComposeDirectAndSourceLighting(
-            directDiffuseResponse,
-            directSpecularResponse,
-            totalResponseModulation,
-            sourceDiffuseModulation,
-            sourceEnvironmentDiffuse,
-            false);
-    Require(Near(
-        ordinaryComposition.finalDirect,
-        splitComposition.finalDirect),
-        "source-only modulation cannot change displayed direct lighting");
-    Require(Near(
-        ordinaryComposition.sourceRadiance,
-        Color{ 2.2f, 2.4f, 2.3f }),
-        "omitting a source-only factor preserves ordinary source semantics");
-    Require(!Near(
-        splitComposition.sourceRadiance,
-        ordinaryComposition.sourceRadiance),
-        "a distinct diffuse ratio must not be replaced by the total ratio");
+    for (const unsigned receiverSamples : { 2u, 4u, 8u, 16u })
+    {
+        (void)receiverSamples;
+        const float below = uvsr::ApplyClosestVisibilityCorrection(
+            0.2f, 0.4f, 0.7f);
+        const float pivot = uvsr::ApplyClosestVisibilityCorrection(
+            0.4f, 0.4f, 0.7f);
+        const float above = uvsr::ApplyClosestVisibilityCorrection(
+            0.8f, 0.4f, 0.7f);
+        Require(
+            uvsr::ApplyClosestVisibilityCorrection(
+                0.f, 0.4f, 0.7f) == 0.f &&
+            uvsr::ApplyClosestVisibilityCorrection(
+                1.f, 0.4f, 0.7f) == 1.f &&
+            pivot == 0.7f && below < pivot && pivot < above,
+            "MSAA denoising correction preserves endpoints, pivot, and "
+            "per-sample ordering");
+    }
 
     const uvsr::DirectLightVisibilityTextureProperties
         compatibleVisibilityTexture{
             1920u, 1080u, 1u, 1u, 1u, 1u,
-            true, false, true, true
+            true, true, false, true
         };
     Require(uvsr::IsDirectLightVisibilityTextureCompatible(
         compatibleVisibilityTexture, 1920u, 1080u),
@@ -611,21 +589,22 @@ int main()
     Require(!uvsr::IsDirectLightVisibilityTextureCompatible(
         incompatibleVisibilityTexture, 1920u, 1080u),
         "wrong-format visibility texture fails white");
-    auto compatibleRgbVisibilityTexture = compatibleVisibilityTexture;
-    compatibleRgbVisibilityTexture.r8Unorm = false;
-    compatibleRgbVisibilityTexture.rgba16Float = true;
+    auto compatibleMsaaVisibilityTexture = compatibleVisibilityTexture;
+    compatibleMsaaVisibilityTexture.arraySize = 16u;
+    compatibleMsaaVisibilityTexture.texture2D = false;
+    compatibleMsaaVisibilityTexture.texture2DArray = true;
     Require(uvsr::IsDirectLightVisibilityTextureCompatible(
-        compatibleRgbVisibilityTexture,
+        compatibleMsaaVisibilityTexture,
         1920u,
         1080u,
-        uvsr::DirectLightVisibilityEncoding::RgbRgba16Float),
-        "full-resolution RGBA16F RGB modulation texture is accepted");
+        16u),
+        "16-slice R8 visibility is accepted for 16x MSAA");
     Require(!uvsr::IsDirectLightVisibilityTextureCompatible(
-        compatibleRgbVisibilityTexture,
+        compatibleMsaaVisibilityTexture,
         1920u,
         1080u,
-        uvsr::DirectLightVisibilityEncoding::ScalarR8Unorm),
-        "RGB modulation cannot masquerade as scalar R8 visibility");
+        8u),
+        "per-sample visibility cannot masquerade as another MSAA count");
     incompatibleVisibilityTexture = compatibleVisibilityTexture;
     incompatibleVisibilityTexture.sampleCount = 2u;
     Require(!uvsr::IsDirectLightVisibilityTextureCompatible(
@@ -700,22 +679,64 @@ int main()
     Require(Near(pointAtOne / pointAtFour, 16.f), "point light inverse-square at 4x");
 
     const float exactPointEmitter =
-        AnalyticalPositionalLightIntensity(12.f, 2.f, 0.f);
+        ResolveAnalyticalPositionalLightIntensity(
+            12.f, 0.f, 0.5f, 4.f);
     Require(
         exactPointEmitter == pointAtTwo,
         "zero-radius analytical emitter preserves the exact point-light branch");
+    Require(
+        ResolveAnalyticalPositionalLightIntensity(
+            12.f,
+            std::numeric_limits<float>::quiet_NaN(),
+            0.5f,
+            4.f) == pointAtTwo,
+        "invalid emitter radius fails over to the exact point-light branch");
     const float nearFiniteEmitter =
-        AnalyticalPositionalLightIntensity(12.f, 0.01f, 0.1f);
+        ResolveAnalyticalPositionalLightIntensity(
+            12.f, 0.1f, 100.f, 0.0001f);
     Require(
         std::isfinite(nearFiniteEmitter) && nearFiniteEmitter > 0.f &&
             nearFiniteEmitter < 12.f / (0.01f * 0.01f),
         "positive-radius analytical emitter bounds near-field energy");
     const float farFiniteEmitter =
-        AnalyticalPositionalLightIntensity(12.f, 100.f, 0.1f);
+        ResolveAnalyticalPositionalLightIntensity(
+            12.f, 0.1f, 0.01f, 10000.f);
     const float farPointEmitter = 12.f / (100.f * 100.f);
     Require(
         Near(farFiniteEmitter, farPointEmitter, 1e-7f),
         "finite analytical emitter converges to inverse square in the far field");
+
+    const float unboundedRange = ResolvePbrAnalyticalRangeWeight(
+        4.f, 0.f);
+    const float finiteRange = ResolvePbrAnalyticalRangeWeight(
+        4.f, 0.25f);
+    const float exhaustedRange = ResolvePbrAnalyticalRangeWeight(
+        16.f, 0.25f);
+    Require(
+        unboundedRange == 1.f && Near(finiteRange, 0.5625f) &&
+            exhaustedRange == 0.f,
+        "analytical range profile retains squared finite-range attenuation");
+
+    const float innerAngle = 0.5f;
+    const float outerAngle = 1.f;
+    const float innerCosine = std::cos(innerAngle * 0.5f);
+    const float outerCosine = std::cos(outerAngle * 0.5f);
+    Require(
+        ResolvePbrOrdinarySpotWeight(
+            innerCosine, innerAngle, outerAngle) == 1.f &&
+        ResolvePbrOrdinarySpotWeight(
+            outerCosine, innerAngle, outerAngle) == 0.f &&
+        Near(ResolvePbrOrdinarySpotWeight(
+            0.5f * (innerCosine + outerCosine),
+            innerAngle,
+            outerAngle), 0.5f),
+        "ordinary spotlight profile retains inner, outer, and smooth midpoint weights");
+    Require(
+        Near(ApplyPbrAnalyticalLightProfile(
+            nearFiniteEmitter,
+            finiteRange,
+            0.5f), nearFiniteEmitter * 0.28125f),
+        "finite-emitter energy is weighted once by range and spotlight profiles");
 
     // Visibility is linear and independent from ambient occlusion.
     const float bsdf = DiffuseBrdf(0.5f, 0.f, normalFresnel);
@@ -786,13 +807,63 @@ int main()
     // Geometric-normal validity, no-light, and emission-only behavior.
     const float geometricNormalDotLight = -0.2f;
     Require(geometricNormalDotLight <= 0.f, "back-side light rejected");
-    Require(!ShouldFlipSurfaceNormals(true, false, 0.8f),
+    const PbrContractFloat3 viewForward{ 0.f, 0.f, 1.f };
+    Require(!ShouldFlipPbrSurfaceNormals(
+        true, false, viewForward, viewForward),
         "a reflected double-sided instance keeps its view-facing normal despite raster winding");
-    Require(ShouldFlipSurfaceNormals(true, true, -0.8f),
+    Require(ShouldFlipPbrSurfaceNormals(
+        true,
+        true,
+        PbrContractFloat3{ 0.f, 0.f, -1.f },
+        viewForward),
         "a double-sided back face is oriented into the view hemisphere");
-    Require(ShouldFlipSurfaceNormals(false, false, 0.8f) &&
-        !ShouldFlipSurfaceNormals(false, true, -0.8f),
+    Require(ShouldFlipPbrSurfaceNormals(
+        false, false, viewForward, viewForward) &&
+        !ShouldFlipPbrSurfaceNormals(
+            false,
+            true,
+            PbrContractFloat3{ 0.f, 0.f, -1.f },
+            viewForward),
         "single-sided normal orientation retains the raster-facing contract");
+
+    const PbrContractFloat3 derivativeX{ 2.f, 0.f, 0.f };
+    const PbrContractFloat3 derivativeY{ 0.f, 3.f, 0.f };
+    const PbrContractFloat3 fallbackNormal{ 0.f, 1.f, 0.f };
+    Require(Near(
+        ResolvePbrTrianglePlaneNormal(
+            derivativeX,
+            derivativeY,
+            fallbackNormal),
+        PbrContractFloat3{ 0.f, 0.f, 1.f }),
+        "triangle plane normal preserves x-derivative cross y-derivative ordering");
+    Require(Near(
+        ResolvePbrTrianglePlaneNormal(
+            derivativeY,
+            derivativeX,
+            fallbackNormal),
+        PbrContractFloat3{ 0.f, 0.f, -1.f }),
+        "swapping triangle derivatives reverses the unoriented plane normal");
+    Require(Near(
+        ResolvePbrTrianglePlaneNormal(
+            PbrContractFloat3{},
+            PbrContractFloat3{},
+            fallbackNormal),
+        fallbackNormal),
+        "degenerate triangle derivatives retain the material-normal fallback");
+
+    const PbrContractSurfaceNormals orientedTriangle =
+        ResolvePbrTriangleSurfaceNormals(
+            derivativeY,
+            derivativeX,
+            fallbackNormal,
+            PbrContractFloat3{ 0.6f, 0.f, -0.8f },
+            viewForward);
+    Require(Near(
+        orientedTriangle.geometricNormal,
+        PbrContractFloat3{ 0.f, 0.f, 1.f }) && Near(
+        orientedTriangle.shadingNormal,
+        PbrContractFloat3{ -0.6f, 0.f, 0.8f }),
+        "view-facing triangle orientation also keeps shading and geometry normals in one hemisphere");
     const float emission = 7.f;
     const float noLightFinal = 0.f + emission;
     Require(noLightFinal == emission, "emission remains additive without lights");

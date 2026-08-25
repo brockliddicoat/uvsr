@@ -28,7 +28,8 @@ The normal Temporal Reconstructive surface contains:
 - **Quality**: Low, Medium, High, or Ultra; and
 - a default-closed **Advanced** disclosure.
 
-The lower-level Wicked Engine-derived policies live directly under Advanced.
+Lower-level policies comparable to Wicked Engine's implementation live directly
+under Advanced.
 Its final default-closed **Cost** submenu contains **Mode** with Full Quality,
 Reduced, and Minimum choices plus the cost-owned overrides.
 
@@ -86,10 +87,11 @@ Advanced begins directly with:
 - **Jitter Sequence**, with all six patterns described above;
 - **Depth Validation**, with Stationary Bypass and Legacy Four-Texel Footprint
   choices;
-- motion source;
-- current-sample reconstruction;
-- history filter and rectification;
 - history frames and strength.
+
+Motion-source selection, current-sample reconstruction, history filtering, and
+rectification algorithms are recipe implementation details, not separate UI
+rows.
 
 Stationary Bypass is the factory default. It keeps center-owned stationary
 history on the phase-invariant resolved-color grid instead of testing the raw
@@ -126,16 +128,12 @@ instead of exposing an internal sentinel or owner suffix. The adjacent reset
 icon reattaches that row to its recipe. Preset Sharpening alone keeps an
 **(Automatic)** choice. History Frames displays 1 through 32 and History
 Strength displays 0 through 200 percent. Explicit values override only their
-row. Changing a recipe-owned Algorithm control appends **(Custom)** to the
-selected Quality preview; Jitter Sequence remains independent. Changing a Cost
-control appends **(Custom)** to the selected Cost Mode preview. Each marker
-disappears when every control in its group returns to its recipe. The adjacent
-Quality reset restores the factory Quality and its recipe-owned controls; the
-Cost Mode reset restores the factory Cost and its Cost group. Selecting any
-named preset, including the currently named Custom preset, reapplies it and
-clears its owned overrides. Selecting a preset-equivalent Advanced value likewise
-reattaches that row unless it has a distinct **(Automatic)** choice. Disabling
-Temporal Reconstructive preserves the stored configuration.
+row. Changing a Quality-owned history value appends **(Custom)** to the selected
+Quality preview; Jitter Sequence and Depth Validation remain independent.
+Changing a Cost control appends **(Custom)** to the selected Cost Mode preview.
+Each marker disappears when every control in its group returns to its recipe.
+The adjacent Quality and Cost resets restore their factory recipe values.
+Disabling Temporal Reconstructive preserves the stored configuration.
 
 ## History Contract
 
@@ -145,10 +143,9 @@ before TAA and the TAA history/blend stage is bypassed, preventing one temporal
 estimator from averaging another. Raster TAA and its camera jitter both resolve
 inactive in this mode, so a camera-driven accumulation reset cannot present a
 different raw subpixel phase on each frame. The stored TAA controls are restored
-when Ray Marching accumulation is disabled. Path Tracing accumulation resolves
-TAA off and owns its own progressive sample history, including its explicit
-Shared Primary coverage-jitter exception. With accumulation off, Shared Primary
-can provide the depth and motion needed for ordinary TAA.
+when Ray Marching accumulation is disabled. Path Tracing always resolves TAA
+off and owns its progressive sample history; raster depth and motion are not
+synthesized to reenable TAA.
 
 The default TAA blend operates directly in scene-linear RGB. The optional
 luminance-compressed domain remains an Advanced cost policy, but it is not the
@@ -211,20 +208,10 @@ supported by all required formats. Multisample Adaptive Quality maps Low,
 Medium, High, and Ultra to 2x, 4x, 8x, and 16x respectively. Direct Samples
 selection remains under the technique's default-collapsed Advanced disclosure.
 
-Advanced also exposes **Per-Sample Shadows**, which defaults on and applies only
-to the directional ray-traced sun producer. On preserves the exact current
-MSAA policy: every valid covered receiver gets independent shadow evidence.
-Off selects the coherent closest reverse-Z receiver before tracing and reuses
-that receiver's total modulation across final MSAA lighting while routing its
-diffuse-only modulation to the screen-space GI source. This changes ray work
-from at most `covered samples * emitter samples` to `emitter samples`, or from
-one ray per covered sample to one ray in hard and non-ratio modes. It is an
-intentional performance approximation at mixed-surface or shadow-boundary
-pixels; one covered receiver and receivers sharing the same modulation retain
-the per-sample result. The switch is inert at 1x, does not affect sky or
-flashlight visibility, and does not make MSAA hit-distance output or any sun
-denoising available. Reapplying a Multisample Quality recipe restores the
-default-on policy.
+Ray-traced directional, sky, and flashlight visibility automatically evaluates
+every valid covered receiver sample at 2x, 4x, 8x, and 16x. No UI control,
+setting, command, or closest-receiver approximation can disable that contract;
+mixed visible/occluded coverage must retain independent evidence per sample.
 
 ## Command Interface
 
@@ -245,7 +232,6 @@ anti-aliasing.fxaa.minimum-edge-threshold
 anti-aliasing.msaa.enabled
 anti-aliasing.msaa.quality
 anti-aliasing.msaa.samples
-anti-aliasing.msaa.per-sample-shadows
 ```
 
 Use Tab completion for the complete current catalog. Accepted image-changing
@@ -266,9 +252,8 @@ coverage handoff in all four cross directions, conservative moving-point depth,
 point-versus-Gather bounds, accumulation-owned raster-TAA suppression, motion
 validity, linear-RGB defaults, the Fast Approximate
 source/resource/provenance contract, retained shader axes, and the absence of
-resurrection paths. MSAA shadow-policy coverage also checks default-on preset
-ownership, closest-owner selection at 2x through 16x, single-covered parity,
-direct total-versus-diffuse output routing, failure-open behavior, and the
-one-receiver ray budget.
+resurrection paths. Directional, sky, and flashlight visibility shaders compile
+for 1x, 2x, 4x, 8x, and 16x receiver samples and write each covered sample
+directly; exact-candidate rendered validation remains required.
 Product validation still requires viewing each technique alone and the
 supported combined order on the exact candidate executable.

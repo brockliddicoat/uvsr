@@ -1,4 +1,7 @@
 #include "noise_settings.h"
+#include "visibility_scheduler_contract.h"
+#include "visibility_pipeline_contract.h"
+#include "visibility_timing_contract.h"
 
 #include <algorithm>
 #include <array>
@@ -13,6 +16,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -37,149 +41,216 @@ namespace
         return std::abs(left - right) <= tolerance;
     }
 
-    enum class ReferenceTimingStage : uint32_t
+    void ValidateVisibilitySchedulerContract()
     {
-        FirstTrace,
-        Reconstruction,
-        Composition,
-        EffectEnvelope,
-        Count
-    };
+        using namespace uvsr;
 
-    struct ReferenceTimingSnapshot
-    {
-        float firstTraceMs = 0.f;
-        float reconstructionMs = 0.f;
-        float compositionMs = 0.f;
-        float effectEnvelopeMs = 0.f;
-        bool available = false;
-    };
+        static_assert(static_cast<uint32_t>(
+            VisibilitySchedulerMode::Guarded) == 0u);
+        static_assert(static_cast<uint32_t>(
+            VisibilitySchedulerMode::Even) == 1u);
+        static_assert(static_cast<uint32_t>(
+            VisibilitySchedulerMode::Odd) == 2u);
 
-    struct ReferenceTimingSlot
-    {
-        uint32_t submittedStageMask = 0u;
-        uint32_t resolvedStageMask = 0u;
-        std::array<float,
-            static_cast<size_t>(ReferenceTimingStage::Count)>
-            resolvedStageMilliseconds{};
-    };
-
-    uint32_t ReferenceTimingStageMask(ReferenceTimingStage stage)
-    {
-        return 1u << static_cast<uint32_t>(stage);
-    }
-
-    bool SameTimingSnapshot(
-        const ReferenceTimingSnapshot& left,
-        const ReferenceTimingSnapshot& right)
-    {
-        return left.firstTraceMs == right.firstTraceMs &&
-            left.reconstructionMs == right.reconstructionMs &&
-            left.compositionMs == right.compositionMs &&
-            left.effectEnvelopeMs == right.effectEnvelopeMs &&
-            left.available == right.available;
-    }
-
-    bool TimingSlotWritable(const ReferenceTimingSlot& slot)
-    {
-        return slot.submittedStageMask == 0u &&
-            slot.resolvedStageMask == 0u;
-    }
-
-    void SubmitReferenceTimingStage(
-        ReferenceTimingSlot& slot,
-        ReferenceTimingStage stage)
-    {
-        const uint32_t stageMask = ReferenceTimingStageMask(stage);
-        Require((slot.submittedStageMask & stageMask) == 0u,
-            "a timing stage is submitted only once per latency slot");
-        slot.submittedStageMask |= stageMask;
-    }
-
-    bool ResolveReferenceTimingStage(
-        ReferenceTimingSlot& slot,
-        ReferenceTimingStage stage,
-        float milliseconds,
-        ReferenceTimingSnapshot& published)
-    {
-        const uint32_t stageIndex = static_cast<uint32_t>(stage);
-        const uint32_t stageMask = 1u << stageIndex;
-        Require((slot.submittedStageMask & stageMask) != 0u &&
-                (slot.resolvedStageMask & stageMask) == 0u,
-            "only a submitted unresolved timing stage can resolve");
-        slot.resolvedStageMilliseconds[stageIndex] = milliseconds;
-        slot.resolvedStageMask |= stageMask;
-        if (slot.resolvedStageMask != slot.submittedStageMask)
-            return false;
-
-        const auto millisecondsOrZero = [&slot](ReferenceTimingStage value)
+        uint32_t testedStates = 0u;
+        for (uint32_t estimatorIndex = 0u;
+            estimatorIndex < 3u;
+            ++estimatorIndex)
         {
-            const uint32_t valueIndex = static_cast<uint32_t>(value);
-            const uint32_t valueMask = 1u << valueIndex;
-            return (slot.submittedStageMask & valueMask) != 0u
-                ? slot.resolvedStageMilliseconds[valueIndex]
-                : 0.f;
-        };
-        published = {
-            millisecondsOrZero(ReferenceTimingStage::FirstTrace),
-            millisecondsOrZero(ReferenceTimingStage::Reconstruction),
-            millisecondsOrZero(ReferenceTimingStage::Composition),
-            millisecondsOrZero(ReferenceTimingStage::EffectEnvelope),
-            true
-        };
-        slot = {};
-        return true;
+            for (uint32_t consumerMask = 0u;
+                consumerMask < 4u;
+                ++consumerMask)
+            {
+                const bool ambientEnabled = (consumerMask & 1u) != 0u;
+                const bool indirectEnabled = (consumerMask & 2u) != 0u;
+                for (uint32_t requestedSampleCount = 0u;
+                    requestedSampleCount <= 65u;
+                    ++requestedSampleCount)
+                {
+                    const VisibilitySchedulerState state =
+                        ResolveVisibilitySchedulerState(
+                            estimatorIndex,
+                            ambientEnabled,
+                            indirectEnabled,
+                            requestedSampleCount);
+                    const uint32_t selectedSampleCount = std::clamp(
+                        requestedSampleCount,
+                        VisibilitySchedulerMinimumSampleCount,
+                        VisibilitySchedulerMaximumSampleCount);
+                    const bool paritySpecialized =
+                        estimatorIndex ==
+                            VisibilitySchedulerParityEstimatorIndex &&
+                        ambientEnabled && indirectEnabled;
+                    const VisibilitySchedulerMode expectedMode =
+                        !paritySpecialized
+                        ? VisibilitySchedulerMode::Guarded
+                        : (selectedSampleCount & 1u) == 0u
+                            ? VisibilitySchedulerMode::Even
+                            : VisibilitySchedulerMode::Odd;
+                    Require(
+                        state.selectedSampleCount == selectedSampleCount &&
+                            state.mode == expectedMode,
+                        "scheduler state disagrees with its estimator, "
+                        "consumer, sample-count, or clamp contract");
+                    ++testedStates;
+                }
+            }
+        }
+        Require(testedStates == 3u * 4u * 66u,
+            "scheduler state matrix was not exhaustive");
+
+        const VisibilitySchedulerState maximum =
+            ResolveVisibilitySchedulerState(
+                VisibilitySchedulerParityEstimatorIndex,
+                true,
+                true,
+                UINT32_MAX);
+        Require(
+            maximum.selectedSampleCount ==
+                VisibilitySchedulerMaximumSampleCount &&
+                maximum.mode == VisibilitySchedulerMode::Even,
+            "an unbounded sample request did not clamp before parity choice");
     }
 
     void ValidateAtomicVisibilityTimingReference()
     {
-        ReferenceTimingSnapshot published = {
+        using namespace uvsr;
+        VisibilityTimingSnapshot published = {
             91.f, 92.f, 93.f, 94.f, true
         };
-        ReferenceTimingSlot slot;
-        SubmitReferenceTimingStage(slot, ReferenceTimingStage::FirstTrace);
-        SubmitReferenceTimingStage(slot, ReferenceTimingStage::Reconstruction);
-        SubmitReferenceTimingStage(slot, ReferenceTimingStage::Composition);
-        SubmitReferenceTimingStage(slot, ReferenceTimingStage::EffectEnvelope);
-        const ReferenceTimingSnapshot original = published;
+        std::array<VisibilityTimingSlot, 4> slots{};
+        VisibilityTimingSlot& slot = slots[2];
+        Require(
+            SubmitVisibilityTimingStage(
+                slot, VisibilityTimingStage::FirstTrace) &&
+                SubmitVisibilityTimingStage(
+                    slot, VisibilityTimingStage::Reconstruction) &&
+                SubmitVisibilityTimingStage(
+                    slot, VisibilityTimingStage::Composition) &&
+                SubmitVisibilityTimingStage(
+                    slot, VisibilityTimingStage::EffectEnvelope) &&
+                slot.submittedStageMask == 0x0fu &&
+                !SubmitVisibilityTimingStage(
+                    slot, VisibilityTimingStage::FirstTrace),
+            "per-slot submitted mask accepts each stage exactly once");
+        const VisibilityTimingSnapshot original = published;
 
-        Require(!ResolveReferenceTimingStage(slot,
-                    ReferenceTimingStage::Reconstruction, 2.f, published) &&
-                !ResolveReferenceTimingStage(slot,
-                    ReferenceTimingStage::EffectEnvelope, 8.f, published) &&
-                !ResolveReferenceTimingStage(slot,
-                    ReferenceTimingStage::FirstTrace, 1.f, published) &&
-                SameTimingSnapshot(published, original) &&
-                !TimingSlotWritable(slot),
+        for (const auto stageAndMilliseconds : {
+                std::pair{ VisibilityTimingStage::Reconstruction, 2.f },
+                std::pair{ VisibilityTimingStage::EffectEnvelope, 8.f },
+                std::pair{ VisibilityTimingStage::FirstTrace, 1.f } })
+        {
+            const VisibilityTimingResolution pending =
+                ResolveVisibilityTimingStage(
+                    slot,
+                    stageAndMilliseconds.first,
+                    stageAndMilliseconds.second);
+            Require(
+                pending.status == VisibilityTimingResolveStatus::Pending &&
+                    !pending.snapshot.available && published == original,
+                "a partial slot attempted to publish a timing field");
+        }
+        Require(
+            slot.resolvedStageMask == 0x0bu &&
+                !VisibilityTimingSlotIsWritable(slot),
             "staggered queries retain the prior snapshot until all resolve");
-        Require(ResolveReferenceTimingStage(slot,
-                    ReferenceTimingStage::Composition, 3.f, published) &&
-                published.firstTraceMs == 1.f &&
+        const VisibilityTimingResolution completed =
+            ResolveVisibilityTimingStage(
+                slot,
+                VisibilityTimingStage::Composition,
+                3.f);
+        Require(completed.status ==
+            VisibilityTimingResolveStatus::Published,
+            "complete timing slot was not published");
+        published = completed.snapshot;
+        Require(
+            published.firstTraceMs == 1.f &&
                 published.reconstructionMs == 2.f &&
                 published.compositionMs == 3.f &&
                 published.effectEnvelopeMs == 8.f &&
-                TimingSlotWritable(slot),
+                published.available &&
+                VisibilityTimingSlotIsWritable(slot),
             "a completed slot publishes one coherent frame and then retires");
 
-        SubmitReferenceTimingStage(slot, ReferenceTimingStage::FirstTrace);
-        SubmitReferenceTimingStage(slot, ReferenceTimingStage::Composition);
-        SubmitReferenceTimingStage(slot, ReferenceTimingStage::EffectEnvelope);
-        const ReferenceTimingSnapshot reconstructedFrame = published;
-        Require(!ResolveReferenceTimingStage(slot,
-                    ReferenceTimingStage::EffectEnvelope, 7.f, published) &&
-                !ResolveReferenceTimingStage(slot,
-                    ReferenceTimingStage::Composition, 4.f, published) &&
-                SameTimingSnapshot(published, reconstructedFrame) &&
-                !TimingSlotWritable(slot),
+        Require(
+            SubmitVisibilityTimingStage(
+                slot, VisibilityTimingStage::FirstTrace) &&
+                SubmitVisibilityTimingStage(
+                    slot, VisibilityTimingStage::Composition) &&
+                SubmitVisibilityTimingStage(
+                    slot, VisibilityTimingStage::EffectEnvelope),
+            "second timing frame could not claim a retired slot");
+        const VisibilityTimingSnapshot reconstructedFrame = published;
+        Require(
+            ResolveVisibilityTimingStage(
+                slot,
+                VisibilityTimingStage::EffectEnvelope,
+                7.f).status == VisibilityTimingResolveStatus::Pending &&
+                ResolveVisibilityTimingStage(
+                    slot,
+                    VisibilityTimingStage::Composition,
+                    4.f).status == VisibilityTimingResolveStatus::Pending &&
+                published == reconstructedFrame &&
+                !VisibilityTimingSlotIsWritable(slot),
             "an early envelope result cannot publish a partial later frame");
-        Require(ResolveReferenceTimingStage(slot,
-                    ReferenceTimingStage::FirstTrace, 2.f, published) &&
-                published.firstTraceMs == 2.f &&
+        const VisibilityTimingResolution withoutReconstruction =
+            ResolveVisibilityTimingStage(
+                slot,
+                VisibilityTimingStage::FirstTrace,
+                2.f);
+        Require(withoutReconstruction.status ==
+            VisibilityTimingResolveStatus::Published,
+            "omitted-stage timing frame did not publish");
+        published = withoutReconstruction.snapshot;
+        Require(
+            published.firstTraceMs == 2.f &&
                 published.reconstructionMs == 0.f &&
                 published.compositionMs == 4.f &&
                 published.effectEnvelopeMs == 7.f &&
-                TimingSlotWritable(slot),
+                VisibilityTimingSlotIsWritable(slot),
             "an omitted reconstruction stage publishes zero without stale cost");
+
+        VisibilityTimingSlot& independentSlot = slots[1];
+        Require(
+            SubmitVisibilityTimingStage(
+                independentSlot, VisibilityTimingStage::FirstTrace) &&
+                independentSlot.submittedStageMask == 1u &&
+                VisibilityTimingSlotIsWritable(slots[0]) &&
+                VisibilityTimingSlotIsWritable(slots[3]),
+            "one latency slot mutated another slot's masks");
+        const VisibilityTimingSlot unchanged = independentSlot;
+        Require(
+            ResolveVisibilityTimingStage(
+                independentSlot,
+                VisibilityTimingStage::Composition,
+                9.f).status == VisibilityTimingResolveStatus::Invalid &&
+                independentSlot.submittedStageMask ==
+                    unchanged.submittedStageMask &&
+                independentSlot.resolvedStageMask ==
+                    unchanged.resolvedStageMask,
+            "invalid resolution partially mutated a timing slot");
+
+        VisibilityTimingSlot& resolvingSlot = slots[3];
+        Require(
+            SubmitVisibilityTimingStage(
+                resolvingSlot, VisibilityTimingStage::FirstTrace) &&
+                SubmitVisibilityTimingStage(
+                    resolvingSlot, VisibilityTimingStage::Composition) &&
+                ResolveVisibilityTimingStage(
+                    resolvingSlot,
+                    VisibilityTimingStage::FirstTrace,
+                    1.f).status == VisibilityTimingResolveStatus::Pending &&
+                !SubmitVisibilityTimingStage(
+                    resolvingSlot,
+                    VisibilityTimingStage::EffectEnvelope),
+            "a partially resolved slot accepted a late stage");
+        Require(
+            ResolveVisibilityTimingStage(
+                resolvingSlot,
+                VisibilityTimingStage::Composition,
+                2.f).status == VisibilityTimingResolveStatus::Published &&
+                VisibilityTimingSlotIsWritable(resolvingSlot),
+            "a completed late-submit rejection did not retire its slot");
     }
 
     struct NoiseAddress
@@ -724,62 +795,6 @@ namespace
         Require(text.find(token) != std::string::npos, message);
     }
 
-    void ValidateAtomicVisibilityTimingSourceContract()
-    {
-        const std::filesystem::path sourceDirectory =
-            FindRepositoryRoot() / "src";
-        const std::string header = ReadText(
-            sourceDirectory / "screen_space_visibility.h");
-        const std::string source = ReadText(
-            sourceDirectory / "screen_space_visibility.cpp");
-
-        RequireContains(header, "struct TimerSlot",
-            "visibility timing keeps explicit per-slot state");
-        RequireContains(header, "submittedStageMask",
-            "visibility timing records every submitted stage per slot");
-        RequireContains(header, "resolvedStageMask",
-            "visibility timing records every resolved stage per slot");
-        RequireContains(header, "resolvedStageMilliseconds",
-            "visibility timing retains resolved values in their source slot");
-        RequireContains(header,
-            "std::array<TimerSlot, c_TimerLatency> m_TimerSlots{};",
-            "visibility timing owns one snapshot for every latency slot");
-        RequireContains(source, "if (timerSlot.resolvedStageMask !=",
-            "visibility timing waits for every submitted query");
-        RequireContains(source,
-            "ScreenSpaceVisibilityTimings completedTimings = m_Timings;",
-            "visibility timing assembles a complete snapshot before publish");
-        RequireContains(source,
-            "completedTimings.reconstructionMs = millisecondsOrZero(",
-            "visibility timing zeros an omitted reconstruction stage");
-        RequireContains(source, "m_Timings = completedTimings;",
-            "visibility timing publishes all named values together");
-        RequireContains(source, "timerSlot = {};",
-            "visibility timing retires a completed slot before reuse");
-        const size_t publishPosition = source.find(
-            "m_Timings = completedTimings;");
-        const size_t retirementPosition = source.find(
-            "timerSlot = {};", publishPosition);
-        const size_t writablePosition = source.find(
-            "m_TimerFrameWritable = true;", retirementPosition);
-        Require(publishPosition != std::string::npos &&
-                retirementPosition != std::string::npos &&
-                writablePosition != std::string::npos &&
-                publishPosition < retirementPosition &&
-                retirementPosition < writablePosition,
-            "a latency slot becomes writable only after atomic publication "
-            "and retirement");
-        Require(source.find("m_Timings.firstTraceMs =") ==
-                std::string::npos &&
-                source.find("m_Timings.reconstructionMs =") ==
-                    std::string::npos &&
-                source.find("m_Timings.compositionMs =") ==
-                    std::string::npos &&
-                source.find("m_Timings.effectEnvelopeMs =") ==
-                    std::string::npos,
-            "resolved queries never mutate published stage fields piecemeal");
-    }
-
     uint64_t Fnv1a64(const uint8_t* values, size_t count)
     {
         uint64_t hash = 14695981039346656037ull;
@@ -1266,10 +1281,13 @@ namespace
     }
 }
 
+void ValidateVisibilityPipelineFailureContract();
+
 int main()
 {
+    ValidateVisibilityPipelineFailureContract();
+    ValidateVisibilitySchedulerContract();
     ValidateAtomicVisibilityTimingReference();
-    ValidateAtomicVisibilityTimingSourceContract();
     ValidateNoiseSettingsContract();
     ValidateCenteredSamplingContract();
     ValidateNoiseAssetContract();
@@ -1288,4 +1306,43 @@ int main()
 
     std::cout << "Visibility sampling validation passed\n";
     return EXIT_SUCCESS;
+}
+
+void ValidateVisibilityPipelineFailureContract()
+{
+        using namespace uvsr;
+        VisibilityPipelinePreparationState state;
+        Require(!CommitVisibilityPipelineCreation(
+                state, true, true, true, 4u),
+            "one pipeline cannot publish the four-pipeline base set");
+        Require(state.completedPipelines == 1u && !state.failed,
+            "successful pipeline creation did not advance exactly once");
+
+        Require(!CommitVisibilityPipelineCreation(
+                state, false, true, true, 4u),
+            "a null shader published pipeline readiness");
+        Require(state.completedPipelines == 1u && state.failed,
+            "a null shader did not latch preparation failure");
+        Require(!CommitVisibilityPipelineCreation(
+                state, true, true, true, 4u),
+            "latched pipeline failure resumed preparation");
+
+        for (const auto handles : {
+            std::array<bool, 3>{ false, true, true },
+            std::array<bool, 3>{ true, false, true },
+            std::array<bool, 3>{ true, true, false } })
+        {
+            VisibilityPipelinePreparationState injected;
+            Require(!CommitVisibilityPipelineCreation(
+                    injected, handles[0], handles[1], handles[2], 1u) &&
+                    injected.failed,
+                "an injected null shader/layout/PSO did not fail closed");
+        }
+
+        Require(VisibilityDispatchIsReady(true, true, true),
+            "complete dispatch state was rejected");
+        Require(!VisibilityDispatchIsReady(false, true, true) &&
+                !VisibilityDispatchIsReady(true, false, true) &&
+                !VisibilityDispatchIsReady(true, true, false),
+            "an incomplete pipeline/binding/resource state was dispatchable");
 }

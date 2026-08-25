@@ -91,7 +91,7 @@ $runIdentity =
     "-$PID-" + [Guid]::NewGuid().ToString("N").Substring(0, 8)
 $effectiveOutputPath = if ([string]::IsNullOrWhiteSpace($OutputPath))
 {
-    "outputs/svsm-thermal-state-$runIdentity.txt"
+    "outputs/uvsr-thermal-state-$runIdentity.txt"
 }
 else
 {
@@ -100,7 +100,7 @@ else
 $effectiveTelemetryCsvPath = if ([string]::IsNullOrWhiteSpace(
         $TelemetryCsvPath))
 {
-    "outputs/svsm-thermal-telemetry-$runIdentity.csv"
+    "outputs/uvsr-thermal-telemetry-$runIdentity.csv"
 }
 else
 {

@@ -171,11 +171,16 @@ int main()
         "the source catalog contains exactly six imported sources");
 
     std::set<std::string> catalogNames;
+    std::set<std::string> catalogTokens;
     std::set<std::string> importedPaths;
     uint32_t nightCount = 0u;
     for (const uvsr::ImageBasedLightingSourceInfo& info :
         uvsr::ImageBasedLightingSourceCatalog)
     {
+        Require(
+            info.canonicalToken && info.canonicalToken[0] &&
+                catalogTokens.emplace(info.canonicalToken).second,
+            "every catalog source has a unique canonical snapshot token");
         Require(
             info.displayName && info.displayName[0],
             "every catalog source has a visible unique name");

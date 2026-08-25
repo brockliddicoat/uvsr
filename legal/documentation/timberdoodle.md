@@ -18,8 +18,9 @@ dependency.
 
 ## Evidence
 
-- [Abandoned SVSM Plan](../../docs/exec-plans/abandoned/sparse-virtual-shadow-maps.md)
-- The plan explicitly assigns Timberdoodle a cross-check role
+- Recovery commit `e29a41245dbd0e6fd7a819d2341646419ab76e72`,
+  `docs/exec-plans/abandoned/sparse-virtual-shadow-maps.md` and
+  `outputs/sparse-virtual-shadow-maps-technical-report.md`
 
 ## Commercial Clearance
 

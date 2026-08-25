@@ -76,7 +76,7 @@ internal sealed class DownloadManager : IDisposable
             // bodies when ResponseHeadersRead is used.
             Timeout = Timeout.InfiniteTimeSpan
         };
-        _client.DefaultRequestHeaders.UserAgent.ParseAdd("UVSR-Launcher/1.1");
+        _client.DefaultRequestHeaders.UserAgent.ParseAdd("uvsr-launcher/1.1");
         _policy = policy ?? DownloadPolicy.Default;
         if (_policy.MaximumAttempts < 1 || _policy.RetryDelays.Count < _policy.MaximumAttempts - 1)
             throw new ArgumentOutOfRangeException(nameof(policy));

@@ -1,220 +1,232 @@
-#include <algorithm>
+#include <Windows.h>
+#include <d3d12.h>
+#include <dxgi.h>
+#include <nvrhi/nvrhi.h>
+
+#include <atomic>
+#include <cstdint>
 #include <cstdlib>
-#include <filesystem>
-#include <fstream>
+#include <iomanip>
 #include <iostream>
-#include <iterator>
+#include <mutex>
+#include <sstream>
 #include <string>
 #include <string_view>
 
+#include "gpu_capabilities.h"
+#include "uvsr-d3d12-diagnostics.h"
+
 namespace
 {
-    [[noreturn]] void Fail(const std::string& message)
+    [[noreturn]] void Fail(const char* message)
     {
-        std::cerr << "D3D12 portability source-contract validation failed: "
+        std::cerr << "D3D12 portability contract failed: "
                   << message << '\n';
         std::exit(EXIT_FAILURE);
     }
 
-    void Require(bool condition, const std::string& message)
+    void Require(bool condition, const char* message)
     {
         if (!condition)
             Fail(message);
     }
 
-    std::string ReadSource(const std::filesystem::path& path)
+    struct RecordingCallback final : nvrhi::IMessageCallback
     {
-        std::ifstream stream(path, std::ios::binary);
-        Require(stream.good(), "cannot open " + path.generic_string());
-        return std::string{
-            std::istreambuf_iterator<char>(stream),
-            std::istreambuf_iterator<char>()
-        };
-    }
+        uint32_t count = 0u;
+        nvrhi::MessageSeverity severity = nvrhi::MessageSeverity::Info;
+        std::string text;
 
-    std::string_view ExtractBalancedScope(
-        std::string_view source,
-        std::string_view anchor)
-    {
-        const size_t anchorPosition = source.find(anchor);
-        Require(anchorPosition != std::string_view::npos,
-            "missing scope anchor " + std::string(anchor));
-        const size_t openPosition = source.find('{', anchorPosition);
-        Require(openPosition != std::string_view::npos,
-            "missing opening brace for " + std::string(anchor));
-        size_t depth = 0u;
-        for (size_t position = openPosition; position < source.size(); ++position)
+        void message(
+            nvrhi::MessageSeverity incomingSeverity,
+            const char* incomingText) override
         {
-            if (source[position] == '{')
-                ++depth;
-            else if (source[position] == '}' && --depth == 0u)
-            {
-                return source.substr(
-                    anchorPosition,
-                    position - anchorPosition + 1u);
-            }
+            ++count;
+            severity = incomingSeverity;
+            text = incomingText ? incomingText : "";
         }
-        Fail("unterminated scope for " + std::string(anchor));
-    }
+    };
 
-    void RequireContains(
-        std::string_view source,
-        std::string_view token,
-        const std::string& message)
-    {
-        Require(source.find(token) != std::string_view::npos, message);
-    }
-
-    void RequireAbsent(
-        std::string_view source,
-        std::string_view token,
-        const std::string& message)
-    {
-        Require(source.find(token) == std::string_view::npos, message);
-    }
-
-    size_t CountOccurrences(
-        std::string_view source,
+    [[nodiscard]] size_t CountOccurrences(
+        std::string_view text,
         std::string_view token)
     {
         size_t count = 0u;
-        size_t cursor = 0u;
-        while ((cursor = source.find(token, cursor)) !=
+        size_t position = 0u;
+        while ((position = text.find(token, position)) !=
             std::string_view::npos)
         {
             ++count;
-            cursor += token.size();
+            position += token.size();
         }
         return count;
     }
+
+    void RequireSingleRecord(
+        const RecordingCallback& callback,
+        nvrhi::MessageSeverity severity,
+        size_t dredRecords,
+        const char* message)
+    {
+        Require(callback.count == 1u, message);
+        Require(callback.severity == severity, message);
+        Require(CountOccurrences(callback.text, "DRED") == dredRecords,
+            message);
+    }
 }
 
-int main(int argc, char** argv)
+int main()
 {
-    Require(argc == 2,
-        "expected the UVSR source root as the only argument");
-    const std::filesystem::path root = argv[1];
-    const std::string viewer = ReadSource(root / "src/uvsr.cpp");
-    const std::string shaderConfig = ReadSource(root / "src/shaders.cfg");
-    const std::string portabilityPatch = ReadSource(
-        root / "overrides/nvrhi-d3d12-portability.patch");
-    const std::string diagnosticsOverride = ReadSource(
-        root / "overrides/nvrhi-d3d12-diagnostics.h");
-    const std::string buildSystem = ReadSource(root / "CMakeLists.txt");
+    using namespace nvrhi::d3d12::uvsr_diagnostics;
 
-    const std::string_view viewerConstructor = ExtractBalancedScope(
-        viewer, "UvsrSceneViewer(");
-    RequireAbsent(
-        viewerConstructor,
-        "std::make_unique<PathTracingPass>",
-        "fresh startup must not compile optional path-tracing PSOs");
-    const std::string_view ensurePathTracing = ExtractBalancedScope(
-        viewer, "void EnsurePathTracingPass()");
-    RequireContains(
-        ensurePathTracing,
-        "std::make_unique<PathTracingPass>",
-        "path tracing must be materialized by its on-demand gate");
-    RequireContains(
-        viewer,
-        "if (pathTracingSelected)\n            EnsurePathTracingPass();",
-        "selected path tracing must enter the on-demand gate");
-    RequireContains(
-        viewer,
-        "pathTracingSelected && bool(m_PathTracingPass);",
-        "shader reload must not recreate path-tracing PSOs after returning to the baseline renderer");
-    RequireContains(
-        viewer,
-        "deviceParams.featureLevel = D3D_FEATURE_LEVEL_11_0;",
-        "device creation must use the universal D3D12 feature-level baseline");
-    RequireContains(
-        viewer,
-        "SupportsBindlessResourceTables(resourceBindingTier)",
-        "bindless creation must be gated on Resource Binding Tier 2");
-    const std::string_view winMain = ExtractBalancedScope(
-        viewer, "int WINAPI WinMain(");
-    Require(
-        winMain.find("ConfigureD3D12DeviceRemovedDiagnostics(") <
-            winMain.find("SelectGraphicsAdapter("),
-        "DRED/debug configuration must precede adapter probe devices");
-    RequireContains(
-        viewer,
-        "uvsr-engine.log",
-        "engine failures must be preserved in a durable per-user log");
-    RequireContains(
-        viewer,
-        "g_EngineLogSuppressedRepeatCount",
-        "repeated renderer warnings must not grow the durable log every frame");
+    static_assert(uvsr::MinimumShaderModel == 0x65u);
+    static_assert(uvsr::MinimumD3DFeatureLevel == 0xb000u);
+    static_assert(uvsr::MinimumBindlessResourceBindingTier == 2u);
+    static_assert(uvsr::MinimumInlineRayTracingTier == 11u);
+    static_assert(!uvsr::SupportsRequiredShaderModel(0x64u));
+    static_assert(uvsr::SupportsRequiredShaderModel(0x65u));
+    static_assert(!uvsr::SupportsRequiredFeatureLevel(0xa100u));
+    static_assert(uvsr::SupportsRequiredFeatureLevel(0xb000u));
+    static_assert(!uvsr::SupportsBindlessResourceTables(1u));
+    static_assert(uvsr::SupportsBindlessResourceTables(2u));
+    static_assert(!uvsr::SupportsOptionalRayQueryRendering(2u, 10u));
+    static_assert(uvsr::SupportsOptionalRayQueryRendering(2u, 11u));
+    static_assert(FenceWaitTimeoutMilliseconds == 30000u);
+    static_assert(FenceWaitTimeoutMilliseconds < INFINITE);
 
-    RequireContains(
-        portabilityPatch,
-        "for (const D3D12_DESCRIPTOR_RANGE1& range : layout->descriptorRanges)",
-        "every unbounded bindless range must become its own table parameter");
-    RequireContains(
-        portabilityPatch,
-        "rootParameterOffset + rangeIndex, tableBase",
-        "every split table parameter must receive the shared heap base");
-    RequireContains(
-        portabilityPatch,
-        "D3D_ROOT_SIGNATURE_VERSION_1_0",
-        "root-signature 1.0 fallback must remain available");
-    RequireContains(
-        portabilityPatch,
-        "rsDesc10.Desc_1_0.pStaticSamplers",
-        "root-signature 1.0 fallback must preserve immutable samplers");
-    RequireContains(
-        portabilityPatch,
-        "GetDeviceRemovedReason",
-        "D3D12 object failures must preserve the device-removed reason");
-    RequireContains(
-        diagnosticsOverride,
-        "GetAutoBreadcrumbsOutput1",
-        "device removal must persist DRED automatic breadcrumbs");
-    RequireContains(
-        diagnosticsOverride,
-        "GetPageFaultAllocationOutput1",
-        "device removal must persist DRED page-fault allocations");
-    Require(
-        CountOccurrences(portabilityPatch, "MessageSeverity::Fatal") == 2u,
-        "a removed device must terminate at the first root-signature or compute-PSO failure");
-    RequireContains(
-        portabilityPatch,
-        "if (!builtRootSignature)",
-        "failed root signatures must stop dependent object creation");
-    RequireContains(
-        portabilityPatch,
-        "if (!pRS)",
-        "pipeline creation must stop after root-signature failure");
-    for (const std::string_view source : {
-            "src/d3d12/d3d12-graphics.cpp",
-            "src/d3d12/d3d12-meshlets.cpp",
-            "src/d3d12/d3d12-raytracing.cpp" })
     {
-        Require(
-            CountOccurrences(buildSystem, source) >= 2u,
-            "every root-signature caller override must replace the pinned source");
+        const auto below = ObserveFenceCompletion(40u);
+        const auto reached = ObserveFenceCompletion(41u);
+        const auto failed = ObserveFenceCompletion(UINT64_MAX);
+        Require(!below.failed && !below.HasReached(41u),
+            "a value below the target completed the fence");
+        Require(!reached.failed && reached.HasReached(41u),
+            "the exact target did not complete the fence");
+        Require(failed.failed && failed.completedValue == 0u &&
+                !failed.HasReached(0u),
+            "UINT64_MAX was not preserved as a terminal fence failure");
     }
-    Require(
-        CountOccurrences(shaderConfig, "-res-may-alias") == 8u,
-        "every shader family using the aliased bindless table must opt in to resource aliasing");
 
-    RequireContains(
-        buildSystem,
-        "overrides/nvrhi-d3d12-portability.patch",
-        "the portability override must be part of configuration");
-    RequireContains(
-        buildSystem,
-        "overrides/nvrhi-d3d12-diagnostics.h",
-        "the DRED serializer must be copied beside the staged NVRHI sources");
-    Require(
-        CountOccurrences(
-            buildSystem,
-            "src/d3d12/d3d12-resource-bindings.cpp") >= 2u,
-        "the staged resource-binding override must replace the pinned source");
-    Require(
-        CountOccurrences(
-            buildSystem,
-            "src/d3d12/d3d12-compute.cpp") >= 2u,
-        "the staged compute override must replace the pinned source");
+    {
+        std::mutex mutex;
+        std::atomic<uint64_t> lastSubmitted{ 9u };
+        std::atomic<bool> failed{ false };
+        uint64_t signaled = 0u;
+        const auto result = TrySignalFence(
+            mutex, lastSubmitted, failed,
+            [&](uint64_t candidate)
+            {
+                signaled = candidate;
+                return S_OK;
+            });
+        Require(result.attempted && result.Succeeded() &&
+                result.candidateValue == 10u &&
+                result.PublishedValue() == 10u && signaled == 10u &&
+                lastSubmitted.load() == 10u && !failed.load(),
+            "a successful Signal did not atomically publish its value");
+    }
+
+    {
+        std::mutex mutex;
+        std::atomic<uint64_t> lastSubmitted{ 19u };
+        std::atomic<bool> failed{ false };
+        uint32_t calls = 0u;
+        const auto first = TrySignalFence(
+            mutex, lastSubmitted, failed,
+            [&](uint64_t candidate)
+            {
+                ++calls;
+                Require(candidate == 20u,
+                    "Signal received the wrong candidate value");
+                return DXGI_ERROR_DEVICE_REMOVED;
+            });
+        const auto second = TrySignalFence(
+            mutex, lastSubmitted, failed,
+            [&](uint64_t)
+            {
+                ++calls;
+                return S_OK;
+            });
+        Require(first.attempted && !first.Succeeded() &&
+                first.PublishedValue() == 0u &&
+                lastSubmitted.load() == 19u && failed.load(),
+            "a failed Signal changed the published value");
+        Require(!second.attempted && second.result == E_ABORT &&
+                calls == 1u,
+            "a latched Signal failure allowed another submission");
+    }
+
+    {
+        std::mutex mutex;
+        std::atomic<uint64_t> lastSubmitted{ UINT64_MAX };
+        std::atomic<bool> failed{ false };
+        bool invoked = false;
+        const auto result = TrySignalFence(
+            mutex, lastSubmitted, failed,
+            [&](uint64_t)
+            {
+                invoked = true;
+                return S_OK;
+            });
+        Require(result.attempted && !result.Succeeded() &&
+                result.result == E_FAIL && failed.load() && !invoked,
+            "fence value overflow invoked Signal or remained recoverable");
+    }
+
+    Require(IsDeviceRemovalFailure(
+            DXGI_ERROR_DEVICE_REMOVED, S_OK),
+        "DXGI_ERROR_DEVICE_REMOVED was not terminal");
+    Require(IsDeviceRemovalFailure(DXGI_ERROR_DEVICE_HUNG, S_OK),
+        "DXGI_ERROR_DEVICE_HUNG was not terminal");
+    Require(IsDeviceRemovalFailure(DXGI_ERROR_DEVICE_RESET, S_OK),
+        "DXGI_ERROR_DEVICE_RESET was not terminal");
+    Require(IsDeviceRemovalFailure(
+            DXGI_ERROR_DRIVER_INTERNAL_ERROR, S_OK),
+        "DXGI_ERROR_DRIVER_INTERNAL_ERROR was not terminal");
+    Require(IsDeviceRemovalFailure(E_FAIL, DXGI_ERROR_DEVICE_REMOVED),
+        "a failed device-removed reason was not terminal");
+    Require(!IsDeviceRemovalFailure(E_FAIL, S_OK),
+        "an ordinary failure was misclassified as device removal");
+    Require(!IsDeviceRemovalFailure(S_OK, S_OK),
+        "success was misclassified as device removal");
+
+    {
+        RecordingCallback callback;
+        std::stringstream message;
+        message << "D3D12 fence wait timed out";
+        Require(!ReportFailure(
+                message, HRESULT_FROM_WIN32(ERROR_TIMEOUT), S_OK,
+                nullptr, &callback, true),
+            "a terminal timeout returned success");
+        RequireSingleRecord(callback, nvrhi::MessageSeverity::Fatal, 0u,
+            "a terminal timeout did not emit one fatal record");
+    }
+
+    {
+        RecordingCallback callback;
+        std::stringstream message;
+        message << "D3D12 device removal";
+        Require(!ReportFailure(
+                message, DXGI_ERROR_DEVICE_REMOVED,
+                DXGI_ERROR_DEVICE_REMOVED, nullptr, &callback, false),
+            "device removal returned success");
+        RequireSingleRecord(callback, nvrhi::MessageSeverity::Fatal, 1u,
+            "device removal did not emit one DRED-bearing fatal record");
+        Require(callback.text.find("DRED device unavailable") !=
+                std::string::npos,
+            "null-device removal did not explain unavailable DRED");
+    }
+
+    {
+        RecordingCallback callback;
+        std::stringstream message;
+        message << "CreateGraphicsPipelineState failed";
+        Require(!ReportFailure(
+                message, E_FAIL, S_OK, nullptr, &callback, false),
+            "an ordinary D3D12 failure returned success");
+        RequireSingleRecord(callback, nvrhi::MessageSeverity::Error, 0u,
+            "an ordinary D3D12 failure did not remain a single error");
+    }
 
     return EXIT_SUCCESS;
 }

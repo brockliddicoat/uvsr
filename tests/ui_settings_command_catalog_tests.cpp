@@ -53,25 +53,24 @@ int main()
 {
     using namespace uvsr;
 
-    static_assert(UiSettingsCommandCatalog.size() == 222u);
-    static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 14u);
+    static_assert(UiSettingsCommandCatalog.size() == 180u);
+    static_assert(static_cast<std::size_t>(UiSettingsCommandSection::Count) == 13u);
     static_assert(static_cast<std::uint8_t>(UiSettingsCommandKind::Float4) == 7u);
     static_assert(Action("test", Section::General, "test").supportedVerbs ==
         static_cast<std::uint8_t>(UiSettingsCommandVerb::Run));
 
-    constexpr std::array<std::size_t, 14> ExpectedSectionCounts = {
+    constexpr std::array<std::size_t, 13> ExpectedSectionCounts = {
         16u, // UI
-        7u,  // General
-        12u, // Pathing
+        6u,  // General
         4u,  // Representation
-        13u, // Noise
+        4u,  // Noise
         20u, // Visibility
-        31u, // Denoising
-        28u, // Aliasing
-        4u,  // Debug
-        25u, // Sky
+        26u, // Denoising
+        23u, // Aliasing
+        3u,  // Debug
+        24u, // Sky
         27u, // Lights
-        11u, // Directional Shadows
+        3u,  // Directional Shadows
         21u, // Materials
         3u   // Footer
     };
@@ -109,31 +108,8 @@ int main()
         "representation.allow-ray-traversal",
         "representation.tlas.update-mode"
     };
-    const std::set<std::string> ExpectedPathing = {
-        "pathing.max-bounces",
-        "pathing.nee",
-        "pathing.nee-candidates",
-        "pathing.rtxdi",
-        "pathing.reuse-proposals-during-motion",
-        "pathing.russian-roulette",
-        "pathing.samples-per-pixel",
-        "pathing.shared-primary-surface",
-        "pathing.ser",
-        "pathing.solver",
-        "pathing.spatial-neighbors",
-        "pathing.temporal-reuse"
-    };
     const std::set<std::string> ExpectedNoise = {
         "noise.accumulate-samples",
-        "noise.accumulation-averaging",
-        "noise.accumulation-effective-history",
-        "noise.accumulation-history-preset",
-        "noise.accumulation-minimum-samples",
-        "noise.accumulation-minimum-update-rate",
-        "noise.accumulation-mode",
-        "noise.accumulation-scheduling",
-        "noise.accumulation-target-error",
-        "noise.accumulation-workload-preset",
         "noise.animate-samples",
         "noise.pattern",
         "noise.resolution"
@@ -164,36 +140,22 @@ int main()
         "denoising.sky.method",
         "denoising.sky.quality",
         "denoising.sky.radius",
-        "denoising.sky.resolution",
-        "denoising.path-tracing.firefly-filter",
-        "denoising.path-tracing.firefly-threshold",
-        "denoising.path-tracing.method",
-        "denoising.path-tracing.resolve-strength",
-        "denoising.path-tracing.signal-groups"
+        "denoising.sky.resolution"
     };
     const std::set<std::string> ExpectedDirectionalShadows = {
-        "shadows.ray-traced.animate-samples",
         "shadows.ray-traced.enabled",
-        "shadows.ray-traced.hard-shadows",
         "shadows.ray-traced.max-distance",
-        "shadows.ray-traced.noise-pattern",
-        "shadows.ray-traced.noise-resolution",
-        "shadows.ray-traced.output-hit-distance",
-        "shadows.ray-traced.ratio-estimator",
-        "shadows.ray-traced.ray-bias",
-        "shadows.ray-traced.samples-per-pixel",
-        "shadows.ray-traced.specify-noise"
+        "shadows.ray-traced.ray-bias"
     };
 
     std::set<std::string> names;
     std::set<std::string> dynamicSelections;
     std::set<std::string> visibility;
     std::set<std::string> representation;
-    std::set<std::string> pathing;
     std::set<std::string> noise;
     std::set<std::string> denoising;
     std::set<std::string> directionalShadows;
-    std::array<std::size_t, 14> sectionCounts{};
+    std::array<std::size_t, 13> sectionCounts{};
     std::size_t actionCount = 0u;
     std::size_t dynamicCount = 0u;
     std::size_t snapshotValueCount = 0u;
@@ -256,8 +218,6 @@ int main()
             visibility.insert(std::string(definition.name));
         if (definition.section == Section::Representation)
             representation.insert(std::string(definition.name));
-        if (definition.section == Section::Pathing)
-            pathing.insert(std::string(definition.name));
         if (definition.section == Section::Noise)
             noise.insert(std::string(definition.name));
         if (definition.section == Section::Denoising)
@@ -275,15 +235,15 @@ int main()
     }
 
     Require(names.size() == UiSettingsCommandCatalog.size(),
-        "the compact catalog must contain 222 unique commands");
+        "the compact catalog must contain 180 unique commands");
     Require(sectionCounts == ExpectedSectionCounts,
         "section counts must match the current UI");
     Require(actionCount == 4u,
         "only open-folder, reset, capture, and restart actions remain");
-    Require(UiSettingsCommandCatalog.size() - actionCount == 218u,
-        "the compact catalog must contain 218 values");
-    Require(snapshotValueCount == 216u,
-        "the current snapshot schema must represent 216 values after excluding "
+    Require(UiSettingsCommandCatalog.size() - actionCount == 176u,
+        "the compact catalog must contain 176 values");
+    Require(snapshotValueCount == 174u,
+        "the current snapshot schema must represent 174 values after excluding "
         "transient root and Material drawer presentation");
     const UiSettingsCommandDefinition* settingsCollapsed =
         Find("ui.settings-collapsed");
@@ -313,14 +273,72 @@ int main()
         "Visibility commands must exactly mirror the direct UI settings");
     Require(representation == ExpectedRepresentation,
         "Representation commands must exactly mirror the direct UI settings");
-    Require(pathing == ExpectedPathing,
-        "Pathing commands must exactly mirror the transport policy drawer");
     Require(noise == ExpectedNoise,
         "Noise commands must exactly mirror the shared configuration drawer");
     Require(denoising == ExpectedDenoising,
         "Denoising commands must exactly mirror the four signal groups");
     Require(directionalShadows == ExpectedDirectionalShadows,
         "Directional Shadow commands must exactly mirror the direct UI settings");
+
+    constexpr std::array RemovedConfigurableTracerCommands = {
+        std::string_view("pathing.solver"),
+        std::string_view("pathing.nee"),
+        std::string_view("pathing.max-bounces"),
+        std::string_view("pathing.russian-roulette"),
+        std::string_view("pathing.nee-candidates"),
+        std::string_view("pathing.samples-per-pixel"),
+        std::string_view("pathing.shared-primary-surface"),
+        std::string_view("pathing.ser"),
+        std::string_view("pathing.temporal-reuse"),
+        std::string_view("pathing.spatial-neighbors"),
+        std::string_view("pathing.reuse-proposals-during-motion"),
+        std::string_view("denoising.path-tracing.method"),
+        std::string_view("denoising.path-tracing.signal-groups"),
+        std::string_view("denoising.path-tracing.resolve-strength"),
+        std::string_view("denoising.path-tracing.firefly-filter"),
+        std::string_view("denoising.path-tracing.firefly-threshold"),
+        std::string_view("debug.path-tracing.view")
+    };
+    for (const std::string_view name : RemovedConfigurableTracerCommands)
+    {
+        Require(!Find(name),
+            "the fixed standard path tracer must not publish mode controls");
+    }
+
+    constexpr std::array RemovedAccumulationCommands = {
+        std::string_view("noise.accumulation-mode"),
+        std::string_view("noise.accumulation-averaging"),
+        std::string_view("noise.accumulation-scheduling"),
+        std::string_view("noise.accumulation-effective-history"),
+        std::string_view("noise.accumulation-history-preset"),
+        std::string_view("noise.accumulation-minimum-samples"),
+        std::string_view("noise.accumulation-target-error"),
+        std::string_view("noise.accumulation-minimum-update-rate"),
+        std::string_view("noise.accumulation-workload-preset")
+    };
+    for (const std::string_view name : RemovedAccumulationCommands)
+    {
+        Require(!Find(name),
+            "fixed cumulative accumulation must not publish tuning controls");
+    }
+
+    constexpr std::array RemovedRatioEstimatorCommands = {
+        std::string_view("anti-aliasing.msaa.per-sample-shadows"),
+        std::string_view("sky.visibility.ratio-estimator"),
+        std::string_view("shadows.ray-traced.ratio-estimator"),
+        std::string_view("shadows.ray-traced.output-hit-distance"),
+        std::string_view("shadows.ray-traced.hard-shadows"),
+        std::string_view("shadows.ray-traced.specify-noise"),
+        std::string_view("shadows.ray-traced.animate-samples"),
+        std::string_view("shadows.ray-traced.noise-pattern"),
+        std::string_view("shadows.ray-traced.noise-resolution"),
+        std::string_view("shadows.ray-traced.samples-per-pixel")
+    };
+    for (const std::string_view name : RemovedRatioEstimatorCommands)
+    {
+        Require(!Find(name),
+            "direct per-covered-sample visibility must not publish estimator controls");
+    }
 
     const auto requireDomain = [](std::string_view name, std::string_view domain) {
         const UiSettingsCommandDefinition* definition = Find(name);
@@ -352,51 +370,12 @@ int main()
         "gpu.adaptive-sync",
         "off|vendor-agnostic|nvidia-exclusive");
     requireDomain("lighting.solution", "ray-marching|path-tracing");
-    requireDomain("pathing.solver", "rtx-pt|restir-pt|restir-gi");
-    requireDomain("pathing.nee", "uniform|power|nee-at");
-    requireDomain("pathing.max-bounces", "integer 1..96");
-    requireDomain("pathing.russian-roulette", "on|off");
-    requireDomain("pathing.nee-candidates", "integer 1..63");
-    requireDomain("pathing.samples-per-pixel", "integer 1..8");
-    requireDomain("pathing.shared-primary-surface", "on|off");
-    requireDomain("pathing.ser", "on|off");
-    requireDomain("pathing.rtxdi", "on|off");
-    requireDomain("pathing.temporal-reuse", "on|off");
-    requireDomain("pathing.spatial-neighbors", "integer 0..4");
-    requireDomain("pathing.reuse-proposals-during-motion", "on|off");
     requireDomain("noise.pattern",
         "spatial-white|spatial-blue|spatiotemporal-blue");
     requireDomain("noise.resolution",
         "64x64|128x128|256x256|512x512");
     requireDomain("noise.animate-samples", "on|off");
     requireDomain("noise.accumulate-samples", "on|off");
-    requireDomain(
-        "noise.accumulation-mode",
-        "progressive|responsive|variance-guided");
-    requireDomain(
-        "noise.accumulation-averaging",
-        "cumulative|exponential");
-    requireDomain(
-        "noise.accumulation-scheduling",
-        "every-pixel|variance-guided");
-    requireDomain(
-        "noise.accumulation-effective-history",
-        "integer 2..4096");
-    requireDomain(
-        "noise.accumulation-history-preset",
-        "quick-preview|responsive|balanced|stable|very-stable|custom (get only)");
-    requireDomain(
-        "noise.accumulation-minimum-samples",
-        "integer 2..256");
-    requireDomain(
-        "noise.accumulation-target-error",
-        "float 0.001..0.25");
-    requireDomain(
-        "noise.accumulation-minimum-update-rate",
-        "float 0.00390625..1");
-    requireDomain(
-        "noise.accumulation-workload-preset",
-        "full-quality|balanced|performance|maximum-savings|custom (get only)");
     requireDomain("visibility.specify-noise", "on|off");
     requireDomain("visibility.noise-pattern",
         "spatial-white|spatial-blue|spatiotemporal-blue");
@@ -421,7 +400,6 @@ int main()
     requireDomain("anti-aliasing.fxaa.minimum-edge-threshold",
         "float 0.04..0.06");
     requireDomain("anti-aliasing.msaa.quality", "low|medium|high|ultra");
-    requireDomain("anti-aliasing.msaa.per-sample-shadows", "on|off");
     requireDomain("debug.world.materials",
         "scene|white|white-detail|white-lighting");
     requireDomain("debug.visibility.view",
@@ -434,7 +412,6 @@ int main()
     requireDomain("sky.visibility.enabled", "on|off");
     requireDomain("sky.visibility.diffuse-ibl", "on|off");
     requireDomain("sky.visibility.specular-ibl", "on|off");
-    requireDomain("sky.visibility.ratio-estimator", "on|off");
     requireDomain("sky.visibility.output-hit-distance", "on|off");
     requireDomain("sky.visibility.specify-noise", "on|off");
     requireDomain("sky.visibility.animate-samples", "on|off");
@@ -447,19 +424,8 @@ int main()
         "1|2|4|8|16|32|64");
     requireDomain("sky.visibility.ray-bias", "world units 0..0.1");
     requireDomain("shadows.ray-traced.enabled", "on|off");
-    requireDomain("shadows.ray-traced.ratio-estimator", "on|off");
-    requireDomain("shadows.ray-traced.output-hit-distance", "on|off");
-    requireDomain("shadows.ray-traced.hard-shadows", "on|off");
-    requireDomain("shadows.ray-traced.specify-noise", "on|off");
-    requireDomain("shadows.ray-traced.animate-samples", "on|off");
     requireDomain("shadows.ray-traced.max-distance",
         "max|32m|16m|8m|4m|2m");
-    requireDomain("shadows.ray-traced.noise-pattern",
-        "spatial-white|spatial-blue|spatiotemporal-blue");
-    requireDomain("shadows.ray-traced.noise-resolution",
-        "64x64|128x128|256x256|512x512");
-    requireDomain("shadows.ray-traced.samples-per-pixel",
-        "1|2|4|8|16|32|64");
     requireDomain("shadows.ray-traced.ray-bias",
         "world units 0..0.1");
     requireDomain("denoising.ao.method",
@@ -480,27 +446,9 @@ int main()
     }
     requireDomain("sky.environment",
         "day|bright-overcast|soft-day|night|starry-night|cloudy");
-    requireDomain(
-        "denoising.path-tracing.method",
-        "raw|spatial-path-resolve");
-    requireDomain(
-        "denoising.path-tracing.signal-groups",
-        "integer 1..3; RESTIR supports 1..2");
-    requireDomain(
-        "denoising.path-tracing.resolve-strength",
-        "float 0..1");
-    requireDomain(
-        "denoising.path-tracing.firefly-filter",
-        "on|off");
-    requireDomain(
-        "denoising.path-tracing.firefly-threshold",
-        "float 0.01..1000000");
     requireDomain("denoising.ao.quality",
         "performance|balanced|quality|ultra");
     requireDomain("denoising.sky.resolution", "quarter|half|full");
-    requireDomain(
-        "debug.path-tracing.view",
-        "final|albedo|geometric-normal|shading-normal|sample-count|update-rate|signal-group|direct-reservoir|indirect-reservoir|primary-transport|indirect-transport");
     requireDomain(
         "debug.pbr.filter",
         "final|surface-normals|geometry-normals|normal-difference|diffuse-environment|environment-direction|reflected-environment|brdf-response|specular-environment|all-environment-light|specular-visibility|environment-level|sky-visibility");
@@ -547,28 +495,6 @@ int main()
         Section::Representation);
     requireKindAndSection(
         "lighting.solution", Kind::Enum, Section::General);
-    requireKindAndSection(
-        "pathing.solver", Kind::Enum, Section::Pathing);
-    requireKindAndSection(
-        "pathing.nee", Kind::Enum, Section::Pathing);
-    requireKindAndSection(
-        "pathing.max-bounces", Kind::Integer, Section::Pathing);
-    requireKindAndSection(
-        "pathing.russian-roulette", Kind::Boolean, Section::Pathing);
-    requireKindAndSection(
-        "pathing.nee-candidates", Kind::Integer, Section::Pathing);
-    requireKindAndSection(
-        "pathing.samples-per-pixel", Kind::Integer, Section::Pathing);
-    requireKindAndSection(
-        "pathing.shared-primary-surface", Kind::Boolean, Section::Pathing);
-    requireKindAndSection(
-        "pathing.ser", Kind::Boolean, Section::Pathing);
-    requireKindAndSection(
-        "pathing.rtxdi", Kind::Boolean, Section::Pathing);
-    requireKindAndSection(
-        "pathing.temporal-reuse", Kind::Boolean, Section::Pathing);
-    requireKindAndSection(
-        "pathing.spatial-neighbors", Kind::Integer, Section::Pathing);
     requireKindAndSection("ui.skin", Kind::Enum, Section::Ui);
     requireKindAndSection("ui.font-family", Kind::Enum, Section::Ui);
     requireKindAndSection("ui.animations", Kind::Boolean, Section::Ui);
@@ -620,20 +546,6 @@ int main()
     requireKindAndSection(
         "noise.accumulate-samples", Kind::Boolean, Section::Noise);
     requireKindAndSection(
-        "noise.accumulation-mode", Kind::Enum, Section::Noise);
-    requireKindAndSection(
-        "noise.accumulation-averaging", Kind::Enum, Section::Noise);
-    requireKindAndSection(
-        "noise.accumulation-scheduling", Kind::Enum, Section::Noise);
-    requireKindAndSection(
-        "noise.accumulation-effective-history", Kind::Integer, Section::Noise);
-    requireKindAndSection(
-        "noise.accumulation-minimum-samples", Kind::Integer, Section::Noise);
-    requireKindAndSection(
-        "noise.accumulation-target-error", Kind::Float, Section::Noise);
-    requireKindAndSection(
-        "noise.accumulation-minimum-update-rate", Kind::Float, Section::Noise);
-    requireKindAndSection(
         "visibility.specify-noise", Kind::Boolean, Section::Visibility);
     requireKindAndSection(
         "visibility.noise-pattern", Kind::Enum, Section::Visibility);
@@ -642,38 +554,6 @@ int main()
     requireKindAndSection(
         "shadows.ray-traced.enabled",
         Kind::Boolean,
-        Section::DirectionalShadows);
-    requireKindAndSection(
-        "shadows.ray-traced.ratio-estimator",
-        Kind::Boolean,
-        Section::DirectionalShadows);
-    requireKindAndSection(
-        "shadows.ray-traced.output-hit-distance",
-        Kind::Boolean,
-        Section::DirectionalShadows);
-    requireKindAndSection(
-        "shadows.ray-traced.hard-shadows",
-        Kind::Boolean,
-        Section::DirectionalShadows);
-    requireKindAndSection(
-        "shadows.ray-traced.animate-samples",
-        Kind::Boolean,
-        Section::DirectionalShadows);
-    requireKindAndSection(
-        "shadows.ray-traced.specify-noise",
-        Kind::Boolean,
-        Section::DirectionalShadows);
-    requireKindAndSection(
-        "shadows.ray-traced.noise-pattern",
-        Kind::Enum,
-        Section::DirectionalShadows);
-    requireKindAndSection(
-        "shadows.ray-traced.noise-resolution",
-        Kind::Enum,
-        Section::DirectionalShadows);
-    requireKindAndSection(
-        "shadows.ray-traced.samples-per-pixel",
-        Kind::Enum,
         Section::DirectionalShadows);
     requireKindAndSection(
         "shadows.ray-traced.ray-bias",
@@ -689,8 +569,6 @@ int main()
         "sky.visibility.diffuse-ibl", Kind::Boolean, Section::Sky);
     requireKindAndSection(
         "sky.visibility.specular-ibl", Kind::Boolean, Section::Sky);
-    requireKindAndSection(
-        "sky.visibility.ratio-estimator", Kind::Boolean, Section::Sky);
     requireKindAndSection(
         "sky.visibility.output-hit-distance", Kind::Boolean, Section::Sky);
     requireKindAndSection(

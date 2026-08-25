@@ -1,17 +1,12 @@
 #include "world_space_representation_settings.h"
+#include "world_space_representation_contract.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
 #include <cassert>
 #include <array>
-#include <cctype>
 #include <cstddef>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <string>
-#include <string_view>
 
 namespace
 {
@@ -30,47 +25,6 @@ namespace
         TlasUpdateMode::Rebuild,
         TlasUpdateMode::Refit
     };
-
-    std::string ReadSource(const std::filesystem::path& path)
-    {
-        std::ifstream stream(path, std::ios::binary);
-        assert(stream.good());
-        return {
-            std::istreambuf_iterator<char>(stream),
-            std::istreambuf_iterator<char>()
-        };
-    }
-
-    std::string Canonicalize(std::string_view source)
-    {
-        std::string canonical;
-        canonical.reserve(source.size());
-        for (const char character : source)
-        {
-            const unsigned char byte =
-                static_cast<unsigned char>(character);
-            if (!std::isspace(byte))
-            {
-                canonical.push_back(
-                    static_cast<char>(std::tolower(byte)));
-            }
-        }
-        return canonical;
-    }
-
-    std::string_view ExtractSection(
-        std::string_view source,
-        std::string_view beginToken,
-        std::string_view endToken)
-    {
-        const std::size_t begin = source.find(beginToken);
-        assert(begin != std::string_view::npos);
-        const std::size_t end = source.find(
-            endToken,
-            begin + beginToken.size());
-        assert(end != std::string_view::npos);
-        return source.substr(begin, end - begin);
-    }
 
     constexpr WorldSpaceRepresentationInvalidation ExpectedInvalidation(
         const WorldSpaceRepresentationSettings& previous,
@@ -221,86 +175,55 @@ namespace
 
     void TestMaterialVisibilityTopologyContract()
     {
-        const std::filesystem::path sourceRoot =
-            std::filesystem::path(__FILE__).parent_path().parent_path();
-        const std::string header = Canonicalize(ReadSource(
-            sourceRoot / "src/world_space_representation.h"));
-        const std::string source = Canonicalize(ReadSource(
-            sourceRoot / "src/world_space_representation.cpp"));
+        enum class MaterialDomain
+        {
+            Opaque,
+            AlphaTested,
+            AlphaBlended,
+            Transmissive,
+            Count
+        };
 
-        assert(header.find(
-            "maximumrayvisibilitygeometrymapoffset=0x00ffffffu;") !=
-            std::string::npos);
-        assert(header.find(
-            "returnoffset<=maximumrayvisibilitygeometrymapoffset;") !=
-            std::string::npos);
+        assert(IsRayVisibilityMaterialDomainSupported(
+            MaterialDomain::Opaque,
+            MaterialDomain::Opaque,
+            MaterialDomain::AlphaTested));
+        assert(IsRayVisibilityMaterialDomainSupported(
+            MaterialDomain::AlphaTested,
+            MaterialDomain::Opaque,
+            MaterialDomain::AlphaTested));
+        assert(!IsRayVisibilityMaterialDomainSupported(
+            MaterialDomain::AlphaBlended,
+            MaterialDomain::Opaque,
+            MaterialDomain::AlphaTested));
+        assert(!IsRayVisibilityMaterialDomainSupported(
+            MaterialDomain::Transmissive,
+            MaterialDomain::Opaque,
+            MaterialDomain::AlphaTested));
+        assert(IsRayVisibilityMaterialDomainOpaque(
+            MaterialDomain::Opaque,
+            MaterialDomain::Opaque));
+        assert(!IsRayVisibilityMaterialDomainOpaque(
+            MaterialDomain::AlphaTested,
+            MaterialDomain::Opaque));
 
-        const std::string_view meshDescription = ExtractSection(
-            source,
-            "boolbuildmeshdescription(",
-            "booltransformsequal(");
-        const std::size_t domainFilter = meshDescription.find(
-            "if(domain!=materialdomain::opaque&&"
-                "domain!=materialdomain::alphatested){continue;}");
-        const std::size_t appendGeometry = meshDescription.find(
-            "description.addbottomlevelgeometry(");
-        const std::size_t appendMapIndex = meshDescription.find(
-            "geometryindices.push_back("
-                "uint32_t(geometry->globalgeometryindex));");
-        assert(domainFilter != std::string_view::npos);
-        assert(appendGeometry != std::string_view::npos);
-        assert(appendMapIndex != std::string_view::npos);
-        assert(domainFilter < appendGeometry);
-        assert(appendGeometry < appendMapIndex);
-        assert(meshDescription.find("alphablended") ==
-            std::string_view::npos);
-        assert(meshDescription.find("transmissive") ==
-            std::string_view::npos);
+        std::uint32_t offset = 0u;
+        assert(TryResolveRayVisibilityGeometryMapOffset(0u, offset));
+        assert(offset == 0u);
+        assert(TryResolveRayVisibilityGeometryMapOffset(
+            MaximumRayVisibilityGeometryMapOffset,
+            offset));
+        assert(offset == MaximumRayVisibilityGeometryMapOffset);
+        assert(!TryResolveRayVisibilityGeometryMapOffset(
+            std::uint64_t(MaximumRayVisibilityGeometryMapOffset) + 1u,
+            offset));
 
-        const std::string_view beginGeneration = ExtractSection(
-            source,
-            "boolworldspacerepresentation::begingeneration(",
-            "boolworldspacerepresentation::buildnextblas(");
-        const std::size_t clearUpload = beginGeneration.find(
-            "m_geometryindexmapupload.clear();");
-        const std::size_t releaseMap = beginGeneration.find(
-            "m_geometryindexmap=nullptr;");
-        const std::size_t clearUploaded = beginGeneration.find(
-            "m_geometryindexmapuploaded=false;");
-        const std::size_t offsetGuard = beginGeneration.find(
-            "if(!israyvisibilitygeometrymapoffsetsupported("
-                "m_geometryindexmapupload.size()))");
-        const std::size_t assignOffset = beginGeneration.find(
-            "record.geometrymapoffset=uint32_t("
-                "m_geometryindexmapupload.size());");
-        const std::size_t appendIndices = beginGeneration.find(
-            "m_geometryindexmapupload.insert("
-                "m_geometryindexmapupload.end(),"
-                "geometryindices.begin(),geometryindices.end());");
-        assert(clearUpload != std::string_view::npos);
-        assert(releaseMap != std::string_view::npos);
-        assert(clearUploaded != std::string_view::npos);
-        assert(offsetGuard != std::string_view::npos);
-        assert(assignOffset != std::string_view::npos);
-        assert(appendIndices != std::string_view::npos);
-        assert(clearUpload < offsetGuard);
-        assert(offsetGuard < assignOffset);
-        assert(assignOffset < appendIndices);
-
-        const std::string_view tlasInvalidation = ExtractSection(
-            source,
-            "voidworldspacerepresentation::invalidate(",
-            "voidworldspacerepresentation::fail(");
-        assert(tlasInvalidation.find("m_geometryindexmap") ==
-            std::string_view::npos);
-        assert(source.find(
-            ".setinstancecontributiontohitgroupindex("
-                "found->second->geometrymapoffset)") !=
-            std::string::npos);
-        assert(source.find(
-            "commandlist->writebuffer(m_geometryindexmap,"
-                "m_geometryindexmapupload.data(),") !=
-            std::string::npos);
+        assert(RetainsRayVisibilityGeometryMap(
+            WorldSpaceRepresentationInvalidation::None));
+        assert(RetainsRayVisibilityGeometryMap(
+            WorldSpaceRepresentationInvalidation::Tlas));
+        assert(!RetainsRayVisibilityGeometryMap(
+            WorldSpaceRepresentationInvalidation::BlasAndTlas));
     }
 }
 

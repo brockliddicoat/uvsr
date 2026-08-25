@@ -18,7 +18,6 @@ lookup assets are absent from the current product.
 
 ## Evidence
 
-- [Retirement Plan](../../docs/exec-plans/completed/miniengine-taa-options-experiment.md)
 - Vendored snapshot added in `58813cb94054738fc25ff2493444fbdb3dce7d98`; inspect with `git show 58813cb:src/third_party/smaa/SMAA.hlsl`
 - Removed in `644a521fe0afb867c412bc12f9f1a364636b0e84`
 

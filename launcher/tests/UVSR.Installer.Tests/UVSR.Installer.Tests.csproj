@@ -8,6 +8,11 @@
     <AssemblyName>UVSR.Installer.Tests</AssemblyName>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
+    <Product>UVSR Engine</Product>
+    <FileVersion>40016.45297.20830.35288</FileVersion>
+    <AssemblyVersion>40016.45297.20830.35288</AssemblyVersion>
+    <InformationalVersion>40016.45297.20830.35288+9c50b0f1515e89d856c8ebb627b86984</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\UVSR.Installer\UVSR.Installer.csproj" />

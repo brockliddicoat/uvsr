@@ -1,10 +1,8 @@
 #include "pixel_zoom.h"
+#include "uvsr_ui_renderer.h"
 
 #include <cstdlib>
-#include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <string>
 
 namespace
@@ -16,16 +14,9 @@ namespace
         return condition;
     }
 
-    std::string ReadTextFile(const std::filesystem::path& path)
-    {
-        std::ifstream stream(path, std::ios::binary);
-        return std::string(
-            std::istreambuf_iterator<char>(stream),
-            std::istreambuf_iterator<char>());
-    }
 }
 
-int main(int argc, char** argv)
+int main()
 {
     using namespace uvsr;
 
@@ -175,6 +166,14 @@ int main(int argc, char** argv)
         !IsPixelZoomEnabled(PixelZoomMode::Off) &&
             IsPixelZoomEnabled(PixelZoomMode::Zoom2x),
         "only magnifying modes enable zoom work");
+    passed &= Check(
+        !IsPixelZoomPassActive(PixelZoomMode::Off, 1.f) &&
+            !IsPixelZoomPassActive(PixelZoomMode::Zoom2x, 0.f) &&
+            IsPixelZoomPassActive(PixelZoomMode::Zoom2x, 0.001f),
+        "the render pass is active only for a visible magnifying mode");
+    static_assert(UiPanelShadowBlurPixels == 10.f &&
+        UiPanelShadowOpacity == 0.34f &&
+        UiPanelShadowOffsetYPixels == 3.f);
 
     const CenterMaterialPick evenCenter =
         ResolveCenterMaterialPick(1920u, 1080u);
@@ -312,94 +311,6 @@ int main(int argc, char** argv)
         visibility == 0.f &&
             SmoothPixelZoomVisibility(visibility) == 0.f,
         "zoom reaches an exact nonexistent endpoint after fading out");
-
-    if (argc != 2)
-    {
-        std::cerr << "usage: uvsr_pixel_zoom_tests <source-root>\n";
-        return 2;
-    }
-    const std::filesystem::path sourceRoot = argv[1];
-    const std::string shader =
-        ReadTextFile(sourceRoot / "src" / "pixel_zoom_ps.hlsl");
-    const std::string application =
-        ReadTextFile(sourceRoot / "src" / "uvsr.cpp");
-    passed &= Check(
-        shader.find("t_Source.Load(") != std::string::npos &&
-            shader.find(".Sample") == std::string::npos &&
-            shader.find("SamplerState") == std::string::npos,
-        "zoom shader uses integer texel loads without a sampler");
-    passed &= Check(
-        shader.find("discard;") != std::string::npos &&
-            shader.find("outlineCoverage") != std::string::npos &&
-            shader.find("g_PixelZoom.outlineWidth") != std::string::npos,
-        "zoom shader cuts the rounded silhouette before layering its outline");
-    passed &= Check(
-        shader.find("saturate(g_PixelZoom.opacity)") != std::string::npos &&
-            application.find(
-                "SmoothPixelZoomVisibility(m_PixelZoomVisibility)") !=
-                std::string::npos &&
-            application.find(
-                "ResolveAnimatedPixelZoomLayout(") !=
-                std::string::npos &&
-            application.find(
-                "ResolvePixelZoomLevelTransitionScale(") !=
-                std::string::npos &&
-            application.find(
-                "ShouldSwitchPixelZoomLevel(") !=
-                std::string::npos,
-        "zoom appearance and exact level changes share eased transition state");
-    passed &= Check(
-        shader.find("shadowDistance") != std::string::npos &&
-            shader.find(
-                "if (!insidePanelBounds || signedDistance > 0.0)") !=
-                std::string::npos &&
-            application.find(
-                ".setSrcBlend(nvrhi::BlendFactor::SrcAlpha)") !=
-                std::string::npos,
-        "the fading shadow is alpha blended only outside the zoom cutout");
-    passed &= Check(
-        application.find(
-            "if (pixelZoomPassActive && m_PixelZoomPass)") !=
-                std::string::npos,
-        "zoom skips its render pass after the fade-out reaches zero");
-    const size_t zoomRoundingPosition = application.find(
-        "ImGui::GetStyle().WindowRounding,");
-    const size_t zoomOpacityPosition = zoomRoundingPosition ==
-        std::string::npos
-        ? std::string::npos
-        : application.find("pixelZoomOpacity", zoomRoundingPosition);
-    passed &= Check(
-        zoomRoundingPosition != std::string::npos &&
-            zoomOpacityPosition != std::string::npos &&
-            zoomOpacityPosition - zoomRoundingPosition < 128u,
-        "zoom derives square Ogg and rounded authored-skin silhouettes from "
-        "active style");
-    passed &= Check(
-        application.find(
-            "constexpr float UiPanelShadowBlurPixels = 10.f;") !=
-                std::string::npos &&
-            application.find(
-                "constexpr float UiPanelShadowOpacity = 0.34f;") !=
-                std::string::npos &&
-            application.find(
-                "constexpr float UiPanelShadowOffsetYPixels = 3.f;") !=
-                std::string::npos &&
-            application.find(
-                "constants.shadowBlur = UiPanelShadowBlurPixels;") !=
-                std::string::npos &&
-            application.find(
-                "constants.shadowOpacity = UiPanelShadowOpacity;") !=
-                std::string::npos &&
-            application.find(
-                "constants.shadowOffsetY = "
-                "UiPanelShadowOffsetYPixels;") !=
-                std::string::npos &&
-            application.find(
-                "static_assert(sizeof(PixelZoomConstants) == 96u);") !=
-                std::string::npos &&
-            shader.find("g_PixelZoom.shadowOffsetY") !=
-                std::string::npos,
-        "zoom and Ogg panels share the accepted shadow presentation constants");
 
     return passed ? 0 : 1;
 }

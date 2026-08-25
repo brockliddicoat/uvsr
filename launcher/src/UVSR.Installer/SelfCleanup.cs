@@ -135,7 +135,8 @@ internal static class SelfCleanup
             if (string.IsNullOrWhiteSpace(helperDirectory) ||
                 !string.Equals(Path.GetDirectoryName(helperDirectory),
                     paths.HelpersDirectory, StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(Path.GetFileName(self), "UVSR-Launcher-Cleanup.exe",
+                !string.Equals(Path.GetFileName(self),
+                    ProductConstants.LauncherExecutableName,
                     StringComparison.OrdinalIgnoreCase))
                 return false;
             SafePaths.RejectReparsePathChain(paths.OperationsRoot,
@@ -331,7 +332,8 @@ internal static class SelfCleanup
         Directory.CreateDirectory(helperRoot);
         SafePaths.RejectReparsePathChain(helperRoot,
             "UVSR cleanup-helper directory");
-        string helper = Path.Combine(helperRoot, "UVSR-Launcher-Cleanup.exe");
+        string helper = Path.Combine(helperRoot,
+            ProductConstants.LauncherExecutableName);
         try
         {
             File.Copy(current, helper, overwrite: false);

@@ -1,7 +1,8 @@
 [CmdletBinding(PositionalBinding = $false)]
 param(
+    [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
-    [string] $BuildDirectory = 'build',
+    [string] $BuildDirectory,
 
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]] $RendererArguments
@@ -15,9 +16,9 @@ else {
     $resolvedBuildDirectory = [System.IO.Path]::GetFullPath(
         (Join-Path $repositoryRoot $BuildDirectory))
 }
-$executable = Join-Path $resolvedBuildDirectory 'bin\uvsr.exe'
+$executable = Join-Path $resolvedBuildDirectory 'bin\uvsr-engine.exe'
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
-    throw "UVSR is not built at '$resolvedBuildDirectory'. Run: cmake --build `"$resolvedBuildDirectory`" --config Release --target uvsr"
+    throw "UVSR is not built at '$resolvedBuildDirectory'. Run: cmake --build `"$resolvedBuildDirectory`" --config Release --target uvsr-engine"
 }
 
 $startParameters = @{

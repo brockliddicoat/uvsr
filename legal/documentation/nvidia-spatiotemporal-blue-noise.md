@@ -11,15 +11,16 @@
 
 ## UVSR Relationship
 
-UVSR's deterministic first-party generator follows the published spatial and
-temporal optimization objective. The checked-in volumes are newly generated;
-NVIDIA's generator and texture assets are not bundled or translated.
+UVSR's retired deterministic first-party generator followed the published
+spatial and temporal optimization objective. Its checked-in generated volumes
+remain current runtime assets; NVIDIA's generator and texture assets are not
+bundled or translated.
 
 ## Evidence
 
 - [Noise Design](../../docs/noise.md)
 - [Asset Provenance](../../assets/noise/README.md)
-- [First-Party Generator](../../tools/generate_noise_assets.py)
+- [Retained Asset Manifest](../../assets/noise/manifest.json)
 - Commit `f892c17e33c007db69ca10f055bd7e59301b37d0`
 
 ## Commercial Clearance

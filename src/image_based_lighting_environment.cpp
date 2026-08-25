@@ -1,12 +1,10 @@
 #include "image_based_lighting_environment.h"
+#include "renderer_common_passes.h"
+#include "renderer_light_probe_processing.h"
+#include "renderer_log.h"
+#include "renderer_shader_factory.h"
 
-#include <donut/core/log.h>
-#include <donut/core/math/float.h>
-#include <donut/engine/CommonRenderPasses.h>
-#include <donut/engine/SceneTypes.h>
-#include <donut/engine/ShaderFactory.h>
-#include <donut/render/LightProbeProcessingPass.h>
-
+#include <DirectXPackedVector.h>
 #include <stb_image.h>
 
 #include <algorithm>
@@ -15,38 +13,51 @@
 
 #include "image_based_lighting_shared.h"
 
-using namespace donut;
-using namespace donut::engine;
-using namespace donut::math;
-using namespace donut::render;
-
 namespace
 {
-    constexpr dm::float3 LuminanceWeights(
+    const DirectX::XMFLOAT3 LuminanceWeights(
         0.2126f, 0.7152f, 0.0722f);
 
-    dm::float3 SanitizeRadiance(dm::float3 value, bool neutralize)
+    DirectX::XMFLOAT3 SanitizeRadiance(
+        DirectX::XMFLOAT3 value,
+        bool neutralize)
     {
-        value = min(
-            max(uvsr::SanitizeFinite(value), dm::float3(0.f)),
-            dm::float3(uvsr::DiffuseEnvironmentHalfMaximum));
+        value = uvsr::RendererClampFloat3(
+            value, 0.f, uvsr::RendererEnvironmentHalfMaximum);
         if (neutralize)
-            value = dot(value, LuminanceWeights);
+        {
+            const float luminance = DirectX::XMVectorGetX(
+                DirectX::XMVector3Dot(
+                    DirectX::XMLoadFloat3(&value),
+                    DirectX::XMLoadFloat3(&LuminanceWeights)));
+            value = { luminance, luminance, luminance };
+        }
         return value;
     }
 
-    template <typename Source>
-    dm::float3 SampleLatLongBilinear(
-        const Source& source,
-        dm::float3 direction)
+    uvsr::ImageBasedLightingHalf4 ToHalf4(DirectX::XMFLOAT3 value)
     {
-        direction = uvsr::NormalizeDiffuseEnvironmentDirection(
-            direction, dm::float3(0.f, 1.f, 0.f));
+        using DirectX::PackedVector::XMConvertFloatToHalf;
+        return {
+            XMConvertFloatToHalf(value.x),
+            XMConvertFloatToHalf(value.y),
+            XMConvertFloatToHalf(value.z),
+            XMConvertFloatToHalf(0.f)
+        };
+    }
+
+    template <typename Source>
+    DirectX::XMFLOAT3 SampleLatLongBilinear(
+        const Source& source,
+        DirectX::XMFLOAT3 direction)
+    {
+        direction = uvsr::RendererNormalizeEnvironmentDirection(
+            direction, { 0.f, 1.f, 0.f });
         float u = std::atan2(direction.z, direction.x) /
-            (2.f * dm::PI_f) + 0.5f;
+            (2.f * DirectX::XM_PI) + 0.5f;
         u -= std::floor(u);
         const float v = std::acos(std::clamp(
-            direction.y, -1.f, 1.f)) / dm::PI_f;
+            direction.y, -1.f, 1.f)) / DirectX::XM_PI;
 
         const float sourceX = u * float(source.width) - 0.5f;
         const float sourceY = v * float(source.height) - 0.5f;
@@ -73,31 +84,65 @@ namespace
         {
             const size_t offset =
                 (size_t(y) * size_t(source.width) + size_t(x)) * 3u;
-            return dm::float3(
+            return DirectX::XMFLOAT3(
                 source.pixels[offset + 0u],
                 source.pixels[offset + 1u],
                 source.pixels[offset + 2u]);
         };
-        return lerp(
-            lerp(load(x0, y0), load(x1, y0), tx),
-            lerp(load(x0, y1), load(x1, y1), tx),
-            ty);
+        const DirectX::XMFLOAT3 topLeft = load(x0, y0);
+        const DirectX::XMFLOAT3 topRight = load(x1, y0);
+        const DirectX::XMFLOAT3 bottomLeft = load(x0, y1);
+        const DirectX::XMFLOAT3 bottomRight = load(x1, y1);
+        const DirectX::XMVECTOR top = DirectX::XMVectorLerp(
+            DirectX::XMLoadFloat3(&topLeft),
+            DirectX::XMLoadFloat3(&topRight),
+            tx);
+        const DirectX::XMVECTOR bottom = DirectX::XMVectorLerp(
+            DirectX::XMLoadFloat3(&bottomLeft),
+            DirectX::XMLoadFloat3(&bottomRight),
+            tx);
+        return uvsr::RendererStoreFloat3(
+            DirectX::XMVectorLerp(top, bottom, ty));
     }
 }
 
 namespace uvsr
 {
+    bool ImageBasedLightingProbe::IsActive() const noexcept
+    {
+        return IsImageBasedLightingProbeActive(
+            bool(diffuseMap),
+            bool(specularMap),
+            bool(environmentBrdf),
+            diffuseScale,
+            specularScale);
+    }
+
+    void ImageBasedLightingProbe::FillLightProbeConstants(
+        LightProbeConstants& constants) const noexcept
+    {
+        constants = MakeImageBasedLightingProbeConstants(
+            diffuseArrayIndex,
+            specularArrayIndex,
+            diffuseScale,
+            specularScale,
+            specularMap ? float(specularMap->getDesc().mipLevels) : 0.f);
+    }
+
     ImageBasedLightingEnvironment::ImageBasedLightingEnvironment(
         nvrhi::IDevice* device,
-        const std::shared_ptr<ShaderFactory>& shaderFactory,
-        const std::shared_ptr<CommonRenderPasses>& commonPasses,
+        const std::shared_ptr<RendererShaderFactory>& shaderFactory,
+        const std::shared_ptr<RendererCommonPasses>& commonPasses,
         std::filesystem::path environmentAssetDirectory)
         : m_Device(device)
         , m_EnvironmentAssetDirectory(
             std::move(environmentAssetDirectory))
     {
         if (!device || !shaderFactory || !commonPasses)
+        {
+            m_PreparationState.Fail();
             return;
+        }
 
         nvrhi::TextureDesc radianceDesc;
         radianceDesc.width = RadianceCubeDimension;
@@ -150,27 +195,35 @@ namespace uvsr
         {
             log::error(
                 "Failed to create one or more persistent UVSR IBL textures.");
+            m_PreparationState.Fail();
             return;
         }
 
         m_ProbeProcessing =
-            std::make_shared<LightProbeProcessingPass>(
+            std::make_unique<RendererLightProbeProcessing>(
                 device,
                 shaderFactory,
                 commonPasses,
                 RadianceCubeDimension,
                 nvrhi::Format::RGBA16_FLOAT);
-        m_LightProbe = std::make_shared<LightProbe>();
-        m_LightProbe->name = "UVSR Global Image-Based Lighting";
-        m_LightProbe->diffuseMap = m_DiffuseTexture;
-        m_LightProbe->specularMap = m_SpecularTexture;
-        m_LightProbe->environmentBrdf =
+        if (!m_ProbeProcessing->IsValid())
+        {
+            m_ProbeProcessing.reset();
+            log::error("Failed to create UVSR IBL processing resources.");
+            m_PreparationState.Fail();
+            return;
+        }
+        m_LightProbe.diffuseMap = m_DiffuseTexture;
+        m_LightProbe.specularMap = m_SpecularTexture;
+        m_LightProbe.environmentBrdf =
             m_ProbeProcessing->GetEnvironmentBrdfTexture();
-        m_LightProbe->diffuseArrayIndex = 0u;
-        m_LightProbe->specularArrayIndex = 0u;
-        m_LightProbe->diffuseScale = 1.f;
-        m_LightProbe->specularScale = 1.f;
+        m_LightProbe.diffuseArrayIndex = 0u;
+        m_LightProbe.specularArrayIndex = 0u;
+        m_LightProbe.diffuseScale = 1.f;
+        m_LightProbe.specularScale = 1.f;
     }
+
+    ImageBasedLightingEnvironment::~ImageBasedLightingEnvironment() = default;
 
     std::optional<ImageBasedLightingEnvironment::PreparedRadiance>
         ImageBasedLightingEnvironment::PrepareRadiance(
@@ -235,8 +288,8 @@ namespace uvsr
             pixel < size_t(width) * size_t(height);
             ++pixel)
         {
-            const dm::float3 radiance = SanitizeRadiance(
-                dm::float3(
+            const DirectX::XMFLOAT3 radiance = SanitizeRadiance(
+                DirectX::XMFLOAT3(
                     decoded[pixel * 3u + 0u],
                     decoded[pixel * 3u + 1u],
                     decoded[pixel * 3u + 2u]),
@@ -247,8 +300,8 @@ namespace uvsr
         }
         releaseDecoded();
 
-        const std::optional<ImportedDiffuseEnvironmentProjection>
-            projection = ProjectDiffuseEnvironmentLatLongRgb(
+        const std::optional<RendererDiffuseEnvironmentProjection>
+            projection = ProjectRendererDiffuseEnvironmentLatLongRgb(
                 imported.pixels.data(),
                 imported.width,
                 imported.height);
@@ -268,7 +321,8 @@ namespace uvsr
             RadianceCubeDimension);
         for (uint32_t face = 0u; face < 6u; ++face)
         {
-            float16_t4* destination = imported.radianceFaces.data() +
+            ImageBasedLightingHalf4* destination =
+                imported.radianceFaces.data() +
                 size_t(face) * RadianceCubeDimension *
                     RadianceCubeDimension;
             for (uint32_t y = 0u;
@@ -279,19 +333,17 @@ namespace uvsr
                     x < RadianceCubeDimension;
                     ++x)
                 {
-                    const dm::float3 direction =
-                        DiffuseEnvironmentCubeDirection(
+                    const DirectX::XMFLOAT3 direction =
+                        RendererEnvironmentCubeDirection(
                             face,
                             x,
                             y,
                             RadianceCubeDimension);
-                    const dm::float3 radiance =
+                    const DirectX::XMFLOAT3 radiance =
                         SampleLatLongBilinear(imported, direction);
                     destination[
                         size_t(y) * RadianceCubeDimension + x] =
-                        Float32ToFloat16x4(float4(
-                            SanitizeRadiance(radiance, false),
-                            0.f));
+                        ToHalf4(SanitizeRadiance(radiance, false));
                 }
             }
         }
@@ -301,7 +353,8 @@ namespace uvsr
             DiffuseCubeDimension);
         for (uint32_t face = 0u; face < 6u; ++face)
         {
-            float16_t4* destination = imported.diffuseFaces.data() +
+            ImageBasedLightingHalf4* destination =
+                imported.diffuseFaces.data() +
                 size_t(face) * DiffuseCubeDimension *
                     DiffuseCubeDimension;
             for (uint32_t y = 0u;
@@ -312,20 +365,21 @@ namespace uvsr
                     x < DiffuseCubeDimension;
                     ++x)
                 {
-                    const dm::float3 direction =
-                        DiffuseEnvironmentCubeDirection(
+                    const DirectX::XMFLOAT3 direction =
+                        RendererEnvironmentCubeDirection(
                             face,
                             x,
                             y,
                             DiffuseCubeDimension);
-                    const dm::float3 response =
-                        ClampDiffuseEnvironmentForHalf(
-                            EvaluateDiffuseEnvironmentSh(
-                                imported.diffuseSh,
-                                direction));
+                    const DirectX::XMFLOAT3 response =
+                        RendererClampFloat3(
+                            EvaluateRendererEnvironmentSh(
+                                imported.diffuseSh, direction),
+                            0.f,
+                            RendererEnvironmentHalfMaximum);
                     destination[
                         y * DiffuseCubeDimension + x] =
-                        Float32ToFloat16x4(float4(response, 0.f));
+                        ToHalf4(response);
                 }
             }
         }
@@ -351,12 +405,21 @@ namespace uvsr
             PreparedRadianceGpuStage::EnvironmentBrdf;
         m_PreparedRadianceStep = 0u;
         m_Uploaded = false;
-        m_LastLoadFailed = false;
+        m_PreparationState.Begin();
     }
 
     bool ImageBasedLightingEnvironment::AdvancePreparedRadiance(
         nvrhi::ICommandList* commandList)
     {
+        const auto fail = [this]()
+        {
+            m_PreparedRadiance.reset();
+            m_PreparedRadianceStage = PreparedRadianceGpuStage::None;
+            m_PreparedRadianceStep = 0u;
+            m_Uploaded = false;
+            m_PreparationState.Fail();
+            return false;
+        };
         if (!commandList ||
             !m_PreparedRadiance ||
             !m_ProbeProcessing ||
@@ -364,12 +427,7 @@ namespace uvsr
             !m_DiffuseTexture ||
             !m_SpecularTexture)
         {
-            m_PreparedRadiance.reset();
-            m_PreparedRadianceStage = PreparedRadianceGpuStage::None;
-            m_PreparedRadianceStep = 0u;
-            m_Uploaded = false;
-            m_LastLoadFailed = true;
-            return false;
+            return fail();
         }
 
         PreparedRadiance& prepared = *m_PreparedRadiance;
@@ -382,12 +440,7 @@ namespace uvsr
         if (prepared.radianceFaces.size() != expectedRadianceTexels ||
             prepared.diffuseFaces.size() != expectedDiffuseTexels)
         {
-            m_PreparedRadiance.reset();
-            m_PreparedRadianceStage = PreparedRadianceGpuStage::None;
-            m_PreparedRadianceStep = 0u;
-            m_Uploaded = false;
-            m_LastLoadFailed = true;
-            return false;
+            return fail();
         }
 
         switch (m_PreparedRadianceStage)
@@ -395,7 +448,11 @@ namespace uvsr
         case PreparedRadianceGpuStage::EnvironmentBrdf:
             if (!m_BrdfReady)
             {
-                m_ProbeProcessing->RenderEnvironmentBrdfTexture(commandList);
+                if (!m_ProbeProcessing->RenderEnvironmentBrdfTexture(
+                        commandList))
+                {
+                    return fail();
+                }
                 m_BrdfReady = true;
             }
             m_PreparedRadianceStage =
@@ -414,7 +471,7 @@ namespace uvsr
                     size_t(face) * RadianceCubeDimension *
                         RadianceCubeDimension,
                 size_t(RadianceCubeDimension) *
-                    sizeof(float16_t4));
+                    sizeof(ImageBasedLightingHalf4));
             ++m_PreparedRadianceStep;
             if (m_PreparedRadianceStep == 6u)
             {
@@ -436,7 +493,7 @@ namespace uvsr
                         size_t(face) * DiffuseCubeDimension *
                             DiffuseCubeDimension,
                     size_t(DiffuseCubeDimension) *
-                        sizeof(float16_t4));
+                        sizeof(ImageBasedLightingHalf4));
             }
             m_PreparedRadianceStage =
                 PreparedRadianceGpuStage::RadianceMipGeneration;
@@ -444,12 +501,15 @@ namespace uvsr
             return false;
 
         case PreparedRadianceGpuStage::RadianceMipGeneration:
-            m_ProbeProcessing->GenerateCubemapMips(
-                commandList,
-                m_RadianceTexture,
-                0u,
-                m_PreparedRadianceStep,
-                1u);
+            if (!m_ProbeProcessing->GenerateCubemapMips(
+                    commandList,
+                    m_RadianceTexture,
+                    0u,
+                    m_PreparedRadianceStep,
+                    1u))
+            {
+                return fail();
+            }
             ++m_PreparedRadianceStep;
             if (m_PreparedRadianceStep == RadianceCubeMipCount - 1u)
             {
@@ -460,14 +520,17 @@ namespace uvsr
             return false;
 
         case PreparedRadianceGpuStage::SpecularBaseBlit:
-            m_ProbeProcessing->BlitCubemap(
-                commandList,
-                m_RadianceTexture,
-                0u,
-                0u,
-                m_SpecularTexture,
-                0u,
-                0u);
+            if (!m_ProbeProcessing->BlitCubemap(
+                    commandList,
+                    m_RadianceTexture,
+                    0u,
+                    0u,
+                    m_SpecularTexture,
+                    0u,
+                    0u))
+            {
+                return fail();
+            }
             m_PreparedRadianceStage =
                 PreparedRadianceGpuStage::SpecularMipGeneration;
             m_PreparedRadianceStep = 1u;
@@ -485,20 +548,23 @@ namespace uvsr
                 RadianceCubeMipCount,
                 0u,
                 6u);
-            m_ProbeProcessing->RenderSpecularMap(
-                commandList,
-                perceptualRoughness,
-                m_RadianceTexture,
-                radianceSubresources,
-                m_SpecularTexture,
-                0u,
-                mip);
+            if (!m_ProbeProcessing->RenderSpecularMap(
+                    commandList,
+                    perceptualRoughness,
+                    m_RadianceTexture,
+                    radianceSubresources,
+                    m_SpecularTexture,
+                    0u,
+                    mip))
+            {
+                return fail();
+            }
             ++m_PreparedRadianceStep;
             if (m_PreparedRadianceStep < SpecularCubeMipCount)
                 return false;
 
             m_Uploaded = true;
-            m_LastLoadFailed = false;
+            m_PreparationState.Complete();
             m_PreparedRadiance.reset();
             m_PreparedRadianceStage = PreparedRadianceGpuStage::None;
             m_PreparedRadianceStep = 0u;
@@ -507,6 +573,7 @@ namespace uvsr
 
         case PreparedRadianceGpuStage::None:
         default:
+            m_PreparationState.Fail();
             return false;
         }
     }
@@ -546,7 +613,7 @@ namespace uvsr
                     size_t(face) * RadianceCubeDimension *
                         RadianceCubeDimension,
                 size_t(RadianceCubeDimension) *
-                    sizeof(float16_t4));
+                    sizeof(ImageBasedLightingHalf4));
         }
 
         for (uint32_t face = 0u; face < 6u; ++face)
@@ -559,24 +626,28 @@ namespace uvsr
                     size_t(face) * DiffuseCubeDimension *
                         DiffuseCubeDimension,
                 size_t(DiffuseCubeDimension) *
-                    sizeof(float16_t4));
+                    sizeof(ImageBasedLightingHalf4));
         }
 
         commandList->beginMarker("UVSR IBL Prefilter");
-        m_ProbeProcessing->GenerateCubemapMips(
-            commandList,
-            m_RadianceTexture,
-            0u,
-            0u,
-            RadianceCubeMipCount - 1u);
-        m_ProbeProcessing->BlitCubemap(
-            commandList,
-            m_RadianceTexture,
-            0u,
-            0u,
-            m_SpecularTexture,
-            0u,
-            0u);
+        if (!m_ProbeProcessing->GenerateCubemapMips(
+                commandList,
+                m_RadianceTexture,
+                0u,
+                0u,
+                RadianceCubeMipCount - 1u) ||
+            !m_ProbeProcessing->BlitCubemap(
+                commandList,
+                m_RadianceTexture,
+                0u,
+                0u,
+                m_SpecularTexture,
+                0u,
+                0u))
+        {
+            commandList->endMarker();
+            return false;
+        }
         const nvrhi::TextureSubresourceSet radianceSubresources(
             0u,
             RadianceCubeMipCount,
@@ -588,19 +659,22 @@ namespace uvsr
         {
             const float normalizedMip =
                 float(mip) / float(SpecularCubeMipCount - 1u);
-            // Donut's receiver selects sqrt(perceptual roughness), so a
-            // squared generation schedule makes each mip represent the
-            // intended perceptual roughness exactly.
+            // The receiver selects sqrt(perceptual roughness), so a squared
+            // generation schedule maps each mip to its intended response.
             const float perceptualRoughness =
                 ImageBasedLightingGenerationRoughness(normalizedMip);
-            m_ProbeProcessing->RenderSpecularMap(
-                commandList,
-                perceptualRoughness,
-                m_RadianceTexture,
-                radianceSubresources,
-                m_SpecularTexture,
-                0u,
-                mip);
+            if (!m_ProbeProcessing->RenderSpecularMap(
+                    commandList,
+                    perceptualRoughness,
+                    m_RadianceTexture,
+                    radianceSubresources,
+                    m_SpecularTexture,
+                    0u,
+                    mip))
+            {
+                commandList->endMarker();
+                return false;
+            }
         }
         commandList->endMarker();
         return true;
@@ -618,19 +692,22 @@ namespace uvsr
         ImageBasedLightingSource source)
     {
         if (!commandList)
-            return false;
-
-        if (!m_ProbeProcessing || !m_LightProbe)
         {
-            if (m_PreparedRadianceStage !=
-                PreparedRadianceGpuStage::None)
-            {
-                m_PreparedRadiance.reset();
-                m_PreparedRadianceStage =
-                    PreparedRadianceGpuStage::None;
-                m_PreparedRadianceStep = 0u;
-                m_LastLoadFailed = true;
-            }
+            m_PreparationState.Fail();
+            return false;
+        }
+
+        if (!m_ProbeProcessing ||
+            !m_LightProbe.diffuseMap ||
+            !m_LightProbe.specularMap ||
+            !m_LightProbe.environmentBrdf)
+        {
+            m_PreparedRadiance.reset();
+            m_PreparedRadianceStage =
+                PreparedRadianceGpuStage::None;
+            m_PreparedRadianceStep = 0u;
+            m_Uploaded = false;
+            m_PreparationState.Fail();
             return false;
         }
 
@@ -643,8 +720,8 @@ namespace uvsr
                 specularEnabled,
                 specularStrength);
         m_RadianceScale = scales.radiance;
-        m_LightProbe->diffuseScale = scales.diffuse;
-        m_LightProbe->specularScale = scales.specular;
+        m_LightProbe.diffuseScale = scales.diffuse;
+        m_LightProbe.specularScale = scales.specular;
 
         const ImageBasedLightingSource requestedSource =
             uint32_t(source) < uint32_t(ImageBasedLightingSource::Count)
@@ -673,12 +750,18 @@ namespace uvsr
             m_PreparedRadiance.reset();
             m_PreparedRadianceStage = PreparedRadianceGpuStage::None;
             m_PreparedRadianceStep = 0u;
+            m_PreparationState.Begin();
         }
 
         if (!m_BrdfReady)
         {
-            m_ProbeProcessing->RenderEnvironmentBrdfTexture(
-                commandList);
+            if (!m_ProbeProcessing->RenderEnvironmentBrdfTexture(
+                    commandList))
+            {
+                m_Uploaded = false;
+                m_PreparationState.Fail();
+                return false;
+            }
             m_BrdfReady = true;
         }
 
@@ -687,10 +770,11 @@ namespace uvsr
             m_LastNeutralize != neutralize;
         const bool shouldAttemptLoad =
             requestChanged ||
-            (!m_Uploaded && !m_LastLoadFailed);
+            (!m_Uploaded && !m_PreparationState.HasFailed());
         bool rebuilt = false;
         if (shouldAttemptLoad)
         {
+            m_PreparationState.Begin();
             m_LastRequestedSource = requestedSource;
             m_LastNeutralize = neutralize;
             std::optional<PreparedRadiance> imported;
@@ -710,7 +794,7 @@ namespace uvsr
                 // probe and background, then latch the failed request so the
                 // render loop does not retry synchronous disk I/O each frame.
                 m_Uploaded = false;
-                m_LastLoadFailed = true;
+                m_PreparationState.Fail();
             }
             else
             {
@@ -718,12 +802,12 @@ namespace uvsr
                 if (rebuilt)
                 {
                     m_Uploaded = true;
-                    m_LastLoadFailed = false;
+                    m_PreparationState.Complete();
                 }
                 else
                 {
                     m_Uploaded = false;
-                    m_LastLoadFailed = true;
+                    m_PreparationState.Fail();
                 }
             }
         }

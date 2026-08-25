@@ -1,39 +1,14 @@
 #pragma once
 
-#include <nvrhi/nvrhi.h>
+#include "msaa_visibility_resolve_contract.h"
 
 #include <array>
 #include <cstdint>
 #include <memory>
 
-namespace donut::engine
-{
-    class ShaderFactory;
-}
-
 namespace uvsr
 {
-    struct MsaaVisibilityResolveInputs
-    {
-        nvrhi::ITexture* depth = nullptr;
-        nvrhi::ITexture* diffuse = nullptr;
-        nvrhi::ITexture* material = nullptr;
-        nvrhi::ITexture* normals = nullptr;
-        nvrhi::ITexture* emissive = nullptr;
-        nvrhi::ITexture* materialAmbientOcclusion = nullptr;
-        nvrhi::ITexture* motionVectors = nullptr;
-    };
-
-    struct MsaaVisibilityResolveOutputs
-    {
-        nvrhi::ITexture* depth = nullptr;
-        nvrhi::ITexture* diffuse = nullptr;
-        nvrhi::ITexture* material = nullptr;
-        nvrhi::ITexture* normals = nullptr;
-        nvrhi::ITexture* emissive = nullptr;
-        nvrhi::ITexture* materialAmbientOcclusion = nullptr;
-        nvrhi::ITexture* motionVectors = nullptr;
-    };
+    class RendererShaderFactory;
 
     // Produces a coherent single-surface G-buffer for screen-space visibility.
     // UVSR uses reverse-Z, so the greatest valid raw depth owns the pixel.
@@ -51,15 +26,16 @@ namespace uvsr
 
         nvrhi::DeviceHandle m_Device;
         std::array<Pipeline, 4> m_Pipelines;
-        std::shared_ptr<donut::engine::ShaderFactory> m_ShaderFactory;
+        std::shared_ptr<RendererShaderFactory> m_ShaderFactory;
         uint32_t m_PipelinePreparationStep = 0u;
         bool m_PipelinesReady = false;
+        bool m_PipelinePreparationFailed = false;
 
     public:
         explicit MsaaVisibilityResolvePass(nvrhi::IDevice* device);
 
         void Init(
-            const std::shared_ptr<donut::engine::ShaderFactory>&
+            const std::shared_ptr<RendererShaderFactory>&
                 shaderFactory,
             bool deferPipelineCreation = false);
 
@@ -67,6 +43,11 @@ namespace uvsr
         [[nodiscard]] bool ArePipelinesReady() const
         {
             return m_PipelinesReady;
+        }
+
+        [[nodiscard]] bool DidPipelinePreparationFail() const noexcept
+        {
+            return m_PipelinePreparationFailed;
         }
 
         [[nodiscard]] bool Render(

@@ -1,0 +1,79 @@
+diff --git a/src/engine/ShaderFactory.cpp b/src/engine/ShaderFactory.cpp
+--- a/src/engine/ShaderFactory.cpp
++++ b/src/engine/ShaderFactory.cpp
+@@ -27,1 +27,1 @@
+-#include <ShaderMake/ShaderBlob.h>
++#include "shader_blob.h"
+@@ -130,18 +130,18 @@ nvrhi::ShaderHandle ShaderFactory::CreateStaticShader(StaticShader shader, const
+     if (!shader.pBytecode || !shader.size)
+         return nullptr;
+ 
+-    vector<ShaderMake::ShaderConstant> constants;
++    vector<uvsr::shader_blob::Constant> constants;
+     if (pDefines)
+     {
+         for (const ShaderMacro& define : *pDefines)
+-            constants.push_back(ShaderMake::ShaderConstant{ define.name.c_str(), define.definition.c_str() });
++            constants.push_back(uvsr::shader_blob::Constant{ define.name.c_str(), define.definition.c_str() });
+     }
+ 
+     const void* permutationBytecode = nullptr;
+     size_t permutationSize = 0;
+-    if (!ShaderMake::FindPermutationInBlob(shader.pBytecode, shader.size, constants.data(), uint32_t(constants.size()), &permutationBytecode, &permutationSize))
++    if (!uvsr::shader_blob::find_permutation(shader.pBytecode, shader.size, constants.data(), uint32_t(constants.size()), &permutationBytecode, &permutationSize))
+     {
+-        const std::string message = ShaderMake::FormatShaderNotFoundMessage(shader.pBytecode, shader.size, constants.data(), uint32_t(constants.size()));
++        const std::string message = uvsr::shader_blob::format_not_found_message(shader.pBytecode, shader.size, constants.data(), uint32_t(constants.size()));
+         log::error("%s", message.c_str());
+         
+         return nullptr;
+@@ -184,18 +184,18 @@ nvrhi::ShaderLibraryHandle ShaderFactory::CreateStaticShaderLibrary(StaticShader
+     if (!shader.pBytecode || !shader.size)
+         return nullptr;
+ 
+-    vector<ShaderMake::ShaderConstant> constants;
++    vector<uvsr::shader_blob::Constant> constants;
+     if (pDefines)
+     {
+         for (const ShaderMacro& define : *pDefines)
+-            constants.push_back(ShaderMake::ShaderConstant{ define.name.c_str(), define.definition.c_str() });
++            constants.push_back(uvsr::shader_blob::Constant{ define.name.c_str(), define.definition.c_str() });
+     }
+     
+     const void* permutationBytecode = nullptr;
+     size_t permutationSize = 0;
+-    if (!ShaderMake::FindPermutationInBlob(shader.pBytecode, shader.size, constants.data(), uint32_t(constants.size()), &permutationBytecode, &permutationSize))
++    if (!uvsr::shader_blob::find_permutation(shader.pBytecode, shader.size, constants.data(), uint32_t(constants.size()), &permutationBytecode, &permutationSize))
+     {
+-        const std::string message = ShaderMake::FormatShaderNotFoundMessage(shader.pBytecode, shader.size, constants.data(), uint32_t(constants.size()));
++        const std::string message = uvsr::shader_blob::format_not_found_message(shader.pBytecode, shader.size, constants.data(), uint32_t(constants.size()));
+         log::error("%s", message.c_str());
+ 
+         return nullptr;
+@@ -259,11 +259,11 @@ std::pair<const void*, size_t> donut::engine::ShaderFactory::FindShaderFromHash(
+ 
+         // the bytecode could contain multiple permutations
+         std::vector<std::string> permutations;
+-        ShaderMake::EnumeratePermutationsInBlob(shaderBytes, shaderSize, permutations);
++        uvsr::shader_blob::enumerate_permutations(shaderBytes, shaderSize, permutations);
+ 
+         if (permutations.size() > 1)
+         {
+-            std::vector<ShaderMake::ShaderConstant> permutationConstants;
++            std::vector<uvsr::shader_blob::Constant> permutationConstants;
+             std::unordered_map<std::string, std::string> permutationDefines;
+             for (auto permutation : permutations)
+             {
+@@ -279,10 +279,10 @@ std::pair<const void*, size_t> donut::engine::ShaderFactory::FindShaderFromHash(
+                 for (const auto& [key, value] : permutationDefines)
+                 {
+-                    permutationConstants.push_back(ShaderMake::ShaderConstant{ key.c_str(), value.c_str() });
++                    permutationConstants.push_back(uvsr::shader_blob::Constant{ key.c_str(), value.c_str() });
+                 }
+                 const void* permutationBytecode = nullptr;
+                 size_t permutationSize = 0;
+-                if (ShaderMake::FindPermutationInBlob(shaderBytes, shaderSize, permutationConstants.data(),
++                if (uvsr::shader_blob::find_permutation(shaderBytes, shaderSize, permutationConstants.data(),
+                     uint32_t(permutationConstants.size()), &permutationBytecode, &permutationSize))
+                 {
+                     uint64_t entryHash = hashGenerator(std::make_pair(permutationBytecode, permutationSize), m_Device->getGraphicsAPI());

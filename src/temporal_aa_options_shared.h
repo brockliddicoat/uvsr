@@ -1,13 +1,9 @@
 #ifndef UVSR_TEMPORAL_AA_OPTIONS_SHARED_H
 #define UVSR_TEMPORAL_AA_OPTIONS_SHARED_H
 
-// This macro-only file is the single numeric ABI for C++ PSO indexing and HLSL
-// specialization. The algorithm and execution options below remain static PSO
-// dimensions. The behavior bits at the end are deliberately runtime-uniform
-// advanced image controls on the robust path: keeping them in one
-// constant-buffer word avoids a 32-way multiplication of every shipping
-// algorithm permutation. Minimum additionally packages one statically folded
-// default shader so normal low-cost frames do not pay for that flexibility.
+// This macro-only file is the numeric ABI shared by the four visible quality
+// recipes and HLSL. Advanced behavior remains runtime-uniform, avoiding a
+// compile-time cross-product for controls that do not change resource layout.
 
 #define UVSR_TAA_MOTION_CENTER 0
 #define UVSR_TAA_MOTION_CLOSEST_CROSS 1
@@ -28,7 +24,7 @@
 #define UVSR_TAA_RECTIFICATION_VARIANCE_YCOCG 1
 #define UVSR_TAA_RECTIFICATION_COUNT 2
 
-#define UVSR_TAA_BLEND_PERMUTATION_COUNT 48
+#define UVSR_TAA_BLEND_PERMUTATION_COUNT 4
 
 #define UVSR_TAA_LDS_LEGACY 0
 #define UVSR_TAA_LDS_PACKED 1

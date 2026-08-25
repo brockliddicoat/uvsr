@@ -91,12 +91,16 @@ internal static class SafePaths
         }
     }
 
-    internal static void ExtractVerifiedZip(string zipPath, string destination)
+    internal static void ExtractVerifiedZip(
+        string zipPath,
+        string destination,
+        long maximumExpandedBytes = long.MaxValue)
     {
         RejectReparsePathChain(Path.GetDirectoryName(destination)!,
-            "tool extraction parent directory");
+            "archive extraction parent directory");
         Directory.CreateDirectory(destination);
-        RejectReparsePathChain(destination, "tool extraction directory");
+        RejectReparsePathChain(destination, "archive extraction directory");
+        long expandedBytes = 0;
         using ZipArchive archive = ZipFile.OpenRead(zipPath);
         foreach (ZipArchiveEntry entry in archive.Entries)
         {
@@ -104,42 +108,32 @@ internal static class SafePaths
             if (string.IsNullOrEmpty(normalized))
                 continue;
             if (Path.IsPathRooted(normalized) || normalized.Contains(':'))
-                throw new InstallerException("A downloaded tool archive contains an unsafe path.");
+                throw new InstallerException("A downloaded archive contains an unsafe path.");
             string output = CombineDescendant(destination, normalized);
             bool directory = normalized.EndsWith(Path.DirectorySeparatorChar);
             if (directory)
             {
                 RejectReparsePathChain(Path.GetDirectoryName(output)!,
-                    "tool extraction output directory");
+                    "archive extraction output directory");
                 Directory.CreateDirectory(output);
-                RejectReparsePathChain(output, "tool extraction output directory");
+                RejectReparsePathChain(output, "archive extraction output directory");
                 continue;
             }
             RejectReparsePathChain(Path.GetDirectoryName(output)!,
-                "tool extraction output directory");
+                "archive extraction output directory");
             Directory.CreateDirectory(Path.GetDirectoryName(output)!);
             using Stream input = entry.Open();
             using FileStream target = new(output, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            input.CopyTo(target);
-        }
-    }
-
-    internal static void CopyDirectory(string source, string destination)
-    {
-        RejectReparsePathChain(source, "runtime source directory");
-        RejectReparsePathChain(Path.GetDirectoryName(destination)!,
-            "runtime destination parent directory");
-        Directory.CreateDirectory(destination);
-        RejectReparsePathChain(destination, "runtime destination directory");
-        foreach (string directory in Directory.EnumerateDirectories(source, "*", SearchOption.TopDirectoryOnly))
-        {
-            RejectReparsePoint(directory, "runtime source directory");
-            CopyDirectory(directory, Path.Combine(destination, Path.GetFileName(directory)));
-        }
-        foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.TopDirectoryOnly))
-        {
-            RejectReparsePoint(file, "runtime source file");
-            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: false);
+            byte[] buffer = new byte[128 * 1024];
+            int read;
+            while ((read = input.Read(buffer, 0, buffer.Length)) != 0)
+            {
+                checked { expandedBytes += read; }
+                if (expandedBytes > maximumExpandedBytes)
+                    throw new InstallerException(
+                        "A downloaded archive exceeded its safe expanded-size limit.");
+                target.Write(buffer, 0, read);
+            }
         }
     }
 

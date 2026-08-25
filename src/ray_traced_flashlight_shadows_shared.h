@@ -340,6 +340,15 @@ UVSR_FLASHLIGHT_SHADOW_INLINE RayTracedFlashlightShadowEncoding
 
 namespace uvsr
 {
+    [[nodiscard]] constexpr bool
+        IsRayTracedFlashlightReceiverSampleCountSupported(
+            std::uint32_t sampleCount)
+    {
+        return sampleCount == 1u || sampleCount == 2u ||
+            sampleCount == 4u || sampleCount == 8u ||
+            sampleCount == 16u;
+    }
+
     struct RayTracedFlashlightTextureShape
     {
         std::uint32_t width = 0u;
@@ -362,7 +371,8 @@ namespace uvsr
             shape.depth == 1u &&
             shape.arraySize == 1u &&
             shape.mipLevels > 0u &&
-            shape.sampleCount == 1u &&
+            IsRayTracedFlashlightReceiverSampleCountSupported(
+                shape.sampleCount) &&
             shape.shaderResource;
     }
 
@@ -374,7 +384,8 @@ namespace uvsr
         return IsRayTracedFlashlightTextureShapeValid(reference) &&
             IsRayTracedFlashlightTextureShapeValid(candidate) &&
             reference.width == candidate.width &&
-            reference.height == candidate.height;
+            reference.height == candidate.height &&
+            reference.sampleCount == candidate.sampleCount;
     }
 }
 

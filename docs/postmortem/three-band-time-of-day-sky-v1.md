@@ -24,27 +24,16 @@ visual evaluation. No version received product acceptance.
 Retirement is therefore the correct outcome. A future experiment may reuse
 isolated components, but it should not continue tuning this orbit implementation.
 
-## Archive Identity
+## Immutable Identity
 
 - Lineage base: `3087874cc89853eeecaa3c81e24d4ca49b6aa0a1`
   (`feat: add collision-aware camera modes`).
 - Exact rejected implementation checkpoint:
   `c58956327d5cca26f6a36d20daf4d5d2e03cf74f`.
-- Archive branch:
-  `archive/three-band-time-of-day-sky-v1-3087874`.
-- Last camera-relative candidate title: `time-3087874-2059`.
-- Last fixed-world candidate title: `orbit-3087874-2128`.
 
-The runtime titles contain the dirty build's embedded base commit, not the later
-checkpoint SHA. The checkpoint records the exact source that produced the last
-candidate; the archive branch adds only retirement documentation and evidence.
-The archive branch is published for inspection. The rejected implementation was
-never merged into or promoted as Canonical.
-
-At retirement, the experiment base was three first-parent commits behind the
-then-current `origin/main` and eight commits behind in the complete ancestry
-graph. A successor must select the newest Canonical verified checkpoint at that
-future time rather than treating this archive as a base.
+The checkpoint records the exact rejected source. No accepted runtime artifact
+hash exists. A successor must select the newest verified product checkpoint at
+that future time rather than treating the rejected implementation as a base.
 
 ## Intended Product Contract
 
@@ -66,8 +55,8 @@ world anchored while the camera moved, and hand off cleanly to the other body.
 
 ## Reconstructed Development Chronology
 
-Intermediate orbit revisions were not committed separately. This chronology is
-reconstructed from the task feedback, retained screenshots, and final source.
+Only the final rejected orbit has an immutable checkpoint. This chronology is
+reconstructed from retained feedback, screenshots, and that source.
 
 1. **Night-Mode Prototype:** The first implementation added a three-band sky,
    stars, and a soft moon. Follow-up tuning addressed day color, night brightness,
@@ -199,8 +188,8 @@ coordinate model.
 
 ## Required Order for a Successor Experiment
 
-1. **Select the Base:** Start from the newest Canonical verified checkpoint, in
-   a new branch and isolated worktree.
+1. **Select the Base:** Start a new isolated experiment from the newest verified
+   product checkpoint.
 2. **Define One Horizon:** Choose and document the world, view, and occlusion
    semantics before writing time or lighting logic.
 3. **Build an Unlit Orbit Probe:** Render only a debug arc and markers for start,
@@ -221,23 +210,16 @@ coordinate model.
 10. **Add Secondary Celestials Last:** Moon detail, stars, halo controls, and UI
     polish come only after the orbit and atmosphere are accepted together.
 
-## How to Inspect or Reuse the Archive
+## How to Inspect or Reuse the Checkpoint
 
-The exact failed implementation is checkpoint `c589563`. Inspect a component
-without restoring the entire branch, for example:
+The exact failed implementation is checkpoint `c589563`. Inspect only named
+paths, for example:
 
 ```powershell
 git show c589563:src/procedural_sky_ps.hlsl
 git show c589563:src/procedural_sky_settings.h
 ```
 
-To resume the exact archived state for diagnosis, create a detached worktree
-from the immutable checkpoint. Do not use it as the base for a successor:
-
-```powershell
-git worktree add --detach <diagnostic-path> c589563
-```
-
-For a clean successor, select the newest Canonical verified checkpoint at that
-future time and create a new branch from it. Extract only individually reviewed
-components from this archive after the bare orbit probe passes.
+The full commit and named paths are the sole source-recovery authority. For a
+successor, select the newest verified product checkpoint and extract only
+individually reviewed components after the bare orbit probe passes.

@@ -1,6 +1,6 @@
 #include "world_space_representation.h"
+#include "renderer_log.h"
 
-#include <donut/core/log.h>
 #include <donut/core/math/math.h>
 #include <donut/engine/Scene.h>
 #include <donut/engine/SceneGraph.h>
@@ -153,8 +153,10 @@ namespace uvsr
                 const MaterialDomain domain = geometry->material
                     ? geometry->material->domain
                     : MaterialDomain::Count;
-                if (domain != MaterialDomain::Opaque &&
-                    domain != MaterialDomain::AlphaTested)
+                if (!IsRayVisibilityMaterialDomainSupported(
+                        domain,
+                        MaterialDomain::Opaque,
+                        MaterialDomain::AlphaTested))
                 {
                     continue;
                 }
@@ -178,7 +180,9 @@ namespace uvsr
 
                 const nvrhi::rt::GeometryFlags geometryFlags =
                     geometry->material &&
-                        geometry->material->domain == MaterialDomain::Opaque
+                        IsRayVisibilityMaterialDomainOpaque(
+                            geometry->material->domain,
+                            MaterialDomain::Opaque)
                     ? nvrhi::rt::GeometryFlags::Opaque
                     : nvrhi::rt::GeometryFlags::None;
                 description.addBottomLevelGeometry(
@@ -260,8 +264,7 @@ namespace uvsr
             m_Status.state = WorldSpaceRepresentationState::Unsupported;
             return;
         }
-        if (invalidation ==
-            WorldSpaceRepresentationInvalidation::BlasAndTlas)
+        if (!RetainsRayVisibilityGeometryMap(invalidation))
         {
             Reset();
             return;
@@ -382,22 +385,21 @@ namespace uvsr
                     continue;
                 }
 
-                if (!IsRayVisibilityGeometryMapOffsetSupported(
-                        m_GeometryIndexMapUpload.size()))
+                BlasRecord record;
+                if (!TryResolveRayVisibilityGeometryMapOffset(
+                        m_GeometryIndexMapUpload.size(),
+                        record.geometryMapOffset))
                 {
                     Fail("the geometry index map exceeded the DXR 24-bit "
                         "instance contribution limit");
                     return false;
                 }
 
-                BlasRecord record;
                 record.mesh = mesh;
                 record.dynamic = bool(mesh->skinPrototype) ||
                     mesh->isMorphTargetAnimationMesh;
                 record.topologySignature =
                     GetMeshTopologySignature(*mesh);
-                record.geometryMapOffset = uint32_t(
-                    m_GeometryIndexMapUpload.size());
                 record.description = std::move(description);
                 m_GeometryIndexMapUpload.insert(
                     m_GeometryIndexMapUpload.end(),

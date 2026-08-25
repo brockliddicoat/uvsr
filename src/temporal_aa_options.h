@@ -125,41 +125,6 @@ namespace uvsr
         Count
     };
 
-    enum class TemporalAaMotionSourceOverride : uint32_t
-    {
-        FromPreset,
-        Center,
-        ClosestCross,
-        CenterFirstEdgeDilation,
-        Count
-    };
-
-    enum class TemporalAaCurrentReconstructionOverride : uint32_t
-    {
-        FromPreset,
-        Direct,
-        DeJittered,
-        Count
-    };
-
-    enum class TemporalAaHistoryFilterOverride : uint32_t
-    {
-        FromPreset,
-        Bilinear,
-        OneSampleBicubic,
-        FiveTapCatmullRom,
-        NineTapCatmullRom,
-        Count
-    };
-
-    enum class TemporalAaRectificationOverride : uint32_t
-    {
-        FromPreset,
-        PairRgb,
-        VarianceYCoCg,
-        Count
-    };
-
     enum class TemporalAaHistoryStorageOverride : uint32_t
     {
         FromTemporalCost,
@@ -232,25 +197,13 @@ namespace uvsr
 
     struct TemporalAaAlgorithmOverrides
     {
-        TemporalAaMotionSourceOverride motionSource =
-            TemporalAaMotionSourceOverride::FromPreset;
-        TemporalAaCurrentReconstructionOverride currentReconstruction =
-            TemporalAaCurrentReconstructionOverride::FromPreset;
-        TemporalAaHistoryFilterOverride historyFilter =
-            TemporalAaHistoryFilterOverride::FromPreset;
-        TemporalAaRectificationOverride rectification =
-            TemporalAaRectificationOverride::FromPreset;
         int32_t historyFrames = -1;
         float historyStrength = -1.f;
 
         [[nodiscard]] constexpr bool operator==(
             const TemporalAaAlgorithmOverrides& other) const
         {
-            return motionSource == other.motionSource &&
-                currentReconstruction == other.currentReconstruction &&
-                historyFilter == other.historyFilter &&
-                rectification == other.rectification &&
-                historyFrames == other.historyFrames &&
+            return historyFrames == other.historyFrames &&
                 historyStrength == other.historyStrength;
         }
 
@@ -337,16 +290,13 @@ namespace uvsr
         bool enabled = false;
         AntiAliasingQuality quality = AntiAliasingQuality::Medium;
         uint32_t sampleCount = 4u;
-        bool perSampleRayTracedShadows = true;
 
         [[nodiscard]] constexpr bool operator==(
             const MsaaSettings& other) const
         {
             return enabled == other.enabled &&
                 quality == other.quality &&
-                sampleCount == other.sampleCount &&
-                perSampleRayTracedShadows ==
-                    other.perSampleRayTracedShadows;
+                sampleCount == other.sampleCount;
         }
 
     };
@@ -544,38 +494,61 @@ namespace uvsr
         settings.quality = SanitizeAntiAliasingQuality(quality);
         settings.sampleCount =
             GetMultisampleQualitySampleCount(settings.quality);
-        settings.perSampleRayTracedShadows = true;
     }
 
     [[nodiscard]] inline constexpr bool MatchesMultisampleQualityPreset(
         const MsaaSettings& settings)
     {
         return settings.sampleCount ==
-                GetMultisampleQualitySampleCount(settings.quality) &&
-            settings.perSampleRayTracedShadows;
-    }
-
-    [[nodiscard]] inline constexpr bool
-        ShouldUsePerSampleRayTracedShadows(
-            const MsaaSettings& settings,
-            uint32_t rasterSampleCount)
-    {
-        return rasterSampleCount > 1u &&
-            settings.perSampleRayTracedShadows;
+                GetMultisampleQualitySampleCount(settings.quality);
     }
 
     [[nodiscard]] inline constexpr uint32_t
         GetTemporalAaBlendPermutationIndex(
             const TemporalAaOptions& options)
     {
-        uint32_t index = static_cast<uint32_t>(options.motionSource);
-        index = index * TemporalAaCurrentReconstructionCount +
-            static_cast<uint32_t>(options.currentReconstruction);
-        index = index * TemporalAaHistoryFilterCount +
-            static_cast<uint32_t>(options.historyFilter);
-        index = index * TemporalAaRectificationCount +
-            static_cast<uint32_t>(options.rectification);
-        return index;
+        if (options.motionSource == TemporalAaMotionSource::Center &&
+            options.currentReconstruction ==
+                TemporalAaCurrentReconstruction::Direct &&
+            options.historyFilter == TemporalAaHistoryFilter::Bilinear &&
+            options.rectification == TemporalAaRectification::PairRgb)
+        {
+            return 0u;
+        }
+        if (options.motionSource ==
+                TemporalAaMotionSource::CenterFirstEdgeDilation &&
+            options.currentReconstruction ==
+                TemporalAaCurrentReconstruction::Direct &&
+            options.historyFilter == TemporalAaHistoryFilter::Bilinear &&
+            options.rectification == TemporalAaRectification::PairRgb)
+        {
+            return 1u;
+        }
+        if (options.motionSource ==
+                TemporalAaMotionSource::CenterFirstEdgeDilation &&
+            options.currentReconstruction ==
+                TemporalAaCurrentReconstruction::Direct &&
+            options.historyFilter ==
+                TemporalAaHistoryFilter::OneSampleBicubic &&
+            options.rectification ==
+                TemporalAaRectification::VarianceYCoCg)
+        {
+            return 2u;
+        }
+        if (options.motionSource ==
+                TemporalAaMotionSource::CenterFirstEdgeDilation &&
+            options.currentReconstruction ==
+                TemporalAaCurrentReconstruction::DeJittered &&
+            options.historyFilter ==
+                TemporalAaHistoryFilter::FiveTapCatmullRom &&
+            options.rectification ==
+                TemporalAaRectification::VarianceYCoCg)
+        {
+            return 3u;
+        }
+        // Removed research combinations resolve to the Medium recipe. The UI
+        // and persistence layers remove their selectors in the same cut.
+        return 1u;
     }
 
     [[nodiscard]] inline constexpr uint32_t
@@ -657,76 +630,6 @@ namespace uvsr
         float value)
     {
         return value < 0.f ? 0.f : value > 2.f ? 2.f : value;
-    }
-
-    [[nodiscard]] inline constexpr TemporalAaMotionSource
-        ResolveMotionSourceOverride(
-            TemporalAaMotionSource preset,
-            TemporalAaMotionSourceOverride value)
-    {
-        switch (value)
-        {
-        case TemporalAaMotionSourceOverride::Center:
-            return TemporalAaMotionSource::Center;
-        case TemporalAaMotionSourceOverride::ClosestCross:
-            return TemporalAaMotionSource::ClosestCross;
-        case TemporalAaMotionSourceOverride::CenterFirstEdgeDilation:
-            return TemporalAaMotionSource::CenterFirstEdgeDilation;
-        default:
-            return preset;
-        }
-    }
-
-    [[nodiscard]] inline constexpr TemporalAaCurrentReconstruction
-        ResolveCurrentReconstructionOverride(
-            TemporalAaCurrentReconstruction preset,
-            TemporalAaCurrentReconstructionOverride value)
-    {
-        switch (value)
-        {
-        case TemporalAaCurrentReconstructionOverride::Direct:
-            return TemporalAaCurrentReconstruction::Direct;
-        case TemporalAaCurrentReconstructionOverride::DeJittered:
-            return TemporalAaCurrentReconstruction::DeJittered;
-        default:
-            return preset;
-        }
-    }
-
-    [[nodiscard]] inline constexpr TemporalAaHistoryFilter
-        ResolveHistoryFilterOverride(
-            TemporalAaHistoryFilter preset,
-            TemporalAaHistoryFilterOverride value)
-    {
-        switch (value)
-        {
-        case TemporalAaHistoryFilterOverride::Bilinear:
-            return TemporalAaHistoryFilter::Bilinear;
-        case TemporalAaHistoryFilterOverride::OneSampleBicubic:
-            return TemporalAaHistoryFilter::OneSampleBicubic;
-        case TemporalAaHistoryFilterOverride::FiveTapCatmullRom:
-            return TemporalAaHistoryFilter::FiveTapCatmullRom;
-        case TemporalAaHistoryFilterOverride::NineTapCatmullRom:
-            return TemporalAaHistoryFilter::NineTapCatmullRom;
-        default:
-            return preset;
-        }
-    }
-
-    [[nodiscard]] inline constexpr TemporalAaRectification
-        ResolveRectificationOverride(
-            TemporalAaRectification preset,
-            TemporalAaRectificationOverride value)
-    {
-        switch (value)
-        {
-        case TemporalAaRectificationOverride::PairRgb:
-            return TemporalAaRectification::PairRgb;
-        case TemporalAaRectificationOverride::VarianceYCoCg:
-            return TemporalAaRectification::VarianceYCoCg;
-        default:
-            return preset;
-        }
     }
 
     [[nodiscard]] inline constexpr TemporalAaHistoryStorage
@@ -847,19 +750,6 @@ namespace uvsr
         result.depthValidation = temporal.nearestTexelDepth
             ? TemporalAaDepthValidation::NearestTexel
             : TemporalAaDepthValidation::FourTexelFootprint;
-        result.temporal.motionSource = ResolveMotionSourceOverride(
-            result.temporal.motionSource,
-            temporal.algorithmOverrides.motionSource);
-        result.temporal.currentReconstruction =
-            ResolveCurrentReconstructionOverride(
-                result.temporal.currentReconstruction,
-                temporal.algorithmOverrides.currentReconstruction);
-        result.temporal.historyFilter = ResolveHistoryFilterOverride(
-            result.temporal.historyFilter,
-            temporal.algorithmOverrides.historyFilter);
-        result.temporal.rectification = ResolveRectificationOverride(
-            result.temporal.rectification,
-            temporal.algorithmOverrides.rectification);
         result.historyStorage = ResolveHistoryStorageOverride(
             result.historyStorage,
             temporal.behaviorOverrides.historyStorage);

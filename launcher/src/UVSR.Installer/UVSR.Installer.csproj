@@ -6,7 +6,7 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AssemblyName>UVSR-Launcher</AssemblyName>
+    <AssemblyName>uvsr-launcher</AssemblyName>
     <RootNamespace>UvsrInstaller</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
@@ -16,10 +16,11 @@
     <PublishTrimmed>false</PublishTrimmed>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <DebugType>embedded</DebugType>
-    <Version>1.1.14</Version>
-    <FileVersion>1.1.14.0</FileVersion>
-    <AssemblyVersion>1.1.14.0</AssemblyVersion>
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <DebugSymbols Condition="'$(Configuration)' == 'Release'">false</DebugSymbols>
+    <Version>1.2.0</Version>
+    <FileVersion>1.2.0.0</FileVersion>
+    <AssemblyVersion>1.2.0.0</AssemblyVersion>
     <Product>UVSR Launcher</Product>
     <Description>Installs, launches, updates, and removes UVSR on Windows 11.</Description>
     <Company>UVSR</Company>
@@ -33,13 +34,27 @@
                       LogicalName="UVSR.Installer.Notices.DotNetThirdParty.txt" />
     <EmbeddedResource Include="..\..\..\LICENSE.md"
                       LogicalName="UVSR.Installer.Notices.UvsrLicense.md" />
+    <EmbeddedResource Include="..\..\..\cmake\runtime-shader-inventory.def"
+                      LogicalName="UVSR.Installer.RuntimeShaderInventory.def" />
+    <EmbeddedResource Include="..\..\..\cmake\runtime-media-inventory.def"
+                      LogicalName="UVSR.Installer.RuntimeMediaInventory.def" />
     <EmbeddedResource Include="..\..\..\assets\fonts\noto-sans\NotoSans-Regular.ttf"
                       LogicalName="UVSR.Installer.Fonts.NotoSans.Regular.ttf" />
     <EmbeddedResource Include="..\..\..\assets\fonts\noto-sans\NotoSans-Bold.ttf"
                       LogicalName="UVSR.Installer.Fonts.NotoSans.Bold.ttf" />
     <EmbeddedResource Include="..\..\..\assets\fonts\noto-sans\OFL.txt"
                       LogicalName="UVSR.Installer.Notices.NotoSansOfl.txt" />
-    <EmbeddedResource Include="RendererBridges\uvsr-public-main-0c807484.patch"
-                      LogicalName="UVSR.Installer.RendererBridges.uvsr-public-main-0c807484.patch" />
   </ItemGroup>
+  <Target Name="VerifyDotNetNoticeInputs" BeforeTargets="CoreCompile">
+    <GetFileHash Files="$(NetCoreRoot)LICENSE.txt" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_DotNetLicenseInput" />
+    </GetFileHash>
+    <GetFileHash Files="$(NetCoreRoot)ThirdPartyNotices.txt" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="_DotNetThirdPartyInput" />
+    </GetFileHash>
+    <Error Condition="'%(_DotNetLicenseInput.FileHash)' != '7F6839A61CE892B79C6549E2DC5A81FDBD240A0B260F8881216B45B7FDA8B45D'"
+           Text="The pinned .NET SDK license input changed." />
+    <Error Condition="'%(_DotNetThirdPartyInput.FileHash)' != 'DEB4427A295E1ED474B0D81C5A0D972C1B550B9A715CDA939CDFA9236B1B418F'"
+           Text="The pinned .NET SDK third-party notice input changed." />
+  </Target>
 </Project>

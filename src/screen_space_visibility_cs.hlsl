@@ -1,6 +1,5 @@
 #pragma pack_matrix(row_major)
 
-#include <donut/shaders/binding_helpers.hlsli>
 #include "radial_visibility_mask.hlsli"
 #include "visibility_estimator_shared.h"
 #include "visibility_projection_shared.h"
@@ -54,16 +53,16 @@ Texture2D<float4> t_SourceRadiance : register(t2);
 Texture2DArray<float> t_Noise : register(t3);
 Texture2D<uint> t_AttemptMask : register(t4);
 #if ENABLE_AO
-VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
+RWTexture2D<float> u_AmbientVisibility : register(u0);
 #endif
 #if ENABLE_GI
-VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
+RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 #endif
 #if OUTPUT_AO_HIT_DISTANCE
-VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientHitDistance : register(u2);
+RWTexture2D<float> u_AmbientHitDistance : register(u2);
 #endif
 #if OUTPUT_GI_HIT_DISTANCE
-VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_IndirectHitDistance : register(u4);
+RWTexture2D<float> u_IndirectHitDistance : register(u4);
 #endif
 
 static const float VisibilityPi = 3.14159265358979323846f;

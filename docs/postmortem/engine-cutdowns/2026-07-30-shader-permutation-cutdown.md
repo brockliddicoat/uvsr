@@ -45,7 +45,7 @@ executed by the GPU.
 | `58813cb94054` | 2026-07-20 | 98 | 16,220 | TAA developer experiments created a large Cartesian product before entering production. |
 | `553e60491018` | 2026-07-20 | 2,214 | Not Recorded | Fixed visibility specialization moved the production catalog above 2,000. |
 | `bcf4f7e4ade9` | 2026-07-29 | 3,120 | 13,107 | Baseline immediately before the first retirement batch. |
-| `b63cda9639de` | 2026-07-30 | 311 | 2,809 | First retirement batch committed on `codex/prune-shader-paths`. |
+| `b63cda9639de` | 2026-07-30 | 311 | 2,809 | First retirement batch; the commit is the recovery point. |
 
 The first batch removed 2,809 production permutations, a 90.03% reduction, and
 10,298 developer permutations, a 78.57% reduction.
@@ -289,8 +289,8 @@ The original continuous record reserved this structure for later batches:
 ## Historical Restoration Boundary
 
 The source of truth for this snapshot is Git history at `519306c`, with the
-Batch-One-only state at `b63cda9` and the detailed completed plan at
-`docs/exec-plans/completed/shader-path-retirement-runtime-only.md`.
+Batch-One-only state at `b63cda9`. Those commits and named paths are the sole
+recovery authority.
 
 Do not copy only a shader wrapper from this state. Restore its CPU settings,
 manifest axes, bindings, resources, UI, packaging, tests, and evidence contract

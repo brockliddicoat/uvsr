@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace UvsrInstaller;
 
@@ -29,13 +28,6 @@ internal enum LauncherRecoveryPackageStatus
 
 internal sealed class LauncherManager
 {
-    private static readonly JsonSerializerOptions LegacyLauncherFeedOptions = new()
-    {
-        PropertyNameCaseInsensitive = false,
-        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
-        RespectNullableAnnotations = true
-    };
-
     private readonly InstallerPaths _paths;
     private readonly ProcessRunner _runner;
     private readonly DownloadManager _downloads;
@@ -57,9 +49,9 @@ internal sealed class LauncherManager
         _downloads = downloads;
         _launcherFeedPublicKeySpki = launcherFeedPublicKeySpki?.ToArray() ??
             Convert.FromBase64String(
-                ProductConstants.LauncherUpdateFeedPublicKeySpkiBase64);
+                ProductConstants.UpdateFeedPublicKeySpkiBase64);
         _launcherFeedKeyId = launcherFeedKeyId ??
-            ProductConstants.LauncherUpdateFeedKeyId;
+            ProductConstants.UpdateFeedKeyId;
     }
 
     internal LauncherState? TryReadState(Guid installationId)
@@ -81,6 +73,7 @@ internal sealed class LauncherManager
         bool defaultDesktopShortcut,
         InstallLog? log = null)
     {
+        MigrateKnownOldLauncherPackages(installationId, log);
         bool stateFileExists = File.Exists(_paths.LauncherStateFile);
         bool malformed = false;
         bool unverifiable = false;
@@ -178,7 +171,7 @@ internal sealed class LauncherManager
     {
         ComponentUpdateStatus launcher;
         progress?.Report(new InstallerProgress("Checking UVSR Launcher",
-            "Authenticating the unsigned launcher update feed."));
+            "Authenticating the signed launcher update feed."));
         try
         {
             LauncherFeed feed = await DownloadLauncherFeedAsync(progress, log,
@@ -199,7 +192,7 @@ internal sealed class LauncherManager
                     currentIdentity);
             launcher = CreateLauncherUpdateStatus(currentIdentity,
                 recordedStateHealthy, feed);
-            log.Write($"Authenticated unsigned launcher update feed validated at " +
+            log.Write($"Signed launcher update feed validated at " +
                       $"{ProductConstants.LauncherFeedUrl}: running/defensible " +
                       $"{currentIdentity.Version} sequence {currentIdentity.ReleaseSequence}; " +
                       $"published {feed.Version} sequence {feed.ReleaseSequence}; " +
@@ -208,94 +201,58 @@ internal sealed class LauncherManager
         catch (Exception ex) when (ex is InstallerException or IOException or UnauthorizedAccessException)
         {
             string reason = InstallLog.DescribeException(ex);
-            log.Write($"Authenticated unsigned launcher update check failed at " +
+            log.Write($"Signed launcher update check failed at " +
                       $"{ProductConstants.LauncherFeedUrl}: {reason}");
             launcher = new ComponentUpdateStatus(UpdateComponent.Launcher,
                 ComponentUpdateState.CheckFailed,
                 TryCurrentLauncherVersion(marker.InstallationId), null,
-                $"UVSR Launcher authenticated unsigned update check failed at " +
+                $"UVSR Launcher signed update check failed at " +
                 $"{ProductConstants.LauncherFeedUrl}. Running launcher: " +
                 $"{ProductConstants.LauncherVersion} (sequence " +
                 $"{ProductConstants.LauncherReleaseSequence}). Reason: {reason}");
         }
 
         ComponentUpdateStatus uvsr;
-        string uvsrUpdateSource = ProductConstants.RepositoryMainApi;
         progress?.Report(new InstallerProgress("Checking UVSR",
-            "Looking for a newer renderer version."));
+            "Authenticating the renderer package feed."));
         try
         {
-            string publicCommit = await DownloadMainCommitAsync(progress, log,
+            RendererFeed feed = await DownloadRendererFeedAsync(progress, log,
                 cancellationToken);
-            RendererSourceBridge? bridge =
-                RendererSourceBridgeRegistry.FindForPublicBase(publicCommit);
-            RendererBuildContract contract;
-            string sourceCommit;
-            if (bridge is null)
-            {
-                uvsrUpdateSource = SourceManager.BuildRendererBuildContractUri(
-                    publicCommit).AbsoluteUri;
-                contract = await DownloadRendererBuildContractAsync(
-                    publicCommit, progress, log, cancellationToken);
-                sourceCommit = publicCommit;
-            }
-            else
-            {
-                uvsrUpdateSource = $"embedded renderer bridge " +
-                    $"'{RendererSourceBridge.BridgeId}'";
-                bridge.LoadVerifiedPatch();
-                contract = bridge.Contract;
-                sourceCommit = RendererSourceBridge.SourceCommit;
-                SourceManager.ValidateSupportedRendererBuildContract(contract,
-                    sourceCommit, log, uvsrUpdateSource);
-                log.Write($"Selected embedded renderer source bridge " +
-                          $"'{RendererSourceBridge.BridgeId}' for public base " +
-                          $"{publicCommit}; patch SHA-256 " +
-                          $"{RendererSourceBridge.PatchSha256}, resulting tree " +
-                          $"{RendererSourceBridge.SourceTree}, synthetic source " +
-                          $"{sourceCommit}. No remote renderer contract request " +
-                          "was required for this exact base.");
-            }
-            ComponentUpdateState state = snapshot.IsDamaged
-                ? ComponentUpdateState.RepairNeeded
-                : !snapshot.IsInstalled
-                    ? ComponentUpdateState.NotInstalled
-                    : string.Equals(snapshot.State?.Commit, sourceCommit,
-                        StringComparison.Ordinal)
-                        ? ComponentUpdateState.Current
-                        : ComponentUpdateState.UpdateAvailable;
+            ComponentUpdateState state = ClassifyRendererUpdate(snapshot, feed);
             string detail = state switch
             {
                 ComponentUpdateState.RepairNeeded =>
-                    "UVSR needs repair; reinstalling will restore its files.",
-                ComponentUpdateState.NotInstalled => "UVSR is not installed yet.",
-                ComponentUpdateState.Current => "UVSR is up to date.",
-                _ => "A newer UVSR version is available."
+                    "UVSR Engine needs repair; reinstalling restores its signed package.",
+                ComponentUpdateState.NotInstalled =>
+                    $"UVSR Engine {feed.EngineVersion} is ready to install.",
+                ComponentUpdateState.Current when snapshot.State!.ReleaseSequence >
+                                                  feed.ReleaseSequence =>
+                    $"Installed UVSR Engine {snapshot.State.EngineVersion} is newer than the published package.",
+                ComponentUpdateState.Current =>
+                    $"UVSR Engine {feed.EngineVersion} is up to date.",
+                _ => $"UVSR Engine {feed.EngineVersion} is available."
             };
-            detail += bridge is null
-                ? $" Verified renderer contract '{contract.ContractId}' at " +
-                  $"{SourceManager.BuildRendererBuildContractUri(publicCommit)}."
-                : $" Verified embedded renderer bridge " +
-                  $"'{RendererSourceBridge.BridgeId}' for public base " +
-                  $"{publicCommit[..7]}; source {sourceCommit[..7]}, tree " +
-                  $"{RendererSourceBridge.SourceTree}, contract " +
-                  $"'{contract.ContractId}'.";
+            detail += $" Settings {feed.SettingsHash}; signed feed " +
+                      $"{ProductConstants.RendererFeedUrl}.";
             uvsr = new ComponentUpdateStatus(UpdateComponent.Uvsr, state,
-                snapshot.State?.Commit is string current ? current[..7] : null,
-                sourceCommit[..7], detail, UvsrCommit: sourceCommit);
+                snapshot.State?.EngineVersion,
+                feed.EngineVersion, detail, RendererFeed: feed);
+            log.Write($"Authenticated renderer feed sequence " +
+                      $"{feed.ReleaseSequence}; engine {feed.EngineVersion}; " +
+                      $"settings {feed.SettingsHash}; result {state}.");
         }
-        catch (Exception ex) when (ex is InstallerException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is InstallerException or IOException or
+                                   UnauthorizedAccessException)
         {
             string reason = InstallLog.DescribeException(ex);
-            log.Write($"UVSR update check failed at " +
-                      $"{uvsrUpdateSource}: {reason}");
+            log.Write($"Renderer update check failed at " +
+                      $"{ProductConstants.RendererFeedUrl}: {reason}");
             uvsr = new ComponentUpdateStatus(UpdateComponent.Uvsr,
                 ComponentUpdateState.CheckFailed,
-                snapshot.State?.Commit is string current ? current[..7] : null,
-                null, ex is SourceLauncherCompatibilityException
-                    ? ex.Message
-                    : $"UVSR update check failed at " +
-                      $"{uvsrUpdateSource}. Reason: {reason}");
+                snapshot.State?.EngineVersion, null,
+                $"UVSR renderer update check failed at " +
+                $"{ProductConstants.RendererFeedUrl}. Reason: {reason}");
         }
         return new UpdateCheckResult(uvsr, launcher);
     }
@@ -325,15 +282,17 @@ internal sealed class LauncherManager
         CancellationToken cancellationToken)
     {
         ValidateFeed(feed);
-        string downloaded = Path.Combine(_paths.DownloadsDirectory,
-            $"launcher-{feed.ReleaseSequence}-{feed.Artifact.Sha256}.exe");
+        string downloaded = GetLauncherDownloadPath(_paths, feed);
+        Directory.CreateDirectory(Path.GetDirectoryName(downloaded)!);
+        SafePaths.RejectReparsePathChain(Path.GetDirectoryName(downloaded)!,
+            "launcher update download directory");
         Uri artifact = BuildArtifactUri(feed);
         progress?.Report(new InstallerProgress("Downloading UVSR Launcher",
-            $"Downloading authenticated unsigned UVSR Launcher {feed.Version}."));
+            $"Downloading signed-feed UVSR Launcher {feed.Version}."));
         await _downloads.DownloadAndVerifyAsync(artifact, downloaded,
             feed.Artifact.Sha256, ProductConstants.MaximumLauncherBytes,
             progress, log, cancellationToken,
-            NativeMethods.VerifyLauncherIsAuthenticodeUnsigned,
+            NativeMethods.VerifyLauncherAuthenticodePolicy,
             "Downloading UVSR Launcher");
         if (new FileInfo(downloaded).Length != feed.Artifact.Size)
             throw new InstallerException("The launcher download did not match its published size.");
@@ -347,7 +306,7 @@ internal sealed class LauncherManager
         {
             health = await _runner.RunAsync(downloaded,
                 new[] { "--launcher-health-check", feed.ReleaseSequence.ToString(), feed.Version },
-                Path.GetDirectoryName(downloaded), null, log, healthTimeout.Token);
+                Path.GetDirectoryName(downloaded), log, healthTimeout.Token);
         }
         catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
@@ -361,11 +320,22 @@ internal sealed class LauncherManager
             desktopShortcut, log);
     }
 
+    internal static string GetLauncherDownloadPath(
+        InstallerPaths paths,
+        LauncherFeed feed)
+    {
+        ValidateFeed(feed);
+        string directory = SafePaths.CombineDescendant(paths.DownloadsDirectory,
+            $"launcher-update-{feed.ReleaseSequence}-{feed.Artifact.Sha256}");
+        return SafePaths.CombineDescendant(directory,
+            ProductConstants.LauncherExecutableName);
+    }
+
     internal Guid Activate(
         Guid installationId,
         LauncherState candidate,
         InstallState? rendererState,
-        ShellIntegration shell,
+        IInstallerShell shell,
         bool continueUvsrUpdate,
         InstallLog log,
         bool allowMalformedStateReplacement = false)
@@ -453,7 +423,7 @@ internal sealed class LauncherManager
     internal void Recover(
         Guid installationId,
         InstallState? rendererState,
-        ShellIntegration shell,
+        IInstallerShell shell,
         InstallLog log)
     {
         if (!File.Exists(_paths.LauncherTransactionFile))
@@ -736,70 +706,15 @@ internal sealed class LauncherManager
         return feed;
     }
 
-    internal static LegacyLauncherFeed ParseAndValidateLegacyFeed(byte[] data)
-    {
-        if (data.LongLength is <= 0 or > ProductConstants.MaximumLauncherFeedBytes)
-            throw new InstallerException(
-                "The legacy launcher update feed was empty or too large.");
-        try
-        {
-            LauncherUpdateFeedVerifier.RejectDuplicateJsonProperties(data);
-            if (TryDeserializeLegacyFeed(data, JsonStore.Options,
-                    out LegacyLauncherFeed? canonical,
-                    out Exception? canonicalFailure))
-            {
-                ValidateLegacyFeed(canonical!);
-                return canonical!;
-            }
-            if (TryDeserializeLegacyFeed(data, LegacyLauncherFeedOptions,
-                    out LegacyLauncherFeed? legacy,
-                    out Exception? legacyFailure))
-            {
-                ValidateLegacyFeed(legacy!);
-                return legacy!;
-            }
-            throw new InstallerException(
-                "The legacy launcher update feed did not use the required canonical " +
-                "camelCase or supported legacy PascalCase schema. Canonical " +
-                $"schema: {canonicalFailure!.Message} Legacy schema: " +
-                $"{legacyFailure!.Message}",
-                new AggregateException(canonicalFailure!, legacyFailure!));
-        }
-        catch (InstallerException)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
-        {
-            throw new InstallerException(
-                "The legacy launcher update feed was invalid.", ex);
-        }
-    }
-
-    private static LegacyLauncherFeed DeserializeLegacyFeed(
+    internal static RendererFeed ParseAndValidateRendererFeed(
         byte[] data,
-        JsonSerializerOptions options) =>
-        JsonSerializer.Deserialize<LegacyLauncherFeed>(data, options)
-        ?? throw new JsonException("The feed was empty.");
-
-    private static bool TryDeserializeLegacyFeed(
-        byte[] data,
-        JsonSerializerOptions options,
-        out LegacyLauncherFeed? feed,
-        out Exception? failure)
+        byte[] trustedPublicKeySpki,
+        string trustedKeyId)
     {
-        try
-        {
-            feed = DeserializeLegacyFeed(data, options);
-            failure = null;
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
-        {
-            feed = null;
-            failure = ex;
-            return false;
-        }
+        RendererFeed feed = LauncherUpdateFeedVerifier.VerifyRendererAndParse(
+            data, trustedPublicKeySpki, trustedKeyId);
+        RendererPackageContract.ValidateFeed(feed);
+        return feed;
     }
 
     internal static ComponentUpdateStatus CreateLauncherUpdateStatus(
@@ -818,54 +733,25 @@ internal sealed class LauncherManager
                 $"Running UVSR Launcher {currentIdentity.Version} (sequence " +
                 $"{currentIdentity.ReleaseSequence}) is newer than published " +
                 $"{feed.Version} (sequence {feed.ReleaseSequence}). No launcher " +
-                $"update is needed. Checked the authenticated unsigned update " +
+                $"update is needed. Checked the signed update " +
                 $"feed at {ProductConstants.LauncherFeedUrl}.",
             ComponentUpdateState.Current =>
                 $"UVSR Launcher {currentIdentity.Version} (sequence " +
                 $"{currentIdentity.ReleaseSequence}) is up to date. Checked the " +
-                $"authenticated unsigned update feed at " +
+                $"signed update feed at " +
                 $"{ProductConstants.LauncherFeedUrl}.",
             ComponentUpdateState.RepairNeeded =>
                 $"UVSR Launcher needs to restore its installed files using the " +
-                $"authenticated unsigned update feed at " +
-                $"{ProductConstants.LauncherFeedUrl}. The executable is not " +
-                "Authenticode-signed; the feed signature authenticates its exact SHA-256.",
+                $"signed update feed at {ProductConstants.LauncherFeedUrl}. " +
+                "The exact SHA-256 is feed-bound; valid Authenticode signatures are accepted.",
             _ =>
                 $"UVSR Launcher {feed.Version} (sequence {feed.ReleaseSequence}) " +
-                $"is available from the authenticated unsigned update feed at " +
-                $"{ProductConstants.LauncherFeedUrl}. The executable is not " +
-                "Authenticode-signed; the feed signature authenticates its exact SHA-256."
+                $"is available from the signed update feed at " +
+                $"{ProductConstants.LauncherFeedUrl}. The exact SHA-256 is feed-bound; " +
+                "valid Authenticode signatures are accepted."
         };
         return new ComponentUpdateStatus(UpdateComponent.Launcher, state,
             currentIdentity.Version, feed.Version, detail, feed);
-    }
-
-    internal static string ParseMainCommit(byte[] data)
-    {
-        if (data.LongLength is <= 0 or > ProductConstants.MaximumLauncherFeedBytes)
-            throw new InstallerException("GitHub returned an invalid UVSR update record.");
-        try
-        {
-            LauncherUpdateFeedVerifier.RejectDuplicateJsonProperties(data);
-            using JsonDocument document = JsonDocument.Parse(data);
-            JsonElement root = document.RootElement;
-            string reference = root.GetProperty("ref").GetString() ?? string.Empty;
-            JsonElement gitObject = root.GetProperty("object");
-            string type = gitObject.GetProperty("type").GetString() ?? string.Empty;
-            string commit = gitObject.GetProperty("sha").GetString() ?? string.Empty;
-            if (reference != ProductConstants.RepositoryMainRef || type != "commit" ||
-                !ProductConstants.CommitRegex().IsMatch(commit))
-                throw new InstallerException("GitHub returned an invalid UVSR main revision.");
-            return commit;
-        }
-        catch (InstallerException)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException)
-        {
-            throw new InstallerException("GitHub returned an invalid UVSR update record.", ex);
-        }
     }
 
     internal static Uri BuildArtifactUri(LauncherFeed feed)
@@ -876,10 +762,12 @@ internal sealed class LauncherManager
                        ProductConstants.LauncherArtifactName);
     }
 
-    private static bool IsUnavailableArtifactError(InstallerException ex)
+    internal static Uri BuildRendererArtifactUri(RendererFeed feed)
     {
-        return ex.Message.Contains("HTTP 404", StringComparison.OrdinalIgnoreCase) &&
-               ex.Message.Contains("download service returned", StringComparison.OrdinalIgnoreCase);
+        RendererPackageContract.ValidateFeed(feed);
+        return new Uri("https://github.com/brockliddicoat/uvsr/releases/download/" +
+                       $"uvsr-engine-r{feed.ReleaseSequence}/" +
+                       ProductConstants.RendererArtifactName);
     }
 
     private async Task<LauncherFeed> DownloadLauncherFeedAsync(
@@ -889,73 +777,52 @@ internal sealed class LauncherManager
     {
         string path = Path.Combine(_paths.DownloadsDirectory,
             "launcher-update-feed-v2.json");
-        log.Write($"Checking authenticated unsigned UVSR Launcher update source: " +
+        log.Write($"Checking signed UVSR Launcher update source: " +
                   $"{ProductConstants.LauncherFeedUrl}.");
         await _downloads.DownloadAndVerifyAsync(new Uri(ProductConstants.LauncherFeedUrl),
-            path, null, ProductConstants.MaximumLauncherFeedBytes, progress, log,
+            path, null, ProductConstants.MaximumUpdateFeedBytes, progress, log,
             cancellationToken, phase: "Checking UVSR Launcher");
         return ParseAndValidateFeed(
             await File.ReadAllBytesAsync(path, cancellationToken),
             _launcherFeedPublicKeySpki, _launcherFeedKeyId);
     }
 
-    private async Task<string> DownloadMainCommitAsync(
+    internal async Task<RendererFeed> DownloadRendererFeedAsync(
         IProgress<InstallerProgress>? progress,
         InstallLog log,
         CancellationToken cancellationToken)
     {
-        string path = Path.Combine(_paths.DownloadsDirectory, "uvsr-main-ref.json");
-        log.Write($"Checking UVSR update reference: " +
-                  $"{ProductConstants.RepositoryMainApi}.");
-        await _downloads.DownloadAndVerifyAsync(new Uri(ProductConstants.RepositoryMainApi),
-            path, null, ProductConstants.MaximumLauncherFeedBytes, progress, log,
+        string path = Path.Combine(_paths.DownloadsDirectory,
+            "renderer-update-feed-v1.json");
+        log.Write($"Checking authenticated renderer package source: " +
+                  $"{ProductConstants.RendererFeedUrl}.");
+        await _downloads.DownloadAndVerifyAsync(new Uri(ProductConstants.RendererFeedUrl),
+            path, null, ProductConstants.MaximumUpdateFeedBytes, progress, log,
             cancellationToken, phase: "Checking UVSR");
-        string commit = ParseMainCommit(await File.ReadAllBytesAsync(path, cancellationToken));
-        log.Write($"UVSR update reference {ProductConstants.RepositoryMainApi} " +
-                  $"resolved to {commit}.");
-        return commit;
+        RendererFeed feed = LauncherUpdateFeedVerifier.VerifyRendererAndParse(
+            await File.ReadAllBytesAsync(path, cancellationToken),
+            _launcherFeedPublicKeySpki, _launcherFeedKeyId);
+        RendererPackageContract.ValidateFeed(feed);
+        return feed;
     }
 
-    private async Task<RendererBuildContract> DownloadRendererBuildContractAsync(
-        string commit,
+    internal async Task<string> DownloadRendererPackageAsync(
+        RendererFeed feed,
         IProgress<InstallerProgress>? progress,
         InstallLog log,
         CancellationToken cancellationToken)
     {
-        Uri uri = SourceManager.BuildRendererBuildContractUri(commit);
+        RendererPackageContract.ValidateFeed(feed);
         string path = Path.Combine(_paths.DownloadsDirectory,
-            $"uvsr-renderer-build-contract-{commit}.json");
-        log.Write($"Checking UVSR renderer build contract: {uri}.");
-        try
-        {
-            await _downloads.DownloadAndVerifyAsync(uri, path, null,
-                ProductConstants.MaximumRendererBuildContractBytes, progress, log,
-                cancellationToken, phase: "Checking UVSR");
-        }
-        catch (InstallerException ex) when (IsUnavailableArtifactError(ex))
-        {
-            throw SourceManager.CreateSourceCompatibilityException(commit,
-                $"required contract '{uri}' is not published", ex);
-        }
-
-        try
-        {
-            RendererBuildContract contract = SourceManager.ParseRendererBuildContract(
-                await File.ReadAllBytesAsync(path, cancellationToken));
-            SourceManager.ValidateSupportedRendererBuildContract(contract, commit,
-                log, uri.AbsoluteUri);
-            return contract;
-        }
-        catch (SourceLauncherCompatibilityException)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is InstallerException or IOException or
-                                   UnauthorizedAccessException)
-        {
-            throw SourceManager.CreateSourceCompatibilityException(commit,
-                $"contract '{uri}' could not be validated ({ex.Message})", ex);
-        }
+            $"renderer-{feed.ReleaseSequence}-{feed.Artifact.Sha256}.zip");
+        Uri uri = BuildRendererArtifactUri(feed);
+        await _downloads.DownloadAndVerifyAsync(uri, path, feed.Artifact.Sha256,
+            ProductConstants.MaximumRendererPackageBytes, progress, log,
+            cancellationToken, phase: "Downloading UVSR Engine");
+        if (new FileInfo(path).Length != feed.Artifact.Size)
+            throw new InstallerException(
+                "The renderer package did not match its signed published size.");
+        return path;
     }
 
     private LauncherState StageExecutable(
@@ -1184,6 +1051,34 @@ internal sealed class LauncherManager
             : ComponentUpdateState.RepairNeeded;
     }
 
+    internal static ComponentUpdateState ClassifyRendererUpdate(
+        InstallSnapshot snapshot,
+        RendererFeed feed)
+    {
+        RendererPackageContract.ValidateFeed(feed);
+        if (snapshot.IsDamaged)
+            return ComponentUpdateState.RepairNeeded;
+        if (!snapshot.IsInstalled || snapshot.State is null)
+            return ComponentUpdateState.NotInstalled;
+        InstallState current = snapshot.State;
+        current.Validate(current.InstallationId);
+        if (feed.ReleaseSequence < current.ReleaseSequence)
+            return ComponentUpdateState.Current;
+        if (feed.ReleaseSequence > current.ReleaseSequence)
+            return ComponentUpdateState.UpdateAvailable;
+        if (!string.Equals(feed.SourceCommit, current.Commit,
+                StringComparison.Ordinal) ||
+            !string.Equals(feed.SettingsHash, current.SettingsHash,
+                StringComparison.Ordinal) ||
+            !string.Equals(feed.EngineVersion, current.EngineVersion,
+                StringComparison.Ordinal) ||
+            !string.Equals(feed.Artifact.Sha256, current.ArtifactSha256,
+                StringComparison.Ordinal))
+            throw new InstallerException(
+                "The renderer feed reused a release sequence with different files or settings.");
+        return ComponentUpdateState.Current;
+    }
+
     private LauncherReleaseIdentity CurrentProcessIdentity()
     {
         string current = Environment.ProcessPath
@@ -1302,18 +1197,61 @@ internal sealed class LauncherManager
             }
 
             SweepStaging(log);
-            if (File.Exists(_paths.LegacyManagerPath) &&
-                ProcessInspector.IsConfirmedNotRunning(
-                    ProcessInspector.InspectProcessesByExecutable(
-                        _paths.LegacyManagerPath)))
-            {
-                File.Delete(_paths.LegacyManagerPath);
-                log.Write("Removed the retired UVSR Installer compatibility executable.");
-            }
         }
         catch (Exception ex) when (ex is InstallerException or IOException or UnauthorizedAccessException)
         {
             log.Write($"Post-update launcher cleanup was deferred safely: {ex.Message}");
+        }
+    }
+
+    private void MigrateKnownOldLauncherPackages(
+        Guid installationId,
+        InstallLog? log)
+    {
+        if (!Directory.Exists(_paths.LauncherVersionsDirectory))
+            return;
+        foreach (string directory in Directory.EnumerateDirectories(
+                     _paths.LauncherVersionsDirectory))
+        {
+            string hash = Path.GetFileName(directory);
+            if (!ProductConstants.HashRegex().IsMatch(hash))
+                continue;
+            string canonical = _paths.LauncherExecutable(hash);
+            string knownOld = _paths.MigrationLauncherExecutable(hash);
+            if (File.Exists(canonical) || !File.Exists(knownOld))
+                continue;
+            LauncherPackageManifest marker =
+                JsonStore.Read<LauncherPackageManifest>(
+                    _paths.LauncherPackageMarker(hash));
+            ValidatePackageDirectoryBinding(hash, marker);
+            LauncherState migratedState = new(marker.SchemaVersion,
+                marker.ProductId, marker.InstallationId,
+                marker.ReleaseSequence, marker.Version,
+                marker.ExecutableSha256, true, marker.InstalledUtc);
+            migratedState.Validate(installationId);
+            if (marker.ExecutableSize <= 0 ||
+                marker.ExecutableSize > ProductConstants.MaximumLauncherBytes ||
+                new FileInfo(knownOld).Length != marker.ExecutableSize ||
+                !string.Equals(PayloadPackager.ComputeSha256(knownOld), hash,
+                    StringComparison.Ordinal))
+                throw new InstallerException(
+                    "The known old launcher filename did not match its owned package.");
+            string[] entries = Directory.EnumerateFileSystemEntries(directory)
+                .Select(Path.GetFileName)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToArray()!;
+            string[] expected =
+            {
+                ".uvsr-launcher-package.json",
+                ProductConstants.MigrationLauncherName
+            };
+            Array.Sort(expected, StringComparer.OrdinalIgnoreCase);
+            if (!entries.SequenceEqual(expected, StringComparer.OrdinalIgnoreCase))
+                throw new InstallerException(
+                    "The known old launcher package contained unexpected files.");
+            File.Move(knownOld, canonical);
+            log?.Write($"Migrated the exact known old launcher filename to " +
+                       $"{ProductConstants.LauncherExecutableName}.");
         }
     }
 
@@ -1384,49 +1322,6 @@ internal sealed class LauncherManager
             !ProductConstants.HashRegex().IsMatch(feed.Artifact.Sha256))
             throw new InstallerException(
                 "The launcher update feed artifact SHA-256 was invalid.");
-    }
-
-    private static void ValidateLegacyFeed(LegacyLauncherFeed feed)
-    {
-        if (feed is null)
-            throw new InstallerException("The legacy launcher update feed was empty.");
-        if (feed.SchemaVersion != ProductConstants.LauncherSchemaVersion)
-            throw new InstallerException(
-                $"The legacy launcher update feed schema version was " +
-                $"{feed.SchemaVersion}; expected " +
-                $"{ProductConstants.LauncherSchemaVersion}.");
-        if (!string.Equals(feed.ProductId, ProductConstants.ProductId,
-                StringComparison.OrdinalIgnoreCase))
-            throw new InstallerException(
-                "The legacy launcher update feed product identity did not match UVSR Launcher.");
-        if (!string.IsNullOrWhiteSpace(feed.Channel) &&
-            !string.Equals(feed.Channel, "stable", StringComparison.OrdinalIgnoreCase))
-            throw new InstallerException(
-                $"The legacy launcher update feed channel '{feed.Channel}' was not supported.");
-        if (feed.ReleaseSequence is < 1 or > ProductConstants.MaximumReleaseSequence)
-            throw new InstallerException(
-                $"The legacy launcher update feed release sequence " +
-                $"{feed.ReleaseSequence} was outside its safe range.");
-        if (string.IsNullOrWhiteSpace(feed.Version) ||
-            !ProductConstants.StableVersionRegex().IsMatch(feed.Version) ||
-            !feed.Version.Split('.').All(part => int.TryParse(part, out _)))
-            throw new InstallerException(
-                $"The legacy launcher update feed version '{feed.Version}' was invalid.");
-        if (feed.Artifact is null)
-            throw new InstallerException(
-                "The legacy launcher update feed did not contain an artifact identity.");
-        if (feed.Artifact.Name != ProductConstants.LauncherArtifactName)
-            throw new InstallerException(
-                $"The legacy launcher update feed artifact name " +
-                $"'{feed.Artifact.Name}' was invalid.");
-        if (feed.Artifact.Size is <= 0 or > ProductConstants.MaximumLauncherBytes)
-            throw new InstallerException(
-                $"The legacy launcher update feed artifact size " +
-                $"{feed.Artifact.Size} was outside its safe range.");
-        if (string.IsNullOrWhiteSpace(feed.Artifact.Sha256) ||
-            !ProductConstants.HashRegex().IsMatch(feed.Artifact.Sha256))
-            throw new InstallerException(
-                "The legacy launcher update feed artifact SHA-256 was invalid.");
     }
 
     private static void ValidateActivationRecord(

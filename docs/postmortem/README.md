@@ -36,17 +36,15 @@ Each record distinguishes technical checks from product acceptance and product
 sequencing. A build, test pass, or mathematically consistent reference model can
 still fail visual validation. A sound feature can also be sunset when its
 optional surface area arrives before the systems it depends on are stable.
-Archive branches or restoration bundles retain exact source for inspection and
-selective extraction; they are deliberately removed from active roadmap
-tracking.
+Immutable commits or checksum-bound restoration bundles retain exact source for
+inspection and selective extraction; retired work stays off the active roadmap.
 
 ## Resuming or Restarting
 
 Resume an archive only when investigating its exact historical behavior. Use
-the checkpoint named by its postmortem rather than guessing from timestamps or
-build folders.
+the checkpoint and named paths in its postmortem.
 
-Start a successor from the newest Canonical verified checkpoint available at
+Start a successor from the newest verified product commit available at
 that future time. Read the postmortem first, reproduce the minimum rejected case,
 and prove the replacement's core invariant before restoring secondary features.
 Strategic-sunset records can define a different explicit revival contract; when

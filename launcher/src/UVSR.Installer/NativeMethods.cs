@@ -1,6 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
 using Microsoft.Win32.SafeHandles;
 
 namespace UvsrInstaller;
@@ -111,73 +109,30 @@ internal static class NativeMethods
         return (info.Build, info.ProductType == VerNtWorkstation);
     }
 
-    internal static void VerifyMicrosoftSignature(string path)
-    {
-        VerifyAuthenticodeSignature(path);
-        try
-        {
-#pragma warning disable SYSLIB0057 // Authenticode signer extraction has no loader replacement for PE files.
-            using X509Certificate2 certificate = new(X509Certificate.CreateFromSignedFile(path));
-#pragma warning restore SYSLIB0057
-            if (!string.Equals(certificate.GetNameInfo(X509NameType.SimpleName, false),
-                    "Microsoft Corporation", StringComparison.OrdinalIgnoreCase))
-                throw new InstallerException("A prerequisite was signed by an unexpected publisher.");
-        }
-        catch (InstallerException)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is CryptographicException or IOException)
-        {
-            throw new InstallerException("A Microsoft prerequisite signature could not be verified.", ex);
-        }
-    }
-
-    internal static void VerifyAuthenticodeSignature(string path)
+    internal static void VerifyLauncherAuthenticodePolicy(string path)
     {
         int result = GetAuthenticodeTrustStatus(path);
-        if (result != 0)
+        if (result == 0)
+            return;
+        if (result != TrustENoSignature)
             throw new InstallerException(
-                "The downloaded program did not have a valid Windows signature.");
-    }
-
-    internal static void VerifyLauncherIsAuthenticodeUnsigned(string path)
-    {
-        InspectLauncherCertificateTable(path, verifyWindowsTrust: true);
+                $"The launcher update executable had an invalid Windows " +
+                $"signature status (HRESULT = 0x{unchecked((uint)result):X8}).");
+        VerifyNoPeCertificateTable(path);
     }
 
     internal static void VerifyNoPeCertificateTable(string path)
     {
-        InspectLauncherCertificateTable(path, verifyWindowsTrust: false);
+        InspectUnsignedLauncherCertificateTable(path);
     }
 
-    internal static void RequireUnsignedLauncherAuthenticodeStatus(int result)
-    {
-        if (result == TrustENoSignature)
-            return;
-        if (result == 0)
-            throw new InstallerException(
-                "The launcher update executable unexpectedly had an Authenticode " +
-                "signature. UVSR accepts only the exact unsigned release bytes " +
-                "authenticated by its update feed.");
-        throw new InstallerException(
-            $"The launcher update executable did not have the required Windows " +
-            $"NotSigned status (HRESULT = 0x{unchecked((uint)result):X8}). It may " +
-            "be signed, malformed, or altered.");
-    }
-
-    private static void InspectLauncherCertificateTable(
-        string path,
-        bool verifyWindowsTrust)
+    private static void InspectUnsignedLauncherCertificateTable(string path)
     {
         try
         {
             using FileStream stream = new(path, FileMode.Open, FileAccess.Read,
                 FileShare.Read);
             VerifyNoPeCertificateTable(stream);
-            if (verifyWindowsTrust)
-                RequireUnsignedLauncherAuthenticodeStatus(
-                    GetAuthenticodeTrustStatus(path));
         }
         catch (InstallerException)
         {
@@ -268,7 +223,7 @@ internal static class NativeMethods
         if (certificateFileOffset != 0 || certificateSize != 0)
             throw new InstallerException(
                 "The launcher update executable contained Certificate Table metadata. " +
-                "UVSR accepts only an unsigned PE with a zero Certificate Table offset and size.");
+                "An unsigned launcher must have a zero Certificate Table offset and size.");
     }
 
     private static int GetAuthenticodeTrustStatus(string path)

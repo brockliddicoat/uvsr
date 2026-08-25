@@ -18,7 +18,7 @@ namespace
 
 int main()
 {
-    using namespace donut::app;
+    using namespace uvsr;
 
     int signedValue = -1;
     Require(ParseCommandLineInt("1", 1, 4096, signedValue));

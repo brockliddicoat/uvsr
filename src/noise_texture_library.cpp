@@ -1,6 +1,5 @@
 #include "noise_texture_library.h"
-
-#include <donut/core/log.h>
+#include "renderer_log.h"
 
 #include <fstream>
 #include <limits>
@@ -82,13 +81,13 @@ namespace uvsr
     {
         if (!m_Device || !commandList)
         {
-            donut::log::error(
+            log::error(
                 "Noise texture resolution requires a device and command list.");
             return {};
         }
         if (!IsValidNoiseSettings(settings))
         {
-            donut::log::error(
+            log::error(
                 "Noise texture settings are invalid (pattern %u, resolution %u).",
                 static_cast<uint32_t>(settings.pattern),
                 static_cast<uint32_t>(settings.resolution));
@@ -101,7 +100,7 @@ namespace uvsr
         if (cacheIndex == InvalidCacheIndex ||
             cacheIndex >= m_Cache.size())
         {
-            donut::log::error(
+            log::error(
                 "Noise texture settings could not be mapped to a cache entry.");
             return {};
         }
@@ -126,7 +125,7 @@ namespace uvsr
             expectedBytes >
                 uint64_t(std::numeric_limits<std::streamsize>::max()))
         {
-            donut::log::error(
+            log::error(
                 "Noise texture dimensions overflow the supported upload size "
                 "(%u x %u x %u).",
                 resolution,
@@ -143,7 +142,7 @@ namespace uvsr
         std::ifstream input(path, std::ios::binary | std::ios::ate);
         if (!input)
         {
-            donut::log::error(
+            log::error(
                 "Could not open noise texture asset '%s'. Verify that the "
                 "UVSR noise assets were packaged.",
                 pathText.c_str());
@@ -158,7 +157,7 @@ namespace uvsr
             const unsigned long long actualBytes = actualSize < 0
                 ? 0ull
                 : static_cast<unsigned long long>(actualSize);
-            donut::log::error(
+            log::error(
                 "Noise texture asset '%s' has %llu bytes; expected exactly "
                 "%llu bytes for %u x %u x %u R8.",
                 pathText.c_str(),
@@ -177,7 +176,7 @@ namespace uvsr
                 reinterpret_cast<char*>(bytes.data()),
                 std::streamsize(expectedBytes)))
         {
-            donut::log::error(
+            log::error(
                 "Could not read the complete noise texture asset '%s'.",
                 pathText.c_str());
             return {};
@@ -197,7 +196,7 @@ namespace uvsr
             m_Device->createTexture(description);
         if (!texture)
         {
-            donut::log::error(
+            log::error(
                 "Could not create the %u x %u x %u R8 noise texture for '%s'.",
                 resolution,
                 resolution,

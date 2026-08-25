@@ -1,7 +1,6 @@
 #pragma pack_matrix(row_major)
 
-#include <donut/shaders/gbuffer.hlsli>
-#include <donut/shaders/binding_helpers.hlsli>
+#include "renderer_gpu_helpers.hlsli"
 #include "denoising_cb.h"
 
 #ifndef DENOISING_SIGNAL_CLASS
@@ -30,14 +29,14 @@ Texture2D<float> t_Depth : register(t2);
 Texture2D<float4> t_NormalRoughness : register(t3);
 Texture2D<float4> t_MotionVectors : register(t4);
 
-VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_MotionVectors : register(u0);
-VK_IMAGE_FORMAT("rgba16snorm") RWTexture2D<float4> u_NormalRoughness : register(u1);
-VK_IMAGE_FORMAT("r32f") RWTexture2D<float> u_ViewZ : register(u2);
+RWTexture2D<float4> u_MotionVectors : register(u0);
+RWTexture2D<float4> u_NormalRoughness : register(u1);
+RWTexture2D<float> u_ViewZ : register(u2);
 
 #if DENOISING_SIGNAL_CLASS == DENOISING_RADIANCE || DENOISING_SIGNAL_CLASS == DENOISING_SCALAR_RADIANCE
-VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_RadianceHitDistance : register(u3);
+RWTexture2D<float4> u_RadianceHitDistance : register(u3);
 #else
-VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_Penumbra : register(u3);
+RWTexture2D<float> u_Penumbra : register(u3);
 #endif
 
 static const float kFp16Maximum = 65504.0f;

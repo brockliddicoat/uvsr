@@ -2,30 +2,22 @@
 
 ## Report Identity
 
-This report inventories the complete local engine-core cleanup and orders the
+This report inventories the complete August 2 engine-core cleanup and orders the
 removed or changed features by how plausible and consequential a future
-restoration would be. It is intentionally more restoration-focused than the
-execution plan.
+restoration would be.
 
 | Field | Value |
 | --- | --- |
 | Cleanup date | 2026-08-02 |
-| Cleanup branch | `codex/engine-core-cleanup` |
 | Exact base | `f7c0c87d8cba6880428fbc34400eb2882fb5182e` |
-| Publication state | Local dirty candidate; not committed, pushed, merged, or released |
-| Preserved shadow branch | Local `codex/svsm-csm-preserved` at `f7c0c87` |
-| Verified executable | `build-engine-core-cleanup/bin/uvsr.exe` |
-| Executable SHA-256 | `536D2A6092927E483573144F858F927E8F3B580C2C2FB2ACE83B9FC7CF6B733C` |
+| Historical executable SHA-256 | `536D2A6092927E483573144F858F927E8F3B580C2C2FB2ACE83B9FC7CF6B733C` |
+| Integrated successor commit | `b4dc24128e4f38effdeaf5a2dbc33cae107e9134` |
 
-The base commit is the exact recovery source for every path removed in this
-batch. The shadow preservation branch is the preferred working source for SVSM
-or diagnostic CSM because those systems were deliberately moved aside for
-separate development.
-
-The cleanup was uncommitted when this report was written. A wholesale Git reset
-would therefore be destructive to the entire candidate and is not a selective
-restoration method. Future work should compare or extract named paths from the
-base or preservation branch in an isolated worktree.
+The base commit is the exact recovery source for every recoverable pre-base path
+removed in this batch. It does not contain the transient transparent shadow
+overlay, for which no immutable source checkpoint is known. Recover SVSM or
+diagnostic CSM by comparing their named paths in the base commit. Exact commits
+and paths are the sole recovery evidence.
 
 ## How to Read the Restoration Order
 
@@ -37,8 +29,8 @@ capability back and should find its recovery boundary quickly.
 
 | Priority | Retired or Changed Area | Why It Ranks Here | Preferred Recovery Source |
 | ---: | --- | --- | --- |
-| 1 | Sparse Virtual Shadow Maps | Largest removed renderer feature; explicitly moved aside for future repair | `codex/svsm-csm-preserved` |
-| 2 | Diagnostic Cascaded Shadow Maps | Valuable conventional comparison path; coupled but smaller than SVSM | `codex/svsm-csm-preserved` |
+| 1 | Sparse Virtual Shadow Maps | Largest removed renderer feature; explicitly moved aside for future repair | Base `f7c0c87` |
+| 2 | Diagnostic Cascaded Shadow Maps | Valuable conventional comparison path; coupled but smaller than SVSM | Base `f7c0c87` |
 | 3 | Recursive Multiple-Bounce Indirect Diffuse | Unique visible lighting capability with broad PBR and scheduling dependencies | Base `f7c0c87` |
 | 4 | TAA Sample Resurrection | Unique older-frame recovery behavior, a debug view, 192 production permutations, and about 24 bytes per pixel | Base `f7c0c87` |
 | 5 | Visibility-Owned Temporal Accumulation | Could alter AO/GI stability, but was unreachable and overlapped renderer TAA | Base `f7c0c87` |
@@ -65,16 +57,10 @@ effect-specific Statistics, and richer Debug selection were restored on top.
 | Field | Value |
 | --- | --- |
 | Restoration date | 2026-08-02 |
-| Parent cleanup artifact | `build-engine-core-cleanup/bin/uvsr.exe` |
 | Parent cleanup SHA-256 | `536D2A6092927E483573144F858F927E8F3B580C2C2FB2ACE83B9FC7CF6B733C` |
 | Intake cleanup patch identity | Content hash `631ec35c500cc7bf4f78cc69b68a1a98cb32eebc`; not a Git object |
-| Completed execution plan | `docs/exec-plans/completed/frontend-functionality-restoration.md` |
-| Branch and worktree | `codex/engine-core-cleanup` in `work/engine-core-cleanup` |
-| Publication state | Local dirty candidate; not committed, pushed, merged, or released |
-| Replacement artifact | `build-frontend-restoration/bin/uvsr.exe` |
 | Replacement SHA-256 | `58B58FBD643859D12CFB9A746BD5FA563048CB1F569B56449E31FBE6A5F82458` |
 | Replacement size | 2,491,904 bytes |
-| Replacement build time | 2026-08-02 23:39:13 America/Chicago |
 
 The original sections below describe the verified cleanup snapshot identified
 in Report Identity. In those sections, *current*, *final*, and *now* refer to
@@ -82,11 +68,12 @@ that snapshot. This addendum alone describes the later front-end restoration
 candidate. Build, runtime, and confidence evidence does not transfer between
 the two artifacts.
 
-The recorded intake patch identity is a content hash, not a commit, tag, stash,
-or other object that `git cat-file` can recover. In particular, the exact
+The recorded intake patch identity distinguishes the reviewed input but is not
+a recovery object. In particular, the exact
 transient transparent shadow overlay introduced by the original cleanup is not
 present in base `f7c0c87` or the later source. A future restoration requires a
-separately preserved patch or a fresh implementation from the contract below.
+fresh implementation from the contract below. Git commits and named paths are
+the sole source-recovery authority.
 
 ### Further-Cut Restoration Priority
 
@@ -300,10 +287,9 @@ moves from 3,033 to the same 314-task catalog: 2,719 fewer tasks, or an 89.65
 percent reduction. Including the fixed 76 Donut tasks, the integrated catalog
 moves from 899 to 390 tasks: 509 fewer tasks, or a 56.62 percent reduction.
 
-Against base `f7c0c87`, the final tracked candidate touches 127 paths with
-9,213 inserted and 100,971 deleted physical lines. Untracked execution-plan
-and archive documents are outside Git's tracked numstat and therefore are not
-part of that physical-diff count.
+Against base `f7c0c87`, the recorded implementation diff touches 127 paths with
+9,213 inserted and 100,971 deleted physical lines. Documentation outside that
+implementation scope is not part of the physical-diff count.
 
 ### Addendum Changed-Path Ledger
 
@@ -334,7 +320,7 @@ ledger below, whose paths and reasons remain evidence for the parent artifact.
 
 | Check | Restoration Candidate Result |
 | --- | --- |
-| Release executable build | Passed with `cmake --build build-frontend-restoration --config Release -- /m:1 /nr:false` |
+| Release executable build | Passed |
 | Core shader compilation | Passed, 268 of 268 tasks |
 | Screen-Space Directional Shadow compilation | Passed, 46 of 46 tasks |
 | Runtime shader package | Passed the exact 39-file contract |
@@ -418,9 +404,9 @@ build matrices, and any out-of-tree component use are explicitly checked.
 | First-party developer shader tasks | 3,033 | 315 | 2,718 (89.61%) |
 | Integrated production tasks, including Donut | 899 | 391 | 508 (56.51%) |
 
-The current tracked cleanup diff covers 124 files, with 8,317 inserted and
-101,702 deleted physical lines. The new untracked execution-plan and dated
-archive documents are not included in those Git numstat totals.
+The recorded cleanup implementation diff covers 124 files, with 8,317 inserted
+and 101,702 deleted physical lines. Dated report documents are not included in
+those Git numstat totals.
 
 No performance improvement is claimed from the source or permutation reduction
 alone. The durable results are smaller build/package surfaces and fewer
@@ -491,7 +477,7 @@ The production bundle comprised `src/sparse_virtual_shadow_map.cpp` and `.h`,
 its settings and CPU/HLSL constant buffers, receiver-LOD helper, dense and
 sparse depth shaders, allocation/mark/build/clear/recycle/schedule/stat kernels,
 resolve and debug shaders, the dedicated 105-task manifest,
-`src/svsm_motion_benchmark.h`, an 8,022-line reference test, now-archived plans, CMake
+`src/svsm_motion_benchmark.h`, an 8,022-line reference test, CMake
 component targets, shader staging, packaging, UI, commands, lifecycle,
 telemetry, benchmarks, and output records.
 
@@ -504,13 +490,14 @@ draw/dispatch arguments, bindings, and framebuffers.
 ### Why It Was Cut
 
 The user explicitly requested that SVSM leave the focused engine and continue
-on a separate branch. Its large settings, benchmark, shader, and renderer
+as a separate experiment. Its large settings, benchmark, shader, and renderer
 integration surface made every unrelated cleanup harder to reason about.
 
 ### Safe Restoration Bundle
 
-Start in a separate worktree from `codex/svsm-csm-preserved` at `f7c0c87`.
-Restore the pass, settings, CPU/HLSL ABI, shader manifest, CMake component,
+Recover the named paths from exact commit
+`f7c0c87d8cba6880428fbc34400eb2882fb5182e`. Restore the pass, settings,
+CPU/HLSL ABI, shader manifest, CMake component,
 resource lifecycle, UI, commands, and tests as one versioned subsystem. Do not
 copy the old 36,000-line-era `uvsr.cpp` wholesale.
 
@@ -548,7 +535,7 @@ receiver scissor; and cascade/cache diagnostics.
 
 The bundle comprised `src/diagnostic_cascaded_shadow_map.cpp` and `.h`, settings,
 constant buffers, clear/depth/scroll/resolve shaders, a 54-task manifest,
-`src/diagnostic_csm_benchmark.h`, a 3,582-line reference test, now-archived plans,
+`src/diagnostic_csm_benchmark.h`, a 3,582-line reference test,
 CMake component and staging rules, package entries, UI and command controls, and
 benchmark CLI flags.
 
@@ -557,9 +544,10 @@ output, resolve and scroll constants, a sampler, bindings, and timer state.
 
 ### Safe Restoration Bundle
 
-Develop from `codex/svsm-csm-preserved`. Port CSM independently from SVSM unless
-a shared comparison UI is explicitly required. Integrate through the current
-singular directional-visibility contract.
+Recover the named CSM paths from exact base
+`f7c0c87d8cba6880428fbc34400eb2882fb5182e`. Port CSM independently from SVSM
+unless a shared comparison UI is explicitly required. Integrate through the
+current singular directional-visibility contract.
 
 Do not restore only the old settings header: its defaults selected resource and
 shader behavior. Restore settings, shaders, ABI, renderer scheduling, UI,
@@ -1107,7 +1095,7 @@ features need.
 `AGENTS.md` stopped treating forward PBR and SVSM diagnostics as permanent
 exceptions. Its performance guidance now refers to renderer settings and
 composable debug isolation/overlays rather than SVSM-specific cases. The
-DirectX 12, dirty-state, verification, and product-acceptance rules remain.
+DirectX 12, source-ownership, verification, and product-acceptance rules remain.
 
 ## Complete Do-Not-Restore-Alone Matrix
 
@@ -1157,22 +1145,14 @@ the exact base.
 | Modified | `docs/ui-integration-agent-procedure.md` | Condensed incident-specific and retired-feature choreography into current reusable UI rules. |
 | Modified | `docs/visibility-estimator-validation.md` | Removed retired planner/benchmark dependencies while retaining estimator fixtures and evidence limits. |
 
-### Documentation and Plan Disposition
+### Deleted Documentation
 
-The original local report draft listed the retired subsystem plans as deleted.
-The publication ownership audit restored their full evidence and archived them
-as superseded instead. Runtime support stays removed; only historical reasoning,
-failure evidence, and restoration boundaries remain.
+The exact base commit is the recovery authority for deleted documentation.
+Deleted execution-plan archives are not an active or preferred recovery layer.
 
 | State | Path | Disposition |
 | --- | --- | --- |
 | Deleted | `docs/ao-optimization-ledger.md` | Large AO optimization and experiment ledger superseded by the focused route and dated postmortem. |
-| Archived | `docs/exec-plans/abandoned/diagnostic-csm-fifteen-percent-confidence.md` | Superseded diagnostic CSM performance plan; full unfinished evidence retained. |
-| Archived | `docs/exec-plans/abandoned/sparse-virtual-shadow-maps.md` | Superseded SVSM implementation plan; full unfinished evidence retained. |
-| Archived | `docs/exec-plans/abandoned/svsm-ue5-performance.md` | Superseded SVSM performance plan; full unfinished evidence retained. |
-| Archived | `docs/exec-plans/abandoned/bend-screen-space-shadows.md` | Superseded Bend experiment plan; verified successor records are linked from the archive. |
-| Archived | `docs/exec-plans/abandoned/emissive-motion-lights-experiment-build.md` | Partially integrated plan superseded by this cleanup's factory-profile and benchmark retirement. |
-| Preserved | `docs/exec-plans/completed/ao-performance-optimization.md` | Completed AO experiment evidence remains historical and does not restore a runtime route. |
 | Deleted | `docs/visibility-dxil-evidence.md` | DXIL evidence tied to retired Visibility profiles. |
 | Deleted | `docs/visibility-estimator-benchmark.schema.json` | Embedded Visibility benchmark export schema. |
 
@@ -1315,42 +1295,24 @@ failure evidence, and restoration boundaries remain.
 | Deleted | `tests/experiment_title_tests.cpp` | Experiment-label and launch-time title formatting. |
 | Deleted | `tests/experiment_shader_bundle_tests.cpp` | Factory experiment manifest and topology-lock contract. |
 
-### New Cleanup and Archive Documents
+### New Cleanup Documents
 
 These files were added after the tracked implementation-diff snapshot and are
 not removed runtime surface:
 
 | State | Path | Purpose |
 | --- | --- | --- |
-| Added | `docs/exec-plans/completed/engine-core-cleanup.md` | Exact task scope, measurements, artifact identity, checks, and confidence. |
 | Added | `docs/postmortem/engine-cutdowns/README.md` | Dated cutdown index and count-comparability warning. |
 | Added | `docs/postmortem/engine-cutdowns/2026-07-30-shader-permutation-cutdown.md` | Restored historical record for the first shader cutdown. |
 | Added | `docs/postmortem/engine-cutdowns/2026-08-02-engine-core-cleanup.md` | This complete restoration-focused report. |
 
-## Dirty-State, Build, Worktree, and Media Reconciliation
+## Immutable Recovery Boundary
 
-The cleanup did not treat nearby artifacts as disposable merely because they
-looked old.
-
-- Eight pre-existing dirty linked worktrees were audited and preserved without
-  task writes. Other registered worktrees were also left in place.
-- The root `main` checkout was not modified by this task.
-- No branches or worktrees were deleted or pruned.
-- No tracked duplicate media was found, so no media was removed.
-- The task-local stale baseline build at
-  `C:\Users\brock\OneDrive\Documents\uvsr\work\engine-core-cleanup\build-engine-core-cleanup-baseline`
-  was moved to the Windows Recycle Bin after path and ownership validation.
-- The task-local Python bytecode cache at
-  `C:\Users\brock\OneDrive\Documents\uvsr\work\engine-core-cleanup\tools\__pycache__`
-  was moved to the Windows Recycle Bin after the same audit.
-- Those two recycled artifacts remain recoverable until the Recycle Bin is
-  emptied.
-- The final candidate build remains at
-  `C:\Users\brock\OneDrive\Documents\uvsr\work\engine-core-cleanup\build-engine-core-cleanup`.
-
-The local shadow preservation branch is not a remote archive. Before deleting
-local refs or worktrees in the future, preserve or publish it through a
-separately authorized workflow if the shadow work is still wanted.
+Recover pre-cut implementation paths from
+`f7c0c87d8cba6880428fbc34400eb2882fb5182e` and the integrated successor from
+`b4dc24128e4f38effdeaf5a2dbc33cae107e9134`. The content hash
+`631ec35c500cc7bf4f78cc69b68a1a98cb32eebc` identifies an intake patch but is
+not recoverable source. Deleted plan archives are not recovery evidence.
 
 ## Original Cleanup Verification
 
@@ -1368,9 +1330,8 @@ separately authorized workflow if the shadow work is still wanted.
 | Retired-symbol search | No operational production references remained; expected negative test assertions only |
 | Independent review | No remaining P0–P2 findings |
 
-The source build and runtime smoke predate this documentation-only archive
-split. No renderer source changed while creating the reports, so the executable
-was not rebuilt for the archive edit.
+The source build and runtime smoke predate this documentation record. No
+renderer source changed while creating it, so the executable was not rebuilt.
 
 ## Original Cleanup Confidence
 
@@ -1386,8 +1347,8 @@ was not rebuilt for the archive edit.
 The evidence-weighted average confidence in the remaining features is 94.85%.
 Residual uncertainty is concentrated in visual quality across every camera and
 scene, long-duration runtime soak, multiple hardware adapters, and controlled
-performance benchmarking. Product acceptance and Canonical verification remain
-separate from this local technical candidate.
+performance benchmarking. The later integrated verification is recorded in the
+[Front-End Fidelity Restoration](2026-08-03-frontend-fidelity-restoration.md).
 
 ## Restoration Rule of Thumb
 
@@ -1395,7 +1356,7 @@ Use the smallest current product need to define a successor, but restore every
 owner of that behavior. Historical availability is evidence that code existed,
 not evidence that it still fits current resources, UI, or output ordering.
 
-For shadows, begin from the preservation branch. For all other August 2 cuts,
-compare against exact base `f7c0c87`. For paths first removed on July 30, use the
+For every August 2 cut, compare named paths against exact base `f7c0c87`. For
+paths first removed on July 30, use the
 [dated shader cutdown](2026-07-30-shader-permutation-cutdown.md) and its named
-commits. Never infer a recovery point from build-folder age.
+commits. Use only exact commits and named paths as recovery points.

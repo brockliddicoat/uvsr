@@ -54,7 +54,8 @@ namespace uvsr
     }
 
     [[nodiscard]] inline std::string BuildSettingsSnapshotCode(
-        std::string_view canonicalSettings)
+        std::string_view canonicalSettings,
+        std::string_view version)
     {
         constexpr char HexDigits[] = "0123456789abcdef";
         constexpr std::uint64_t FnvOffset = 14695981039346656037ull;
@@ -87,9 +88,12 @@ namespace uvsr
                 secondary >> ((7u - index) * 8u));
         }
 
+        if (version.size() != 4u)
+            return {};
+
         std::string code(SettingsSnapshotCodeLength, '0');
         for (std::size_t index = 0u; index < 4u; ++index)
-            code[index] = SettingsSnapshotVersionText[index];
+            code[index] = version[index];
         for (std::size_t index = 0u; index < payload.size(); ++index)
         {
             code[4u + index * 2u] =
@@ -100,13 +104,51 @@ namespace uvsr
         return code;
     }
 
+    [[nodiscard]] inline std::string BuildSettingsSnapshotCode(
+        std::string_view canonicalSettings)
+    {
+        return BuildSettingsSnapshotCode(
+            canonicalSettings,
+            std::string_view(
+                SettingsSnapshotVersionText.data(),
+                4u));
+    }
+
+    [[nodiscard]] constexpr char HexDigit(std::uint8_t value) noexcept
+    {
+        return value < 10u
+            ? static_cast<char>('0' + value)
+            : static_cast<char>('a' + value - 10u);
+    }
+
+    [[nodiscard]] constexpr bool IsRegisteredSettingsSnapshotVersion(
+        std::string_view version) noexcept
+    {
+        if (version.size() != 4u)
+            return false;
+        for (const SettingsSnapshotSchemaVersionEntry& entry :
+            SettingsSnapshotSchemaVersions)
+        {
+            bool matches = true;
+            for (std::size_t index = 0u; index < 4u; ++index)
+            {
+                const unsigned int shift =
+                    static_cast<unsigned int>((3u - index) * 4u);
+                matches = matches && version[index] ==
+                    HexDigit(static_cast<std::uint8_t>(
+                        (entry.version >> shift) & 0x0fu));
+            }
+            if (matches)
+                return true;
+        }
+        return false;
+    }
+
     [[nodiscard]] constexpr bool IsSettingsSnapshotCode(
         std::string_view code) noexcept
     {
         if (code.size() != SettingsSnapshotCodeLength ||
-            code.substr(0u, 4u) != std::string_view(
-                SettingsSnapshotVersionText.data(),
-                4u))
+            !IsRegisteredSettingsSnapshotVersion(code.substr(0u, 4u)))
         {
             return false;
         }

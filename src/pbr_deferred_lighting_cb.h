@@ -1,29 +1,23 @@
 #ifndef UVSR_PBR_DEFERRED_LIGHTING_CB_H
 #define UVSR_PBR_DEFERRED_LIGHTING_CB_H
 
-#include <donut/shaders/deferred_lighting_cb.h>
+#include "renderer_gpu_contract.h"
 #include "flashlight_shared.h"
+#include "pbr_lighting_debug_contract.h"
 #include "sky_visibility_application.h"
-
-#define UVSR_DIRECT_VISIBILITY_SCALAR_R8 0u
-#define UVSR_DIRECT_VISIBILITY_RGB_RGBA16F 1u
 
 struct PbrDeferredLightingConstants
 {
     DeferredLightingConstants deferred;
 
     int separateIndirect;
-    uint lightingDebugView;
-    uint visibilityDebugView;
-    uint skyVisibilityApplication;
+    UVSR_GPU_UINT lightingDebugView;
+    UVSR_GPU_UINT visibilityDebugView;
+    UVSR_GPU_UINT skyVisibilityApplication;
 
-    int2 directVisibilityLightIndices;
-    uint2 directVisibilityEncodings;
-
+    UVSR_GPU_INT2 directVisibilityLightIndices;
     int flashlightLightIndex;
-    int sourceSunVisibilityLightIndex;
-    uint sourceSunVisibilityEncoding;
-    uint flashlightPadding;
+    UVSR_GPU_UINT flashlightPadding;
 
     FlashlightBeamProfile flashlightBeamProfile;
 };

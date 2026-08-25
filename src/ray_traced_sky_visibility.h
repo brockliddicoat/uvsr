@@ -1,8 +1,10 @@
 #pragma once
 
 #include "lighting_accumulation_pass.h"
+#include "ray_traced_sky_visibility_result.h"
 #include "ray_traced_sky_visibility_settings.h"
 #include "ray_traced_material_visibility.h"
+#include "ray_traced_sky_visibility_bindings.h"
 
 #include <nvrhi/nvrhi.h>
 
@@ -13,29 +15,17 @@
 namespace donut::engine
 {
     class IView;
-    class ShaderFactory;
 }
 
 namespace uvsr
 {
+    class RendererShaderFactory;
+
     struct RayTracedSkyVisibilityInputs
     {
         nvrhi::ITexture* depth = nullptr;
         nvrhi::ITexture* material = nullptr;
         nvrhi::ITexture* normals = nullptr;
-    };
-
-    struct RayTracedSkyVisibilityResult
-    {
-        nvrhi::ITexture* visibility = nullptr;
-        nvrhi::ITexture* hitDistance = nullptr;
-        bool dispatched = false;
-        bool ratioEstimator = false;
-
-        [[nodiscard]] explicit operator bool() const
-        {
-            return visibility != nullptr;
-        }
     };
 
     class RayTracedSkyVisibilityPass final
@@ -46,7 +36,7 @@ namespace uvsr
 
         RayTracedSkyVisibilityPass(
             nvrhi::IDevice* device,
-            const std::shared_ptr<donut::engine::ShaderFactory>&
+            const std::shared_ptr<RendererShaderFactory>&
                 shaderFactory,
             nvrhi::IBindingLayout* bindlessLayout);
 
@@ -81,18 +71,17 @@ namespace uvsr
         std::array<nvrhi::BindingLayoutHandle, 2> m_BindingLayouts;
         nvrhi::SamplerHandle m_MaterialSampler;
         nvrhi::BufferHandle m_ConstantBuffer;
-        std::array<nvrhi::ShaderHandle, 2> m_Shaders;
-        std::array<nvrhi::ComputePipelineHandle, 2> m_Pipelines;
-        std::array<nvrhi::BindingSetHandle, 2> m_BindingSets;
+        std::array<std::array<nvrhi::ShaderHandle, 5>, 2> m_Shaders;
+        std::array<std::array<nvrhi::ComputePipelineHandle, 5>, 2>
+            m_Pipelines;
+        std::array<std::array<nvrhi::BindingSetHandle, 5>, 2>
+            m_BindingSets;
 
         nvrhi::TextureHandle m_OutputVisibility;
+        nvrhi::TextureHandle m_OutputClosestVisibility;
         nvrhi::TextureHandle m_OutputHitDistance;
 
-        nvrhi::rt::IAccelStruct* m_BoundTlas = nullptr;
-        RayTracedSkyVisibilityInputs m_BoundInputs;
-        RayTracedMaterialVisibilityInputs m_BoundMaterialVisibility;
-        nvrhi::ITexture* m_BoundNoiseTexture = nullptr;
-        nvrhi::ITexture* m_BoundAttemptMask = nullptr;
+        RayTracedSkyVisibilityBindingIdentity m_BoundIdentity;
         bool m_Supported = false;
         bool m_HitDistanceSupported = false;
         bool m_ReportedInvalidInput = false;
@@ -102,6 +91,7 @@ namespace uvsr
             const RayTracedSkyVisibilityInputs& inputs,
             bool outputHitDistance);
         [[nodiscard]] bool EnsureBindingSet(
+            uint32_t variant,
             const RayTracedSkyVisibilityInputs& inputs,
             const RayTracedMaterialVisibilityInputs& materialVisibility,
             nvrhi::rt::IAccelStruct* worldTlas,

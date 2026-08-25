@@ -39,7 +39,7 @@ internal static class Program
             if (NativeMethods.IsCurrentProcessElevated())
             {
                 ShowLauncherError("UVSR Launcher",
-                    "UVSR Launcher must run as your normal Windows user so downloaded source is never built with administrator rights. Close this copy, then open it normally (do not choose Run as administrator).",
+                    "UVSR Launcher must run as your normal Windows user so its installation remains per-user. Close this copy, then open it normally (do not choose Run as administrator).",
                     null);
                 return 1;
             }

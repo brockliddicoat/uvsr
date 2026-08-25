@@ -2,25 +2,26 @@
 
 ## Record
 
-- Relationship: Dependency Integration and Indirect Lineage
+- Relationship: Dependency Integration
 - Status: Current
 - Confidence: Confirmed
 - Upstream: [cgltf](https://github.com/jkuhlmann/cgltf)
 - Revision: `fa3b80fa762790192c9532b63c441627416ff300`
+- Archive SHA-256: `89351d82a140337ac876e018b091f26176fcc8c227479796993ce79be33ed8a3`
 - Governing Terms: MIT License; copyright Johannes Kuhlmann
+- License SHA-256: `f619925f80ef862497aaf8e8155ef218fa6a2190055129523ca3df9119a9ba95`
 
 ## UVSR Relationship
 
-Donut's glTF importer uses cgltf to load the scene packages shipped with UVSR.
-UVSR patches surrounding Donut loading behavior, not cgltf itself.
+UVSR fetches the immutable upstream archive directly and owns the `cgltf`
+interface target. Donut's glTF importer still consumes that target while its
+loading slice is replaced; UVSR does not patch cgltf.
 
 ## Evidence
 
-- [Donut Loading Override](../../overrides/donut-loading.patch)
-- [Donut Submodule Declarations](../../donut/.gitmodules)
-- [Donut Third-Party License Inventory](../../donut/ThirdPartyLicenses.txt) at Donut revision `bc1ea24b0486f1c00d89327fe16c0b4dd11c5937`
+- [Direct Pin and Target](../../cmake/DirectThirdParty.cmake)
+- [Current Importer](../../donut/src/engine/GltfImporter.cpp)
 
 ## Commercial Clearance
 
-The cgltf MIT notice must remain with redistributed substantial portions and in
-the product's consolidated dependency notices.
+The fetched license is installed as `bin/licenses/cgltf-MIT.txt`.

@@ -1,6 +1,5 @@
 #include "scene_catalog.h"
-
-#include <donut/core/vfs/VFS.h>
+#include "json_document.h"
 
 #include <algorithm>
 #include <chrono>
@@ -30,8 +29,10 @@ namespace
             const auto nonce = std::chrono::high_resolution_clock::now().time_since_epoch().count();
             m_Path = std::filesystem::temp_directory_path()
                 / ("uvsr_scene_catalog_" + std::to_string(nonce));
-            std::filesystem::create_directories(m_Path / "intel_sponza/components");
-            std::filesystem::create_directories(m_Path / "intel_sponza/components/ivy");
+            std::filesystem::create_directories(
+                m_Path / "bistro_interior_retextured/components");
+            std::filesystem::create_directories(
+                m_Path / "bistro_interior_retextured/components/details");
             std::filesystem::create_directories(m_Path / "standalone");
         }
 
@@ -86,64 +87,91 @@ int main()
 {
     try
     {
+        const uvsr::json::Value json = uvsr::json::Parse(
+            R"({"name":"Caf\u00e9","number":-1.25e2,"empty":null,"enabled":true})");
+        Require(json.kind == uvsr::json::Value::Kind::Object &&
+                json.Find("name") != nullptr &&
+                json.Find("name")->string == "Caf\xc3\xa9" &&
+                json.Find("number") != nullptr &&
+                json.Find("number")->number == -125.0 &&
+                json.Find("empty") != nullptr &&
+                json.Find("empty")->kind == uvsr::json::Value::Kind::Null &&
+                json.Find("enabled") != nullptr &&
+                json.Find("enabled")->boolean,
+            "direct JSON parser must preserve strings, numbers, null, and booleans");
+        bool duplicateRejected = false;
+        try
+        {
+            (void)uvsr::json::Parse(R"({"name":1,"name":2})");
+        }
+        catch (const std::runtime_error&)
+        {
+            duplicateRejected = true;
+        }
+        Require(duplicateRejected,
+            "direct JSON parser must reject duplicate object properties");
+
         TemporaryDirectory temporary;
         const std::filesystem::path root = temporary.GetPath();
-        const std::filesystem::path intel = root / "intel_sponza";
-        const std::filesystem::path components = intel / "components";
+        const std::filesystem::path bistro =
+            root / "bistro_interior_retextured";
+        const std::filesystem::path components = bistro / "components";
 
         const std::filesystem::path part1 = components / "part1.glb";
         const std::filesystem::path part2 = components / "part2.glb";
-        const std::filesystem::path curtains = components / "curtains.glb";
-        const std::filesystem::path ivy1 = components / "ivy/ivy1.glb";
-        const std::filesystem::path ivy2 = components / "ivy/ivy2.glb";
-        const std::filesystem::path mainDescriptor = intel / "main.scene.json";
-        const std::filesystem::path plainDescriptor = intel / "plain.scene.json";
-        const std::filesystem::path fallbackDescriptor = intel / "fallback.scene.json";
+        const std::filesystem::path fixtures = components / "fixtures.glb";
+        const std::filesystem::path detail1 = components / "details/detail1.glb";
+        const std::filesystem::path detail2 = components / "details/detail2.glb";
+        const std::filesystem::path mainDescriptor =
+            bistro / "main.scene.json";
+        const std::filesystem::path alternateDescriptor =
+            bistro / "alternate.scene.json";
+        const std::filesystem::path fallbackDescriptor =
+            bistro / "fallback.scene.json";
         const std::filesystem::path standalone = root / "standalone/example.glb";
 
         WriteText(mainDescriptor,
-            R"({"displayName":"Sponza Decorated","initialCamera":{"position":[1,2,3],"direction":[0,0,-2],"up":[0,3,0],"verticalFovDegrees":55},"models":["components/part1.glb","components/../components/part2.glb","components/curtains.glb","components/ivy/ivy1.glb","components/ivy/ivy2.glb"],"graph":[]})");
-        WriteText(plainDescriptor,
-            R"({"displayName":"Sponza Plain","models":["components/part1.glb","components/part2.glb"],"graph":[]})");
+            R"({"displayName":"Bistro Interior","initialCamera":{"position":[1,2,3],"direction":[0,0,-2],"up":[0,3,0],"verticalFovDegrees":55},"models":["components/part1.glb","components/../components/part2.glb","components/fixtures.glb","components/details/detail1.glb","components/details/detail2.glb"],"graph":[]})");
+        WriteText(alternateDescriptor,
+            R"({"displayName":"Bistro Alternate","models":["components/part1.glb","components/part2.glb"],"graph":[]})");
         WriteText(fallbackDescriptor,
             R"({"displayName":"   ","initialCamera":{"position":[0,0,0],"direction":[3e38,0,0],"up":[3e38,1,0]},"models":[],"graph":[]})");
 
         std::vector<std::string> discovered = {
             Generic(part2),
-            Generic(plainDescriptor),
-            Generic(ivy2),
+            Generic(alternateDescriptor),
+            Generic(detail2),
             Generic(standalone),
             Generic(mainDescriptor),
-            Generic(curtains),
+            Generic(fixtures),
             Generic(fallbackDescriptor),
-            Generic(ivy1),
+            Generic(detail1),
             Generic(part1),
             Generic(part1), // Duplicate discovery must not duplicate a picker entry.
         };
 
-        donut::vfs::NativeFileSystem fileSystem;
-        const auto catalog = uvsr::BuildSceneCatalog(fileSystem, root, discovered);
+        const auto catalog = uvsr::BuildSceneCatalog(root, discovered);
 
         Require(catalog.size() == 4, "catalog must hide all descriptor-owned components");
-        const auto* decorated = FindByDisplayName(catalog, "Sponza Decorated");
-        Require(decorated != nullptr,
+        const auto* bistroEntry = FindByDisplayName(catalog, "Bistro Interior");
+        Require(bistroEntry != nullptr,
             "main descriptor must use its friendly display name");
-        Require(decorated->InitialCamera.has_value(),
+        Require(bistroEntry->InitialCamera.has_value(),
             "valid descriptor initial camera must be retained");
         Require(
-            decorated->InitialCamera->Position ==
+            bistroEntry->InitialCamera->Position ==
                     std::array<float, 3>{ 1.f, 2.f, 3.f } &&
-                decorated->InitialCamera->Direction ==
+                bistroEntry->InitialCamera->Direction ==
                     std::array<float, 3>{ 0.f, 0.f, -1.f } &&
-                decorated->InitialCamera->Up ==
+                bistroEntry->InitialCamera->Up ==
                     std::array<float, 3>{ 0.f, 1.f, 0.f } &&
-                decorated->InitialCamera->VerticalFovDegrees == 55.f,
+                bistroEntry->InitialCamera->VerticalFovDegrees == 55.f,
             "descriptor initial camera must normalize vectors and retain its pose");
-        Require(FindByDisplayName(catalog, "Sponza Plain") != nullptr,
-            "plain descriptor must remain visible when it shares architecture components");
+        Require(FindByDisplayName(catalog, "Bistro Alternate") != nullptr,
+            "alternate descriptor must remain visible when it shares components");
         const auto* fallback = FindByDisplayName(
             catalog,
-            "intel_sponza/fallback.scene.json");
+            "bistro_interior_retextured/fallback.scene.json");
         Require(fallback != nullptr,
             "empty displayName must fall back to the relative descriptor path");
         Require(!fallback->InitialCamera.has_value(),
@@ -155,11 +183,18 @@ int main()
             "exact main-descriptor lookup must succeed independently of similar names");
         Require(uvsr::FindSceneCatalogEntry(catalog, Generic(part1)) == nullptr,
             "hidden component must not resolve as a catalog entry");
-        Require(uvsr::FindSceneCatalogEntry(catalog, Generic(ivy1)) == nullptr,
-            "nested ivy component must not resolve as a catalog entry");
+        Require(uvsr::FindSceneCatalogEntry(catalog, Generic(detail1)) == nullptr,
+            "nested component must not resolve as a catalog entry");
 
         Require(uvsr::MakeSceneDisplayName(root, standalone) == "standalone/example.glb",
             "in-tree scene display names must remain relative");
+        Require(
+            uvsr::MakeSceneDisplayName(
+                std::filesystem::path(Generic(root) + "/"),
+                mainDescriptor) ==
+                "bistro_interior_retextured/main.scene.json",
+            "a trailing scene-directory separator must preserve the exact "
+            "relative filename");
         const std::filesystem::path similarlyPrefixedDirectory =
             root.parent_path() / (root.filename().string() + "_backup");
         const std::filesystem::path externalScene = similarlyPrefixedDirectory / "external.glb";
@@ -167,9 +202,9 @@ int main()
             "a sibling path sharing the scene-directory prefix must remain external");
 
         std::reverse(discovered.begin(), discovered.end());
-        const auto reversedCatalog = uvsr::BuildSceneCatalog(fileSystem, root, discovered);
+        const auto reversedCatalog = uvsr::BuildSceneCatalog(root, discovered);
         Require(Flatten(catalog) == Flatten(reversedCatalog),
-            "catalog order must not depend on VFS enumeration order");
+            "catalog order must not depend on filesystem enumeration order");
 
 #ifdef _WIN32
         std::string upperCasePath = Generic(mainDescriptor);

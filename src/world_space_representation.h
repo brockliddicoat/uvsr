@@ -1,6 +1,6 @@
 #pragma once
 
-#include "world_space_representation_settings.h"
+#include "world_space_representation_contract.h"
 
 #include <nvrhi/nvrhi.h>
 
@@ -20,15 +20,6 @@ namespace donut::engine
 
 namespace uvsr
 {
-    inline constexpr uint32_t
-        MaximumRayVisibilityGeometryMapOffset = 0x00ffffffu;
-
-    [[nodiscard]] inline constexpr bool
-        IsRayVisibilityGeometryMapOffsetSupported(uint64_t offset)
-    {
-        return offset <= MaximumRayVisibilityGeometryMapOffset;
-    }
-
     enum class WorldSpaceRepresentationState : uint32_t
     {
         Unsupported,
