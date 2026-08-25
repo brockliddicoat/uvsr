@@ -1,207 +1,78 @@
-# Noise
+# Noise Assets and Sampling
 
-## Product Contract
+## Retained Assets
 
-The Noise drawer defines one precomputed texture configuration shared by every
-effect that exposes stochastic noise sampling. The factory configuration is
-**Spatiotemporal Blue**, **128x128**, with **Animate Samples** enabled and
-**Accumulate Samples** disabled. Accumulate Samples is the final collapsible
-section in the drawer. It starts expanded on each launch; collapsing it can
-still hide both its top-level **Enable** toggle and every enabled-only option.
-It renders no gray explanatory text. Accumulation is global because it changes
-the retained lighting result rather than one effect's sampling texture.
+UVSR retains all 12 binary files under `assets/noise` byte-for-byte. The
+authoritative `assets/noise/manifest.json` records each file's pattern,
+dimensions, layer count, `R8_UNORM` format, byte size, algorithm revision, seed,
+and SHA-256. Packaging consumes these checked-in bytes directly; no generator is
+part of the active build or toolchain.
 
-Ambient occlusion and diffuse illumination share one screen-space visibility
-dispatch and therefore share one effect override. Ray traced directional
-shadows and Ray Traced Sky Visibility each have their own override. Finite
-flashlight shadows also consume the global noise directly and maintain a
-separate animated sample phase. An effect with **Specify Noise** inherits the
-Noise drawer until that option is enabled. Its hidden custom values are retained
-while inheritance is active and do not change another effect.
+Spatial White and Spatial Blue each have one layer at 64x64, 128x128, 256x256,
+and 512x512. Spatiotemporal Blue has 64 layers at each resolution. Array slices
+are row-major. The default 128x128x64 spatiotemporal volume is exactly 1 MiB.
 
-The override tooltip states the isolation rule directly:
+## Sampling Contract
 
-> Use custom noise sampling for this effect only. This does not change the
-> noise sampling used by any other effect.
+The Noise drawer selects pattern, resolution, and animation. Spatial patterns
+use one layer. Spatiotemporal Blue advances through 64 layers. Sampling uses
+point-loaded `R8_UNORM` values decoded to open-bin scalar values; an effect and
+semantic sample dimension receive stable independent stream offsets.
 
-## Progressive Accumulation
-
-**Accumulate Samples** applies to both Lighting Solution modes. Enabling it
-exposes three named starting profiles. **Variance Guided** is the factory preset. It first
-takes 16 successful samples everywhere, then converts the largest per-channel
-relative standard error into a deterministic revisit interval. Its two-percent
-target and 1/16 minimum update rate guarantee that even a low-variance pixel is
-revisited at least once every 16 scheduling cycles. **Progressive Mean** samples
-every eligible pixel and updates an unbounded cumulative scene-linear RGB mean.
-**Responsive Mean** also samples every eligible pixel, but uses a 32-sample
-exponential history that reacts faster at the cost of a persistent noise floor.
-
-All accumulation controls are exposed whenever accumulation is enabled:
-averaging, scheduling, effective history, warmup samples, target error, and
-minimum update rate. Editing any field retains the selected profile as its
-origin and displays `<Profile> (Custom)`. Reselecting that named profile
-reapplies its complete vector. The per-field reset restores the origin
-profile's value, while the mode reset restores factory Variance Guided.
-
-**History Preset** provides transparent shortcuts for Effective History:
-**Quick Preview** is 8 samples, **Responsive** is 32, **Balanced** is 64,
-**Stable** is 256, and **Very Stable** is 1024. Higher values suppress more
-noise in Exponential Mean but react more slowly; Cumulative Mean remains an
-unbounded mean, so this slider does not change it. Selecting a shortcut changes
-only the visible Effective History value and may mark the outer profile
-`(Custom)`.
-
-**Adaptive Workload** provides four transparent Variance Guided recipes.
-**Full Quality** begins easing after 32 samples, targets one-percent relative
-error, and keeps at least one-quarter of pixels active. **Balanced** uses 16,
-two percent, and 1/16. **Performance** uses 8, four percent, and 1/32.
-**Maximum Savings** uses 4, eight percent, and 1/64. The three sliders remain
-editable after selection, and any nonmatching vector displays Custom.
-
-**Warmup Samples** controls when adaptive work may begin to ease. **Target
-Error** maps estimated RGB uncertainty to an update rate, and **Minimum Update
-Rate** bounds the longest revisit cycle. These controls reduce eligible ray
-attempts; required raster, deferred, resolve, and presentation work remains.
-
-The old harmonic `1 / (n + 1)` retry schedule is not used. It produced only
-about the square root of one sample per eligible frame and could leave many
-pixels visibly incomplete. Variance Guided uses a stable per-pixel hashed phase
-and a bounded integer interval instead of independent Bernoulli retries, so its
-minimum update rate is a real revisit guarantee rather than an average. Each
-success advances the pixel's scheduling congruence by an odd stride. Adaptive
-updates therefore cover every phase of UVSR's power-of-two projection-jitter
-sequences instead of aliasing to one repeated subpixel location.
-
-Every accepted stationary stochastic sample uses that pixel's
-successful-sample count as its sequence phase. A skipped frame does not consume
-a phase, and stationary accumulation continues to obtain new samples even when
-**Animate Samples** is off. When physical camera motion resets the mean,
-**Animate Samples** instead selects the live frame phase so the noise pattern
-visibly moves with the camera; disabling it deliberately retains phase zero
-during those reset frames. Scheduling never classifies a candidate by
-brightness. A finite environment miss or black contribution is successful and
-remains part of the mean.
-
-Path Tracing makes the scheduling decision before traversal. Ordinary presets
-update the full frame each pass. A one-Gi synthetic work-unit safety budget
-introduces a bounded progressive lattice only for extreme combinations of
-resolution, fresh samples, lights, candidates, bounces, and usable replay
-donors; the Pathing drawer reports the active phase count and estimated work.
-Reset frames are charged only for current paths. When an extreme reset still
-needs a sparse lattice, a presentation-only bilinear preview replaces the old
-nearest-tile expansion without entering estimator history. A skipped pixel
-retains its previous scene-linear mean, RGB variance, and count without tracing
-a path. Ray Marching
-runs a prepare shader before stochastic screen-space visibility,
-Heitz shadow, ray-traced flashlight, and ray-traced sky producers. Each guarded
-producer consumes the same attempt token and returns early for a rejected
-pixel. Deterministic hard-sun and point-flashlight rays also honor the adaptive
-work mask even though their phase value is irrelevant. Half- or quarter-scale
-screen-space visibility safely forces Every Pixel scheduling for the shared Ray
-Marching attempt mask because one reduced-resolution sample cannot represent
-divergent full-resolution per-pixel phases.
-
-Ray Marching accumulation resolves the raw scene-linear frame before TAA. While
-it is enabled, the accumulator is the sole long-term history owner: TAA's
-history, rectification, and temporal blend are bypassed, and Ray Marching
-denoisers are bypassed instead of feeding a second temporal estimate into the
-mean. Raster TAA camera jitter is also inactive so a reset cannot expose one raw
-Halton phase per displayed frame.
-This prevents an already clipped, denoised, or nonlinear temporal result from
-being averaged a second time. A matching transactional resolve commits only a
-finite attempted sample; rejected and non-finite attempts copy the prior mean,
-RGB variance, and count exactly. With accumulation disabled, Ray Marching
-bypasses its full-resolution history and Path Tracing continuously replaces each
-pixel with the cumulative batch selected by **Samples**. Shared Primary Surface
-traces a full-resolution receiver/direct baseline before the indirect batch. Its
-validated depth and motion let TAA reconstruct non-accumulating final output;
-progressive path accumulation remains the sole history owner and only borrows
-the selected camera-jitter sequence.
-
-Path Tracing's **Firefly Clamp (Biased)** is part of the estimator rather than
-the noise schedule. When enabled, it limits each successful contribution before
-the persistent mean is updated, so the retained result is intentionally biased.
-
-All retained samples share the renderer's lighting-history epoch. Camera motion
-always discards every mean, variance, count, and stable signal. Path Tracing's
-optional **Motion Reuse** may retain only surface-validated direct-light,
-fully replayable RESTIR PT, and reconnectable rough diffuse-tail RESTIR GI
-proposals across an eligible camera-only change. Donors are reprojected through
-the prior camera, then re-evaluated at the current receiver. It never retains
-accumulated radiance, intentionally has no effect while stationary, and is
-unavailable when the requested work needs a sparse dispatch lattice.
-Geometry, dynamic vertices, instance transforms, materials, lights,
-environment, output extent, lighting solution, solver, transport, accumulation
-policy, noise, scene, or shader changes clear every history family. Noise
-animation alone changes ordinary non-accumulating sample presentation;
-stationary accumulated sample phases remain owned by each pixel's successful
-count. Full path-transport details are in
-[Path Tracing Transport](path-tracing-transport.md#progressive-accumulation).
-
-## Patterns
-
-- **Spatial White** is a deterministic R8 rank permutation.
-- **Spatial Blue** is a deterministic toroidal, spectrally shaped R8 rank
-  field with suppressed low spatial frequencies.
-- **Spatiotemporal Blue** contains 64 R8 layers. Every XY layer preserves
-  spatial blue-noise structure, while a fixed XY address advances through a
-  temporally blue 64-sample sequence.
-
-Spatial patterns use one array layer. Spatiotemporal Blue uses 64 layers and
-advances one layer after each successful animated dispatch. Each effect and
-semantic sample dimension uses a fixed independent stream offset.
-
-## Resolution and Centering
-
-Noise Resolution offers **64x64**, **128x128**, **256x256**, and **512x512**.
-All patterns are precomputed at all four sizes. Sampling uses point-loaded
-`R8_UNORM` texture arrays without mips.
-
-Tiling is centered in the effect's local dispatch rectangle, not anchored to
-the absolute viewport origin. For a power-of-two tile size `N`, each axis uses:
+Tiling is centered in the active dispatch rectangle. For power-of-two size
+`N`, each axis uses:
 
 ```text
 tile = (localPixel - floor(dispatchExtent / 2) + N / 2) mod N
 ```
 
-This makes clipped rectangles at opposite screen edges use the same centered
-mapping. Spatial modes translate the complete tile with a deterministic Weyl
-offset when animation is enabled. Spatiotemporal Blue keeps its XY address
-fixed and advances only the array layer. R8 values are decoded to bin centers,
-so random scalars never equal exactly zero or one.
+Animated spatial patterns translate the tile deterministically. Animated
+spatiotemporal sampling keeps XY fixed and advances the layer. A disabled
+effect-specific override inherits the global values while retaining its hidden
+preference; it must not change another effect.
 
-## Assets and Memory
+## Accumulation
 
-The 12 checked-in files live under `assets/noise/` and are staged to
-`media/uvsr/noise/`. `manifest.json` records dimensions, format, byte length,
-algorithm revision, seed, and SHA-256 for every file. The runtime library loads
-only an exact requested pattern-resolution pair and shares that texture among
-all matching consumers.
+Ray Marching exposes one **Accumulate Samples** toggle. When enabled, every
+eligible pixel is attempted and one finite accepted scene-linear sample advances
+one cumulative mean and that pixel's GPU successful-sample count. There is no
+exponential averaging, adaptive schedule, workload preset, history preset, or
+internal-policy control. The implementation may ping-pong mean/count textures
+transactionally; those copies are one logical history, not selectable
+alternatives.
 
-The default 128x128x64 texture is exactly 1 MiB. All four Spatiotemporal Blue
-volumes total 21.25 MiB; both spatial families total about 0.66 MiB. These are
-source assets, not configure-time or runtime generated data.
+Path Tracing always advances its equivalent fixed cumulative mean/count after a
+valid fresh sample. Its history is not controlled by an additional path setting.
+The GPU count is per pixel and advances only for a valid sample. The displayed
+path-tracing count is an asynchronous readback of the center pixel's accepted
+GPU history count. Camera, scene, resolution, geometry, material, lighting,
+environment, solution, noise, and other image-defining changes reset both the
+applicable history and that displayed count.
 
-## Provenance
+For both accumulators, `UINT32_MAX` is terminal overflow safety, not a
+selectable history cap; mean/count stop advancing there. An invalid candidate
+leaves a valid prior history unchanged. A non-finite stored history is repaired
+to empty history and published even when the new candidate is rejected.
 
-The feature follows the spatial/temporal objective described in NVIDIA's
-[Spatiotemporal Blue Noise paper](https://arxiv.org/abs/2112.09629) and
-[rendering guidance](https://developer.nvidia.com/blog/rendering-in-real-time-with-spatiotemporal-blue-noise-textures-part-1/).
-UVSR does not copy NVIDIA's generator or packaged textures. The checked-in
-volumes are produced by UVSR's deterministic first-party
-`tools/generate_noise_assets.py` spectral construction from the published
-objective. This avoids redistributing files from the
-[NVIDIA-RTX/STBN repository](https://github.com/NVIDIA-RTX/STBN), whose bundled
-license does not establish a general commercial redistribution grant for the
-STBN work.
+TAA cannot own a second long-term history while the accumulator owns the
+presented result.
 
-## Validation
+## Provenance and Validation
 
-Automated contracts verify settings inheritance, hidden override isolation,
-centered odd/even dispatch coordinates, phase wrap, R8 open-bin decoding,
-asset dimensions and hashes, spatial low-frequency suppression, temporal
-progression, central cache sharing, shader binding invalidation, accumulation
-mean/variance/count math, deterministic revisit bounds, per-pixel successful
-sample phases, prepare-before-producer attempt-mask gating, raw scene-linear
-transactional commit behavior, epoch invalidation coverage, and staged asset
-equality.
+`assets/noise/README.md` and the manifest preserve construction and attribution.
+The bytes are a first-party deterministic spectral construction informed by the
+published spatiotemporal blue-noise objective; no NVIDIA texture or generator
+source is packaged. Historical one-time generation code is recoverable from
+`e29a41245dbd0e6fd7a819d2341646419ab76e72`, but restoring it requires a new
+need and byte-for-byte review.
+
+Validate every manifest path, format, dimension, layer count, byte size, hash,
+and package copy. Test centered wrapping, all resolutions, layer periodicity,
+independent streams, deterministic replay, per-pixel successful-sample counts,
+the asynchronously displayed center-pixel accepted GPU history count,
+transactional failure, and every reset input. Render representative static, motion,
+disocclusion, thin-geometry, AO/GI, sky, flashlight, and path-tracing cases in
+Bistro and San Miguel. Bind captures to exact source, settings hash/version,
+executable SHA-256, scene, camera, resolution, warmup, and sample window.
+Compilation or matching dimensions do not prove spectrum, decorrelation,
+convergence, or image quality.

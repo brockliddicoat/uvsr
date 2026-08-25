@@ -1,0 +1,247 @@
+name: Windows Renderer Package
+
+on:
+  push:
+    paths:
+      - ".github/workflows/windows-renderer.yml"
+      - ".gitmodules"
+      - "CMakeLists.txt"
+      - "LICENSE.md"
+      - "assets/**"
+      - "cmake/**"
+      - "donut"
+      - "launcher/**"
+      - "legal/documentation/google-filament-fxaa.md"
+      - "legal/documentation/third-party-notices.md"
+      - "legal/licenses/**"
+      - "overrides/**"
+      - "src/**"
+      - "tests/**"
+      - "third_party/**"
+      - "tools/**"
+  pull_request:
+    paths:
+      - ".github/workflows/windows-renderer.yml"
+      - ".gitmodules"
+      - "CMakeLists.txt"
+      - "LICENSE.md"
+      - "assets/**"
+      - "cmake/**"
+      - "donut"
+      - "launcher/**"
+      - "legal/documentation/google-filament-fxaa.md"
+      - "legal/documentation/third-party-notices.md"
+      - "legal/licenses/**"
+      - "overrides/**"
+      - "src/**"
+      - "tests/**"
+      - "third_party/**"
+      - "tools/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-validate:
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - name: Check Out Exact Sources
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Use Pinned .NET SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 10.0.400
+
+      - name: Require Python-Unavailable Toolchain
+        shell: pwsh
+        run: |
+          $blockedNames = @("python.exe", "python3.exe", "py.exe")
+          $entries = @($env:PATH -split [IO.Path]::PathSeparator |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+          $sanitized = @($entries | Where-Object {
+            $entry = $_
+            -not ($blockedNames | Where-Object {
+              Test-Path -LiteralPath (Join-Path $entry $_)
+            })
+          }) -join [IO.Path]::PathSeparator
+          if ([string]::IsNullOrWhiteSpace($sanitized)) {
+            throw "Python-unavailable PATH became empty."
+          }
+          $env:PATH = $sanitized
+          foreach ($name in @("python", "python3", "py")) {
+            if (Get-Command $name -ErrorAction SilentlyContinue) {
+              throw "Python command '$name' remains available."
+            }
+            & "$env:SystemRoot/System32/where.exe" $name 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              throw "where.exe still resolves '$name'."
+            }
+          }
+          "PATH=$sanitized" >> $env:GITHUB_ENV
+          "UVSR_PYTHON_UNAVAILABLE=true" >> $env:GITHUB_ENV
+
+      - name: Configure Developer Renderer
+        shell: pwsh
+        run: |
+          if ($env:UVSR_PYTHON_UNAVAILABLE -ne "true" -or
+              (Get-Command python, python3, py -ErrorAction SilentlyContinue)) {
+            throw "Developer configure did not inherit Python-unavailable PATH."
+          }
+          $dev = Join-Path $env:RUNNER_TEMP "uvsr-renderer-dev"
+          cmake -S . -B $dev -A x64 -DBUILD_TESTING=ON -DUVSR_RENDERER_RELEASE_SEQUENCE=16
+          if ($LASTEXITCODE -ne 0) { throw "Developer configure failed." }
+          "UVSR_DEV_BUILD=$dev" >> $env:GITHUB_ENV
+
+      - name: Build And Test Developer Renderer
+        shell: pwsh
+        run: |
+          cmake --build $env:UVSR_DEV_BUILD --config Release
+          if ($LASTEXITCODE -ne 0) { throw "Developer build failed." }
+          ctest --test-dir $env:UVSR_DEV_BUILD -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw "Developer CTest gate failed." }
+
+      - name: Configure Production Renderer
+        shell: pwsh
+        run: |
+          $production = Join-Path $env:RUNNER_TEMP "uvsr-renderer-production"
+          cmake -S . -B $production -A x64 -DBUILD_TESTING=OFF -DUVSR_RENDERER_RELEASE_SEQUENCE=16
+          if ($LASTEXITCODE -ne 0) { throw "Production configure failed." }
+          "UVSR_PRODUCTION_BUILD=$production" >> $env:GITHUB_ENV
+
+      - name: Reject Debug Production Package
+        shell: pwsh
+        run: |
+          cmake --build $env:UVSR_PRODUCTION_BUILD --config Debug --target uvsr-renderer-package
+          if ($LASTEXITCODE -eq 0) {
+            throw "Debug incorrectly produced a production renderer package."
+          }
+          Write-Output "PASS production package rejects Debug configuration"
+
+      - name: Build Exact Production Package
+        shell: pwsh
+        run: |
+          cmake --build $env:UVSR_PRODUCTION_BUILD --config Release --target uvsr-renderer-package
+          if ($LASTEXITCODE -ne 0) { throw "Production package build failed." }
+
+      - name: Validate Stage And Exact CMake Archive
+        shell: pwsh
+        run: |
+          $validator = Join-Path $env:UVSR_DEV_BUILD "bin/uvsr_renderer_package_contract_validator.exe"
+          $shaderInventory = Join-Path $env:GITHUB_WORKSPACE "cmake/runtime-shader-inventory.def"
+          $mediaInventory = Join-Path $env:GITHUB_WORKSPACE "cmake/runtime-media-inventory.def"
+          $stage = Join-Path $env:UVSR_PRODUCTION_BUILD "package"
+          $archive = Join-Path $env:UVSR_PRODUCTION_BUILD "artifacts/uvsr-renderer-windows-11-x64.zip"
+          & $validator --check $stage --shader-inventory $shaderInventory --media-inventory $mediaInventory
+          if ($LASTEXITCODE -ne 0) { throw "Staged package validation failed." }
+          $extracted = Join-Path $env:RUNNER_TEMP "uvsr-renderer-extracted"
+          if (Test-Path -LiteralPath $extracted) {
+            Remove-Item -LiteralPath $extracted -Recurse -Force
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $extracted
+          & $validator --check $extracted --shader-inventory $shaderInventory --media-inventory $mediaInventory
+          if ($LASTEXITCODE -ne 0) { throw "Exact CMake archive validation failed." }
+          "UVSR_RENDERER_ARCHIVE=$archive" >> $env:GITHUB_ENV
+          "UVSR_EXTRACTED_RENDERER=$extracted" >> $env:GITHUB_ENV
+
+      - name: Verify Exact Archive Through Trusted Launcher Path
+        shell: pwsh
+        run: |
+          $obj = Join-Path $env:RUNNER_TEMP "uvsr-launcher-roundtrip/obj/"
+          $bin = Join-Path $env:RUNNER_TEMP "uvsr-launcher-roundtrip/bin/"
+          dotnet run --project launcher/tests/UVSR.Installer.Tests/UVSR.Installer.Tests.csproj -c Release --nologo "-p:BaseIntermediateOutputPath=$obj" "-p:OutputPath=$bin" -- --verify-renderer-archive $env:UVSR_RENDERER_ARCHIVE $env:GITHUB_SHA 7c6ee789fd2d2ad2de5fedaaa74f4220 31854.59273.64813.10962 16
+          if ($LASTEXITCODE -ne 0) { throw "Trusted launcher archive round trip failed." }
+
+      - name: Build Canonical Launcher
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "uvsr-launcher"
+          ./launcher/build.ps1 -OutputDirectory $output -DotNetPath (Get-Command dotnet).Source -SourceCommit $env:GITHUB_SHA
+          "UVSR_LAUNCHER=$output/uvsr-launcher.exe" >> $env:GITHUB_ENV
+
+      - name: Verify Production Process And Shortcut Services
+        shell: pwsh
+        run: |
+          $obj = Join-Path $env:RUNNER_TEMP "uvsr-production-services/obj/"
+          $bin = Join-Path $env:RUNNER_TEMP "uvsr-production-services/bin/"
+          $engine = Join-Path $env:UVSR_EXTRACTED_RENDERER "bin/uvsr-engine.exe"
+          dotnet run --project launcher/tests/UVSR.Installer.Tests/UVSR.Installer.Tests.csproj -c Release --nologo "-p:BaseIntermediateOutputPath=$obj" "-p:OutputPath=$bin" -- --verify-production-services $engine $env:UVSR_LAUNCHER
+          if ($LASTEXITCODE -ne 0) { throw "Production process and shortcut services failed." }
+
+      - name: Validate Actual Signed Test Feeds
+        shell: pwsh
+        run: |
+          $key = [Security.Cryptography.ECDsa]::Create(
+            [Security.Cryptography.ECCurve]::NamedCurves.nistP256)
+          try {
+            $keyPath = Join-Path $env:RUNNER_TEMP "uvsr-feed-test-key.pem"
+            [IO.File]::WriteAllText($keyPath, $key.ExportECPrivateKeyPem(),
+              [Text.UTF8Encoding]::new($false))
+            $publicKey = [Convert]::ToBase64String(
+              $key.ExportSubjectPublicKeyInfo())
+          }
+          finally {
+            $key.Dispose()
+          }
+          $keyId = "uvsr-launcher-update-p256-2026-01"
+          $launcherFeed = Join-Path $env:RUNNER_TEMP "launcher-update-feed-v2.json"
+          $rendererFeed = Join-Path $env:RUNNER_TEMP "renderer-update-feed-v1.json"
+          $packageValidator = Join-Path $env:UVSR_DEV_BUILD "bin/uvsr_renderer_package_contract_validator.exe"
+          $shaderInventory = Join-Path $env:GITHUB_WORKSPACE "cmake/runtime-shader-inventory.def"
+          $mediaInventory = Join-Path $env:GITHUB_WORKSPACE "cmake/runtime-media-inventory.def"
+          ./launcher/new-launcher-update-feed.ps1 -PrivateKeyPemPath $keyPath -ArtifactPath $env:UVSR_LAUNCHER -Version 1.2.0 -ReleaseSequence 16 -SourceCommit $env:GITHUB_SHA -OutputPath $launcherFeed -AllowTestKey -TestKeyId $keyId -TestPublicKeySpkiBase64 $publicKey
+          $tamperedDirectory = Join-Path $env:RUNNER_TEMP "tampered-renderer"
+          New-Item -ItemType Directory -Path $tamperedDirectory | Out-Null
+          $tamperedArchive = Join-Path $tamperedDirectory "uvsr-renderer-windows-11-x64.zip"
+          Copy-Item -LiteralPath $env:UVSR_RENDERER_ARCHIVE -Destination $tamperedArchive
+          $zip = [IO.Compression.ZipFile]::Open($tamperedArchive,
+            [IO.Compression.ZipArchiveMode]::Update)
+          try {
+            $settings = $zip.GetEntry("bin/settings/canonical-settings.json")
+            if ($null -eq $settings) { throw "Tamper fixture lacks canonical settings." }
+            $reader = [IO.StreamReader]::new($settings.Open(),
+              [Text.UTF8Encoding]::new($false, $true))
+            try { $settingsText = $reader.ReadToEnd() }
+            finally { $reader.Dispose() }
+            $settings.Delete()
+            $replacement = $zip.CreateEntry("bin/settings/canonical-settings.json")
+            $writer = [IO.StreamWriter]::new($replacement.Open(),
+              [Text.UTF8Encoding]::new($false))
+            try { $writer.Write($settingsText + " ") }
+            finally { $writer.Dispose() }
+          }
+          finally {
+            $zip.Dispose()
+          }
+          $tamperRejected = $false
+          try {
+            ./launcher/new-renderer-update-feed.ps1 -PrivateKeyPemPath $keyPath -ArtifactPath $tamperedArchive -EnginePath "$env:UVSR_PRODUCTION_BUILD/bin/uvsr-engine.exe" -RendererPackageValidatorPath $packageValidator -ShaderInventoryPath $shaderInventory -MediaInventoryPath $mediaInventory -ReleaseSequence 16 -OutputPath "$tamperedDirectory/rejected-feed.json" -AllowTestKey -TestKeyId $keyId -TestPublicKeySpkiBase64 $publicKey
+          }
+          catch {
+            $tamperRejected = $true
+          }
+          if (-not $tamperRejected) {
+            throw "Renderer feed signer accepted a tampered non-engine asset."
+          }
+          ./launcher/new-renderer-update-feed.ps1 -PrivateKeyPemPath $keyPath -ArtifactPath $env:UVSR_RENDERER_ARCHIVE -EnginePath "$env:UVSR_PRODUCTION_BUILD/bin/uvsr-engine.exe" -RendererPackageValidatorPath $packageValidator -ShaderInventoryPath $shaderInventory -MediaInventoryPath $mediaInventory -ReleaseSequence 16 -OutputPath $rendererFeed -AllowTestKey -TestKeyId $keyId -TestPublicKeySpkiBase64 $publicKey
+          ./launcher/verify-launcher-update-feed.ps1 -Path $launcherFeed -AllowTestKey -TestKeyId $keyId -TestPublicKeySpkiBase64 $publicKey | Out-Null
+          ./launcher/verify-renderer-update-feed.ps1 -Path $rendererFeed -AllowTestKey -TestKeyId $keyId -TestPublicKeySpkiBase64 $publicKey | Out-Null
+          $validator = Join-Path $env:UVSR_DEV_BUILD "bin/uvsr_launcher_feed_contract_validator.exe"
+          & $validator --check-launcher $launcherFeed
+          if ($LASTEXITCODE -ne 0) { throw "Actual launcher feed contract failed." }
+          & $validator --check-renderer $rendererFeed
+          if ($LASTEXITCODE -ne 0) { throw "Actual renderer feed contract failed." }
+
+      - name: Record Local Hardware Gate
+        shell: pwsh
+        run: |
+          Write-Output "Hosted CI proves builds, contracts, feeds, staging, and packaging only."
+          Write-Output "The developer diagnostic cannot prove the packaged production engine."
+          Write-Output "The exact Release ZIP must be installed through the trusted launcher and exercised through normal product settings/CLI on local DXR hardware, with package path, manifest source/configuration, independently computed engine SHA-256, identity output, settings/camera, captures, and timings preserved. Focused external pixtool capture and debug-layer replay are additionally required for barrier, lifetime, ray-tracing, and Donut-detachment changes."
+          Write-Output "That production runtime matrix remains open until those bound artifacts exist."
+          Write-Output "No artifact upload or publication step is enabled."

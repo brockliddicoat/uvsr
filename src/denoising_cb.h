@@ -1,7 +1,7 @@
 #ifndef UVSR_DENOISING_CB_H
 #define UVSR_DENOISING_CB_H
 
-#include <donut/shaders/view_cb.h>
+#include "renderer_gpu_contract.h"
 
 // Shared by built-in spatial denoising, application-side NRD guide
 // preparation, and the guided full-resolution resolve. NRD receives its
@@ -10,29 +10,29 @@ struct DenoisingConstants
 {
     PlanarViewConstants view;
 
-    float2 fullResolution;
-    float2 denoiserResolution;
-    float2 sourceResolution;
-    float2 fullResolutionInv;
-    float2 denoiserResolutionInv;
-    float2 sourceResolutionInv;
+    UVSR_GPU_FLOAT2 fullResolution;
+    UVSR_GPU_FLOAT2 denoiserResolution;
+    UVSR_GPU_FLOAT2 sourceResolution;
+    UVSR_GPU_FLOAT2 fullResolutionInv;
+    UVSR_GPU_FLOAT2 denoiserResolutionInv;
+    UVSR_GPU_FLOAT2 sourceResolutionInv;
 
     float hitDistanceNormalization;
     float motionScaleX;
     float motionScaleY;
     float denoisingRange;
 
-    float3 localLightPosition;
+    UVSR_GPU_FLOAT3 localLightPosition;
     float localLightRadius;
 
     float directionalTanAngularRadius;
-    uint reverseDepth;
-    uint method;
-    uint signalType;
+    UVSR_GPU_UINT reverseDepth;
+    UVSR_GPU_UINT method;
+    UVSR_GPU_UINT signalType;
 
     float spatialRadius;
-    uint spatialMethod;
-    uint2 spatialPadding;
+    UVSR_GPU_UINT spatialMethod;
+    UVSR_GPU_UINT2 spatialPadding;
 };
 
 #endif // UVSR_DENOISING_CB_H

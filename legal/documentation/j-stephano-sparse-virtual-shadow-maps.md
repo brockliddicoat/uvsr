@@ -19,7 +19,6 @@ is why this classification stops at design and implementation study.
 
 ## Evidence
 
-- [Abandoned SVSM Plan](../../docs/exec-plans/abandoned/sparse-virtual-shadow-maps.md)
 - First published implementation commit `ea566bc67f744059e6f62e33c541c5b25bde9bd8`
 - Final removal commit `b9287b04874cbdf0a3b805a37a6952104df77c29`
 

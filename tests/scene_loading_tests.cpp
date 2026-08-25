@@ -205,7 +205,7 @@ int main()
     uvsr::SceneLoadTimingDatabase database;
     database.allScenes = { 600u, 3u };
     database.byScene.emplace(
-        "media/sponza scene.gltf",
+        "media/bistro interior.gltf",
         uvsr::SceneLoadTimingHistory{ 400u, 2u });
     database.byScene.emplace(
         "C:/external/scene.gltf",
@@ -214,7 +214,7 @@ int main()
     passed &= uvsr::WriteSceneLoadTimingDatabase(serialized, database);
     passed &= serialized.str().find("UVSR_SCENE_LOAD_HISTORY 1") == 0u;
     passed &= serialized.str().find("C:/external/scene.gltf") <
-        serialized.str().find("media/sponza scene.gltf");
+        serialized.str().find("media/bistro interior.gltf");
 
     uvsr::SceneLoadTimingDatabase restored;
     std::istringstream serializedInput(serialized.str());
@@ -224,7 +224,7 @@ int main()
     passed &= restored.allScenes.totalMilliseconds == 600u;
     passed &= restored.allScenes.completedLoadCount == 3u;
     passed &= restored.byScene.size() == 2u;
-    passed &= restored.byScene.at("media/sponza scene.gltf")
+    passed &= restored.byScene.at("media/bistro interior.gltf")
         .completedLoadCount == 2u;
 
     for (const std::string invalidDatabase : {

@@ -15,11 +15,13 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -65,17 +67,7 @@ namespace
         bool CompareEmbeddedCamera = false;
     };
 
-    constexpr std::array<ExpectedDescriptor, 5> kExpectedDescriptors = {{
-        {
-            "intel_sponza/intel_pbr_sponza.scene.json",
-            "Sponza Decorated",
-            5u
-        },
-        {
-            "intel_sponza/intel_pbr_sponza_plain.scene.json",
-            "Sponza Plain",
-            2u
-        },
+    constexpr std::array<ExpectedDescriptor, 2> kExpectedDescriptors = {{
         {
             "bistro_interior_retextured/bistro_interior_retextured.scene.json",
             "Bistro Interior",
@@ -86,14 +78,9 @@ namespace
             "San Miguel",
             1u
         },
-        {
-            "blender_classroom/blender_classroom.scene.json",
-            "Classroom Interior",
-            1u
-        },
     }};
 
-    constexpr std::array<ExpectedDownloadedScene, 3> kDownloadedScenes = {{
+    constexpr std::array<ExpectedDownloadedScene, 2> kDownloadedScenes = {{
         {
             "bistro_interior_retextured/bistro_interior_retextured.scene.json",
             "components/bistro_interior.gltf",
@@ -124,29 +111,15 @@ namespace
             false,
             false
         },
-        {
-            "blender_classroom/blender_classroom.scene.json",
-            "components/blender_classroom.gltf",
-            {
-                { 2.5133827f, 1.0972751f, 4.2238383f },
-                { -0.2520502f, 0.0111987f, -0.9676494f },
-                { 0.0028260f, 0.9999372f, 0.0108363f },
-                39.5977509f
-            },
-            { -0.0630126f, 0.0027997f, -0.2419124f },
-            1u,
-            3u,
-            true,
-            true
-        },
     }};
 
-    constexpr std::array<const char*, 4> kSupportedSceneDirectories = {{
-        "intel_sponza",
+    constexpr std::array<const char*, 2> kSupportedSceneDirectories = {{
         "bistro_interior_retextured",
         "san_miguel_retextured",
-        "blender_classroom",
     }};
+
+    using RuntimeSceneInventory =
+        std::array<std::set<std::string>, kSupportedSceneDirectories.size()>;
 
     void Require(bool condition, const std::string& message)
     {
@@ -283,10 +256,77 @@ namespace
         return result;
     }
 
+    RuntimeSceneInventory LoadRuntimeSceneInventory(
+        const std::filesystem::path& inventoryPath)
+    {
+        RequireRegularFileBelowLimit(
+            inventoryPath,
+            "canonical runtime media inventory");
+        std::ifstream inventory(inventoryPath);
+        Require(inventory.good(),
+            "failed to open canonical runtime media inventory: " +
+                Generic(inventoryPath));
+
+        constexpr std::string_view scenePrefix =
+            "media/glTF-Sample-Assets/Models/";
+        RuntimeSceneInventory result;
+        std::string line;
+        size_t lineNumber = 0u;
+        while (std::getline(inventory, line))
+        {
+            ++lineNumber;
+            if (!line.empty() && line.back() == '\r')
+                line.pop_back();
+            Require(!line.empty(),
+                "runtime media inventory has an empty line at " +
+                    std::to_string(lineNumber));
+            if (line.size() < scenePrefix.size() ||
+                !std::equal(scenePrefix.begin(), scenePrefix.end(), line.begin()))
+                continue;
+
+            const std::string scenePath = line.substr(scenePrefix.size());
+            const size_t separator = scenePath.find('/');
+            Require(separator != std::string::npos && separator != 0u &&
+                    separator + 1u < scenePath.size(),
+                "runtime media inventory has a malformed scene entry: " +
+                    line);
+            const std::string scene = scenePath.substr(0u, separator);
+            const auto supported = std::find_if(
+                kSupportedSceneDirectories.begin(),
+                kSupportedSceneDirectories.end(),
+                [&scene](const char* candidate) { return scene == candidate; });
+            Require(supported != kSupportedSceneDirectories.end(),
+                "runtime media inventory names an unsupported scene: " +
+                    scene);
+
+            const std::string relative = scenePath.substr(separator + 1u);
+            const std::filesystem::path relativePath(relative);
+            Require(!relativePath.empty() && !relativePath.is_absolute() &&
+                    relativePath.lexically_normal().generic_string() == relative &&
+                    *relativePath.begin() != "..",
+                "runtime media inventory has an unsafe scene path: " + line);
+            const size_t sceneIndex = static_cast<size_t>(
+                std::distance(kSupportedSceneDirectories.begin(), supported));
+            Require(result[sceneIndex].insert(relative).second,
+                "runtime media inventory repeats scene entry: " + line);
+        }
+        Require(inventory.eof(),
+            "failed while reading canonical runtime media inventory: " +
+                Generic(inventoryPath));
+        for (size_t index = 0u; index < result.size(); ++index)
+        {
+            Require(!result[index].empty(),
+                "runtime media inventory has no files for scene: " +
+                    std::string(kSupportedSceneDirectories[index]));
+        }
+        return result;
+    }
+
     void ValidateStagedSceneTree(
         const std::filesystem::path& sourceRoot,
         const std::filesystem::path& stagingRoot,
-        const std::filesystem::path& relativeSceneDirectory)
+        const std::filesystem::path& relativeSceneDirectory,
+        const std::set<std::string>& expectedRuntimeFiles)
     {
         const std::filesystem::path sourceDirectory =
             sourceRoot / relativeSceneDirectory;
@@ -296,11 +336,16 @@ namespace
             CollectSceneTreeFiles(sourceDirectory);
         const std::set<std::string> stagedFiles =
             CollectSceneTreeFiles(stagedDirectory);
-        Require(sourceFiles == stagedFiles,
-            "staged scene inventory differs for " +
+        Require(stagedFiles == expectedRuntimeFiles,
+            "staged scene inventory differs from the canonical runtime media "
+            "inventory for " +
                 relativeSceneDirectory.generic_string());
-        for (const std::string& relativeFile : sourceFiles)
+        for (const std::string& relativeFile : expectedRuntimeFiles)
         {
+            Require(sourceFiles.find(relativeFile) != sourceFiles.end(),
+                "canonical runtime scene asset is missing from source: " +
+                    relativeSceneDirectory.generic_string() + "/" +
+                    relativeFile);
             RequireFilesEqual(
                 sourceDirectory / relativeFile,
                 stagedDirectory / relativeFile);
@@ -965,224 +1010,6 @@ namespace
         return position;
     }
 
-    void ValidateBlenderClassroomPresentation(
-        const cgltf_data& data,
-        const std::string& context)
-    {
-        Require(data.scenes_count == 1u &&
-                data.nodes_count == 876u &&
-                data.meshes_count == 381u &&
-                data.materials_count == 66u &&
-                data.images_count == 19u &&
-                data.textures_count == 36u &&
-                data.samplers_count == 1u &&
-                data.accessors_count == 1665u &&
-                data.buffer_views_count == 1665u &&
-                data.buffers_count == 1u &&
-                data.cameras_count == 1u,
-            context + " exported structure differs from the audited cleaned "
-                "Classroom presentation");
-
-        const std::vector<const cgltf_node*> sceneNodes =
-            CollectDefaultSceneNodes(data, context);
-        Require(sceneNodes.size() == 876u,
-            context + " default scene must retain every audited exported node");
-
-        constexpr std::array<const char*, 16> kRemovedTrashNodes = {{
-            "Cylinder__0102",
-            "Cylinder.056__0103",
-            "Cylinder.057__0104",
-            "Paper__0106",
-            "Paper__0108",
-            "Paper__0110",
-            "Paper__0112",
-            "Paper__0114",
-            "Paper__0116",
-            "Paper__0118",
-            "Paper__0120",
-            "Paper__0122",
-            "Paper__0124",
-            "Paper__0126",
-            "Paper__0128",
-            "Paper__0130",
-        }};
-        for (const char* removedNodeName : kRemovedTrashNodes)
-        {
-            const bool foundRemovedNode = std::any_of(
-                data.nodes,
-                data.nodes + data.nodes_count,
-                [removedNodeName](const cgltf_node& node)
-                {
-                    return node.name != nullptr &&
-                        std::strcmp(node.name, removedNodeName) == 0;
-                });
-            Require(!foundRemovedNode,
-                context + " still contains removed spawn-corner trash node '" +
-                    removedNodeName + "'");
-        }
-
-        const cgltf_node* retainedPaper = nullptr;
-        for (cgltf_size nodeIndex = 0u;
-            nodeIndex < data.nodes_count;
-            ++nodeIndex)
-        {
-            const cgltf_node& node = data.nodes[nodeIndex];
-            if (node.name == nullptr ||
-                std::strcmp(node.name, "whitePages__0250") != 0)
-            {
-                continue;
-            }
-            Require(retainedPaper == nullptr,
-                context + " contains duplicate unrelated whitePages paper");
-            retainedPaper = &node;
-        }
-        Require(retainedPaper != nullptr &&
-                retainedPaper->mesh != nullptr &&
-                retainedPaper->mesh->primitives_count == 1u &&
-                retainedPaper->mesh->primitives[0u].material != nullptr &&
-                retainedPaper->mesh->primitives[0u].material->name != nullptr &&
-                std::strcmp(
-                    retainedPaper->mesh->primitives[0u].material->name,
-                    "paper__UVSR_PBR") == 0,
-            context + " must retain the unrelated renderable whitePages paper");
-
-        constexpr std::array<const char*, 4> kRemovedTextureUris = {{
-            "textures/base_bareMetal.png",
-            "textures/checker.png",
-            "textures/crinkledPaper.png",
-            "textures/dustbin_wireframe.png",
-        }};
-        for (cgltf_size imageIndex = 0u;
-            imageIndex < data.images_count;
-            ++imageIndex)
-        {
-            const cgltf_image& image = data.images[imageIndex];
-            for (const char* removedUri : kRemovedTextureUris)
-            {
-                Require(image.uri == nullptr ||
-                        std::strcmp(image.uri, removedUri) != 0,
-                    context + " still packages removed Classroom image '" +
-                        removedUri + "'");
-            }
-        }
-
-        const cgltf_material* drawingMaterial = nullptr;
-        const cgltf_material* blankDrawingMaterial = nullptr;
-        for (cgltf_size materialIndex = 0u;
-            materialIndex < data.materials_count;
-            ++materialIndex)
-        {
-            const cgltf_material& material = data.materials[materialIndex];
-            if (material.name == nullptr)
-                continue;
-            if (std::strcmp(material.name, "drawing__UVSR_PBR") == 0)
-            {
-                Require(drawingMaterial == nullptr,
-                    context + " contains duplicate drawing__UVSR_PBR materials");
-                drawingMaterial = &material;
-            }
-            else if (std::strcmp(
-                material.name,
-                "drawing.004__UVSR_PBR") == 0)
-            {
-                Require(blankDrawingMaterial == nullptr,
-                    context +
-                        " contains duplicate drawing.004__UVSR_PBR materials");
-                blankDrawingMaterial = &material;
-            }
-        }
-        Require(drawingMaterial != nullptr &&
-                blankDrawingMaterial != nullptr &&
-                drawingMaterial != blankDrawingMaterial,
-            context + " must preserve distinct checker-sheet and blank-sheet "
-                "material identities");
-
-        const cgltf_pbr_metallic_roughness& drawingPbr =
-            drawingMaterial->pbr_metallic_roughness;
-        const cgltf_pbr_metallic_roughness& blankDrawingPbr =
-            blankDrawingMaterial->pbr_metallic_roughness;
-        bool baseColorMatches = true;
-        for (size_t channel = 0u; channel < 4u; ++channel)
-        {
-            baseColorMatches = baseColorMatches && NearlyEqual(
-                drawingPbr.base_color_factor[channel],
-                blankDrawingPbr.base_color_factor[channel]);
-        }
-        Require(drawingMaterial->has_pbr_metallic_roughness &&
-                blankDrawingMaterial->has_pbr_metallic_roughness &&
-                drawingMaterial->alpha_mode == cgltf_alpha_mode_opaque &&
-                blankDrawingMaterial->alpha_mode == cgltf_alpha_mode_opaque &&
-                drawingMaterial->double_sided &&
-                blankDrawingMaterial->double_sided &&
-                drawingPbr.base_color_texture.texture == nullptr &&
-                blankDrawingPbr.base_color_texture.texture == nullptr &&
-                drawingPbr.metallic_roughness_texture.texture == nullptr &&
-                blankDrawingPbr.metallic_roughness_texture.texture == nullptr &&
-                baseColorMatches &&
-                NearlyEqual(drawingPbr.base_color_factor[0], 0.80000001) &&
-                NearlyEqual(drawingPbr.base_color_factor[1], 0.80000001) &&
-                NearlyEqual(drawingPbr.base_color_factor[2], 0.80000001) &&
-                NearlyEqual(drawingPbr.base_color_factor[3], 1.0) &&
-                NearlyEqual(drawingPbr.metallic_factor, 0.0) &&
-                NearlyEqual(drawingPbr.roughness_factor, 1.0) &&
-                NearlyEqual(
-                    drawingPbr.metallic_factor,
-                    blankDrawingPbr.metallic_factor) &&
-                NearlyEqual(
-                    drawingPbr.roughness_factor,
-                    blankDrawingPbr.roughness_factor),
-            context + " checker-sheet material must render identically to the "
-                "audited blank-paper material");
-
-        size_t drawingPrimitiveCount = 0u;
-        size_t blankDrawingPrimitiveCount = 0u;
-        for (cgltf_size meshIndex = 0u;
-            meshIndex < data.meshes_count;
-            ++meshIndex)
-        {
-            const cgltf_mesh& mesh = data.meshes[meshIndex];
-            for (cgltf_size primitiveIndex = 0u;
-                primitiveIndex < mesh.primitives_count;
-                ++primitiveIndex)
-            {
-                const cgltf_material* material =
-                    mesh.primitives[primitiveIndex].material;
-                drawingPrimitiveCount += material == drawingMaterial ? 1u : 0u;
-                blankDrawingPrimitiveCount +=
-                    material == blankDrawingMaterial ? 1u : 0u;
-            }
-        }
-        Require(drawingPrimitiveCount == 8u &&
-                blankDrawingPrimitiveCount == 4u,
-            context + " paper material primitive assignments differ from the "
-                "audited Classroom presentation");
-
-        uint64_t sceneTriangleCount = 0u;
-        for (const cgltf_node* node : sceneNodes)
-        {
-            if (node->mesh == nullptr)
-                continue;
-            for (cgltf_size primitiveIndex = 0u;
-                primitiveIndex < node->mesh->primitives_count;
-                ++primitiveIndex)
-            {
-                const cgltf_primitive& primitive =
-                    node->mesh->primitives[primitiveIndex];
-                Require(primitive.type == cgltf_primitive_type_triangles,
-                    context + " contains non-triangle Classroom geometry");
-                const cgltf_size elementCount = primitive.indices != nullptr
-                    ? primitive.indices->count
-                    : FindPositionAccessor(primitive, context)->count;
-                Require(elementCount % 3u == 0u,
-                    context + " contains an incomplete Classroom triangle");
-                sceneTriangleCount += elementCount / 3u;
-            }
-        }
-        Require(sceneTriangleCount == 545830u,
-            context + " cleaned default scene triangle count differs from the "
-                "audited Classroom presentation");
-    }
-
     Float3 ReadTransformedPosition(
         const cgltf_accessor& positions,
         cgltf_size index,
@@ -1514,13 +1341,12 @@ namespace
     }
 
     std::vector<uvsr::SceneCatalogEntry> ValidateStagedCatalog(
-        donut::vfs::IFileSystem& fileSystem,
         const std::filesystem::path& stagingRoot)
     {
         const std::vector<std::string> discovered =
             DiscoverSceneFiles(stagingRoot);
         const std::vector<uvsr::SceneCatalogEntry> catalog =
-            uvsr::BuildSceneCatalog(fileSystem, stagingRoot, discovered);
+            uvsr::BuildSceneCatalog(stagingRoot, discovered);
 
         std::set<std::string> actualDisplayNames;
         std::set<std::string> actualRelativePaths;
@@ -1547,9 +1373,8 @@ namespace
         Require(catalog.size() == kExpectedDescriptors.size() &&
                 actualDisplayNames == expectedDisplayNames &&
                 actualRelativePaths == expectedRelativePaths,
-            "staged scene catalog must contain exactly Sponza Decorated, "
-                "Sponza Plain, Bistro Interior, San Miguel, and Classroom "
-                "Interior");
+            "staged scene catalog must contain exactly Bistro Interior and "
+                "San Miguel");
         return catalog;
     }
 
@@ -1734,17 +1559,8 @@ namespace
             if (!validatedComponents.insert(componentKey).second)
                 continue;
 
-            const bool isDownloadedComponent = downloaded != nullptr;
-            if (isDownloadedComponent)
-            {
-                Require(EndsWithCaseInsensitive(componentKey, ".gltf"),
-                    "downloaded scene component must use standard .gltf");
-            }
-            else
-            {
-                Require(EndsWithCaseInsensitive(componentKey, ".glb"),
-                    "Intel PBR Sponza components must remain GLB files");
-            }
+            Require(EndsWithCaseInsensitive(componentKey, ".gltf"),
+                "retained scene component must use standard .gltf");
 
             // Keep the cgltf object local to this iteration. Downloaded scenes
             // can carry large external buffers, so retaining one scene while
@@ -1760,13 +1576,6 @@ namespace
                 minimumExternalBufferCount);
             if (downloaded != nullptr)
             {
-                if (std::string_view(expected.RelativePath) ==
-                    "blender_classroom/blender_classroom.scene.json")
-                {
-                    ValidateBlenderClassroomPresentation(
-                        *component,
-                        expected.DisplayName);
-                }
                 ValidateInitialCameraGeometry(
                     *component,
                     *downloaded,
@@ -1780,9 +1589,10 @@ int main(int argumentCount, char** arguments)
 {
     try
     {
-        Require(argumentCount == 3,
+        Require(argumentCount == 4,
             "usage: uvsr_scene_asset_contract_tests "
-            "<source-scene-root> <staged-scene-root>");
+            "<source-scene-root> <staged-scene-root> "
+            "<runtime-media-inventory>");
         const std::filesystem::path sourceRoot =
             std::filesystem::absolute(arguments[1]).lexically_normal();
         const std::filesystem::path stagingRoot =
@@ -1791,13 +1601,19 @@ int main(int argumentCount, char** arguments)
             "source scene root is missing: " + Generic(sourceRoot));
         Require(std::filesystem::is_directory(stagingRoot),
             "staged scene root is missing: " + Generic(stagingRoot));
+        const RuntimeSceneInventory runtimeSceneInventory =
+            LoadRuntimeSceneInventory(
+                std::filesystem::absolute(arguments[3]).lexically_normal());
 
-        for (const char* sceneDirectory : kSupportedSceneDirectories)
+        for (size_t index = 0u;
+             index < kSupportedSceneDirectories.size();
+             ++index)
         {
             ValidateStagedSceneTree(
                 sourceRoot,
                 stagingRoot,
-                sceneDirectory);
+                kSupportedSceneDirectories[index],
+                runtimeSceneInventory[index]);
         }
         Require(!std::filesystem::exists(stagingRoot / "nvidia_bistro"),
             "the preserved source-only NVIDIA Bistro downloads must not be "
@@ -1805,7 +1621,7 @@ int main(int argumentCount, char** arguments)
 
         donut::vfs::NativeFileSystem fileSystem;
         const std::vector<uvsr::SceneCatalogEntry> catalog =
-            ValidateStagedCatalog(fileSystem, stagingRoot);
+            ValidateStagedCatalog(stagingRoot);
 
         std::set<std::string> validatedComponents;
         for (const ExpectedDescriptor& expected : kExpectedDescriptors)

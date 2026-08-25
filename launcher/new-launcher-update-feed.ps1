@@ -19,7 +19,7 @@ $productionKeyId = 'uvsr-launcher-update-p256-2026-01'
 $productionPublicKeySpkiBase64 =
     'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEATbHkDwYIS0nMut5h9Q6m67qfabhuK+VRo6mDW1UlwZQIfeLI7zc1aKblCclkfgd8DDU0LcblFgTFdvoAWgCYg=='
 $productId = '0c47a7a8-1ec4-4ffd-b6c4-2f7614181223'
-$artifactName = 'UVSR-Launcher-Windows-11-x64.exe'
+$artifactName = 'uvsr-launcher.exe'
 $maximumLauncherBytes = 256L * 1024 * 1024
 $maximumReleaseSequence = 9007199254740991L
 
@@ -93,7 +93,7 @@ function Assert-RegularFile {
     return $fullPath
 }
 
-function Assert-UnsignedPeX64 {
+function Read-PeX64CertificateTable {
     param([Parameter(Mandatory)] [string] $Path)
     $stream = [IO.File]::Open($Path, [IO.FileMode]::Open,
         [IO.FileAccess]::Read, [IO.FileShare]::Read)
@@ -133,8 +133,43 @@ function Assert-UnsignedPeX64 {
         $stream.Position = $optionalHeaderOffset + 144
         $certificateTableOffset = $reader.ReadUInt32()
         $certificateTableSize = $reader.ReadUInt32()
-        if ($certificateTableOffset -ne 0 -or $certificateTableSize -ne 0) {
-            throw 'The unsigned launcher artifact contains an embedded PE certificate table.'
+        if (($certificateTableOffset -eq 0) -ne
+            ($certificateTableSize -eq 0)) {
+            throw 'The launcher PE Certificate Table is incomplete.'
+        }
+        if ($certificateTableSize -ne 0) {
+            if ($certificateTableOffset % 8 -ne 0 -or
+                $certificateTableSize -lt 8 -or
+                [long]$certificateTableOffset + $certificateTableSize -ne
+                    $stream.Length) {
+                throw 'The launcher PE Certificate Table is malformed.'
+            }
+            $stream.Position = $certificateTableOffset
+            [long]$remaining = $certificateTableSize
+            while ($remaining -gt 0) {
+                if ($remaining -lt 8) {
+                    throw 'The launcher PE certificate entry is truncated.'
+                }
+                [long]$certificateLength = $reader.ReadUInt32()
+                $certificateRevision = $reader.ReadUInt16()
+                $certificateType = $reader.ReadUInt16()
+                if ($certificateLength -lt 8 -or
+                    $certificateLength -gt $remaining -or
+                    $certificateRevision -ne 0x0200 -or
+                    $certificateType -ne 0x0002) {
+                    throw 'The launcher PE certificate entry is invalid.'
+                }
+                [long]$paddedLength = ($certificateLength + 7) -band -8
+                if ($paddedLength -gt $remaining) {
+                    throw 'The launcher PE certificate padding is invalid.'
+                }
+                $stream.Position += $paddedLength - 8
+                $remaining -= $paddedLength
+            }
+        }
+        return [pscustomobject]@{
+            Offset = [long]$certificateTableOffset
+            Size = [long]$certificateTableSize
         }
     }
     finally {
@@ -219,13 +254,25 @@ try {
     if ($artifactSize -lt 1 -or $artifactSize -gt $maximumLauncherBytes) {
         throw 'The launcher artifact size is outside its safe range.'
     }
-    Assert-UnsignedPeX64 $launcherPath
+    $certificateTable = Read-PeX64CertificateTable $launcherPath
     $authenticode = Get-AuthenticodeSignature -LiteralPath $launcherPath
-    if ([string]$authenticode.Status -ne 'NotSigned' -or
-        [string]$authenticode.SignatureType -ne 'None' -or
-        $null -ne $authenticode.SignerCertificate -or
-        $null -ne $authenticode.TimeStamperCertificate) {
-        throw 'The launcher artifact must have exact Authenticode NotSigned status with no signer or timestamp certificate.'
+    if ([string]$authenticode.Status -eq 'Valid') {
+        if ($certificateTable.Size -eq 0 -or
+            $null -eq $authenticode.SignerCertificate) {
+            throw 'The valid launcher signature lacks its PE certificate identity.'
+        }
+    }
+    elseif ([string]$authenticode.Status -eq 'NotSigned') {
+        if ($certificateTable.Size -ne 0 -or
+            [string]$authenticode.SignatureType -ne 'None' -or
+            $null -ne $authenticode.SignerCertificate -or
+            $null -ne $authenticode.TimeStamperCertificate) {
+            throw 'The unsigned launcher has conflicting Authenticode state.'
+        }
+    }
+    else {
+        throw "The launcher Authenticode signature is not valid: " +
+            [string]$authenticode.Status
     }
     $metadata = [Diagnostics.FileVersionInfo]::GetVersionInfo($launcherPath)
     if ($metadata.ProductName -ne 'UVSR Launcher' -or

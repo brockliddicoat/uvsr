@@ -12,13 +12,14 @@
 
 namespace donut::engine
 {
-    class CommonRenderPasses;
     class IView;
-    class ShaderFactory;
 }
 
 namespace uvsr
 {
+    class RendererCommonPasses;
+    class RendererShaderFactory;
+
     struct TemporalAATimings
     {
         float blendMilliseconds = 0.f;
@@ -56,8 +57,8 @@ namespace uvsr
     public:
         TemporalAAPass(
             nvrhi::IDevice* device,
-            const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory,
-            const std::shared_ptr<donut::engine::CommonRenderPasses>&
+            const std::shared_ptr<RendererShaderFactory>& shaderFactory,
+            const std::shared_ptr<RendererCommonPasses>&
                 commonPasses,
             nvrhi::ITexture* sceneColor,
             nvrhi::ITexture* currentDepth,
@@ -118,7 +119,7 @@ namespace uvsr
         static constexpr uint32_t c_TimerLatency = 4u;
 
         nvrhi::IDevice* m_Device = nullptr;
-        std::shared_ptr<donut::engine::ShaderFactory> m_ShaderFactory;
+        std::shared_ptr<RendererShaderFactory> m_ShaderFactory;
         nvrhi::ITexture* m_SceneColor = nullptr;
         donut::math::uint2 m_Size = donut::math::uint2::zero();
         float m_SourceDepthPairQuantizationError = 0.f;

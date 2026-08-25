@@ -1,10 +1,7 @@
 #ifndef UVSR_PATH_TRACING_MATERIAL_HLSLI
 #define UVSR_PATH_TRACING_MATERIAL_HLSLI
 
-#include <donut/shaders/packing.hlsli>
-
-#define ENABLE_METAL_ROUGH_RECONSTRUCTION 1
-#include <donut/shaders/scene_material.hlsli>
+#include "renderer_gpu_helpers.hlsli"
 #include "pbr.hlsli"
 #include "ray_traced_material_visibility.hlsli"
 
@@ -488,80 +485,6 @@ float3 PathTracingPrepareRayOrigin(
     const float orientation =
         dot(geometricNormal, direction) >= 0.0f ? 1.0f : -1.0f;
     return position + geometricNormal * (orientation * scaleAwareBias);
-}
-
-float2 PathTracingEncodeUnitVector(float3 direction)
-{
-    direction /= max(
-        abs(direction.x) + abs(direction.y) + abs(direction.z),
-        1.0e-6f);
-    float2 encoded = direction.xy;
-    if (direction.z < 0.0f)
-    {
-        encoded = (1.0f - abs(encoded.yx)) *
-            float2(encoded.x >= 0.0f ? 1.0f : -1.0f,
-                encoded.y >= 0.0f ? 1.0f : -1.0f);
-    }
-    return encoded;
-}
-
-float3 PathTracingDecodeUnitVector(float2 encoded)
-{
-    float3 direction = float3(
-        encoded,
-        1.0f - abs(encoded.x) - abs(encoded.y));
-    if (direction.z < 0.0f)
-    {
-        direction.xy = (1.0f - abs(direction.yx)) *
-            float2(direction.x >= 0.0f ? 1.0f : -1.0f,
-                direction.y >= 0.0f ? 1.0f : -1.0f);
-    }
-    return PbrSafeNormalize(direction, float3(0.0f, 1.0f, 0.0f));
-}
-
-uint PathTracingPackUnitVectorHalf(float3 direction)
-{
-    const float2 encoded = PathTracingEncodeUnitVector(direction);
-    return (f32tof16(encoded.x) & 0xffffu) |
-        ((f32tof16(encoded.y) & 0xffffu) << 16u);
-}
-
-float3 PathTracingUnpackUnitVectorHalf(uint packed)
-{
-    return PathTracingDecodeUnitVector(float2(
-        f16tof32(packed & 0xffffu),
-        f16tof32(packed >> 16u)));
-}
-
-float3 PathTracingSurfaceSignature(PathTracingSurface surface)
-{
-    const float2 encodedNormal =
-        PathTracingEncodeUnitVector(surface.geometricNormal);
-    return float3(encodedNormal, surface.hitDistance);
-}
-
-bool PathTracingSurfaceSignaturesAreCompatible(
-    float4 currentSignature,
-    float4 previousSignature,
-    bool requireCameraRelativeDepth)
-{
-    if (!(currentSignature.w > 0.0f) ||
-        currentSignature.w != previousSignature.w)
-    {
-        return false;
-    }
-    const float normalDistance = length(
-        currentSignature.xy - previousSignature.xy);
-    if (!(normalDistance < 0.12f))
-        return false;
-    if (!requireCameraRelativeDepth)
-        return true;
-
-    const float depthScale = max(
-        max(abs(currentSignature.z), abs(previousSignature.z)),
-        1.0f);
-    return abs(currentSignature.z - previousSignature.z) <
-            depthScale * 0.025f;
 }
 
 #endif // UVSR_PATH_TRACING_MATERIAL_HLSLI

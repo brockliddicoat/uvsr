@@ -13,10 +13,6 @@ internal sealed record InstallerPaths(
     internal string TransactionFile => Path.Combine(StateRoot, ProductConstants.TransactionFileName);
     internal string LogsDirectory => Path.Combine(StateRoot, "logs");
     internal string DownloadsDirectory => Path.Combine(StateRoot, "downloads");
-    internal string ToolsDirectory => Path.Combine(ProgramRoot, "tools");
-    internal string CacheDirectory => Path.Combine(ProgramRoot, "cache");
-    internal string SourceDirectory => Path.Combine(CacheDirectory, "source");
-    internal string BuildDirectory => Path.Combine(CacheDirectory, "build");
     internal string StagingDirectory => Path.Combine(ProgramRoot, "staging");
     internal string VersionsDirectory => Path.Combine(ProgramRoot, "versions");
     internal string LauncherRoot => Path.Combine(ProgramRoot, "launcher");
@@ -24,16 +20,9 @@ internal sealed record InstallerPaths(
     internal string LauncherStagingDirectory => Path.Combine(LauncherRoot, "staging");
     internal string LauncherStateFile => Path.Combine(StateRoot, "launcher-state.json");
     internal string LauncherTransactionFile => Path.Combine(StateRoot, "launcher-update.json");
-    internal string VisualStudioLayoutDirectory => Path.Combine(ProgramRoot, "vs-buildtools-layout");
-    internal string VisualStudioLayoutRecord => Path.Combine(StateRoot, "vs-buildtools-layout.json");
-    internal string LegacyManagerPath => Path.Combine(ProgramRoot,
-        ProductConstants.LegacyInstalledManagerName);
     internal string DesktopShortcut => Path.Combine(DesktopDirectory, "UVSR Launcher.lnk");
-    internal string LegacyDesktopShortcut => Path.Combine(DesktopDirectory, "UVSR.lnk");
     internal string StartMenuDirectory => Path.Combine(ProgramsDirectory, "UVSR");
     internal string StartMenuShortcut => Path.Combine(StartMenuDirectory, "UVSR Launcher.lnk");
-    internal string LegacyStartMenuShortcut => Path.Combine(StartMenuDirectory,
-        "UVSR Installer.lnk");
     internal string OperationsRoot => Path.Combine(LocalApplicationData, "UVSR Installer Operations");
     internal string OperationsMarker => Path.Combine(OperationsRoot, ProductConstants.OwnerMarkerName);
     internal string UninstallRecordFile => Path.Combine(OperationsRoot, "uninstall.json");
@@ -104,7 +93,8 @@ internal sealed record InstallerPaths(
     }
 
     internal string VersionExecutable(string versionId) =>
-        Path.Combine(VersionRoot(versionId), "bin", "uvsr.exe");
+        Path.Combine(VersionRoot(versionId), "bin",
+            ProductConstants.EngineExecutableName);
 
     internal string LauncherVersionRoot(string executableSha256)
     {
@@ -116,6 +106,10 @@ internal sealed record InstallerPaths(
     internal string LauncherExecutable(string executableSha256) =>
         Path.Combine(LauncherVersionRoot(executableSha256),
             ProductConstants.LauncherExecutableName);
+
+    internal string MigrationLauncherExecutable(string executableSha256) =>
+        Path.Combine(LauncherVersionRoot(executableSha256),
+            ProductConstants.MigrationLauncherName);
 
     internal string LauncherPackageMarker(string executableSha256) =>
         Path.Combine(LauncherVersionRoot(executableSha256), ".uvsr-launcher-package.json");

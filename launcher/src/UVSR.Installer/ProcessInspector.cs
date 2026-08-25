@@ -32,35 +32,12 @@ internal static class ProcessInspector
 
     internal static ExactProcessInspection InspectManagedLauncherProcesses(
         string programRoot,
-        bool excludeCurrentProcess = false)
-    {
-        List<ExactProcessIdentity> matches = new();
-        bool unverifiable = false;
-        foreach (string processName in new[]
-                 {
-                     Path.GetFileNameWithoutExtension(ProductConstants.LauncherExecutableName),
-                     Path.GetFileNameWithoutExtension(ProductConstants.LegacyInstalledManagerName)
-                 })
-        {
-            ExactProcessInspection inspection = InspectProcesses(
-                processName,
-                path => SafePaths.IsStrictDescendant(path, programRoot),
-                excludeCurrentProcess ? Environment.ProcessId : null);
-            matches.AddRange(inspection.Matches);
-            unverifiable |= inspection.State == TrackedProcessState.Unverifiable;
-        }
-        ExactProcessIdentity[] distinct = matches
-            .DistinctBy(process => (process.ProcessId,
-                process.CreationTimeUtcFileTime, process.ExecutablePath))
-            .ToArray();
-        return new ExactProcessInspection(
-            distinct.Length > 0
-                ? TrackedProcessState.Running
-                : unverifiable
-                    ? TrackedProcessState.Unverifiable
-                    : TrackedProcessState.NotRunning,
-            distinct);
-    }
+        bool excludeCurrentProcess = false) =>
+        InspectProcesses(
+            Path.GetFileNameWithoutExtension(
+                ProductConstants.LauncherExecutableName),
+            path => SafePaths.IsStrictDescendant(path, programRoot),
+            excludeCurrentProcess ? Environment.ProcessId : null);
 
     internal static ExactProcessInspection InspectProcessesByExecutable(
         string executable)
@@ -72,9 +49,10 @@ internal static class ProcessInspector
     }
 
     internal static ExactProcessInspection InspectManagedUvsrProcesses(
-        string programRoot)
-        => InspectProcesses("uvsr", path =>
-            SafePaths.IsStrictDescendant(path, programRoot));
+        string programRoot) =>
+        InspectProcesses(
+            Path.GetFileNameWithoutExtension(ProductConstants.EngineExecutableName),
+            path => SafePaths.IsStrictDescendant(path, programRoot));
 
     private static ExactProcessInspection InspectProcesses(
         string processName,
@@ -227,88 +205,6 @@ internal static class ProcessInspector
             return null;
         }
     }
-
-    internal static TrackedProcessState InspectTrackedProcess(
-        VisualStudioOperationRecord expected)
-    {
-        string expectedPath;
-        try
-        {
-            expectedPath = Path.GetFullPath(expected.ExecutablePath);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
-        {
-            return TrackedProcessState.Unverifiable;
-        }
-
-        if (expected.ProcessId is int processId &&
-            expected.CreationTimeUtcFileTime is not null)
-        {
-            ProcessQuery query = QueryProcess(processId);
-            if (query.State == ProcessQueryState.Unverifiable)
-                return TrackedProcessState.Unverifiable;
-            if (query.State == ProcessQueryState.Running &&
-                MatchesTrackedProcess(expected, processId,
-                    query.ExecutablePath!, query.CreationTimeUtcFileTime))
-                return TrackedProcessState.Running;
-        }
-
-        // A crash can occur after ShellExecute starts the elevated program but
-        // before its PID reaches the journal. Search only the exact recorded
-        // executable path. An inaccessible same-name process is ambiguous and
-        // therefore blocks a second elevated operation.
-        bool unverifiableCandidate = false;
-        string processName = Path.GetFileNameWithoutExtension(expectedPath);
-        Process[] candidates;
-        try
-        {
-            candidates = Process.GetProcessesByName(processName);
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or
-                                   System.ComponentModel.Win32Exception)
-        {
-            return TrackedProcessState.Unverifiable;
-        }
-        foreach (Process process in candidates)
-        {
-            using (process)
-            {
-                ProcessQuery query = QueryProcess(process.Id);
-                if (query.State == ProcessQueryState.Unverifiable)
-                {
-                    unverifiableCandidate = true;
-                    continue;
-                }
-                if (query.State == ProcessQueryState.Running)
-                {
-                    try
-                    {
-                        if (string.Equals(Path.GetFullPath(query.ExecutablePath!),
-                                expectedPath, StringComparison.OrdinalIgnoreCase))
-                            return TrackedProcessState.Running;
-                    }
-                    catch (Exception ex) when (ex is ArgumentException or
-                                               NotSupportedException)
-                    {
-                        unverifiableCandidate = true;
-                    }
-                }
-            }
-        }
-        return unverifiableCandidate
-            ? TrackedProcessState.Unverifiable
-            : TrackedProcessState.NotRunning;
-    }
-
-    internal static bool MatchesTrackedProcess(
-        VisualStudioOperationRecord expected,
-        int actualProcessId,
-        string actualExecutablePath,
-        long actualCreationTimeUtcFileTime) =>
-        expected.ProcessId == actualProcessId &&
-        expected.CreationTimeUtcFileTime == actualCreationTimeUtcFileTime &&
-        string.Equals(Path.GetFullPath(expected.ExecutablePath),
-            Path.GetFullPath(actualExecutablePath), StringComparison.OrdinalIgnoreCase);
 
     private static ProcessQuery QueryProcess(int processId)
     {

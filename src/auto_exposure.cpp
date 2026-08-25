@@ -1,10 +1,10 @@
 #include "auto_exposure.h"
+#include "renderer_common_passes.h"
+#include "renderer_log.h"
+#include "renderer_shader_factory.h"
 
 #include <donut/core/math/math.h>
 
-#include <donut/core/log.h>
-#include <donut/engine/CommonRenderPasses.h>
-#include <donut/engine/ShaderFactory.h>
 #include <donut/engine/View.h>
 
 #include <algorithm>
@@ -22,7 +22,7 @@ namespace uvsr
 {
     AutoExposurePass::AutoExposurePass(
         nvrhi::IDevice* device,
-        const std::shared_ptr<ShaderFactory>& shaderFactory)
+        const std::shared_ptr<RendererShaderFactory>& shaderFactory)
         : m_Device(device)
     {
         if (!device || !shaderFactory)
@@ -34,7 +34,7 @@ namespace uvsr
         constantBufferDescription.isConstantBuffer = true;
         constantBufferDescription.isVolatile = true;
         constantBufferDescription.maxVersions =
-            engine::c_MaxRenderPassConstantBufferVersions;
+            RendererMaxConstantBufferVersions;
         m_ConstantBuffer = device->createBuffer(
             constantBufferDescription);
 
@@ -145,27 +145,24 @@ namespace uvsr
         bool diagnosticView)
     {
         m_DispatchedThisFrame = false;
-        if (!commandList || !m_ExposureBuffer)
-            return nullptr;
-
         const auto returnUnityExposure = [&]() -> nvrhi::IBuffer*
         {
-            m_ResetRequested = true;
-            m_WasEnabled = false;
-            m_ExposureInitialized = false;
+            AbandonAutoExposureFrame(m_FrameHistory);
             return nullptr;
         };
+        if (!commandList)
+            return returnUnityExposure();
 
         const AutoExposureSettings settings =
             SanitizeAutoExposureSettings(requestedSettings);
-        if (!settings.enabled || diagnosticView)
-            return returnUnityExposure();
-
-        // Auto exposure is optional. Missing shaders, pipelines, bindings, or
-        // scene input must preserve rendering with a unity exposure instead of
-        // abandoning the frame while its command list is still open.
-        if (!IsAvailable() || !sceneColor)
-            return returnUnityExposure();
+        const AutoExposureFrameDecision frame = BeginAutoExposureFrame(
+            m_FrameHistory,
+            settings,
+            diagnosticView,
+            IsAvailable(),
+            sceneColor != nullptr);
+        if (!frame.dispatch)
+            return nullptr;
 
         if (!m_HistogramBindingSet || m_BoundSceneColor != sceneColor)
         {
@@ -184,11 +181,6 @@ namespace uvsr
         }
         if (!m_HistogramBindingSet)
             return returnUnityExposure();
-
-        const bool resetExposure = m_ResetRequested || !m_WasEnabled ||
-            !m_ExposureInitialized;
-        m_ResetRequested = false;
-        m_WasEnabled = true;
 
         commandList->beginMarker("Auto Exposure");
         commandList->clearBufferUInt(m_HistogramBuffer, 0u);
@@ -221,7 +213,7 @@ namespace uvsr
                 settings.exposureCompensationEV;
             constants.adjustmentPeriodSeconds =
                 settings.adjustmentPeriodSeconds;
-            constants.resetExposure = resetExposure ? 1u : 0u;
+            constants.resetExposure = frame.resetExposure ? 1u : 0u;
             constants.maximumBrighteningEV =
                 settings.maximumBrighteningEV;
             constants.maximumDarkeningEV =
@@ -252,7 +244,7 @@ namespace uvsr
             state.bindings = { m_ResolveBindingSet };
             commandList->setComputeState(state);
             commandList->dispatch(1u);
-            m_ExposureInitialized = true;
+            CompleteAutoExposureFrame(m_FrameHistory, true);
         }
         commandList->endMarker();
         if (!histogramDispatched)
@@ -263,6 +255,6 @@ namespace uvsr
 
     void AutoExposurePass::Reset()
     {
-        m_ResetRequested = true;
+        RequestAutoExposureReset(m_FrameHistory);
     }
 }

@@ -1,11 +1,7 @@
 #include "denoising_pass.h"
+#include "renderer_common_passes.h"
+#include "renderer_shader_factory.h"
 
-#ifndef UVSR_WITH_NRD
-#define UVSR_WITH_NRD 0
-#endif
-
-#include <donut/engine/CommonRenderPasses.h>
-#include <donut/engine/ShaderFactory.h>
 #include <donut/engine/View.h>
 
 #include <algorithm>
@@ -143,7 +139,7 @@ namespace uvsr
 {
     DenoisingPass::DenoisingPass(
         nvrhi::IDevice* device,
-        const std::shared_ptr<ShaderFactory>& shaderFactory,
+        const std::shared_ptr<RendererShaderFactory>& shaderFactory,
         uint32_t framesInFlight)
         : m_Device(device)
         , m_Backend(CreateDenoiserBackend())
@@ -172,14 +168,14 @@ namespace uvsr
         constantDesc.isConstantBuffer = true;
         constantDesc.isVolatile = true;
         constantDesc.maxVersions =
-            engine::c_MaxRenderPassConstantBufferVersions;
+            RendererMaxConstantBufferVersions;
         m_ConstantBuffer = device->createBuffer(constantDesc);
 
         for (uint32_t formatIndex = 0;
             formatIndex < uint32_t(c_SpatialFormatCount); ++formatIndex)
         {
-            std::vector<ShaderMacro> macros = {
-                ShaderMacro("DENOISING_OUTPUT_FORMAT",
+            std::vector<RendererShaderMacro> macros = {
+                RendererShaderMacro("DENOISING_OUTPUT_FORMAT",
                     std::to_string(formatIndex)) };
             Pipeline& spatial = m_SpatialPipelines[formatIndex];
             spatial.bindingLayout = device->createBindingLayout(
@@ -205,12 +201,11 @@ namespace uvsr
         for (const Pipeline& spatial : m_SpatialPipelines)
             m_SpatialAvailable = m_SpatialAvailable && bool(spatial.pipeline);
 
-#if UVSR_WITH_NRD
         for (uint32_t classIndex = 0;
             classIndex < uint32_t(SignalClass::Count); ++classIndex)
         {
-            std::vector<ShaderMacro> macros = {
-                ShaderMacro("DENOISING_SIGNAL_CLASS",
+            std::vector<RendererShaderMacro> macros = {
+                RendererShaderMacro("DENOISING_SIGNAL_CLASS",
                     std::to_string(classIndex)) };
 
             Pipeline& prepare = m_PreparePipelines[classIndex];
@@ -284,14 +279,6 @@ namespace uvsr
                     DenoiserStatusCode::InitializationFailed,
                     "denoising guide or resolve pipeline creation failed");
         }
-#else
-        for (SignalState& signal : m_Signals)
-        {
-            signal.lastStatus = DenoiserStatus::Error(
-                DenoiserStatusCode::Unavailable,
-                "NRD support is unavailable in this build");
-        }
-#endif
     }
 
     DenoisingPass::~DenoisingPass()
@@ -408,14 +395,18 @@ namespace uvsr
 
         DenoisingConstants constants{};
         inputs.currentView->FillPlanarViewConstants(constants.view);
-        constants.fullResolution = float2(inputs.signalSize);
-        constants.denoiserResolution = float2(sourceSize);
-        constants.sourceResolution = float2(sourceSize);
-        constants.fullResolutionInv = 1.f / constants.fullResolution;
-        constants.denoiserResolutionInv = 1.f /
-            constants.denoiserResolution;
-        constants.sourceResolutionInv = 1.f /
-            constants.sourceResolution;
+        constants.fullResolution = {
+            float(inputs.signalSize.x), float(inputs.signalSize.y) };
+        constants.denoiserResolution = {
+            float(sourceSize.x), float(sourceSize.y) };
+        constants.sourceResolution = constants.denoiserResolution;
+        constants.fullResolutionInv = {
+            1.f / constants.fullResolution.x,
+            1.f / constants.fullResolution.y };
+        constants.denoiserResolutionInv = {
+            1.f / constants.denoiserResolution.x,
+            1.f / constants.denoiserResolution.y };
+        constants.sourceResolutionInv = constants.denoiserResolutionInv;
         constants.denoisingRange = 500000.f;
         constants.reverseDepth =
             inputs.currentView->IsReverseDepth() ? 1u : 0u;
@@ -496,7 +487,7 @@ namespace uvsr
                     : DenoiserStatusCode::InitializationFailed,
                 m_Backend &&
                     !m_Backend->GetCapabilities().backendAvailable
-                    ? "NRD support is unavailable in this build"
+                    ? "the NRD backend is unavailable"
                     : "the denoising front end or NRD backend is unavailable");
             return { inputs.rawSignal, false };
         }
@@ -629,15 +620,21 @@ namespace uvsr
 
         DenoisingConstants constants{};
         inputs.currentView->FillPlanarViewConstants(constants.view);
-        constants.fullResolution = float2(inputs.signalSize);
-        constants.denoiserResolution = float2(
-            denoiserExtent.width, denoiserExtent.height);
-        constants.sourceResolution = float2(sourceSize);
-        constants.fullResolutionInv = 1.f / constants.fullResolution;
-        constants.denoiserResolutionInv = 1.f /
-            constants.denoiserResolution;
-        constants.sourceResolutionInv = 1.f /
-            constants.sourceResolution;
+        constants.fullResolution = {
+            float(inputs.signalSize.x), float(inputs.signalSize.y) };
+        constants.denoiserResolution = {
+            float(denoiserExtent.width), float(denoiserExtent.height) };
+        constants.sourceResolution = {
+            float(sourceSize.x), float(sourceSize.y) };
+        constants.fullResolutionInv = {
+            1.f / constants.fullResolution.x,
+            1.f / constants.fullResolution.y };
+        constants.denoiserResolutionInv = {
+            1.f / constants.denoiserResolution.x,
+            1.f / constants.denoiserResolution.y };
+        constants.sourceResolutionInv = {
+            1.f / constants.sourceResolution.x,
+            1.f / constants.sourceResolution.y };
         constants.hitDistanceNormalization =
             inputs.hitDistanceNormalization;
         constants.motionScaleX = float(denoiserExtent.width) /
@@ -645,7 +642,10 @@ namespace uvsr
         constants.motionScaleY = float(denoiserExtent.height) /
             float(inputs.signalSize.y);
         constants.denoisingRange = 500000.f;
-        constants.localLightPosition = inputs.localLightPosition;
+        constants.localLightPosition = {
+            inputs.localLightPosition.x,
+            inputs.localLightPosition.y,
+            inputs.localLightPosition.z };
         constants.localLightRadius = inputs.localLightRadius;
         constants.directionalTanAngularRadius =
             inputs.directionalTanAngularRadius;

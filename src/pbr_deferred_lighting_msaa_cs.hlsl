@@ -1,13 +1,12 @@
 #pragma pack_matrix(row_major)
 
-#include <donut/shaders/gbuffer.hlsli>
-#include <donut/shaders/utils.hlsli>
-#include <donut/shaders/shadows.hlsli>
-#include <donut/shaders/binding_helpers.hlsli>
+#include "renderer_gpu_helpers.hlsli"
+#include "pbr_deferred_lighting_bindings.h"
 #include "pbr_deferred_lighting_cb.h"
 #include "pbr_environment.hlsli"
 #include "pbr_gbuffer.hlsli"
 #include "pbr_lighting.hlsli"
+#include "renderer_environment_bindings.h"
 
 #ifndef PBR_DEFERRED_MSAA_SAMPLES
 #error PBR_DEFERRED_MSAA_SAMPLES must be a static 2, 4, 8, or 16.
@@ -32,9 +31,12 @@ cbuffer c_Deferred : register(b0)
 #define g_Deferred g_PbrDeferred.deferred
 
 Texture2DArray t_ShadowMapArray : register(t0);
-TextureCubeArray t_DiffuseEnvironment : register(t1);
-TextureCubeArray t_SpecularEnvironment : register(t2);
-Texture2D t_EnvironmentBrdf : register(t3);
+TextureCubeArray t_DiffuseEnvironment :
+    register(UVSR_PBR_DEFERRED_DIFFUSE_ENVIRONMENT_REGISTER);
+TextureCubeArray t_SpecularEnvironment :
+    register(UVSR_PBR_DEFERRED_SPECULAR_ENVIRONMENT_REGISTER);
+Texture2D t_EnvironmentBrdf :
+    register(UVSR_PBR_DEFERRED_ENVIRONMENT_BRDF_REGISTER);
 
 SamplerComparisonState s_ShadowSamplerComparison : register(s1);
 SamplerState s_DiffuseEnvironmentSampler : register(s2);
@@ -62,11 +64,25 @@ Texture2D t_ResolvedBackground : register(t17);
 Texture2D t_VisibilityBaseLighting : register(t18);
 Texture2D t_VisibilityComposite : register(t19);
 #endif
-Texture2D<float4> t_FlashlightVisibility : register(t20);
-Texture2D<float4> t_SunVisibility : register(t21);
-Texture2D<float> t_SkyVisibility : register(t22);
+Texture2DArray<float> t_FlashlightVisibility :
+    register(UVSR_PBR_FLASHLIGHT_VISIBILITY_REGISTER);
+Texture2DArray<float> t_SunVisibility :
+    register(UVSR_PBR_SUN_VISIBILITY_REGISTER);
+Texture2DArray<float> t_SkyVisibility :
+    register(UVSR_PBR_SKY_VISIBILITY_REGISTER);
+Texture2D<float> t_FlashlightRawClosestVisibility :
+    register(UVSR_PBR_FLASHLIGHT_RAW_CLOSEST_REGISTER);
+Texture2D<float> t_FlashlightDenoisedClosestVisibility :
+    register(UVSR_PBR_FLASHLIGHT_DENOISED_CLOSEST_REGISTER);
+Texture2D<float> t_SkyRawClosestVisibility :
+    register(UVSR_PBR_SKY_RAW_CLOSEST_REGISTER);
+Texture2D<float> t_SkyDenoisedClosestVisibility :
+    register(UVSR_PBR_SKY_DENOISED_CLOSEST_REGISTER);
+Texture2D<float> t_SunRawClosestVisibility :
+    register(UVSR_PBR_SUN_RAW_CLOSEST_REGISTER);
+Texture2D<float> t_SunDenoisedClosestVisibility :
+    register(UVSR_PBR_SUN_DENOISED_CLOSEST_REGISTER);
 
-VK_IMAGE_FORMAT("rgba16f")
 RWTexture2D<float4> u_Output : register(u0);
 
 float GetRandom(float2 position)
@@ -76,39 +92,70 @@ float GetRandom(float2 position)
     return g_Deferred.noisePattern[y][x];
 }
 
-float3 DecodeDirectLightVisibility(float4 encoded, uint encoding)
+float3 DecodeDirectLightVisibility(float encoded)
 {
-    if (any(!isfinite(encoded)))
+    if (!isfinite(encoded))
         return 1.0f;
-    if (encoding == UVSR_DIRECT_VISIBILITY_RGB_RGBA16F)
+    return saturate(encoded).xxx;
+}
+
+float ApplyClosestSurfaceDenoisingCorrection(
+    float receiverSample,
+    float rawClosest,
+    float denoisedClosest)
+{
+    receiverSample = isfinite(receiverSample)
+        ? saturate(receiverSample)
+        : 1.0f;
+    rawClosest = isfinite(rawClosest) ? saturate(rawClosest) : 1.0f;
+    denoisedClosest = isfinite(denoisedClosest)
+        ? saturate(denoisedClosest)
+        : rawClosest;
+    if (abs(rawClosest - denoisedClosest) <= 1e-6f)
+        return receiverSample;
+
+    if (receiverSample >= rawClosest)
     {
-        return saturate(encoded.rgb);
+        const float upperRange = max(1.0f - rawClosest, 1e-6f);
+        return saturate(denoisedClosest +
+            (receiverSample - rawClosest) *
+            (1.0f - denoisedClosest) / upperRange);
     }
-    return saturate(encoded.r).xxx;
+    const float lowerRange = max(rawClosest, 1e-6f);
+    return saturate(denoisedClosest -
+        (rawClosest - receiverSample) *
+        denoisedClosest / lowerRange);
 }
 
 float3 GetDirectLightVisibility(
     uint lightIndex,
-    int2 pixelPosition)
+    int2 pixelPosition,
+    uint sampleIndex)
 {
     float3 visibility = 1.0f;
     if (int(lightIndex) ==
         g_PbrDeferred.directVisibilityLightIndices.x)
     {
+        const uint2 pixel = uint2(pixelPosition);
+        const float corrected = ApplyClosestSurfaceDenoisingCorrection(
+            t_FlashlightVisibility[uint3(pixel, sampleIndex)],
+            t_FlashlightRawClosestVisibility[pixel],
+            t_FlashlightDenoisedClosestVisibility[pixel]);
         visibility = min(
             visibility,
-            DecodeDirectLightVisibility(
-                t_FlashlightVisibility[pixelPosition],
-                g_PbrDeferred.directVisibilityEncodings.x));
+            DecodeDirectLightVisibility(corrected));
     }
     if (int(lightIndex) ==
         g_PbrDeferred.directVisibilityLightIndices.y)
     {
+        const uint2 pixel = uint2(pixelPosition);
+        const float corrected = ApplyClosestSurfaceDenoisingCorrection(
+            t_SunVisibility[uint3(pixel, sampleIndex)],
+            t_SunRawClosestVisibility[pixel],
+            t_SunDenoisedClosestVisibility[pixel]);
         visibility = min(
             visibility,
-            DecodeDirectLightVisibility(
-                t_SunVisibility[pixelPosition],
-                g_PbrDeferred.directVisibilityEncodings.y));
+            DecodeDirectLightVisibility(corrected));
     }
     return visibility;
 }
@@ -240,23 +287,25 @@ bool ShadeDeferredSample(
     float3 environmentSpecular = 0.0f;
     float skyVisibility = 1.0f;
     const bool showSkyVisibility =
-        g_PbrDeferred.lightingDebugView == 12u;
+        PbrLightingDebugShowsSkyVisibility(
+            g_PbrDeferred.lightingDebugView);
     const bool applySkyVisibilityToDiffuseIbl =
-        g_PbrDeferred.skyVisibilityApplication ==
-            UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL ||
-        g_PbrDeferred.skyVisibilityApplication ==
-            UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
+        SkyVisibilityAppliesToDiffuseIbl(
+            g_PbrDeferred.skyVisibilityApplication);
     const bool applySkyVisibilityToSpecularIbl =
-        g_PbrDeferred.skyVisibilityApplication ==
-            UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL ||
-        g_PbrDeferred.skyVisibilityApplication ==
-            UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL;
-    if (showSkyVisibility ||
-        applySkyVisibilityToDiffuseIbl ||
-        applySkyVisibilityToSpecularIbl)
+        SkyVisibilityAppliesToSpecularIbl(
+            g_PbrDeferred.skyVisibilityApplication);
+    if (PbrNeedsSkyVisibilitySample(
+        g_PbrDeferred.lightingDebugView,
+        applySkyVisibilityToDiffuseIbl,
+        applySkyVisibilityToSpecularIbl))
     {
+        const uint2 pixel = uint2(pixelPosition);
         const float sampledSkyVisibility =
-            t_SkyVisibility[pixelPosition];
+            ApplyClosestSurfaceDenoisingCorrection(
+                t_SkyVisibility[uint3(pixel, sampleIndex)],
+                t_SkyRawClosestVisibility[pixel],
+                t_SkyDenoisedClosestVisibility[pixel]);
         skyVisibility = isfinite(sampledSkyVisibility)
             ? saturate(sampledSkyVisibility)
             : 1.0f;
@@ -265,12 +314,16 @@ bool ShadeDeferredSample(
     {
         const bool needDiffuseEnvironment =
             g_PbrDeferred.separateIndirect == 0 ||
-            g_PbrDeferred.lightingDebugView == 4u ||
-            g_PbrDeferred.lightingDebugView == 9u;
+            g_PbrDeferred.lightingDebugView ==
+                UVSR_PBR_LIGHTING_DEBUG_DIFFUSE_ENVIRONMENT ||
+            g_PbrDeferred.lightingDebugView ==
+                UVSR_PBR_LIGHTING_DEBUG_COMBINED_ENVIRONMENT;
         const bool needSpecularEnvironment =
             g_PbrDeferred.separateIndirect == 0 ||
-            (g_PbrDeferred.lightingDebugView >= 6u &&
-                g_PbrDeferred.lightingDebugView <= 9u);
+            (g_PbrDeferred.lightingDebugView >=
+                    UVSR_PBR_LIGHTING_DEBUG_PREFILTERED_SPECULAR &&
+                g_PbrDeferred.lightingDebugView <=
+                    UVSR_PBR_LIGHTING_DEBUG_COMBINED_ENVIRONMENT);
         if (needDiffuseEnvironment &&
             environmentProbe.diffuseScale > 0.0f)
         {
@@ -324,18 +377,22 @@ bool ShadeDeferredSample(
         }
     }
 
-    if (g_PbrDeferred.lightingDebugView != 0u)
+    if (PbrLightingDebugIsActive(
+        g_PbrDeferred.lightingDebugView))
     {
         float3 debugColor = 0.0f;
-        if (g_PbrDeferred.lightingDebugView == 1u)
+        if (g_PbrDeferred.lightingDebugView ==
+            UVSR_PBR_LIGHTING_DEBUG_SHADING_NORMAL)
         {
             debugColor = gbuffer.shadingNormal * 0.5f + 0.5f;
         }
-        else if (g_PbrDeferred.lightingDebugView == 2u)
+        else if (g_PbrDeferred.lightingDebugView ==
+            UVSR_PBR_LIGHTING_DEBUG_GEOMETRIC_NORMAL)
         {
             debugColor = gbuffer.geometricNormal * 0.5f + 0.5f;
         }
-        else if (g_PbrDeferred.lightingDebugView == 3u)
+        else if (g_PbrDeferred.lightingDebugView ==
+            UVSR_PBR_LIGHTING_DEBUG_NORMAL_DIFFERENCE)
         {
             float angularDifference = saturate(
                 1.0f - dot(
@@ -346,37 +403,44 @@ bool ShadeDeferredSample(
                 0.0f,
                 1.0f - angularDifference);
         }
-        else if (g_PbrDeferred.lightingDebugView == 4u)
+        else if (g_PbrDeferred.lightingDebugView ==
+            UVSR_PBR_LIGHTING_DEBUG_DIFFUSE_ENVIRONMENT)
         {
             debugColor = environmentDiffuseResponse;
         }
-        else if (g_PbrDeferred.lightingDebugView == 5u)
+        else if (g_PbrDeferred.lightingDebugView ==
+            UVSR_PBR_LIGHTING_DEBUG_ENVIRONMENT_DIRECTION)
         {
             float cardinalResponse =
                 1.0f + 0.5f * gbuffer.shadingNormal.x;
             debugColor = cardinalResponse * 0.5f;
         }
-        else if (g_PbrDeferred.lightingDebugView == 6u)
+        else if (g_PbrDeferred.lightingDebugView ==
+            UVSR_PBR_LIGHTING_DEBUG_PREFILTERED_SPECULAR)
         {
             debugColor = prefilteredEnvironment;
         }
-        else if (g_PbrDeferred.lightingDebugView == 7u)
+        else if (g_PbrDeferred.lightingDebugView ==
+            UVSR_PBR_LIGHTING_DEBUG_ENVIRONMENT_BRDF)
         {
             debugColor = float3(
                 environmentBrdf.x,
                 environmentBrdf.y,
                 0.0f);
         }
-        else if (g_PbrDeferred.lightingDebugView == 8u)
+        else if (g_PbrDeferred.lightingDebugView ==
+            UVSR_PBR_LIGHTING_DEBUG_FINAL_SPECULAR)
         {
             debugColor = environmentSpecular;
         }
-        else if (g_PbrDeferred.lightingDebugView == 9u)
+        else if (g_PbrDeferred.lightingDebugView ==
+            UVSR_PBR_LIGHTING_DEBUG_COMBINED_ENVIRONMENT)
         {
             debugColor =
                 environmentDiffuse + environmentSpecular;
         }
-        else if (g_PbrDeferred.lightingDebugView == 10u)
+        else if (g_PbrDeferred.lightingDebugView ==
+            UVSR_PBR_LIGHTING_DEBUG_SPECULAR_OCCLUSION)
         {
             const float specularOcclusion =
                 PbrEnvironmentSpecularOcclusion(
@@ -385,7 +449,8 @@ bool ShadeDeferredSample(
                     preparedEnvironment.perceptualRoughness);
             debugColor = specularOcclusion.xxx;
         }
-        else if (g_PbrDeferred.lightingDebugView == 11u)
+        else if (g_PbrDeferred.lightingDebugView ==
+            UVSR_PBR_LIGHTING_DEBUG_ENVIRONMENT_MIP)
         {
             const float normalizedMip =
                 environmentProbe.mipLevels > 1.0f
@@ -396,7 +461,8 @@ bool ShadeDeferredSample(
         }
         else if (showSkyVisibility)
         {
-            debugColor = skyVisibility.xxx;
+            debugColor =
+                ResolvePbrSkyVisibilityDebugColor(skyVisibility);
         }
 
         finalLinearHdr = min(max(debugColor, 0.0f), 65504.0f);
@@ -422,7 +488,8 @@ bool ShadeDeferredSample(
             float3 directModulation =
                 GetDirectLightVisibility(
                 lightIndex,
-                pixelPosition);
+                pixelPosition,
+                sampleIndex);
             if (!any(directModulation > 0.0f))
                 continue;
 
@@ -493,9 +560,11 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
         i_globalIdx.xy +
         int2(g_Deferred.view.viewportOrigin);
     float3 finalLinearHdr =
-        g_PbrDeferred.lightingDebugView == 0u
-            ? max(t_ResolvedBackground[pixelPosition].rgb, 0.0f)
-            : 0.0f;
+        PbrDebugUsesBlackBackground(
+            g_PbrDeferred.lightingDebugView,
+            g_PbrDeferred.visibilityDebugView)
+        ? 0.0f
+        : max(t_ResolvedBackground[pixelPosition].rgb, 0.0f);
     const float inverseSampleCount =
         1.0f / float(PBR_DEFERRED_MSAA_SAMPLES);
     uint coveredSampleCount = 0u;
@@ -519,11 +588,14 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
     }
 
 #if PBR_DEFERRED_MSAA_VISIBILITY
-    if (g_PbrDeferred.visibilityDebugView != 0u)
+    const uint debugPresentation = ResolvePbrDebugPresentation(
+        g_PbrDeferred.lightingDebugView,
+        g_PbrDeferred.visibilityDebugView);
+    if (debugPresentation == UVSR_PBR_DEBUG_PRESENT_VISIBILITY)
     {
         finalLinearHdr = t_VisibilityComposite[pixelPosition].rgb;
     }
-    else if (g_PbrDeferred.lightingDebugView == 0u)
+    else if (debugPresentation == UVSR_PBR_DEBUG_PRESENT_FINAL)
     {
         // Visibility evaluates the closest coherent covered surface once.
         // Apply only its signed lighting correction and scale it by raster

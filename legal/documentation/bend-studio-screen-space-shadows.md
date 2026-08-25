@@ -18,7 +18,6 @@ source remains in the current tree.
 
 ## Evidence
 
-- [Abandoned Experiment Record](../../docs/exec-plans/abandoned/bend-screen-space-shadows.md)
 - Added at `ea566bc67f744059e6f62e33c541c5b25bde9bd8`; inspect the former files with `git show ea566bc:third_party/bend_sss/README.md`
 - Temporarily removed at `aed8cdac1a6d3abd6b2ff1951dd6ca7bb6dec83a`, restored at `18236ffb48d475ec85a518b326f3481c838ad7c3`, and finally removed at `f892c17e33c007db69ca10f055bd7e59301b37d0`
 

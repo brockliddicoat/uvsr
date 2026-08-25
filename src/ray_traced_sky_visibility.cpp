@@ -1,13 +1,16 @@
 #include "ray_traced_sky_visibility.h"
+#include "renderer_common_passes.h"
+#include "renderer_log.h"
+#include "renderer_receiver_texture_contract.h"
+#include "renderer_resource_contract.h"
+#include "renderer_shader_factory.h"
 
-#include <donut/core/log.h>
 #include <donut/core/math/math.h>
-#include <donut/engine/CommonRenderPasses.h>
-#include <donut/engine/ShaderFactory.h>
 #include <donut/engine/View.h>
 
 #include <cmath>
 #include <cstddef>
+#include <array>
 #include <vector>
 
 using namespace donut;
@@ -33,6 +36,25 @@ namespace uvsr
 {
     namespace
     {
+        constexpr std::array<uint32_t, 5> ReceiverSampleCounts = {
+            1u, 2u, 4u, 8u, 16u
+        };
+        constexpr std::array<const char*, 5> ReceiverSampleMacros = {
+            "1", "2", "4", "8", "16"
+        };
+
+        uint32_t FindVariant(uint32_t sampleCount)
+        {
+            for (uint32_t index = 0u;
+                index < ReceiverSampleCounts.size();
+                ++index)
+            {
+                if (ReceiverSampleCounts[index] == sampleCount)
+                    return index;
+            }
+            return uint32_t(ReceiverSampleCounts.size());
+        }
+
         bool HasFormatSupport(
             nvrhi::IDevice* device,
             nvrhi::Format format,
@@ -45,15 +67,6 @@ namespace uvsr
             if (requiresUav)
                 required = required | nvrhi::FormatSupport::ShaderUavStore;
             return (device->queryFormatSupport(format) & required) == required;
-        }
-
-        bool SameInputs(
-            const RayTracedSkyVisibilityInputs& left,
-            const RayTracedSkyVisibilityInputs& right)
-        {
-            return left.depth == right.depth &&
-                left.material == right.material &&
-                left.normals == right.normals;
         }
 
         float GetDepthQuantizationStep(nvrhi::Format format)
@@ -82,14 +95,18 @@ namespace uvsr
             nvrhi::IDevice* device,
             uint32_t width,
             uint32_t height,
+            uint32_t receiverSampleCount,
             nvrhi::Format format,
             const char* debugName)
         {
             nvrhi::TextureDesc description;
             description.width = width;
             description.height = height;
+            description.arraySize = receiverSampleCount;
             description.format = format;
-            description.dimension = nvrhi::TextureDimension::Texture2D;
+            description.dimension = receiverSampleCount > 1u
+                ? nvrhi::TextureDimension::Texture2DArray
+                : nvrhi::TextureDimension::Texture2D;
             description.isUAV = true;
             description.debugName = debugName;
             description.enableAutomaticStateTracking(
@@ -111,7 +128,7 @@ namespace uvsr
 
     RayTracedSkyVisibilityPass::RayTracedSkyVisibilityPass(
         nvrhi::IDevice* device,
-        const std::shared_ptr<ShaderFactory>& shaderFactory,
+        const std::shared_ptr<RendererShaderFactory>& shaderFactory,
         nvrhi::IBindingLayout* bindlessLayout)
         : m_Device(device)
         , m_BindlessLayout(bindlessLayout)
@@ -136,7 +153,7 @@ namespace uvsr
         constantBufferDescription.isConstantBuffer = true;
         constantBufferDescription.isVolatile = true;
         constantBufferDescription.maxVersions =
-            engine::c_MaxRenderPassConstantBufferVersions;
+            RendererMaxConstantBufferVersions;
         m_ConstantBuffer = device->createBuffer(
             constantBufferDescription);
         m_MaterialSampler = device->createSampler(
@@ -153,65 +170,101 @@ namespace uvsr
             nvrhi::BindingLayoutDesc layoutDescription;
             layoutDescription.visibility = nvrhi::ShaderType::Compute;
             layoutDescription.bindings = {
-                nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                nvrhi::BindingLayoutItem::RayTracingAccelStruct(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(1),
-                nvrhi::BindingLayoutItem::Texture_SRV(2),
-                nvrhi::BindingLayoutItem::Texture_SRV(3),
-                nvrhi::BindingLayoutItem::Texture_SRV(4),
-                nvrhi::BindingLayoutItem::Texture_SRV(5),
-                nvrhi::BindingLayoutItem::StructuredBuffer_SRV(10),
-                nvrhi::BindingLayoutItem::StructuredBuffer_SRV(11),
-                nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
-                nvrhi::BindingLayoutItem::Sampler(0),
-                nvrhi::BindingLayoutItem::Texture_UAV(0)
+                nvrhi::BindingLayoutItem::VolatileConstantBuffer(
+                    SkyVisibilityConstantBufferSlot),
+                nvrhi::BindingLayoutItem::RayTracingAccelStruct(
+                    SkyVisibilityWorldTlasSlot),
+                nvrhi::BindingLayoutItem::Texture_SRV(
+                    SkyVisibilityDepthSlot),
+                nvrhi::BindingLayoutItem::Texture_SRV(
+                    SkyVisibilityMaterialSlot),
+                nvrhi::BindingLayoutItem::Texture_SRV(
+                    SkyVisibilityNormalsSlot),
+                nvrhi::BindingLayoutItem::Texture_SRV(
+                    SkyVisibilityNoiseSlot),
+                nvrhi::BindingLayoutItem::Texture_SRV(
+                    SkyVisibilityAttemptMaskSlot),
+                nvrhi::BindingLayoutItem::StructuredBuffer_SRV(
+                    RayMaterialGeometrySlot),
+                nvrhi::BindingLayoutItem::StructuredBuffer_SRV(
+                    RayMaterialConstantsSlot),
+                nvrhi::BindingLayoutItem::StructuredBuffer_SRV(
+                    RayMaterialGeometryIndexSlot),
+                nvrhi::BindingLayoutItem::Sampler(
+                    RayMaterialSamplerSlot),
+                nvrhi::BindingLayoutItem::Texture_UAV(
+                    SkyVisibilityOutputSlot),
+                nvrhi::BindingLayoutItem::Texture_UAV(
+                    SkyVisibilityClosestOutputSlot)
             };
             if (outputHitDistance)
             {
                 layoutDescription.bindings.push_back(
-                    nvrhi::BindingLayoutItem::Texture_UAV(1));
+                    nvrhi::BindingLayoutItem::Texture_UAV(
+                        SkyVisibilityHitDistanceOutputSlot));
             }
             m_BindingLayouts[variant] =
                 device->createBindingLayout(layoutDescription);
 
-            std::vector<ShaderMacro> macros;
-            macros.push_back({
-                "OUTPUT_HIT_DISTANCE",
-                outputHitDistance ? "1" : "0" });
-            m_Shaders[variant] = shaderFactory->CreateShader(
-                "uvsr/ray_traced_sky_visibility_cs.hlsl",
-                "Generate",
-                &macros,
-                nvrhi::ShaderType::Compute);
-            if (m_Shaders[variant] && m_BindingLayouts[variant])
+            for (uint32_t receiverVariant = 0u;
+                receiverVariant < ReceiverSampleCounts.size();
+                ++receiverVariant)
             {
-                nvrhi::ComputePipelineDesc pipelineDescription;
-                pipelineDescription.CS = m_Shaders[variant];
-                pipelineDescription.bindingLayouts = {
-                    m_BindingLayouts[variant],
-                    m_BindlessLayout
+                const std::vector<RendererShaderMacro> macros = {
+                    { "OUTPUT_HIT_DISTANCE",
+                        outputHitDistance ? "1" : "0" },
+                    { "SKY_VISIBILITY_SAMPLES",
+                        ReceiverSampleMacros[receiverVariant] }
                 };
-                m_Pipelines[variant] = device->createComputePipeline(
-                    pipelineDescription);
+                m_Shaders[variant][receiverVariant] =
+                    shaderFactory->CreateShader(
+                        "uvsr/ray_traced_sky_visibility_cs.hlsl",
+                        "Generate",
+                        &macros,
+                        nvrhi::ShaderType::Compute);
+                if (m_Shaders[variant][receiverVariant] &&
+                    m_BindingLayouts[variant])
+                {
+                    nvrhi::ComputePipelineDesc pipelineDescription;
+                    pipelineDescription.CS =
+                        m_Shaders[variant][receiverVariant];
+                    pipelineDescription.bindingLayouts = {
+                        m_BindingLayouts[variant],
+                        m_BindlessLayout
+                    };
+                    m_Pipelines[variant][receiverVariant] =
+                        device->createComputePipeline(
+                            pipelineDescription);
+                }
             }
         }
 
-        if (m_HitDistanceSupported &&
-            (!m_BindingLayouts[1] || !m_Shaders[1] || !m_Pipelines[1]))
+        if (m_HitDistanceSupported)
         {
-            m_HitDistanceSupported = false;
+            for (const auto& pipeline : m_Pipelines[1])
+                m_HitDistanceSupported = m_HitDistanceSupported &&
+                    bool(pipeline);
+        }
+        if (!m_HitDistanceSupported)
+        {
             m_BindingLayouts[1] = nullptr;
-            m_Shaders[1] = nullptr;
-            m_Pipelines[1] = nullptr;
+            for (auto& shader : m_Shaders[1])
+                shader = nullptr;
+            for (auto& pipeline : m_Pipelines[1])
+                pipeline = nullptr;
         }
 
         if (!m_BindingLayouts[0] || !m_ConstantBuffer ||
-            !m_MaterialSampler ||
-            !m_Shaders[0] || !m_Pipelines[0])
+            !m_MaterialSampler)
         {
             m_Supported = false;
+        }
+        for (const auto& pipeline : m_Pipelines[0])
+            m_Supported = m_Supported && bool(pipeline);
+        if (!m_Supported)
+        {
             log::error(
-                "The ray traced sky visibility pipeline could not be created");
+                "The ray traced sky visibility pipelines could not be created");
         }
     }
 
@@ -219,57 +272,89 @@ namespace uvsr
         const RayTracedSkyVisibilityInputs& inputs,
         bool outputHitDistance)
     {
-        const nvrhi::ITexture* textures[] = {
-            inputs.depth,
-            inputs.material,
-            inputs.normals
-        };
-        if (!inputs.depth)
+        if (!inputs.depth || !inputs.material || !inputs.normals)
             return false;
         const nvrhi::TextureDesc& depthDescription =
             inputs.depth->getDesc();
-        for (const nvrhi::ITexture* texture : textures)
+        const nvrhi::TextureDesc& materialDescription =
+            inputs.material->getDesc();
+        const nvrhi::TextureDesc& normalsDescription =
+            inputs.normals->getDesc();
+        const uint32_t receiverSampleCount = depthDescription.sampleCount;
+        if (!AreRendererReceiverTextureDescriptorsCompatible(
+                depthDescription,
+                materialDescription,
+                normalsDescription) ||
+            FindVariant(receiverSampleCount) >=
+                ReceiverSampleCounts.size())
         {
-            if (!texture || texture->getDesc().sampleCount != 1u ||
-                texture->getDesc().dimension !=
-                    nvrhi::TextureDimension::Texture2D ||
-                texture->getDesc().width != depthDescription.width ||
-                texture->getDesc().height != depthDescription.height)
-            {
-                return false;
-            }
+            return false;
         }
+        const nvrhi::TextureDimension visibilityDimension =
+            receiverSampleCount > 1u
+                ? nvrhi::TextureDimension::Texture2DArray
+                : nvrhi::TextureDimension::Texture2D;
         const bool visibilitySizeMatches = m_OutputVisibility &&
             m_OutputVisibility->getDesc().width == depthDescription.width &&
-            m_OutputVisibility->getDesc().height == depthDescription.height;
+            m_OutputVisibility->getDesc().height == depthDescription.height &&
+            m_OutputVisibility->getDesc().arraySize == receiverSampleCount &&
+            m_OutputVisibility->getDesc().dimension == visibilityDimension;
+        const bool closestVisibilitySizeMatches =
+            m_OutputClosestVisibility &&
+            m_OutputClosestVisibility->getDesc().width ==
+                depthDescription.width &&
+            m_OutputClosestVisibility->getDesc().height ==
+                depthDescription.height;
         const bool hitDistanceSizeMatches = m_OutputHitDistance &&
             m_OutputHitDistance->getDesc().width == depthDescription.width &&
             m_OutputHitDistance->getDesc().height == depthDescription.height;
-        bool resourcesChanged = false;
-        if (!visibilitySizeMatches)
+        const std::array<bool, 2> replaceMandatory = {
+            !visibilitySizeMatches,
+            !closestVisibilitySizeMatches
+        };
+        std::array<nvrhi::TextureHandle, 2> mandatory = {
+            m_OutputVisibility,
+            m_OutputClosestVisibility
+        };
+        if (!TryReplaceRendererResources(
+                mandatory,
+                replaceMandatory,
+                [this, &depthDescription, receiverSampleCount](
+                    std::size_t index)
+                {
+                    return CreateOutputTexture(
+                        m_Device,
+                        depthDescription.width,
+                        depthDescription.height,
+                        index == 0u ? receiverSampleCount : 1u,
+                        nvrhi::Format::R8_UNORM,
+                        index == 0u
+                            ? "Ray Traced Sky Visibility/Per Raster Sample"
+                            : "Ray Traced Sky Visibility/Closest Raster Sample");
+                }))
         {
-            nvrhi::TextureHandle outputVisibility = CreateOutputTexture(
-                m_Device,
-                depthDescription.width,
-                depthDescription.height,
-                nvrhi::Format::R8_UNORM,
-                "Ray Traced Sky Visibility");
-            if (!outputVisibility)
-                return false;
-            m_OutputVisibility = outputVisibility;
-            resourcesChanged = true;
+            return false;
         }
+        bool resourcesChanged = replaceMandatory[0] || replaceMandatory[1];
+        m_OutputVisibility = mandatory[0];
+        m_OutputClosestVisibility = mandatory[1];
 
         if (outputHitDistance && !hitDistanceSizeMatches)
         {
-            m_OutputHitDistance = CreateOutputTexture(
+            nvrhi::TextureHandle hitDistance = CreateOutputTexture(
                 m_Device,
                 depthDescription.width,
                 depthDescription.height,
+                1u,
                 nvrhi::Format::R16_FLOAT,
-                "Ray Traced Sky Visibility/Hit Distance");
-            if (!m_OutputHitDistance)
+                "Ray Traced Sky Visibility/Closest Hit Distance");
+            if (hitDistance)
+                m_OutputHitDistance = hitDistance;
+            else
+            {
+                m_OutputHitDistance = nullptr;
                 m_HitDistanceSupported = false;
+            }
             resourcesChanged = true;
         }
         else if (!outputHitDistance && m_OutputHitDistance)
@@ -284,6 +369,7 @@ namespace uvsr
     }
 
     bool RayTracedSkyVisibilityPass::EnsureBindingSet(
+        uint32_t receiverVariant,
         const RayTracedSkyVisibilityInputs& inputs,
         const RayTracedMaterialVisibilityInputs& materialVisibility,
         nvrhi::rt::IAccelStruct* worldTlas,
@@ -291,54 +377,77 @@ namespace uvsr
         nvrhi::ITexture* attemptMask,
         bool outputHitDistance)
     {
-        const uint32_t variant = outputHitDistance ? 1u : 0u;
-        if (!worldTlas || !materialVisibility || !noiseTexture ||
-            !m_OutputVisibility ||
+        const uint32_t outputVariant = outputHitDistance ? 1u : 0u;
+        if (receiverVariant >= ReceiverSampleCounts.size() ||
+            !worldTlas || !materialVisibility || !noiseTexture ||
+            !m_OutputVisibility || !m_OutputClosestVisibility ||
             (outputHitDistance && !m_OutputHitDistance))
             return false;
-        if (m_BoundTlas != worldTlas ||
-            !SameInputs(m_BoundInputs, inputs) ||
-            m_BoundMaterialVisibility != materialVisibility ||
-            m_BoundNoiseTexture != noiseTexture ||
-            m_BoundAttemptMask != attemptMask)
+        const RayTracedSkyVisibilityBindingIdentity identity = {
+            worldTlas,
+            inputs.depth,
+            inputs.material,
+            inputs.normals,
+            materialVisibility.geometryBuffer,
+            materialVisibility.materialBuffer,
+            materialVisibility.geometryIndexMap,
+            materialVisibility.descriptorTable,
+            noiseTexture,
+            attemptMask
+        };
+        if (m_BoundIdentity != identity)
         {
             ClearBindingSets();
-            m_BoundTlas = worldTlas;
-            m_BoundInputs = inputs;
-            m_BoundMaterialVisibility = materialVisibility;
-            m_BoundNoiseTexture = noiseTexture;
-            m_BoundAttemptMask = attemptMask;
+            m_BoundIdentity = identity;
         }
-        if (m_BindingSets[variant])
+        if (m_BindingSets[outputVariant][receiverVariant])
             return true;
 
         nvrhi::BindingSetDesc description;
         description.bindings = {
-            nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
-            nvrhi::BindingSetItem::RayTracingAccelStruct(0, worldTlas),
-            nvrhi::BindingSetItem::Texture_SRV(1, inputs.depth),
-            nvrhi::BindingSetItem::Texture_SRV(2, inputs.material),
-            nvrhi::BindingSetItem::Texture_SRV(3, inputs.normals),
-            nvrhi::BindingSetItem::Texture_SRV(4, noiseTexture),
-            nvrhi::BindingSetItem::Texture_SRV(5, attemptMask),
+            nvrhi::BindingSetItem::ConstantBuffer(
+                SkyVisibilityConstantBufferSlot, m_ConstantBuffer),
+            nvrhi::BindingSetItem::RayTracingAccelStruct(
+                SkyVisibilityWorldTlasSlot, worldTlas),
+            nvrhi::BindingSetItem::Texture_SRV(
+                SkyVisibilityDepthSlot, inputs.depth),
+            nvrhi::BindingSetItem::Texture_SRV(
+                SkyVisibilityMaterialSlot, inputs.material),
+            nvrhi::BindingSetItem::Texture_SRV(
+                SkyVisibilityNormalsSlot, inputs.normals),
+            nvrhi::BindingSetItem::Texture_SRV(
+                SkyVisibilityNoiseSlot, noiseTexture),
+            nvrhi::BindingSetItem::Texture_SRV(
+                SkyVisibilityAttemptMaskSlot, attemptMask),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(
-                10, materialVisibility.geometryBuffer),
+                RayMaterialGeometrySlot,
+                materialVisibility.geometryBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(
-                11, materialVisibility.materialBuffer),
+                RayMaterialConstantsSlot,
+                materialVisibility.materialBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(
-                12, materialVisibility.geometryIndexMap),
-            nvrhi::BindingSetItem::Sampler(0, m_MaterialSampler),
-            nvrhi::BindingSetItem::Texture_UAV(0, m_OutputVisibility)
+                RayMaterialGeometryIndexSlot,
+                materialVisibility.geometryIndexMap),
+            nvrhi::BindingSetItem::Sampler(
+                RayMaterialSamplerSlot, m_MaterialSampler),
+            nvrhi::BindingSetItem::Texture_UAV(
+                SkyVisibilityOutputSlot, m_OutputVisibility),
+            nvrhi::BindingSetItem::Texture_UAV(
+                SkyVisibilityClosestOutputSlot,
+                m_OutputClosestVisibility)
         };
         if (outputHitDistance)
         {
             description.bindings.push_back(
                 nvrhi::BindingSetItem::Texture_UAV(
-                    1, m_OutputHitDistance));
+                    SkyVisibilityHitDistanceOutputSlot,
+                    m_OutputHitDistance));
         }
-        m_BindingSets[variant] = m_Device->createBindingSet(
-            description, m_BindingLayouts[variant]);
-        if (!m_BindingSets[variant])
+        m_BindingSets[outputVariant][receiverVariant] =
+            m_Device->createBindingSet(
+                description,
+                m_BindingLayouts[outputVariant]);
+        if (!m_BindingSets[outputVariant][receiverVariant])
         {
             ClearBindingSets();
             return false;
@@ -417,7 +526,12 @@ namespace uvsr
                 "Ray traced sky visibility hit distance allocation failed");
             m_ReportedHitDistanceUnavailable = true;
         }
+        const uint32_t receiverSampleCount =
+            inputs.depth->getDesc().sampleCount;
+        const uint32_t receiverVariant =
+            FindVariant(receiverSampleCount);
         if (!EnsureBindingSet(
+                receiverVariant,
                 inputs,
                 materialVisibility,
                 worldTlas,
@@ -438,8 +552,8 @@ namespace uvsr
         RayTracedSkyVisibilityConstants constants = {};
         view.FillPlanarViewConstants(constants.view);
         constants.sampleSequencePhase = samplingPhase;
-        constants.sampleCount = ResolveRayTracedSkyVisibilityTraceCount(
-            settings);
+        constants.sampleCount = ResolveRayTracedSkyVisibilitySampleCount(
+            settings.sampleRateLog2);
         constants.noisePattern =
             static_cast<uint32_t>(noiseSettings.pattern);
         constants.rayDistance = rayDistance;
@@ -457,12 +571,12 @@ namespace uvsr
         commandList->writeBuffer(
             m_ConstantBuffer, &constants, sizeof(constants));
 
-        const uint32_t variant = outputHitDistance ? 1u : 0u;
+        const uint32_t outputVariant = outputHitDistance ? 1u : 0u;
         commandList->beginMarker("Ray Traced Sky Visibility");
         nvrhi::ComputeState state;
-        state.pipeline = m_Pipelines[variant];
+        state.pipeline = m_Pipelines[outputVariant][receiverVariant];
         state.bindings = {
-            m_BindingSets[variant],
+            m_BindingSets[outputVariant][receiverVariant],
             materialVisibility.descriptorTable
         };
         commandList->setComputeState(state);
@@ -473,25 +587,25 @@ namespace uvsr
         commandList->endMarker();
         return {
             m_OutputVisibility,
+            m_OutputClosestVisibility,
             outputHitDistance ? m_OutputHitDistance.Get() : nullptr,
-            true,
-            settings.useRatioEstimator
+            receiverSampleCount,
+            true
         };
     }
 
     void RayTracedSkyVisibilityPass::ResetBindingCache()
     {
         ClearBindingSets();
-        m_BoundTlas = nullptr;
-        m_BoundInputs = {};
-        m_BoundMaterialVisibility = {};
-        m_BoundNoiseTexture = nullptr;
-        m_BoundAttemptMask = nullptr;
+        m_BoundIdentity = {};
     }
 
     void RayTracedSkyVisibilityPass::ClearBindingSets()
     {
-        for (nvrhi::BindingSetHandle& bindingSet : m_BindingSets)
-            bindingSet = nullptr;
+        for (auto& outputVariant : m_BindingSets)
+        {
+            for (nvrhi::BindingSetHandle& bindingSet : outputVariant)
+                bindingSet = nullptr;
+        }
     }
 }

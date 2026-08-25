@@ -1,15 +1,13 @@
 #include "msaa_visibility_resolve.h"
+#include "renderer_log.h"
+#include "renderer_shader_factory.h"
 
-#include <donut/core/log.h>
-#include <donut/engine/ShaderFactory.h>
-
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <string>
+#include <utility>
 #include <vector>
-
-using namespace donut;
-using namespace donut::engine;
 
 namespace
 {
@@ -25,29 +23,6 @@ namespace
         }
     }
 
-    bool IsSupportedDepthFormat(nvrhi::Format format)
-    {
-        return format == nvrhi::Format::D16 ||
-            format == nvrhi::Format::D24S8 ||
-            format == nvrhi::Format::D32 ||
-            format == nvrhi::Format::D32S8;
-    }
-
-    bool HasExpectedTextureTopology(
-        const nvrhi::TextureDesc& description,
-        uint32_t width,
-        uint32_t height,
-        uint32_t sampleCount,
-        nvrhi::TextureDimension dimension)
-    {
-        return description.width == width &&
-            description.height == height &&
-            description.depth == 1u &&
-            description.arraySize == 1u &&
-            description.mipLevels == 1u &&
-            description.sampleCount == sampleCount &&
-            description.dimension == dimension;
-    }
 }
 
 namespace uvsr
@@ -59,12 +34,14 @@ namespace uvsr
     }
 
     void MsaaVisibilityResolvePass::Init(
-        const std::shared_ptr<ShaderFactory>& shaderFactory,
+        const std::shared_ptr<RendererShaderFactory>& shaderFactory,
         bool deferPipelineCreation)
     {
+        m_Pipelines = {};
         m_ShaderFactory = shaderFactory;
         m_PipelinePreparationStep = 0u;
         m_PipelinesReady = false;
+        m_PipelinePreparationFailed = false;
         if (!deferPipelineCreation)
         {
             while (!PreparePipelinesStep())
@@ -75,52 +52,80 @@ namespace uvsr
 
     bool MsaaVisibilityResolvePass::PreparePipelinesStep()
     {
-        if (m_PipelinesReady)
+        if (m_PipelinesReady || m_PipelinePreparationFailed)
             return true;
+
+        if (!m_Device || !m_ShaderFactory ||
+            m_PipelinePreparationStep >= m_Pipelines.size())
+        {
+            m_Pipelines = {};
+            m_ShaderFactory.reset();
+            m_PipelinePreparationFailed = true;
+            log::error(
+                "MSAA visibility resolve pipeline preparation dependencies are unavailable.");
+            return true;
+        }
 
         const uint32_t variant = m_PipelinePreparationStep;
         const uint32_t sampleCount = 2u << variant;
-        Pipeline& pipeline = m_Pipelines[variant];
+        Pipeline candidate;
 
         nvrhi::BindingLayoutDesc layoutDesc;
         layoutDesc.visibility = nvrhi::ShaderType::Compute;
-        layoutDesc.bindings = {
-                nvrhi::BindingLayoutItem::Texture_SRV(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(1),
-                nvrhi::BindingLayoutItem::Texture_SRV(2),
-                nvrhi::BindingLayoutItem::Texture_SRV(3),
-                nvrhi::BindingLayoutItem::Texture_SRV(4),
-                nvrhi::BindingLayoutItem::Texture_SRV(5),
-                nvrhi::BindingLayoutItem::Texture_SRV(6),
-                nvrhi::BindingLayoutItem::Texture_UAV(0),
-                nvrhi::BindingLayoutItem::Texture_UAV(1),
-                nvrhi::BindingLayoutItem::Texture_UAV(2),
-                nvrhi::BindingLayoutItem::Texture_UAV(3),
-                nvrhi::BindingLayoutItem::Texture_UAV(4),
-                nvrhi::BindingLayoutItem::Texture_UAV(5),
-                nvrhi::BindingLayoutItem::Texture_UAV(6)
-        };
-        pipeline.bindingLayout =
+        for (const uint32_t slot : MsaaVisibilityResolveBindingSlots)
+        {
+            layoutDesc.bindings.push_back(
+                nvrhi::BindingLayoutItem::Texture_SRV(slot));
+        }
+        for (const uint32_t slot : MsaaVisibilityResolveBindingSlots)
+        {
+            layoutDesc.bindings.push_back(
+                nvrhi::BindingLayoutItem::Texture_UAV(slot));
+        }
+        candidate.bindingLayout =
             m_Device->createBindingLayout(layoutDesc);
 
-        std::vector<ShaderMacro> macros;
+        std::vector<RendererShaderMacro> macros;
         macros.emplace_back(
             "MSAA_VISIBILITY_SAMPLES",
             std::to_string(sampleCount));
-        pipeline.shader = m_ShaderFactory->CreateShader(
+        candidate.shader = m_ShaderFactory->CreateShader(
             "uvsr/msaa_visibility_resolve_cs.hlsl",
             "main",
             &macros,
             nvrhi::ShaderType::Compute);
 
         nvrhi::ComputePipelineDesc pipelineDesc;
-        pipelineDesc.CS = pipeline.shader;
-        pipelineDesc.bindingLayouts = { pipeline.bindingLayout };
-        pipeline.pso = m_Device->createComputePipeline(pipelineDesc);
+        pipelineDesc.CS = candidate.shader;
+        pipelineDesc.bindingLayouts = { candidate.bindingLayout };
+        if (candidate.shader && candidate.bindingLayout)
+        {
+            candidate.pso =
+                m_Device->createComputePipeline(pipelineDesc);
+        }
+        const MsaaVisibilityResolvePipelineResources resources = {
+            bool(m_Device),
+            bool(m_ShaderFactory),
+            bool(candidate.bindingLayout),
+            bool(candidate.shader),
+            bool(candidate.pso)
+        };
+        if (!resources.AreComplete())
+        {
+            m_Pipelines = {};
+            m_ShaderFactory.reset();
+            m_PipelinePreparationFailed = true;
+            log::error(
+                "MSAA visibility resolve pipeline preparation failed.");
+            return true;
+        }
 
+        m_Pipelines[variant] = std::move(candidate);
         ++m_PipelinePreparationStep;
         m_PipelinesReady =
             m_PipelinePreparationStep == m_Pipelines.size();
+        if (m_PipelinesReady)
+            m_ShaderFactory.reset();
         return m_PipelinesReady;
     }
 
@@ -147,117 +152,61 @@ namespace uvsr
             return false;
         }
 
-        const std::array<nvrhi::ITexture*, 7> inputTextures = {
-            inputs.depth,
-            inputs.diffuse,
-            inputs.material,
-            inputs.normals,
-            inputs.emissive,
-            inputs.materialAmbientOcclusion,
-            inputs.motionVectors
-        };
-        const std::array<nvrhi::ITexture*, 7> outputTextures = {
-            outputs.depth,
-            outputs.diffuse,
-            outputs.material,
-            outputs.normals,
-            outputs.emissive,
-            outputs.materialAmbientOcclusion,
-            outputs.motionVectors
-        };
-        if (!inputs.depth)
+        const auto inputTextures =
+            GetMsaaVisibilityResolveInputTextures(inputs);
+        const auto outputTextures =
+            GetMsaaVisibilityResolveOutputTextures(outputs);
+        if (std::any_of(
+                inputTextures.begin(),
+                inputTextures.end(),
+                [](nvrhi::ITexture* texture) { return !texture; }) ||
+            std::any_of(
+                outputTextures.begin(),
+                outputTextures.end(),
+                [](nvrhi::ITexture* texture) { return !texture; }))
         {
             log::error(
-                "MSAA visibility resolve requires a depth input.");
+                "MSAA visibility resolve requires all seven inputs and outputs.");
             return false;
         }
-        const nvrhi::TextureDesc& inputExtent =
-            inputs.depth->getDesc();
-        const std::array<nvrhi::Format, 6> expectedInputFormats = {
-            nvrhi::Format::SRGBA8_UNORM,
-            nvrhi::Format::RGBA8_UNORM,
-            nvrhi::Format::RGBA16_SNORM,
-            nvrhi::Format::RGBA16_FLOAT,
-            nvrhi::Format::R8_UNORM,
-            nvrhi::Format::RGBA16_FLOAT
-        };
-        for (std::size_t textureIndex = 0u;
-            textureIndex < inputTextures.size();
-            ++textureIndex)
+        std::array<nvrhi::TextureDesc,
+            MsaaVisibilityResolveResourceCount> inputDescriptors;
+        std::array<nvrhi::TextureDesc,
+            MsaaVisibilityResolveResourceCount> outputDescriptors;
+        for (std::size_t index = 0u; index < inputTextures.size(); ++index)
         {
-            nvrhi::ITexture* texture = inputTextures[textureIndex];
-            if (!texture || !HasExpectedTextureTopology(
-                    texture->getDesc(),
-                    inputExtent.width,
-                    inputExtent.height,
-                    sampleCount,
-                    nvrhi::TextureDimension::Texture2DMS) ||
-                (textureIndex == 0u
-                    ? !IsSupportedDepthFormat(texture->getDesc().format)
-                    : texture->getDesc().format !=
-                        expectedInputFormats[textureIndex - 1u]))
-            {
-                log::error(
-                    "MSAA visibility resolve inputs must match the exact "
-                    "2DMS extent, sample count, single-mip topology, and "
-                    "G-buffer formats.");
-                return false;
-            }
+            inputDescriptors[index] = inputTextures[index]->getDesc();
+            outputDescriptors[index] = outputTextures[index]->getDesc();
         }
-        const std::array<nvrhi::Format, 7> expectedOutputFormats = {
-            nvrhi::Format::R32_FLOAT,
-            nvrhi::Format::RGBA16_FLOAT,
-            nvrhi::Format::RGBA16_FLOAT,
-            nvrhi::Format::RGBA16_FLOAT,
-            nvrhi::Format::RGBA16_FLOAT,
-            nvrhi::Format::R16_FLOAT,
-            nvrhi::Format::RGBA16_FLOAT
-        };
-        for (std::size_t textureIndex = 0u;
-            textureIndex < outputTextures.size();
-            ++textureIndex)
+        if (!AreMsaaVisibilityResolveDescriptorsSupported(
+                inputDescriptors,
+                outputDescriptors,
+                sampleCount))
         {
-            nvrhi::ITexture* texture = outputTextures[textureIndex];
-            if (!texture || !HasExpectedTextureTopology(
-                    texture->getDesc(),
-                    inputExtent.width,
-                    inputExtent.height,
-                    1u,
-                    nvrhi::TextureDimension::Texture2D) ||
-                texture->getDesc().format !=
-                    expectedOutputFormats[textureIndex] ||
-                !texture->getDesc().isUAV)
-            {
-                log::error(
-                    "MSAA visibility resolve outputs must match the input "
-                    "extent and exact single-sample UAV topology and formats.");
-                return false;
-            }
+            log::error(
+                "MSAA visibility resolve resources violate the exact 7-in/"
+                "7-out extent, format, mip, slice, sample, or UAV contract.");
+            return false;
         }
 
-        const nvrhi::TextureDesc& extent =
-            outputs.depth->getDesc();
+        const nvrhi::TextureDesc& extent = outputDescriptors[0];
         nvrhi::BindingSetDesc bindingSetDesc;
-        bindingSetDesc.bindings = {
-            nvrhi::BindingSetItem::Texture_SRV(0, inputs.depth),
-            nvrhi::BindingSetItem::Texture_SRV(1, inputs.diffuse),
-            nvrhi::BindingSetItem::Texture_SRV(2, inputs.material),
-            nvrhi::BindingSetItem::Texture_SRV(3, inputs.normals),
-            nvrhi::BindingSetItem::Texture_SRV(4, inputs.emissive),
-            nvrhi::BindingSetItem::Texture_SRV(
-                5, inputs.materialAmbientOcclusion),
-            nvrhi::BindingSetItem::Texture_SRV(
-                6, inputs.motionVectors),
-            nvrhi::BindingSetItem::Texture_UAV(0, outputs.depth),
-            nvrhi::BindingSetItem::Texture_UAV(1, outputs.diffuse),
-            nvrhi::BindingSetItem::Texture_UAV(2, outputs.material),
-            nvrhi::BindingSetItem::Texture_UAV(3, outputs.normals),
-            nvrhi::BindingSetItem::Texture_UAV(4, outputs.emissive),
-            nvrhi::BindingSetItem::Texture_UAV(
-                5, outputs.materialAmbientOcclusion),
-            nvrhi::BindingSetItem::Texture_UAV(
-                6, outputs.motionVectors)
-        };
+        for (std::size_t index = 0u; index < inputTextures.size(); ++index)
+        {
+            const uint32_t slot = MsaaVisibilityResolveBindingSlots[index];
+            bindingSetDesc.bindings.push_back(
+                nvrhi::BindingSetItem::Texture_SRV(
+                    slot,
+                    inputTextures[index]));
+        }
+        for (std::size_t index = 0u; index < outputTextures.size(); ++index)
+        {
+            const uint32_t slot = MsaaVisibilityResolveBindingSlots[index];
+            bindingSetDesc.bindings.push_back(
+                nvrhi::BindingSetItem::Texture_UAV(
+                    slot,
+                    outputTextures[index]));
+        }
         const Pipeline& pipeline =
             m_Pipelines[size_t(pipelineIndex)];
         if (!pipeline.bindingLayout || !pipeline.pso)
@@ -277,6 +226,17 @@ namespace uvsr
             return false;
         }
 
+        MsaaVisibilityResolveDispatchState dispatchState = {
+            m_PipelinesReady,
+            commandList != nullptr,
+            true,
+            bool(pipeline.pso),
+            bool(bindingSet),
+            false
+        };
+        if (!dispatchState.CanDispatch())
+            return false;
+
         nvrhi::ComputeState state;
         state.pipeline = pipeline.pso;
         state.bindings = { bindingSet };
@@ -287,6 +247,7 @@ namespace uvsr
             (extent.width + 7u) / 8u,
             (extent.height + 7u) / 8u);
         commandList->endMarker();
-        return true;
+        dispatchState.dispatchSubmitted = true;
+        return dispatchState.CanPublish();
     }
 }

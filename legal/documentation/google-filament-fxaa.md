@@ -55,7 +55,9 @@ only the generated coordinate table; it does not bundle the generator code.
 
 Google Filament is licensed under the Apache License, Version 2.0. The complete
 license is available at [Apache-2.0.txt](../licenses/Apache-2.0.txt) and is
-distributed as `licenses/Apache-2.0.txt` in UVSR binary packages.
+distributed as `bin/licenses/Apache-2.0.txt` in UVSR binary packages.
+This complete attribution record is also distributed as
+`bin/licenses/Google-Filament-FXAA-Attribution.md`.
 
 ## G3D Notice
 
@@ -65,7 +67,7 @@ Copyright 2000-2018, Morgan McGuire. All rights reserved.
 
 Available under the BSD License. The complete BSD 2-Clause text is available at
 [BSD-2-Clause.txt](../licenses/BSD-2-Clause.txt) and is distributed as
-`licenses/BSD-2-Clause.txt` in UVSR binary packages.
+`bin/licenses/BSD-2-Clause.txt` in UVSR binary packages.
 
 ## NVIDIA FXAA Notice
 

@@ -29,7 +29,6 @@ namespace uvsr
         bool enabled = true;
         bool applyToDiffuseIbl = true;
         bool applyToSpecularIbl = true;
-        bool useRatioEstimator = true;
         bool outputHitDistance = false;
         int32_t sampleRateLog2 = 1;
         float rayBias = 0.002f;
@@ -52,16 +51,6 @@ namespace uvsr
     {
         return IsRayTracedSkyVisibilitySampleRateSupported(sampleRateLog2)
             ? 1u << uint32_t(sampleRateLog2)
-            : 1u;
-    }
-
-    [[nodiscard]] inline constexpr uint32_t
-        ResolveRayTracedSkyVisibilityTraceCount(
-            const RayTracedSkyVisibilitySettings& settings)
-    {
-        return settings.useRatioEstimator
-            ? ResolveRayTracedSkyVisibilitySampleCount(
-                settings.sampleRateLog2)
             : 1u;
     }
 

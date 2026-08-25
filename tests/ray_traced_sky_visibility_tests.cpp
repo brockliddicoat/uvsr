@@ -1,4 +1,5 @@
 #include "ray_traced_sky_visibility_settings.h"
+#include "renderer_receiver_texture_contract.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
@@ -107,6 +108,91 @@ namespace
         return std::round(std::clamp(value, 0.f, 1.f) * 255.f) / 255.f;
     }
 
+    nvrhi::TextureDesc MakeReceiverDescriptor(uint32_t sampleCount)
+    {
+        nvrhi::TextureDesc descriptor;
+        descriptor.width = 800u;
+        descriptor.height = 450u;
+        descriptor.depth = 1u;
+        descriptor.arraySize = 1u;
+        descriptor.mipLevels = 1u;
+        descriptor.sampleCount = sampleCount;
+        descriptor.dimension = sampleCount == 1u
+            ? nvrhi::TextureDimension::Texture2D
+            : nvrhi::TextureDimension::Texture2DMS;
+        return descriptor;
+    }
+
+    void TestReceiverDescriptorContract()
+    {
+        for (const uint32_t sampleCount : { 1u, 2u, 4u, 8u, 16u })
+        {
+            const nvrhi::TextureDesc expected =
+                MakeReceiverDescriptor(sampleCount);
+            assert(uvsr::AreRendererReceiverTextureDescriptorsCompatible(
+                expected,
+                expected,
+                expected));
+
+            const std::array<nvrhi::TextureDimension, 5> wrongDimensions =
+                sampleCount == 1u
+                ? std::array<nvrhi::TextureDimension, 5>{
+                    nvrhi::TextureDimension::Texture2DArray,
+                    nvrhi::TextureDimension::TextureCube,
+                    nvrhi::TextureDimension::TextureCubeArray,
+                    nvrhi::TextureDimension::Texture2DMS,
+                    nvrhi::TextureDimension::Texture2DMSArray }
+                : std::array<nvrhi::TextureDimension, 5>{
+                    nvrhi::TextureDimension::Texture2D,
+                    nvrhi::TextureDimension::Texture2DArray,
+                    nvrhi::TextureDimension::TextureCube,
+                    nvrhi::TextureDimension::TextureCubeArray,
+                    nvrhi::TextureDimension::Texture2DMSArray };
+            for (const nvrhi::TextureDimension wrong : wrongDimensions)
+            {
+                for (uint32_t inputIndex = 0u;
+                    inputIndex < 3u;
+                    ++inputIndex)
+                {
+                    std::array<nvrhi::TextureDesc, 3> inputs = {
+                        expected, expected, expected
+                    };
+                    inputs[inputIndex].dimension = wrong;
+                    assert(
+                        !uvsr::AreRendererReceiverTextureDescriptorsCompatible(
+                            inputs[0], inputs[1], inputs[2]));
+                }
+            }
+
+            for (uint32_t inputIndex = 0u;
+                inputIndex < 3u;
+                ++inputIndex)
+            {
+                std::array<nvrhi::TextureDesc, 3> inputs = {
+                    expected, expected, expected
+                };
+                inputs[inputIndex].arraySize = 2u;
+                assert(!uvsr::AreRendererReceiverTextureDescriptorsCompatible(
+                    inputs[0], inputs[1], inputs[2]));
+                inputs = { expected, expected, expected };
+                inputs[inputIndex].mipLevels = 2u;
+                assert(!uvsr::AreRendererReceiverTextureDescriptorsCompatible(
+                    inputs[0], inputs[1], inputs[2]));
+            }
+        }
+
+        nvrhi::TextureDesc depth = MakeReceiverDescriptor(8u);
+        nvrhi::TextureDesc material = depth;
+        nvrhi::TextureDesc normals = depth;
+        material.sampleQuality = 1u;
+        assert(!uvsr::AreRendererReceiverTextureDescriptorsCompatible(
+            depth, material, normals));
+        normals = depth;
+        normals.height -= 1u;
+        assert(!uvsr::AreRendererReceiverTextureDescriptorsCompatible(
+            depth, depth, normals));
+    }
+
     void TestDefaultsAndExactSampleDomain()
     {
         using namespace uvsr;
@@ -115,13 +201,11 @@ namespace
         assert(settings.enabled);
         assert(settings.applyToDiffuseIbl);
         assert(settings.applyToSpecularIbl);
-        assert(settings.useRatioEstimator);
         assert(!settings.outputHitDistance);
         assert(HasRayTracedSkyVisibilityConsumer(settings));
         assert(settings.sampleRateLog2 == 1);
         assert(ResolveRayTracedSkyVisibilitySampleCount(
             settings.sampleRateLog2) == 2u);
-        assert(ResolveRayTracedSkyVisibilityTraceCount(settings) == 2u);
         const NoiseSettings defaultNoise;
         assert(!settings.noise.specifyNoise);
         assert(settings.noise.custom == defaultNoise);
@@ -158,13 +242,10 @@ namespace
         assert(ResolveRayTracedSkyVisibilitySampleCount(-1) == 1u);
         assert(ResolveRayTracedSkyVisibilitySampleCount(7) == 1u);
 
-        RayTracedSkyVisibilitySettings scalarSettings = settings;
-        scalarSettings.sampleRateLog2 = 6;
-        assert(ResolveRayTracedSkyVisibilityTraceCount(
-            scalarSettings) == 64u);
-        scalarSettings.useRatioEstimator = false;
-        assert(ResolveRayTracedSkyVisibilityTraceCount(
-            scalarSettings) == 1u);
+        RayTracedSkyVisibilitySettings qualitySettings = settings;
+        qualitySettings.sampleRateLog2 = 6;
+        assert(ResolveRayTracedSkyVisibilitySampleCount(
+            qualitySettings.sampleRateLog2) == 64u);
         assert(RayTracedSkyVisibilityHitDistanceInvalid == 0.f);
         assert(RayTracedSkyVisibilityHitDistanceMaximum == 65472.f);
         assert(RayTracedSkyVisibilityHitDistanceMiss == 65504.f);
@@ -374,5 +455,6 @@ int main()
     TestNoiseInheritanceAndValidation();
     TestCosineWeightedHemisphereMapping();
     TestBinaryMeanAndR8UnormStorage();
+    TestReceiverDescriptorContract();
     return 0;
 }

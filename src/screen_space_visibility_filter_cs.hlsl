@@ -1,6 +1,5 @@
 #pragma pack_matrix(row_major)
 
-#include <donut/shaders/binding_helpers.hlsli>
 #include "screen_space_visibility_cb.h"
 
 #ifndef ENABLE_AO
@@ -24,10 +23,10 @@ Texture2D<float> t_Depth : register(t2);
 Texture2D<float4> t_Normal : register(t3);
 
 #if ENABLE_AO
-VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_Ambient : register(u0);
+RWTexture2D<float> u_Ambient : register(u0);
 #endif
 #if ENABLE_GI
-VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Indirect : register(u1);
+RWTexture2D<float4> u_Indirect : register(u1);
 #endif
 
 float3 SafeNormal(float3 value, float3 fallback)

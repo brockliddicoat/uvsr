@@ -1,0 +1,248 @@
+diff --git a/include/donut/app/DeviceManager.h b/include/donut/app/DeviceManager.h
+index 050f7398babf22e9ab78d6f2cafe0bc7c87e90c3..8879ba3ec8ce5feae083a771014be7bff05d41d6 100644
+--- a/include/donut/app/DeviceManager.h
++++ b/include/donut/app/DeviceManager.h
+@@ -271,11 +271,13 @@ namespace donut::app
+         void RemoveRenderPass(IRenderPass *pController);
+ 
+         [[nodiscard]] bool RunMessageLoop();
+-        [[nodiscard]] bool RecordRuntimeFailure(
+-            uvsr::RendererShellOperationResult result);
+-        void RequestSkipPresentThisFrame()
++        void ReportRenderDisposition(
++            uvsr::RendererRenderDisposition disposition)
+         {
+-            m_SkipPresentThisFrame = true;
++            m_RenderDisposition =
++                uvsr::MergeRendererRenderDisposition(
++                    m_RenderDisposition,
++                    disposition);
+         }
+ 
+         // returns the size of the window in screen coordinates
+@@ -316,7 +318,8 @@ namespace donut::app
+         int m_PrevWindowWidth = 0;
+         int m_PrevWindowHeight = 0;
+         bool m_RequestedRenderUnfocused = true;
+-        bool m_SkipPresentThisFrame = false;
++        uvsr::RendererRenderDisposition m_RenderDisposition =
++            uvsr::RendererRenderDisposition::Inactive;
+         uvsr::RendererShellFailureLatch m_RuntimeFailure;
+ 
+         double m_AverageFrameTime = 0.0;
+@@ -332,6 +335,9 @@ namespace donut::app
+ 
+         DeviceManager();
+ 
++        [[nodiscard]] bool RecordRuntimeFailure(
++            uvsr::RendererShellOperationResult result);
++
+         void UpdateWindowSize();
+         bool ShouldRenderUnfocused() const;
+         GLFWmonitor* GetCurrentMonitor() const;
+@@ -342,7 +348,7 @@ namespace donut::app
+         void CreateDepthBuffer();
+ 
+         void Animate(double elapsedTime, bool windowIsFocused);
+-        [[nodiscard]] uvsr::RendererShellFrameDisposition Render();
++        [[nodiscard]] uvsr::RendererRenderDisposition Render();
+         void UpdateAverageFrameTime(double elapsedTime);
+         bool AnimateRenderPresent();
+         // device-specific methods
+diff --git a/src/app/DeviceManager.cpp b/src/app/DeviceManager.cpp
+index 46f103b525f5600d77a77c8d78dbf35518fed1ca..c867ccaf886ea9b0d1d8dcfe88eb0d085e342e5f 100644
+--- a/src/app/DeviceManager.cpp
++++ b/src/app/DeviceManager.cpp
+@@ -599,19 +599,30 @@ void DeviceManager::Animate(double elapsedTime, bool windowIsFocused)
+     }
+ }
+ 
+-uvsr::RendererShellFrameDisposition DeviceManager::Render()
++uvsr::RendererRenderDisposition DeviceManager::Render()
+ {
+     for (auto it : m_vRenderPasses)
+     {
+-        const uvsr::RendererShellFrameDisposition disposition =
+-            uvsr::GetRendererShellFrameDisposition(
+-                m_RuntimeFailure, m_SkipPresentThisFrame);
+-        if (disposition != uvsr::RendererShellFrameDisposition::Present)
+-            return disposition;
+         it->Render(GetCurrentFramebuffer(it->SupportsDepthBuffer()));
++        if (m_RuntimeFailure.Failed())
++            return uvsr::RendererRenderDisposition::Failed;
++        if (m_RenderDisposition ==
++            uvsr::RendererRenderDisposition::Failed)
++        {
++            (void)RecordRuntimeFailure({
++                uvsr::RendererShellOperation::RequiredRenderPass,
++                static_cast<uint32_t>(E_FAIL),
++                0u
++            });
++            return uvsr::RendererRenderDisposition::Failed;
++        }
++        if (m_RenderDisposition ==
++            uvsr::RendererRenderDisposition::Pending)
++        {
++            return uvsr::RendererRenderDisposition::Pending;
++        }
+     }
+-    return uvsr::GetRendererShellFrameDisposition(
+-        m_RuntimeFailure, m_SkipPresentThisFrame);
++    return uvsr::RendererRenderDisposition::Inactive;
+ }
+ 
+ void DeviceManager::UpdateAverageFrameTime(double elapsedTime)
+@@ -714,7 +725,7 @@ bool DeviceManager::AnimateRenderPresent()
+ {
+     if (HasRuntimeFailure())
+         return false;
+-    m_SkipPresentThisFrame = false;
++    m_RenderDisposition = uvsr::RendererRenderDisposition::Inactive;
+ 
+     double curTime = glfwGetTime();
+     double elapsedTime = curTime - m_PreviousFrameTimestamp;
+@@ -761,31 +772,33 @@ bool DeviceManager::AnimateRenderPresent()
+                 }
+ 
+                 if (m_callbacks.beforeRender) m_callbacks.beforeRender(*this, frameIndex);
+-                const uvsr::RendererShellFrameDisposition disposition =
++                const uvsr::RendererRenderDisposition disposition =
+                     Render();
+-                if (disposition ==
+-                    uvsr::RendererShellFrameDisposition::Failed)
+-                    return false;
+-                if (disposition ==
+-                    uvsr::RendererShellFrameDisposition::Present)
+-                {
+-                    if (m_callbacks.afterRender)
+-                        m_callbacks.afterRender(*this, frameIndex);
++                const bool publishSucceeded =
++                    uvsr::ConsumeRendererRenderDisposition(
++                        disposition,
++                        [&]()
++                        {
++                            if (m_callbacks.afterRender)
++                                m_callbacks.afterRender(*this, frameIndex);
+ #if DONUT_WITH_STREAMLINE
+-                    StreamlineIntegration::Get().RenderEnd(*this);
+-                    StreamlineIntegration::Get().PresentStart(*this);
++                            StreamlineIntegration::Get().RenderEnd(*this);
++                            StreamlineIntegration::Get().PresentStart(*this);
+ #endif
+-                    if (m_callbacks.beforePresent)
+-                        m_callbacks.beforePresent(*this, frameIndex);
+-                    const bool presentSuccess = Present();
++                            if (m_callbacks.beforePresent)
++                                m_callbacks.beforePresent(*this, frameIndex);
++                            const bool presentSuccess = Present();
+ #if DONUT_WITH_STREAMLINE
+-                    StreamlineIntegration::Get().PresentEnd(*this);
++                            StreamlineIntegration::Get().PresentEnd(*this);
+ #endif
+-                    if (!presentSuccess)
+-                        return false;
+-                    if (m_callbacks.afterPresent)
+-                        m_callbacks.afterPresent(*this, frameIndex);
+-                }
++                            if (!presentSuccess)
++                                return false;
++                            if (m_callbacks.afterPresent)
++                                m_callbacks.afterPresent(*this, frameIndex);
++                            return true;
++                        });
++                if (!publishSucceeded)
++                    return false;
+             }
+         }
+     }
+diff --git a/src/app/dx12/DeviceManager_DX12.cpp b/src/app/dx12/DeviceManager_DX12.cpp
+index 4153fad0c320bf5f07473eea498c9c59992193e8..e499b104e38c839fa925c89ed8e10770c04a370a 100644
+--- a/src/app/dx12/DeviceManager_DX12.cpp
++++ b/src/app/dx12/DeviceManager_DX12.cpp
+@@ -471,7 +471,16 @@ bool DeviceManager_DX12::CreateRenderTargets()
+     for(UINT n = 0; n < m_SwapChainDesc.BufferCount; n++)
+     {
+         const HRESULT hr = m_SwapChain->GetBuffer(n, IID_PPV_ARGS(&m_SwapChainBuffers[n]));
+-        HR_RETURN(hr)
++        if (FAILED(hr))
++        {
++            return RecordD3D12RuntimeFailure(
++                {
++                    uvsr::RendererShellOperation::CreateRenderTarget,
++                    static_cast<uint32_t>(hr),
++                    n
++                },
++                true);
++        }
+ 
+         nvrhi::TextureDesc textureDesc;
+         textureDesc.width = m_DeviceParams.backBufferWidth;
+@@ -486,6 +495,16 @@ bool DeviceManager_DX12::CreateRenderTargets()
+         textureDesc.keepInitialState = true;
+ 
+         m_RhiSwapChainBuffers[n] = m_NvrhiDevice->createHandleForNativeTexture(nvrhi::ObjectTypes::D3D12_Resource, nvrhi::Object(m_SwapChainBuffers[n]), textureDesc);
++        if (!m_RhiSwapChainBuffers[n])
++        {
++            return RecordD3D12RuntimeFailure(
++                {
++                    uvsr::RendererShellOperation::CreateRenderTarget,
++                    static_cast<uint32_t>(E_FAIL),
++                    n
++                },
++                true);
++        }
+     }
+ 
+     return true;
+@@ -521,7 +540,7 @@ bool DeviceManager_DX12::WaitForFrameFences()
+                         m_FrameFenceEvents[index], timeout);
+                 },
+                 []() { return GetLastError(); });
+-        if (!RecordD3D12RuntimeFailure(waitResult))
++        if (!RecordD3D12RuntimeFailure(waitResult, true))
+             return false;
+ 
+         completion =
+@@ -556,10 +575,15 @@ bool DeviceManager_DX12::ReleaseRenderTargets()
+     return uvsr::ReleaseRendererShellResources(
+         [&]()
+         {
+-            return !m_NvrhiDevice || RecordRuntimeFailure(
+-                uvsr::CheckRendererShellBoolean(
++            if (!m_NvrhiDevice || m_NvrhiDevice->waitForIdle())
++                return true;
++            return RecordD3D12RuntimeFailure(
++                {
+                     uvsr::RendererShellOperation::ShutdownDeviceIdle,
+-                    m_NvrhiDevice->waitForIdle()));
++                    static_cast<uint32_t>(E_FAIL),
++                    0u
++                },
++                true);
+         },
+         [&]() { return !m_FrameFence || WaitForFrameFences(); },
+         [&]()
+@@ -594,14 +618,17 @@ void DeviceManager_DX12::ResizeSwapChain()
+ 
+     if (FAILED(hr))
+     {
+-        donut::log::fatal("ResizeBuffers failed");
++        (void)RecordD3D12RuntimeFailure(
++            {
++                uvsr::RendererShellOperation::ResizeBuffers,
++                static_cast<uint32_t>(hr),
++                0u
++            },
++            true);
++        return;
+     }
+ 
+-    bool ret = CreateRenderTargets();
+-    if (!ret)
+-    {
+-        donut::log::fatal("CreateRenderTarget failed");
+-    }
++    (void)CreateRenderTargets();
+ }
+ 
+ bool DeviceManager_DX12::BeginFrame()

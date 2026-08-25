@@ -2,6 +2,7 @@
 
 #include "direct_light_visibility.h"
 #include "flashlight_shared.h"
+#include "pbr_deferred_dispatch_contract.h"
 
 #include <donut/core/math/math.h>
 #include <donut/engine/BindingCache.h>
@@ -14,11 +15,16 @@
 
 namespace donut::engine
 {
-    class CommonRenderPasses;
     class ICompositeView;
     class Light;
-    class LightProbe;
-    class ShaderFactory;
+}
+
+namespace uvsr
+{
+    struct ImageBasedLightingProbe;
+    class RendererCommonPasses;
+    class RendererShaderFactory;
+
 }
 
 // UVSR-owned deferred lighting pass. In addition to the regular HDR target,
@@ -42,19 +48,22 @@ private:
     // Static 2x, 4x, 8x, and 16x per-sample deferred pipelines, each compiled
     // without and with the single-surface visibility correction.
     std::array<std::array<Pipeline, 4>, 2> m_MsaaPipelines;
+    std::array<nvrhi::TextureHandle, 4> m_NeutralMsaaVisibility;
     donut::engine::BindingCache m_BindingSets;
-    std::shared_ptr<donut::engine::CommonRenderPasses> m_CommonPasses;
-    std::shared_ptr<donut::engine::ShaderFactory> m_ShaderFactory;
+    std::shared_ptr<uvsr::RendererCommonPasses> m_CommonPasses;
+    std::shared_ptr<uvsr::RendererShaderFactory> m_ShaderFactory;
     uint32_t m_PipelinePreparationStep = 0u;
     bool m_PipelinesReady = false;
+    bool m_PipelinePreparationFailed = false;
+    bool m_ResourcesValid = false;
 
 public:
     PbrDeferredLightingPass(
         nvrhi::IDevice* device,
-        std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses);
+        std::shared_ptr<uvsr::RendererCommonPasses> commonPasses);
 
     void Init(
-        const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory,
+        const std::shared_ptr<uvsr::RendererShaderFactory>& shaderFactory,
         bool deferPipelineCreation = false);
 
     // Pipeline creation can be spread over loading frames. Init remains eager
@@ -64,16 +73,23 @@ public:
     {
         return m_PipelinesReady;
     }
+    [[nodiscard]] bool DidPipelinePreparationFail() const
+    {
+        return m_PipelinePreparationFailed;
+    }
 
-    void Render(
+    [[nodiscard]] uvsr::PbrDeferredLightingRenderResult Render(
         nvrhi::ICommandList* commandList,
         const donut::engine::ICompositeView& compositeView,
         const donut::render::DeferredLightingPass::Inputs& inputs,
         const uvsr::DirectLightVisibilities& directLightVisibilities,
         const donut::engine::Light* flashlight,
         const FlashlightBeamProfile& flashlightBeamProfile,
-        const donut::engine::LightProbe* environment,
+        const uvsr::ImageBasedLightingProbe* environment,
         nvrhi::ITexture* skyVisibility,
+        nvrhi::ITexture* rawClosestSkyVisibility,
+        nvrhi::ITexture* denoisedClosestSkyVisibility,
+        uint32_t skyVisibilityReceiverSampleCount,
         bool applySkyVisibilityToDiffuseIbl,
         bool applySkyVisibilityToSpecularIbl,
         nvrhi::ITexture* sourceRadianceOutput,
@@ -85,8 +101,7 @@ public:
         nvrhi::ITexture* resolvedBackground = nullptr,
         uint32_t msaaSampleCount = 1u,
         nvrhi::ITexture* visibilityBaseLighting = nullptr,
-        nvrhi::ITexture* visibilityComposite = nullptr,
-        const uvsr::DirectLightVisibility& sourceSunVisibility = {});
+        nvrhi::ITexture* visibilityComposite = nullptr);
 
     void ResetBindingCache();
 };

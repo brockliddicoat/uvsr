@@ -1,30 +1,24 @@
 #pragma pack_matrix(row_major)
 
-#include <donut/shaders/gbuffer_cb.h>
-
-#define MATERIAL_REGISTER_SPACE     GBUFFER_SPACE_MATERIAL
-#define MATERIAL_CB_SLOT            GBUFFER_BINDING_MATERIAL_CONSTANTS
-#define MATERIAL_DIFFUSE_SLOT       GBUFFER_BINDING_MATERIAL_DIFFUSE_TEXTURE
-#define MATERIAL_SPECULAR_SLOT      GBUFFER_BINDING_MATERIAL_SPECULAR_TEXTURE
-#define MATERIAL_NORMALS_SLOT       GBUFFER_BINDING_MATERIAL_NORMAL_TEXTURE
-#define MATERIAL_EMISSIVE_SLOT      GBUFFER_BINDING_MATERIAL_EMISSIVE_TEXTURE
-#define MATERIAL_OCCLUSION_SLOT     GBUFFER_BINDING_MATERIAL_OCCLUSION_TEXTURE
-#define MATERIAL_TRANSMISSION_SLOT  GBUFFER_BINDING_MATERIAL_TRANSMISSION_TEXTURE
-#define MATERIAL_OPACITY_SLOT       GBUFFER_BINDING_MATERIAL_OPACITY_TEXTURE
-
-#define MATERIAL_SAMPLER_REGISTER_SPACE GBUFFER_SPACE_VIEW
-#define MATERIAL_SAMPLER_SLOT           GBUFFER_BINDING_MATERIAL_SAMPLER
-
-#define ENABLE_METAL_ROUGH_RECONSTRUCTION 1
-#include <donut/shaders/scene_material.hlsli>
-#include <donut/shaders/material_bindings.hlsli>
-#include <donut/shaders/motion_vectors.hlsli>
-#include <donut/shaders/forward_vertex.hlsli>
-#include <donut/shaders/binding_helpers.hlsli>
+#include "renderer_gpu_helpers.hlsli"
 #include "pbr_gbuffer.hlsli"
 
-DECLARE_CBUFFER(GBufferFillConstants, c_GBuffer, GBUFFER_BINDING_VIEW_CONSTANTS, GBUFFER_SPACE_VIEW);
-DECLARE_PUSH_CONSTANTS(GBufferPushConstants, g_Push, GBUFFER_BINDING_PUSH_CONSTANTS, GBUFFER_SPACE_INPUT);
+cbuffer c_Material : register(b0, space0)
+{
+    MaterialConstants g_Material;
+};
+
+Texture2D t_BaseOrDiffuse : register(t0, space0);
+Texture2D t_MetalRoughOrSpecular : register(t1, space0);
+Texture2D t_Normal : register(t2, space0);
+Texture2D t_Emissive : register(t3, space0);
+Texture2D t_Occlusion : register(t4, space0);
+Texture2D t_Transmission : register(t5, space0);
+Texture2D t_Opacity : register(t6, space0);
+SamplerState s_MaterialSampler : register(s0, space2);
+
+ConstantBuffer<GBufferFillConstants> c_GBuffer : register(b2, space2);
+ConstantBuffer<GBufferPushConstants> g_Push : register(b1, space1);
 
 uint GetPbrFeatureMask()
 {
@@ -62,7 +56,17 @@ void main(
 )
 {
     MaterialTextureSample textures = SampleMaterialTexturesAuto(
-        i_vtx.texCoord, g_Material.normalTextureTransformScale);
+        g_Material,
+        t_BaseOrDiffuse,
+        t_MetalRoughOrSpecular,
+        t_Normal,
+        t_Emissive,
+        t_Occlusion,
+        t_Transmission,
+        t_Opacity,
+        s_MaterialSampler,
+        i_vtx.texCoord,
+        g_Material.normalTextureTransformScale);
 #if WHITE_WORLD
     // Retain base alpha for cutout coverage while preventing sampled RGB from
     // leaking into the white reference material.
@@ -90,13 +94,15 @@ void main(
     // plane normal for hemisphere tests and future ray-origin construction.
     // World-position derivatives lie in the same transformed triangle plane
     // represented by the BLAS, including non-uniform instance transforms.
-    float3 triangleNormal = PbrSafeNormalize(
-        cross(ddx(i_vtx.pos), ddy(i_vtx.pos)),
-        surface.geometryNormal);
-    if (dot(triangleNormal, viewDirection) < 0.0f)
-        triangleNormal = -triangleNormal;
-    if (dot(surface.shadingNormal, triangleNormal) < 0.0f)
-        surface.shadingNormal = -surface.shadingNormal;
+    const PbrContractSurfaceNormals orientedNormals =
+        ResolvePbrTriangleSurfaceNormals(
+            ddx(i_vtx.pos),
+            ddy(i_vtx.pos),
+            surface.geometryNormal,
+            surface.shadingNormal,
+            viewDirection);
+    const float3 triangleNormal = orientedNormals.geometricNormal;
+    surface.shadingNormal = orientedNormals.shadingNormal;
 
 #if ALPHA_TESTED
     if (g_Material.domain != MaterialDomain_Opaque)

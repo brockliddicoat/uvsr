@@ -1,7 +1,7 @@
 #ifndef UVSR_SCREEN_SPACE_VISIBILITY_CB_H
 #define UVSR_SCREEN_SPACE_VISIBILITY_CB_H
 
-#include <donut/shaders/view_cb.h>
+#include "renderer_gpu_contract.h"
 #include "sky_visibility_application.h"
 
 // Shared by visibility sampling, required upsampling, and composition.
@@ -9,43 +9,43 @@ struct ScreenSpaceVisibilityConstants
 {
     PlanarViewConstants view;
 
-    float2 fullResolution;
-    float2 samplingResolution;
+    UVSR_GPU_FLOAT2 fullResolution;
+    UVSR_GPU_FLOAT2 samplingResolution;
 
     float radiusWorld;
     float thicknessWorld;
     float stepDistributionExponent;
-    uint sampleSequenceMode;
+    UVSR_GPU_UINT sampleSequenceMode;
 
     float ambientStrength;
     float indirectDiffuseIntensity;
-    uint sampleSequencePhase;
-    uint maximumSampleCount;
+    UVSR_GPU_UINT sampleSequencePhase;
+    UVSR_GPU_UINT maximumSampleCount;
 
-    uint sourceRadianceAvailable;
-    uint enableAmbientOcclusion;
-    uint enableIndirectDiffuse;
-    uint reverseDepth;
+    UVSR_GPU_UINT sourceRadianceAvailable;
+    UVSR_GPU_UINT enableAmbientOcclusion;
+    UVSR_GPU_UINT enableIndirectDiffuse;
+    UVSR_GPU_UINT reverseDepth;
 
-    uint orthographicProjection;
-    uint resolutionScale;
-    uint noisePattern;
-    uint visibilityDebugView;
+    UVSR_GPU_UINT orthographicProjection;
+    UVSR_GPU_UINT resolutionScale;
+    UVSR_GPU_UINT noisePattern;
+    UVSR_GPU_UINT visibilityDebugView;
 
-    uint diffuseEnvironmentEnabled;
+    UVSR_GPU_UINT diffuseEnvironmentEnabled;
     float diffuseEnvironmentScale;
-    uint diffuseEnvironmentArrayIndex;
-    uint specularEnvironmentEnabled;
+    UVSR_GPU_UINT diffuseEnvironmentArrayIndex;
+    UVSR_GPU_UINT specularEnvironmentEnabled;
 
     float specularEnvironmentScale;
     float specularEnvironmentMipLevels;
-    uint specularEnvironmentArrayIndex;
-    uint lightingDebugView;
+    UVSR_GPU_UINT specularEnvironmentArrayIndex;
+    UVSR_GPU_UINT lightingDebugView;
 
-    uint skyVisibilityApplication;
-    uint padding0;
-    uint padding1;
-    uint padding2;
+    UVSR_GPU_UINT skyVisibilityApplication;
+    UVSR_GPU_UINT padding0;
+    UVSR_GPU_UINT padding1;
+    UVSR_GPU_UINT padding2;
 };
 
 #endif // UVSR_SCREEN_SPACE_VISIBILITY_CB_H

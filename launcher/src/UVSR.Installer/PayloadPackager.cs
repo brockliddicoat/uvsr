@@ -1,190 +1,590 @@
+using System.Diagnostics;
+using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace UvsrInstaller;
 
 internal sealed class PayloadPackager
 {
-    private const string NotoSansLicenseFile =
-        "bin/licenses/Noto-Sans-OFL-1.1.txt";
-    private const string TransitionalGeistLicenseFile =
-        "bin/licenses/Geist-OFL-1.1.txt";
-    private const string ProggyCleanLicenseFile =
-        "bin/licenses/ProggyClean-MIT.txt";
-    private const long ProggyCleanLicenseSize = 1082;
-    private const string ProggyCleanLicenseSha256 =
-        "8b802d79f256d29b45ad253323d212fa14ca952a20dcd227cfbcdb3d140bfe7c";
-    private static readonly string[] LegacyUiFontFiles =
-    {
-        "media/fonts/System/CodexUI.ttf",
-        "media/fonts/System/CodexUI-Semibold.ttf",
-        "media/fonts/System/CodexUI-Bold.ttf"
-    };
-    private static readonly string[] NotoSansUiFontFiles =
-    {
-        "media/fonts/NotoSans/NotoSans-Regular.ttf",
-        "media/fonts/NotoSans/NotoSans-SemiBold.ttf",
-        "media/fonts/NotoSans/NotoSans-Bold.ttf"
-    };
-    private static readonly IReadOnlyDictionary<string, string>
-        TransitionalUiFontAliases =
-            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["media/fonts/System/CodexUI.ttf"] =
-                    "media/fonts/NotoSans/NotoSans-Regular.ttf",
-                ["media/fonts/System/CodexUI-Semibold.ttf"] =
-                    "media/fonts/NotoSans/NotoSans-SemiBold.ttf",
-                ["media/fonts/System/CodexUI-Bold.ttf"] =
-                    "media/fonts/NotoSans/NotoSans-Bold.ttf"
-            };
-    private static readonly IReadOnlyDictionary<string, (long Size, string Sha256)>
-        NotoSansPackageFiles =
-            new Dictionary<string, (long Size, string Sha256)>(
-                StringComparer.OrdinalIgnoreCase)
-            {
-                ["media/fonts/NotoSans/NotoSans-Regular.ttf"] =
-                    (621572, "478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823"),
-                ["media/fonts/NotoSans/NotoSans-SemiBold.ttf"] =
-                    (625052, "a4e91fd530ac2b4ef5367240144ff37d7d65d66cf76f2e9a2187b93c676f92d0"),
-                ["media/fonts/NotoSans/NotoSans-Bold.ttf"] =
-                    (631484, "1df075a380fc7cb898acf64c1f7b3b4dd780de3caa860178bf929de35817a913"),
-                [NotoSansLicenseFile] =
-                    (4396, "cee9892f9f0cc8fe882c9e9537ee6a89621d86ee7ceaf70b02e2b2b1c25c061a")
-            };
-
-    private enum UiFontContract
-    {
-        Legacy,
-        NotoSans,
-        DualTransition
-    }
-
+    private const string ShaderInventoryResource =
+        "UVSR.Installer.RuntimeShaderInventory.def";
+    private const string MediaInventoryResource =
+        "UVSR.Installer.RuntimeMediaInventory.def";
+    private static readonly (IReadOnlySet<string> Paths,
+        IReadOnlySet<string> Directories) ShaderInventory = LoadShaderInventory();
+    private static readonly (IReadOnlySet<string> ProtectedPaths,
+        IReadOnlySet<string> MediaPaths,
+        IReadOnlySet<string> NoticePaths,
+        IReadOnlySet<string> Directories) MediaInventory = LoadMediaInventory();
+    internal static IReadOnlySet<string> RuntimeShaderPaths => ShaderInventory.Paths;
+    internal static IReadOnlySet<string> RuntimeMediaPaths =>
+        MediaInventory.MediaPaths;
+    internal static IReadOnlySet<string> RequiredMediaNoticePaths =>
+        MediaInventory.NoticePaths;
+    internal static IReadOnlySet<string> ProtectedMediaAndNoticePaths =>
+        MediaInventory.ProtectedPaths;
     private readonly InstallerPaths _paths;
 
     internal PayloadPackager(InstallerPaths paths) => _paths = paths;
 
-    internal PackageManifest Stage(
-        Guid installationId,
+    internal PackageManifest StageArchive(
         Guid transactionId,
         string versionId,
-        string commit,
+        string archivePath,
+        RendererFeed feed,
         InstallLog log)
     {
-        ValidateBuildOutput(_paths.SourceDirectory, _paths.BuildDirectory);
-        ValidateBuildOutputCanBeStaged(_paths.BuildDirectory,
-            ProductConstants.LauncherReleaseSequence);
-        string sourceBin = Path.Combine(_paths.BuildDirectory, "bin");
-        string sourceMedia = Path.Combine(_paths.BuildDirectory, "media");
-        string transactionRoot = Path.Combine(_paths.StagingDirectory, transactionId.ToString("N"));
+        RendererPackageContract.ValidateFeed(feed);
+        FileInfo archiveInfo = new(archivePath);
+        if (!archiveInfo.Exists || archiveInfo.Length != feed.Artifact.Size ||
+            !FixedTimeHashEquals(ComputeSha256(archivePath), feed.Artifact.Sha256))
+            throw new InstallerException(
+                "The renderer package did not match its signed feed identity.");
+
+        string transactionRoot = Path.Combine(_paths.StagingDirectory,
+            transactionId.ToString("N"));
         string packageRoot = Path.Combine(transactionRoot, "package");
         if (Directory.Exists(transactionRoot))
             SafePaths.DeleteOwnedTree(transactionRoot, _paths.StagingDirectory);
         SafePaths.RejectReparsePathChain(_paths.StagingDirectory,
             "UVSR package staging directory");
-        Directory.CreateDirectory(Path.Combine(packageRoot, "bin"));
-        SafePaths.RejectReparsePathChain(packageRoot, "UVSR package staging directory");
-
-        CopyFile(sourceBin, Path.Combine(packageRoot, "bin"), "uvsr.exe");
-        CopyDirectory(sourceBin, Path.Combine(packageRoot, "bin"), "D3D12");
-        CopyDirectory(sourceBin, Path.Combine(packageRoot, "bin"), "shaders");
-        CopyDirectory(sourceBin, Path.Combine(packageRoot, "bin"), "licenses");
-        CopyFile(sourceBin, Path.Combine(packageRoot, "bin"), "third-party-notices.md");
-        SafePaths.CopyDirectory(sourceMedia, Path.Combine(packageRoot, "media"));
-        NormalizeStagedUiTransition(packageRoot);
-
-        string executable = Path.Combine(packageRoot, "bin", "uvsr.exe");
-        string hash = ComputeSha256(executable);
-        IReadOnlyList<PackageFile> files = BuildFileManifest(packageRoot);
-        PackageManifest manifest = new(ProductConstants.SchemaVersion, installationId,
-            versionId, commit, hash, files, DateTimeOffset.UtcNow);
-        JsonStore.WriteAtomic(Path.Combine(packageRoot, ".uvsr-package.json"), manifest);
-        ValidatePackage(packageRoot, manifest);
-        log.Write($"Staged UVSR package {versionId}; executable SHA-256 {hash}.");
-        return manifest;
+        Directory.CreateDirectory(transactionRoot);
+        try
+        {
+            long expandedBytes = ValidateArchiveInventory(archivePath);
+            string driveRoot = Path.GetPathRoot(packageRoot)
+                ?? throw new InstallerException(
+                    "The renderer staging drive could not be identified.");
+            if (new DriveInfo(driveRoot).AvailableFreeSpace <
+                checked(expandedBytes + 1024L * 1024 * 1024))
+                throw new InstallerException(
+                    "The renderer package does not fit safely in staging.");
+            SafePaths.ExtractVerifiedZip(archivePath, packageRoot,
+                ProductConstants.MaximumRendererExpandedBytes);
+            PackageManifest manifest = ReadManifest(packageRoot);
+            ValidateFeedBinding(manifest, feed);
+            ValidatePackage(packageRoot, manifest);
+            log.Write($"Staged signed renderer package sequence " +
+                      $"{feed.ReleaseSequence}; engine {manifest.EngineVersion}; " +
+                      $"settings {manifest.SettingsHash}; executable SHA-256 " +
+                      $"{manifest.ExecutableSha256}.");
+            return manifest;
+        }
+        catch
+        {
+            if (Directory.Exists(transactionRoot))
+                SafePaths.DeleteOwnedTree(transactionRoot, _paths.StagingDirectory);
+            throw;
+        }
     }
 
-    internal string Activate(Guid transactionId, PackageManifest manifest)
+    internal string Activate(
+        Guid transactionId,
+        string versionId,
+        PackageManifest manifest)
     {
         SafePaths.RejectReparsePathChain(_paths.VersionsDirectory,
             "UVSR managed versions directory");
         Directory.CreateDirectory(_paths.VersionsDirectory);
-        SafePaths.RejectReparsePathChain(_paths.VersionsDirectory,
-            "UVSR managed versions directory");
         string source = Path.Combine(_paths.StagingDirectory,
             transactionId.ToString("N"), "package");
-        string destination = _paths.VersionRoot(manifest.VersionId);
+        string destination = _paths.VersionRoot(versionId);
         if (Directory.Exists(destination))
-            throw new InstallerException("The candidate UVSR version already exists; no active version was changed.");
+            throw new InstallerException(
+                "The candidate UVSR version already exists; no active version was changed.");
         Directory.Move(source, destination);
         ValidatePackage(destination, manifest);
         return destination;
     }
 
-    internal static void ValidatePackage(string packageRoot, PackageManifest manifest)
+    internal static PackageManifest ReadManifest(string packageRoot)
     {
-        SafePaths.RejectReparsePathChain(packageRoot, "UVSR runtime package");
-        if (manifest.SchemaVersion != ProductConstants.SchemaVersion ||
-            manifest.InstallationId == Guid.Empty ||
-            string.IsNullOrWhiteSpace(manifest.VersionId) ||
-            string.IsNullOrWhiteSpace(manifest.Commit) ||
-            string.IsNullOrWhiteSpace(manifest.ExecutableSha256) ||
-            !ProductConstants.VersionIdRegex().IsMatch(manifest.VersionId) ||
-            !ProductConstants.CommitRegex().IsMatch(manifest.Commit) ||
-            !ProductConstants.HashRegex().IsMatch(manifest.ExecutableSha256))
-            throw new InstallerException("The staged UVSR package manifest is invalid.");
-        if (manifest.Files is null || manifest.Files.Count == 0 || manifest.Files.Count > 100_000)
-            throw new InstallerException("The staged UVSR package file inventory is invalid.");
-
-        string[] requiredFiles =
+        string path = Path.Combine(packageRoot, ProductConstants.PackageManifestName);
+        SafePaths.RejectReparsePathChain(path, "renderer package manifest");
+        FileInfo info = new(path);
+        if (!info.Exists || info.Length is <= 0 or >
+            ProductConstants.MaximumPackageManifestBytes)
+            throw new InstallerException("The renderer package manifest was missing or invalid.");
+        try
         {
-            "bin/uvsr.exe",
-            "bin/D3D12/D3D12Core.dll",
-            "bin/D3D12/D3D12SDKLayers.dll",
-            "bin/D3D12/uvsr-runtime-contract.txt",
-            "bin/third-party-notices.md"
-        };
-        Dictionary<string, PackageFile> recorded = new(StringComparer.OrdinalIgnoreCase);
+            byte[] data = File.ReadAllBytes(path);
+            LauncherUpdateFeedVerifier.RejectDuplicateJsonProperties(data);
+            return JsonSerializer.Deserialize<PackageManifest>(data, JsonStore.Options)
+                ?? throw new JsonException("The manifest was empty.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+                                   JsonException or InvalidOperationException)
+        {
+            throw new InstallerException(
+                "The renderer package manifest could not be read safely.", ex);
+        }
+    }
+
+    internal static void ValidatePackage(
+        string packageRoot,
+        PackageManifest manifest)
+    {
+        SafePaths.RejectReparseTree(packageRoot, "UVSR runtime package");
+        RendererPackageContract.ValidateManifest(manifest);
+
+        Dictionary<string, PackageFile> recorded =
+            new(StringComparer.OrdinalIgnoreCase);
         foreach (PackageFile? file in manifest.Files)
         {
-            if (file is null || string.IsNullOrWhiteSpace(file.RelativePath) ||
-                string.IsNullOrWhiteSpace(file.Sha256))
-                throw new InstallerException("The staged UVSR package file inventory is invalid.");
+            if (file is null ||
+                string.IsNullOrWhiteSpace(file.RelativePath) ||
+                string.IsNullOrWhiteSpace(file.Sha256) ||
+                file.Size < 0 ||
+                !ProductConstants.HashRegex().IsMatch(file.Sha256))
+                throw new InstallerException(
+                    "The renderer package file inventory was invalid.");
             string normalized = NormalizeRelativePath(file.RelativePath);
-            if (!string.Equals(normalized, file.RelativePath, StringComparison.Ordinal) ||
-                file.Size < 0 || !ProductConstants.HashRegex().IsMatch(file.Sha256) ||
+            if (!string.Equals(normalized, file.RelativePath,
+                    StringComparison.Ordinal) ||
+                !IsAllowedPackageFile(normalized) ||
                 !recorded.TryAdd(normalized, file))
-                throw new InstallerException("The staged UVSR package file inventory is invalid.");
+                throw new InstallerException(
+                    "The renderer package file inventory was invalid.");
         }
-        UiFontContract uiFontContract = ClassifyUiFontContract(recorded.Keys);
-        ValidateUiLicenseContract(recorded.Keys, uiFontContract,
-            "staged UVSR runtime");
-        ValidateProggyCleanPackageNotice(recorded,
-            required: false, "staged UVSR runtime");
-        if (uiFontContract != UiFontContract.Legacy)
-            ValidateNotoSansPackageFiles(recorded);
-        if (uiFontContract == UiFontContract.DualTransition)
-            ValidateTransitionalAliasRecords(recorded);
-        if (requiredFiles.Any(path => !recorded.ContainsKey(path)) ||
-            !HasFilesUnder(recorded, "bin/shaders/") ||
-            !HasFilesUnder(recorded, "bin/licenses/") ||
-            !HasFilesUnder(recorded, "media/glTF-Sample-Assets/Models/") ||
-            !HasFilesUnder(recorded, "media/environments/") ||
-            !HasFilesUnder(recorded, "media/uvsr/noise/"))
-            throw new InstallerException("The staged UVSR runtime is incomplete.");
+
+        if (!recorded.ContainsKey($"bin/{ProductConstants.EngineExecutableName}") ||
+            !recorded.ContainsKey("bin/D3D12/D3D12Core.dll") ||
+            !recorded.ContainsKey(ProductConstants.SettingsContractRelativePath) ||
+            recorded.Keys.Count(path => path.StartsWith("bin/shaders/",
+                StringComparison.Ordinal)) != ShaderInventory.Paths.Count ||
+            ShaderInventory.Paths.Any(path => !recorded.ContainsKey(path)) ||
+            MediaInventory.ProtectedPaths.Any(path =>
+                !recorded.ContainsKey(path)))
+            throw new InstallerException("The renderer runtime package was incomplete.");
 
         IReadOnlyList<PackageFile> actual = BuildFileManifest(packageRoot);
         if (actual.Count != recorded.Count)
-            throw new InstallerException("The staged UVSR runtime file inventory has changed.");
+            throw new InstallerException(
+                "The renderer package file inventory has changed.");
         foreach (PackageFile file in actual)
         {
             if (!recorded.TryGetValue(file.RelativePath, out PackageFile? expected) ||
+                !string.Equals(expected.RelativePath, file.RelativePath,
+                    StringComparison.Ordinal) ||
                 expected.Size != file.Size ||
-                !string.Equals(expected.Sha256, file.Sha256, StringComparison.Ordinal))
-                throw new InstallerException($"The staged UVSR runtime file '{file.RelativePath}' failed its integrity check.");
+                !FixedTimeHashEquals(expected.Sha256, file.Sha256))
+                throw new InstallerException(
+                    $"The renderer package file '{file.RelativePath}' failed its integrity check.");
         }
-        if (!recorded.TryGetValue("bin/uvsr.exe", out PackageFile? executable) ||
-            !string.Equals(executable.Sha256, manifest.ExecutableSha256, StringComparison.Ordinal))
-            throw new InstallerException("The staged UVSR executable failed its integrity check.");
-        ValidateD3D12RuntimeContract(packageRoot);
+
+        PackageFile executable =
+            recorded[$"bin/{ProductConstants.EngineExecutableName}"];
+        if (!FixedTimeHashEquals(executable.Sha256, manifest.ExecutableSha256))
+            throw new InstallerException(
+                "The renderer executable failed its integrity check.");
+        ValidateEngineMetadata(
+            Path.Combine(packageRoot, "bin", ProductConstants.EngineExecutableName),
+            manifest);
+        ValidateSettingsContract(packageRoot, manifest);
+    }
+
+    internal static void ValidateFeedBinding(
+        PackageManifest manifest,
+        RendererFeed feed)
+    {
+        RendererPackageContract.ValidateManifest(manifest);
+        RendererPackageContract.ValidateFeed(feed);
+        if (manifest.ReleaseSequence != feed.ReleaseSequence ||
+            !string.Equals(manifest.SourceCommit, feed.SourceCommit,
+                StringComparison.Ordinal) ||
+            !string.Equals(manifest.SettingsHash, feed.SettingsHash,
+                StringComparison.Ordinal) ||
+            !string.Equals(manifest.EngineVersion, feed.EngineVersion,
+                StringComparison.Ordinal))
+            throw new InstallerException(
+                "The renderer package metadata did not match its signed feed.");
+    }
+
+    private static long ValidateArchiveInventory(string archivePath)
+    {
+        try
+        {
+            using ZipArchive archive = ZipFile.OpenRead(archivePath);
+            if (archive.Entries.Count == 0 || archive.Entries.Count > 100_001)
+                throw new InstallerException(
+                    "The renderer package archive inventory was invalid.");
+            HashSet<string> entries = new(StringComparer.OrdinalIgnoreCase);
+            long expandedBytes = 0;
+            foreach (ZipArchiveEntry entry in archive.Entries)
+            {
+                string name = entry.FullName;
+                if (string.IsNullOrEmpty(name) ||
+                    name.Contains(Path.DirectorySeparatorChar) ||
+                    name.StartsWith('/') || name.Contains(':'))
+                    throw new InstallerException(
+                        "The renderer package archive contained an unsafe path.");
+                string normalized = name.TrimEnd('/');
+                if (normalized.Length == 0 ||
+                    normalized.Split('/').Any(part => part is "" or "." or "..") ||
+                    !entries.Add(normalized))
+                    throw new InstallerException(
+                        "The renderer package archive inventory was invalid.");
+                bool directory = name.EndsWith('/');
+                if (!directory && normalized != ProductConstants.PackageManifestName &&
+                    !IsAllowedPackageFile(normalized))
+                    throw new InstallerException(
+                        $"The renderer package contained an unexpected file '{normalized}'.");
+                if (directory && !IsAllowedPackageDirectory(normalized))
+                    throw new InstallerException(
+                        $"The renderer package contained an unexpected directory '{normalized}'.");
+                checked { expandedBytes += entry.Length; }
+                if (expandedBytes > ProductConstants.MaximumRendererExpandedBytes)
+                    throw new InstallerException(
+                        "The renderer package expanded size exceeded its safe limit.");
+            }
+            if (!entries.Contains(ProductConstants.PackageManifestName) ||
+                !entries.Contains($"bin/{ProductConstants.EngineExecutableName}"))
+                throw new InstallerException(
+                    "The renderer package archive was incomplete.");
+            return expandedBytes;
+        }
+        catch (OverflowException ex)
+        {
+            throw new InstallerException(
+                "The renderer package expanded size was invalid.", ex);
+        }
+        catch (InvalidDataException ex)
+        {
+            throw new InstallerException(
+                "The renderer package was not a valid ZIP archive.", ex);
+        }
+    }
+
+    private static bool IsAllowedPackageFile(string path)
+    {
+        if (IsForbiddenDeveloperFile(path))
+            return false;
+        return path == $"bin/{ProductConstants.EngineExecutableName}" ||
+               path == ProductConstants.SettingsContractRelativePath ||
+               path == "bin/D3D12/D3D12Core.dll" ||
+               ShaderInventory.Paths.Contains(path) ||
+               path.StartsWith("bin/licenses/", StringComparison.Ordinal) ||
+               MediaInventory.MediaPaths.Contains(path);
+    }
+
+    private static bool IsAllowedPackageDirectory(string path)
+    {
+        if (path is "bin" or "media" or "bin/D3D12" or "bin/shaders" or
+            "bin/licenses" or "bin/settings")
+            return true;
+        return ShaderInventory.Directories.Contains(path) ||
+               path.StartsWith("bin/licenses/", StringComparison.Ordinal) ||
+               MediaInventory.Directories.Contains(path);
+    }
+
+    private static (IReadOnlySet<string> Paths,
+        IReadOnlySet<string> Directories) LoadShaderInventory()
+    {
+        using Stream stream = typeof(PayloadPackager).Assembly
+            .GetManifestResourceStream(ShaderInventoryResource)
+            ?? throw new InstallerException(
+                "The launcher runtime shader inventory resource was missing.");
+        using StreamReader reader = new(stream, System.Text.Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: false);
+        string[] paths = reader.ReadToEnd().Replace("\r\n", "\n",
+                StringComparison.Ordinal)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        string[] sorted = paths.OrderBy(path => path,
+            StringComparer.Ordinal).Distinct(StringComparer.Ordinal).ToArray();
+        if (paths.Length != 47 || !paths.SequenceEqual(sorted,
+                StringComparer.Ordinal) || paths.Any(path =>
+                !path.StartsWith("bin/shaders/", StringComparison.Ordinal) ||
+                !path.EndsWith(".bin", StringComparison.Ordinal) ||
+                path.Split('/').Any(part => part is "" or "." or "..")))
+            throw new InstallerException(
+                "The launcher runtime shader inventory resource was invalid.");
+        HashSet<string> directorySet = new(StringComparer.Ordinal);
+        foreach (string path in paths)
+        {
+            string directory = path;
+            while (directory.Contains('/'))
+            {
+                directory = directory[..directory.LastIndexOf('/')];
+                if (!directory.StartsWith("bin/shaders", StringComparison.Ordinal))
+                    break;
+                directorySet.Add(directory);
+            }
+        }
+        return (paths.ToHashSet(StringComparer.Ordinal), directorySet);
+    }
+
+    private static (IReadOnlySet<string> ProtectedPaths,
+        IReadOnlySet<string> MediaPaths,
+        IReadOnlySet<string> NoticePaths,
+        IReadOnlySet<string> Directories) LoadMediaInventory()
+    {
+        using Stream stream = typeof(PayloadPackager).Assembly
+            .GetManifestResourceStream(MediaInventoryResource)
+            ?? throw new InstallerException(
+                "The launcher retained-media inventory resource was missing.");
+        using StreamReader reader = new(stream, System.Text.Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: false);
+        string text = reader.ReadToEnd();
+        if (text.Length == 0 || text.Contains('\r') ||
+            !text.EndsWith('\n') || text.EndsWith("\n\n",
+                StringComparison.Ordinal))
+            throw new InstallerException(
+                "The launcher retained-media inventory resource was invalid.");
+        string[] paths = text[..^1].Split('\n');
+        string[] sorted = paths.OrderBy(path => path,
+            StringComparer.Ordinal).Distinct(StringComparer.Ordinal).ToArray();
+        if (paths.Length != 310 || !paths.SequenceEqual(sorted,
+                StringComparer.Ordinal) || paths.Any(path =>
+                path.Length == 0 || path.Contains('\\') ||
+                path.Split('/').Any(part => part is "" or "." or "..")))
+            throw new InstallerException(
+                "The launcher retained-media inventory resource was invalid.");
+
+        HashSet<string> notices = paths.Where(path => path.StartsWith(
+                "bin/licenses/", StringComparison.Ordinal))
+            .ToHashSet(StringComparer.Ordinal);
+        string[] media = paths.Where(path => path.StartsWith("media/",
+            StringComparison.Ordinal)).ToArray();
+        HashSet<string> mediaSet = media.ToHashSet(StringComparer.Ordinal);
+        if (media.Length != 305 || notices.Count != 5 ||
+            paths.Any(path => !path.StartsWith("media/",
+                StringComparison.Ordinal) && !notices.Contains(path)) ||
+            media.Count(IsEnvironmentPath) != 6 ||
+            media.Count(IsNoisePath) != 13 ||
+            media.Count(path => IsScenePath(path,
+                "bistro_interior_retextured")) != 7 ||
+            media.Count(path => IsScenePath(path,
+                "san_miguel_retextured")) != 276 ||
+            media.Count(IsNotoPath) != 3 ||
+            media.Count(path => IsNoisePath(path) &&
+                path.EndsWith("/manifest.json", StringComparison.Ordinal)) != 1 ||
+            media.Count(path => IsScenePath(path,
+                "bistro_interior_retextured") &&
+                path.EndsWith(".scene.json", StringComparison.Ordinal)) != 1 ||
+            media.Count(path => IsScenePath(path,
+                "san_miguel_retextured") &&
+                path.EndsWith(".scene.json", StringComparison.Ordinal)) != 1)
+            throw new InstallerException(
+                "The launcher retained-media inventory resource was invalid.");
+
+        HashSet<string> directories = new(StringComparer.Ordinal);
+        foreach (string path in media)
+        {
+            string directory = path;
+            while (directory.Contains('/'))
+            {
+                directory = directory[..directory.LastIndexOf('/')];
+                directories.Add(directory);
+            }
+        }
+        return (paths.ToHashSet(StringComparer.Ordinal), mediaSet, notices,
+            directories);
+    }
+
+    private static bool IsEnvironmentPath(string path) =>
+        path.StartsWith("media/environments/", StringComparison.Ordinal) &&
+        path.EndsWith(".hdr", StringComparison.Ordinal);
+
+    private static bool IsNoisePath(string path)
+    {
+        const string prefix = "media/uvsr/noise/";
+        if (!path.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+        string relative = path[prefix.Length..];
+        return !relative.Contains('/') &&
+            (relative == "manifest.json" ||
+             relative.EndsWith(".bin", StringComparison.Ordinal));
+    }
+
+    private static bool IsScenePath(string path, string scene)
+    {
+        string prefix = $"media/glTF-Sample-Assets/Models/{scene}/";
+        return path.StartsWith(prefix, StringComparison.Ordinal) &&
+            (path.EndsWith(".scene.json", StringComparison.Ordinal) ||
+             path.EndsWith(".gltf", StringComparison.Ordinal) ||
+             path.EndsWith(".glb", StringComparison.Ordinal) ||
+             path.EndsWith(".bin", StringComparison.Ordinal) ||
+             path.EndsWith(".png", StringComparison.Ordinal));
+    }
+
+    private static bool IsNotoPath(string path)
+    {
+        const string prefix = "media/fonts/NotoSans/";
+        if (!path.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+        string relative = path[prefix.Length..];
+        return !relative.Contains('/') &&
+            relative.EndsWith(".ttf", StringComparison.Ordinal);
+    }
+
+    private static bool IsForbiddenDeveloperFile(string path)
+    {
+        if (string.Equals(path, "bin/D3D12/D3D12SDKLayers.dll",
+                StringComparison.OrdinalIgnoreCase))
+            return true;
+        string name = Path.GetFileName(path);
+        if (name.StartsWith(".git", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return Path.GetExtension(name).ToLowerInvariant() is
+            ".py" or ".pyc" or ".ps1" or ".cmd" or ".bat" or ".cmake" or
+            ".cpp" or ".cxx" or ".cc" or ".h" or ".hpp" or ".hlsl" or
+            ".hlsli" or ".pdb" or ".ilk" or ".lib" or ".exp" or ".obj" or
+            ".sln" or ".vcxproj";
+    }
+
+    private static IReadOnlyList<PackageFile> BuildFileManifest(string packageRoot)
+    {
+        List<PackageFile> files = new();
+        foreach (string path in Directory.EnumerateFiles(packageRoot, "*",
+                     SearchOption.AllDirectories))
+        {
+            SafePaths.RejectReparsePoint(path, "renderer package file");
+            string relative = NormalizeRelativePath(
+                Path.GetRelativePath(packageRoot, path));
+            if (relative == ProductConstants.PackageManifestName)
+                continue;
+            if (!IsAllowedPackageFile(relative))
+                throw new InstallerException(
+                    $"The renderer package contained an unexpected file '{relative}'.");
+            FileInfo info = new(path);
+            files.Add(new PackageFile(relative, info.Length, ComputeSha256(path)));
+        }
+        return files.OrderBy(file => file.RelativePath,
+            StringComparer.Ordinal).ToArray();
+    }
+
+    private static string NormalizeRelativePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || Path.IsPathRooted(path) ||
+            path.Contains(':'))
+            throw new InstallerException(
+                "A renderer package relative path was invalid.");
+        string normalized = path.Replace(Path.DirectorySeparatorChar, '/');
+        if (normalized.Split('/').Any(part => part is "" or "." or ".."))
+            throw new InstallerException(
+                "A renderer package relative path was invalid.");
+        string contractRoot = Path.Combine(Path.GetTempPath(),
+            "uvsr-package-root-contract");
+        string full = Path.GetFullPath(Path.Combine(contractRoot,
+            normalized.Replace('/', Path.DirectorySeparatorChar)));
+        string root = Path.GetFullPath(contractRoot);
+        if (!SafePaths.IsStrictDescendant(full, root))
+            throw new InstallerException(
+                "A renderer package path escaped its root.");
+        return normalized;
+    }
+
+    private static void ValidateEngineMetadata(
+        string path,
+        PackageManifest manifest)
+    {
+        FileVersionInfo info = FileVersionInfo.GetVersionInfo(path);
+        if (!string.Equals(info.ProductName, "UVSR Engine",
+                StringComparison.Ordinal) ||
+            !string.Equals(info.FileVersion, manifest.EngineVersion,
+                StringComparison.Ordinal) ||
+            !string.Equals(info.ProductVersion,
+                $"{manifest.EngineVersion}+{manifest.SettingsHash}",
+                StringComparison.Ordinal))
+            throw new InstallerException(
+                "The renderer executable metadata did not match the package settings identity.");
+    }
+
+    private static void ValidateSettingsContract(
+        string packageRoot,
+        PackageManifest manifest)
+    {
+        string path = Path.Combine(packageRoot,
+            ProductConstants.SettingsContractRelativePath.Replace('/',
+                Path.DirectorySeparatorChar));
+        SafePaths.RejectReparsePathChain(path, "canonical settings contract");
+        FileInfo info = new(path);
+        if (!info.Exists || info.Length is <= 0 or > 16L * 1024 * 1024)
+            throw new InstallerException(
+                "The canonical settings contract was missing or invalid.");
+        try
+        {
+            byte[] data = File.ReadAllBytes(path);
+            LauncherUpdateFeedVerifier.RejectDuplicateJsonProperties(data);
+            using JsonDocument document = JsonDocument.Parse(data);
+            JsonElement root = document.RootElement;
+            RequireExactProperties(root,
+                "schemaVersion", "settingsHash", "engineVersion",
+                "serializationPolicy", "entries");
+            if (root.GetProperty("schemaVersion").GetInt32() !=
+                    ProductConstants.SettingsContractSchemaVersion ||
+                !string.Equals(root.GetProperty("settingsHash").GetString(),
+                    manifest.SettingsHash, StringComparison.Ordinal) ||
+                !string.Equals(root.GetProperty("engineVersion").GetString(),
+                    manifest.EngineVersion, StringComparison.Ordinal))
+                throw new JsonException(
+                    "Settings identity does not match the package manifest.");
+            string? policy = root.GetProperty("serializationPolicy").GetString();
+            if (string.IsNullOrWhiteSpace(policy) || policy.Length > 4096)
+                throw new JsonException("Settings serialization policy was invalid.");
+            JsonElement entries = root.GetProperty("entries");
+            if (entries.ValueKind != JsonValueKind.Array ||
+                entries.GetArrayLength() != 176)
+                throw new JsonException("Settings entries were invalid.");
+            string? previous = null;
+            int snapshotEntries = 0;
+            int sessionEntries = 0;
+            foreach (JsonElement entry in entries.EnumerateArray())
+            {
+                RequireExactProperties(entry, "name", "kind", "persistence",
+                    "snapshotMember", "defaultValue", "domain");
+                string? name = entry.GetProperty("name").GetString();
+                string? kind = entry.GetProperty("kind").GetString();
+                string? persistence = entry.GetProperty("persistence").GetString();
+                JsonElement snapshotMember = entry.GetProperty("snapshotMember");
+                JsonElement defaultValue = entry.GetProperty("defaultValue");
+                JsonElement domain = entry.GetProperty("domain");
+                if (string.IsNullOrWhiteSpace(name) || name.Length > 256 ||
+                    kind is not ("Boolean" or "Integer" or "Float" or
+                        "Float3" or "Enum" or "DynamicSelection" or "Float4") ||
+                    previous is not null &&
+                    string.CompareOrdinal(previous, name) >= 0 ||
+                    snapshotMember.ValueKind is not (JsonValueKind.True or
+                        JsonValueKind.False) ||
+                    defaultValue.ValueKind != JsonValueKind.String ||
+                    defaultValue.GetString()!.Length > 4096 ||
+                    domain.ValueKind != JsonValueKind.String ||
+                    domain.GetString()!.Length > 4096)
+                    throw new JsonException("Settings entry was invalid.");
+                bool isSnapshotMember = snapshotMember.GetBoolean();
+                if (persistence == "SnapshotCatalog" && isSnapshotMember)
+                    snapshotEntries++;
+                else if (persistence == "SessionOnly" && !isSnapshotMember)
+                    sessionEntries++;
+                else
+                    throw new JsonException(
+                        "Settings persistence and snapshot membership disagreed.");
+                previous = name;
+            }
+            if (snapshotEntries != 174 || sessionEntries != 2)
+                throw new JsonException(
+                    "Settings snapshot membership was invalid.");
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or
+                                   InvalidOperationException or FormatException)
+        {
+            throw new InstallerException(
+                "The canonical settings contract failed validation.", ex);
+        }
+    }
+
+    private static void RequireExactProperties(
+        JsonElement element,
+        params string[] expected)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            throw new JsonException("A settings contract object was expected.");
+        HashSet<string> names = element.EnumerateObject()
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        if (!names.SetEquals(expected))
+            throw new JsonException("Settings contract properties were invalid.");
     }
 
     internal static string ComputeSha256(string path)
@@ -193,515 +593,62 @@ internal sealed class PayloadPackager
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
-    internal static void ValidateBuildOutput(
-        string sourceDirectory,
-        string buildDirectory)
+    private static bool FixedTimeHashEquals(string left, string right)
     {
-        string sourceRoot = Path.GetFullPath(sourceDirectory);
-        string buildRoot = Path.GetFullPath(buildDirectory);
-        string bin = Path.Combine(buildRoot, "bin");
-        string media = Path.Combine(buildRoot, "media");
-        string[] fixedFiles =
-        {
-            Path.Combine(bin, "uvsr.exe"),
-            Path.Combine(bin, "D3D12", "D3D12Core.dll"),
-            Path.Combine(bin, "D3D12", "D3D12SDKLayers.dll"),
-            Path.Combine(bin, "D3D12", "uvsr-runtime-contract.txt"),
-            Path.Combine(bin, "third-party-notices.md")
-        };
-        string[] legalFiles =
-        {
-            "UVSR-Polyform-Noncommercial-1.0.0.md",
-            "Microsoft-DirectX-Graphics-Samples.txt",
-            "Apache-2.0.txt", "BSD-2-Clause.txt", "IOLITE-AgX-MIT.txt",
-            "Google-Filament-FXAA-Attribution.md", "NVIDIA-Donut-MIT.txt",
-            "Donut-Third-Party-Licenses.txt", "NVIDIA-NVRHI-MIT.txt",
-            "NVIDIA-ShaderMake-MIT.txt", "Dear-ImGui-MIT.txt",
-            "Intel-PBR-Sponza.txt", "Amazon-Lumberyard-Bistro.txt",
-            "San-Miguel-2.1.txt", "Blender-Classroom-CC0-1.0.txt",
-            "Poly-Haven-Environments.md", "Microsoft-DirectX-Headers-MIT.txt",
-            "Microsoft-D3D12-Agility-SDK-Terms.txt",
-            "Microsoft-D3D12-Agility-SDK-Code-MIT.txt"
-        };
-        if (!Directory.Exists(bin) || !Directory.Exists(media) ||
-            fixedFiles.Any(path => !File.Exists(path)) ||
-            legalFiles.Any(name => !File.Exists(Path.Combine(bin, "licenses", name))))
-        {
-            throw new InstallerException("The completed build did not contain a runnable UVSR package.");
-        }
-
-        UiFontContract uiFontContract = ValidateUiFontOutput(media);
-        ValidateBuildUiLicenseContract(bin, uiFontContract);
-        if (uiFontContract != UiFontContract.Legacy)
-            ValidateNotoSansBuildFiles(buildRoot);
-        if (uiFontContract == UiFontContract.DualTransition)
-            ValidateTransitionalBuildAliases(buildRoot);
-
-        ValidateRelativeManifest(
-            Path.Combine(buildRoot, "uvsr_runtime_shader_paths.manifest"),
-            Path.Combine(bin, "shaders"));
-        ValidateSourceManifest(
-            Path.Combine(buildRoot, "uvsr_environment_assets.manifest"),
-            Path.Combine(sourceRoot, "assets", "environments"),
-            Path.Combine(media, "environments"));
-        ValidateSourceManifest(
-            Path.Combine(buildRoot, "uvsr_noise_assets.manifest"),
-            Path.Combine(sourceRoot, "assets", "noise"),
-            Path.Combine(media, "uvsr", "noise"));
-        ValidateSourceManifest(
-            Path.Combine(buildRoot, "scene_runtime_assets.manifest"),
-            Path.Combine(sourceRoot, "assets", "scenes"),
-            Path.Combine(media, "glTF-Sample-Assets", "Models"));
-        ValidateD3D12RuntimeContract(buildRoot);
+        if (!ProductConstants.HashRegex().IsMatch(left) ||
+            !ProductConstants.HashRegex().IsMatch(right))
+            return false;
+        return CryptographicOperations.FixedTimeEquals(
+            Convert.FromHexString(left), Convert.FromHexString(right));
     }
+}
 
-    internal static void ValidateBuildOutputCanBeStaged(
-        string buildDirectory,
-        long launcherReleaseSequence)
+internal static class RendererPackageContract
+{
+    internal static void ValidateFeed(RendererFeed feed)
     {
-        if (launcherReleaseSequence < 1 ||
-            launcherReleaseSequence > ProductConstants.MaximumReleaseSequence)
-            throw new ArgumentOutOfRangeException(nameof(launcherReleaseSequence));
-        if (launcherReleaseSequence < 10)
-            return;
-        UiFontContract contract = ValidateUiFontOutput(
-            Path.Combine(Path.GetFullPath(buildDirectory), "media"));
-        if (contract == UiFontContract.Legacy)
-        {
+        if (feed is null ||
+            feed.SchemaVersion != ProductConstants.RendererUpdateFeedSchemaVersion ||
+            !string.Equals(feed.ProductId, ProductConstants.ProductId,
+                StringComparison.Ordinal) ||
+            !string.Equals(feed.Channel, "stable", StringComparison.Ordinal) ||
+            feed.ReleaseSequence is < 1 or > ProductConstants.MaximumReleaseSequence ||
+            string.IsNullOrWhiteSpace(feed.SourceCommit) ||
+            !ProductConstants.CommitRegex().IsMatch(feed.SourceCommit) ||
+            string.IsNullOrWhiteSpace(feed.SettingsHash) ||
+            !ProductConstants.SettingsHashRegex().IsMatch(feed.SettingsHash) ||
+            !ProductConstants.IsCanonicalEngineVersion(feed.EngineVersion) ||
+            feed.Artifact is null ||
+            !string.Equals(feed.Artifact.Name,
+                ProductConstants.RendererArtifactName, StringComparison.Ordinal) ||
+            feed.Artifact.Size is <= 0 or >
+                ProductConstants.MaximumRendererPackageBytes ||
+            string.IsNullOrWhiteSpace(feed.Artifact.Sha256) ||
+            !ProductConstants.HashRegex().IsMatch(feed.Artifact.Sha256))
             throw new InstallerException(
-                "UVSR Launcher will not create a new renderer package from the " +
-                "legacy CodexUI font inventory. The checked-out UVSR source and " +
-                "this launcher are out of sync. Retry after matching public UVSR " +
-                "source with the bundled Noto Sans assets is published. Existing " +
-                "legacy installations remain available for recovery.");
-        }
+                "The renderer update feed did not match the required strict contract.");
     }
 
-    internal static void ValidateD3D12RuntimeContract(string packageRoot)
+    internal static void ValidateManifest(PackageManifest manifest)
     {
-        string runtimeRoot = Path.Combine(packageRoot, "bin", "D3D12");
-        string contractPath = Path.Combine(runtimeRoot, "uvsr-runtime-contract.txt");
-        string corePath = Path.Combine(runtimeRoot, "D3D12Core.dll");
-        SafePaths.RejectReparsePathChain(contractPath,
-            "UVSR Direct3D runtime contract");
-        FileInfo contractInfo = new(contractPath);
-        if (!contractInfo.Exists || contractInfo.Length is <= 0 or > 4096 ||
-            !File.Exists(corePath))
+        if (manifest is null ||
+            manifest.SchemaVersion != ProductConstants.RendererUpdateFeedSchemaVersion ||
+            !string.Equals(manifest.ProductId, ProductConstants.ProductId,
+                StringComparison.Ordinal) ||
+            !manifest.Production ||
+            !string.Equals(manifest.Configuration, "Release",
+                StringComparison.Ordinal) ||
+            manifest.ReleaseSequence is < 1 or >
+                ProductConstants.MaximumReleaseSequence ||
+            string.IsNullOrWhiteSpace(manifest.SourceCommit) ||
+            !ProductConstants.CommitRegex().IsMatch(manifest.SourceCommit) ||
+            string.IsNullOrWhiteSpace(manifest.SettingsHash) ||
+            !ProductConstants.SettingsHashRegex().IsMatch(manifest.SettingsHash) ||
+            !ProductConstants.IsCanonicalEngineVersion(manifest.EngineVersion) ||
+            string.IsNullOrWhiteSpace(manifest.ExecutableSha256) ||
+            !ProductConstants.HashRegex().IsMatch(manifest.ExecutableSha256) ||
+            manifest.Files is null || manifest.Files.Count is 0 or > 100_000)
             throw new InstallerException(
-                "The completed build is missing its DirectX 12 runtime contract.");
-
-        string[] lines = File.ReadAllText(contractPath)
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Split('\n', StringSplitOptions.None);
-        if (lines.Length != 5 || lines[4].Length != 0 ||
-            lines[0] != "schemaVersion=1" ||
-            lines[1] != $"sdkVersion={ProductConstants.D3D12AgilitySdkVersion}" ||
-            lines[2] != @"sdkPath=.\D3D12\" ||
-            !lines[3].StartsWith("coreSha256=", StringComparison.Ordinal))
-            throw new InstallerException(
-                "The completed build has an invalid DirectX 12 runtime contract.");
-
-        string recordedHash = lines[3]["coreSha256=".Length..];
-        if (!ProductConstants.HashRegex().IsMatch(recordedHash) ||
-            !string.Equals(recordedHash, ComputeSha256(corePath),
-                StringComparison.Ordinal))
-            throw new InstallerException(
-                "The packaged DirectX 12 runtime does not match the verified build.");
-    }
-
-    private static void ValidateRelativeManifest(string manifestPath, string outputRoot)
-    {
-        HashSet<string> expected = ReadManifestLines(manifestPath)
-            .Select(NormalizeRelativePath)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        ValidateExactOutputSet(expected, outputRoot);
-    }
-
-    private static void ValidateSourceManifest(
-        string manifestPath,
-        string sourceRoot,
-        string outputRoot)
-    {
-        HashSet<string> expected = new(StringComparer.OrdinalIgnoreCase);
-        foreach (string source in ReadManifestLines(manifestPath))
-        {
-            string fullSource = Path.GetFullPath(source);
-            if (!SafePaths.IsStrictDescendant(fullSource, sourceRoot))
-                throw new InstallerException("A generated UVSR asset manifest escaped its source directory.");
-            expected.Add(NormalizeRelativePath(Path.GetRelativePath(sourceRoot, fullSource)));
-        }
-        ValidateExactOutputSet(expected, outputRoot);
-    }
-
-    private static IReadOnlyList<string> ReadManifestLines(string manifestPath)
-    {
-        if (!File.Exists(manifestPath))
-            throw new InstallerException("The completed build is missing a generated runtime manifest.");
-        SafePaths.RejectReparsePathChain(manifestPath, "generated UVSR runtime manifest");
-        string[] lines = File.ReadAllLines(manifestPath)
-            .Select(line => line.Trim())
-            .Where(line => line.Length > 0)
-            .ToArray();
-        if (lines.Length == 0 || lines.Length > 100_000)
-            throw new InstallerException("A generated UVSR runtime manifest is invalid.");
-        return lines;
-    }
-
-    private static void ValidateExactOutputSet(
-        IReadOnlySet<string> expected,
-        string outputRoot)
-    {
-        if (!Directory.Exists(outputRoot))
-            throw new InstallerException("The completed build is missing a runtime asset directory.");
-        HashSet<string> actual = Directory.EnumerateFiles(outputRoot, "*",
-                SearchOption.AllDirectories)
-            .Select(path => NormalizeRelativePath(Path.GetRelativePath(outputRoot, path)))
-            .Where(path => !path.EndsWith("/.uvsr-stage.stamp", StringComparison.OrdinalIgnoreCase) &&
-                           !string.Equals(path, ".uvsr-stage.stamp", StringComparison.OrdinalIgnoreCase))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (!expected.SetEquals(actual))
-            throw new InstallerException(
-                "The completed build does not match its generated runtime asset manifest.");
-    }
-
-    private static IReadOnlyList<PackageFile> BuildFileManifest(string packageRoot)
-    {
-        List<PackageFile> files = new();
-        EnumerateFiles(packageRoot, packageRoot, files);
-        return files.OrderBy(file => file.RelativePath, StringComparer.Ordinal).ToArray();
-    }
-
-    private static void EnumerateFiles(string packageRoot, string directory, List<PackageFile> files)
-    {
-        SafePaths.RejectReparsePathChain(directory, "UVSR runtime package directory");
-        foreach (string childDirectory in Directory.EnumerateDirectories(directory,
-                     "*", SearchOption.TopDirectoryOnly))
-        {
-            SafePaths.RejectReparsePoint(childDirectory, "UVSR runtime package directory");
-            EnumerateFiles(packageRoot, childDirectory, files);
-        }
-        foreach (string file in Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly))
-        {
-            SafePaths.RejectReparsePoint(file, "UVSR runtime package file");
-            if (string.Equals(Path.GetFileName(file), ".uvsr-package.json",
-                    StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(Path.GetDirectoryName(file), packageRoot,
-                    StringComparison.OrdinalIgnoreCase))
-                continue;
-            FileInfo info = new(file);
-            string relative = NormalizeRelativePath(Path.GetRelativePath(packageRoot, file));
-            files.Add(new PackageFile(relative, info.Length, ComputeSha256(file)));
-        }
-    }
-
-    private static string NormalizeRelativePath(string relative)
-    {
-        if (Path.IsPathRooted(relative) || relative.Contains(':'))
-            throw new InstallerException("A UVSR package contains an invalid relative path.");
-        string normalized = relative.Replace('\\', '/');
-        string combined = SafePaths.CombineDescendant("C:\\uvsr-package-root", normalized);
-        string roundTrip = Path.GetRelativePath("C:\\uvsr-package-root", combined).Replace('\\', '/');
-        if (roundTrip.StartsWith("../", StringComparison.Ordinal) || roundTrip == "..")
-            throw new InstallerException("A UVSR package path escaped its package root.");
-        return roundTrip;
-    }
-
-    private static bool HasFilesUnder(
-        IReadOnlyDictionary<string, PackageFile> files,
-        string prefix) => files.Keys.Any(path => path.StartsWith(prefix,
-        StringComparison.OrdinalIgnoreCase));
-
-    internal static void NormalizeStagedUiTransition(string packageRoot)
-    {
-        string root = Path.GetFullPath(packageRoot);
-        SafePaths.RejectReparsePathChain(root,
-            "UVSR staged runtime package");
-        Dictionary<string, PackageFile> files = BuildStagedUiRecords(root);
-        UiFontContract contract = ClassifyUiFontContract(files.Keys);
-        ValidateUiLicenseContract(files.Keys, contract,
-            "staged UVSR runtime");
-        ValidateProggyCleanPackageNotice(files,
-            required: contract != UiFontContract.Legacy,
-            "staged UVSR runtime");
-        if (contract != UiFontContract.Legacy)
-            ValidateNotoSansPackageFiles(files);
-        if (contract != UiFontContract.DualTransition)
-            return;
-
-        ValidateTransitionalAliasRecords(files);
-        string fontsRoot = Path.Combine(root, "media", "fonts");
-        SafePaths.DeleteOwnedTree(
-            Path.Combine(fontsRoot, "System"),
-            fontsRoot);
-        string licensesRoot = Path.Combine(root, "bin", "licenses");
-        SafePaths.DeleteOwnedTree(
-            Path.Combine(licensesRoot, "Geist-OFL-1.1.txt"),
-            licensesRoot);
-
-        Dictionary<string, PackageFile> normalized = BuildStagedUiRecords(root);
-        if (ClassifyUiFontContract(normalized.Keys) != UiFontContract.NotoSans)
-            throw new InstallerException(
-                "The staged UVSR runtime font transition could not be normalized.");
-        ValidateUiLicenseContract(normalized.Keys, UiFontContract.NotoSans,
-            "normalized UVSR runtime");
-        ValidateProggyCleanPackageNotice(normalized,
-            required: true, "normalized UVSR runtime");
-        ValidateNotoSansPackageFiles(normalized);
-    }
-
-    private static UiFontContract ClassifyUiFontContract(
-        IEnumerable<string> files)
-    {
-        HashSet<string> actual = files
-            .Where(path => path.StartsWith("media/fonts/",
-                StringComparison.OrdinalIgnoreCase))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        HashSet<string> legacy = LegacyUiFontFiles
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (actual.SetEquals(legacy))
-            return UiFontContract.Legacy;
-        HashSet<string> notoSans = NotoSansUiFontFiles
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (actual.SetEquals(notoSans))
-            return UiFontContract.NotoSans;
-        legacy.UnionWith(notoSans);
-        if (actual.SetEquals(legacy))
-            return UiFontContract.DualTransition;
-        throw new InstallerException(
-            "The UVSR runtime has an incomplete, mixed, or unknown UI font contract.");
-    }
-
-    private static UiFontContract ValidateUiFontOutput(string mediaRoot)
-    {
-        string fontsRoot = Path.Combine(mediaRoot, "fonts");
-        if (!Directory.Exists(fontsRoot))
-        {
-            throw new InstallerException(
-                "The completed build is missing its UI font directory.");
-        }
-        IReadOnlyList<string> files = BuildFileManifest(fontsRoot)
-            .Select(file => "media/fonts/" + file.RelativePath)
-            .ToArray();
-        return ClassifyUiFontContract(files);
-    }
-
-    private static void ValidateUiLicenseContract(
-        IEnumerable<string> files,
-        UiFontContract contract,
-        string description)
-    {
-        HashSet<string> inventory = files.ToHashSet(
-            StringComparer.OrdinalIgnoreCase);
-        bool hasNotoSans = inventory.Contains(NotoSansLicenseFile);
-        bool hasGeist = inventory.Contains(TransitionalGeistLicenseFile);
-        bool expectsNotoSans = contract != UiFontContract.Legacy;
-        bool expectsGeist = contract != UiFontContract.NotoSans;
-        if (hasNotoSans != expectsNotoSans || hasGeist != expectsGeist)
-        {
-            throw new InstallerException(
-                $"The {description} has an incomplete or mixed UI font license contract.");
-        }
-    }
-
-    private static void ValidateBuildUiLicenseContract(
-        string binRoot,
-        UiFontContract contract)
-    {
-        string licensesRoot = Path.Combine(binRoot, "licenses");
-        List<string> present = new();
-        foreach (string relative in new[]
-                 {
-                     NotoSansLicenseFile,
-                     TransitionalGeistLicenseFile
-                 })
-        {
-            string name = relative["bin/licenses/".Length..];
-            if (File.Exists(Path.Combine(licensesRoot, name)))
-                present.Add(relative);
-        }
-        ValidateUiLicenseContract(present, contract, "completed build");
-        ValidateProggyCleanBuildNotice(
-            licensesRoot,
-            required: contract != UiFontContract.Legacy);
-    }
-
-    private static Dictionary<string, PackageFile> BuildStagedUiRecords(
-        string packageRoot)
-    {
-        string fontsRoot = Path.Combine(packageRoot, "media", "fonts");
-        if (!Directory.Exists(fontsRoot))
-            throw new InstallerException(
-                "The staged UVSR runtime is missing its UI font directory.");
-        Dictionary<string, PackageFile> files = BuildFileManifest(fontsRoot)
-            .Select(file => new PackageFile(
-                "media/fonts/" + file.RelativePath,
-                file.Size,
-                file.Sha256))
-            .ToDictionary(file => file.RelativePath,
-                StringComparer.OrdinalIgnoreCase);
-        foreach (string relative in new[]
-                 {
-                     NotoSansLicenseFile,
-                     TransitionalGeistLicenseFile,
-                     ProggyCleanLicenseFile
-                 })
-        {
-            string path = Path.Combine(packageRoot,
-                relative.Replace('/', Path.DirectorySeparatorChar));
-            if (!File.Exists(path))
-                continue;
-            SafePaths.RejectReparsePathChain(path,
-                "UVSR staged UI font license");
-            FileInfo info = new(path);
-            files.Add(relative, new PackageFile(
-                relative,
-                info.Length,
-                ComputeSha256(path)));
-        }
-        return files;
-    }
-
-    private static void ValidateProggyCleanPackageNotice(
-        IReadOnlyDictionary<string, PackageFile> files,
-        bool required,
-        string description)
-    {
-        if (!files.TryGetValue(ProggyCleanLicenseFile,
-                out PackageFile? actual))
-        {
-            if (required)
-            {
-                throw new InstallerException(
-                    $"The {description} is missing its ProggyClean MIT notice.");
-            }
-            return;
-        }
-        if (actual.Size != ProggyCleanLicenseSize ||
-            !string.Equals(actual.Sha256, ProggyCleanLicenseSha256,
-                StringComparison.Ordinal))
-        {
-            throw new InstallerException(
-                $"The {description} does not contain the exact ProggyClean MIT notice.");
-        }
-    }
-
-    private static void ValidateProggyCleanBuildNotice(
-        string licensesRoot,
-        bool required)
-    {
-        string path = Path.Combine(
-            licensesRoot,
-            ProggyCleanLicenseFile["bin/licenses/".Length..]);
-        FileInfo actual = new(path);
-        if (!actual.Exists)
-        {
-            if (required)
-            {
-                throw new InstallerException(
-                    "The completed build is missing its ProggyClean MIT notice.");
-            }
-            return;
-        }
-        SafePaths.RejectReparsePathChain(path,
-            "UVSR ProggyClean MIT notice");
-        if (actual.Length != ProggyCleanLicenseSize ||
-            !string.Equals(ComputeSha256(path), ProggyCleanLicenseSha256,
-                StringComparison.Ordinal))
-        {
-            throw new InstallerException(
-                "The completed build does not contain the exact ProggyClean MIT notice.");
-        }
-    }
-
-    private static void ValidateNotoSansPackageFiles(
-        IReadOnlyDictionary<string, PackageFile> files)
-    {
-        foreach (KeyValuePair<string, (long Size, string Sha256)> expected in
-                 NotoSansPackageFiles)
-        {
-            if (!files.TryGetValue(expected.Key, out PackageFile? actual) ||
-                actual.Size != expected.Value.Size ||
-                !string.Equals(actual.Sha256, expected.Value.Sha256,
-                    StringComparison.Ordinal))
-            {
-                throw new InstallerException(
-                    "The staged UVSR runtime does not contain the exact Noto Sans v2.015 files.");
-            }
-        }
-    }
-
-    private static void ValidateNotoSansBuildFiles(string buildRoot)
-    {
-        foreach (KeyValuePair<string, (long Size, string Sha256)> expected in
-                 NotoSansPackageFiles)
-        {
-            string path = Path.Combine(buildRoot,
-                expected.Key.Replace('/', Path.DirectorySeparatorChar));
-            FileInfo actual = new(path);
-            if (!actual.Exists || actual.Length != expected.Value.Size ||
-                !string.Equals(ComputeSha256(path), expected.Value.Sha256,
-                    StringComparison.Ordinal))
-            {
-                throw new InstallerException(
-                    "The completed build does not contain the exact Noto Sans v2.015 files.");
-            }
-        }
-    }
-
-    private static void ValidateTransitionalAliasRecords(
-        IReadOnlyDictionary<string, PackageFile> files)
-    {
-        foreach (KeyValuePair<string, string> alias in
-                 TransitionalUiFontAliases)
-        {
-            if (!files.TryGetValue(alias.Key, out PackageFile? compatibility) ||
-                !files.TryGetValue(alias.Value, out PackageFile? canonical) ||
-                compatibility.Size != canonical.Size ||
-                !string.Equals(compatibility.Sha256, canonical.Sha256,
-                    StringComparison.Ordinal))
-            {
-                throw new InstallerException(
-                    "The UVSR runtime has an invalid transitional UI font alias.");
-            }
-        }
-    }
-
-    private static void ValidateTransitionalBuildAliases(string buildRoot)
-    {
-        foreach (KeyValuePair<string, string> alias in
-                 TransitionalUiFontAliases)
-        {
-            string compatibility = Path.Combine(buildRoot,
-                alias.Key.Replace('/', Path.DirectorySeparatorChar));
-            string canonical = Path.Combine(buildRoot,
-                alias.Value.Replace('/', Path.DirectorySeparatorChar));
-            FileInfo compatibilityInfo = new(compatibility);
-            FileInfo canonicalInfo = new(canonical);
-            if (!compatibilityInfo.Exists || !canonicalInfo.Exists ||
-                compatibilityInfo.Length != canonicalInfo.Length ||
-                !string.Equals(ComputeSha256(compatibility),
-                    ComputeSha256(canonical), StringComparison.Ordinal))
-            {
-                throw new InstallerException(
-                    "The completed build has an invalid transitional UI font alias.");
-            }
-        }
-    }
-
-    private static void CopyDirectory(string sourceParent, string destinationParent, string name)
-    {
-        string source = Path.Combine(sourceParent, name);
-        if (!Directory.Exists(source))
-            throw new InstallerException($"The build is missing its required '{name}' directory.");
-        SafePaths.CopyDirectory(source, Path.Combine(destinationParent, name));
-    }
-
-    private static void CopyFile(string sourceParent, string destinationParent, string name)
-    {
-        string source = Path.Combine(sourceParent, name);
-        if (!File.Exists(source))
-            throw new InstallerException($"The build is missing its required '{name}' file.");
-        SafePaths.RejectReparsePoint(source, $"build output {name}");
-        File.Copy(source, Path.Combine(destinationParent, name), overwrite: false);
+                "The renderer package manifest did not match the required strict contract.");
     }
 }

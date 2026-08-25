@@ -1,6 +1,6 @@
 #pragma once
 
-// ShaderMake's dependency scanner follows includes without evaluating
+// DXC's dependency scanner follows includes without evaluating
 // __cplusplus. Keep CPU-only dependencies in this adapter so the executable
 // estimator equations remain one scanner-safe C++/HLSL source file.
 #include "radial_visibility_mask.h"

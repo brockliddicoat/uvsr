@@ -1,7 +1,6 @@
 #pragma pack_matrix(row_major)
 
-#include <donut/shaders/gbuffer.hlsli>
-#include <donut/shaders/binding_helpers.hlsli>
+#include "renderer_gpu_helpers.hlsli"
 #include "denoising_cb.h"
 
 #ifndef DENOISING_SIGNAL_CLASS
@@ -31,11 +30,11 @@ Texture2D<float4> t_FullNormalRoughness : register(t4);
 Texture2D<float4> t_RawFullSignal : register(t5);
 
 #if DENOISING_SIGNAL_CLASS == DENOISING_RADIANCE
-VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_ResolvedSignal : register(u0);
+RWTexture2D<float4> u_ResolvedSignal : register(u0);
 #elif DENOISING_SIGNAL_CLASS == DENOISING_SCALAR_RADIANCE
-VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_ResolvedSignal : register(u0);
+RWTexture2D<float> u_ResolvedSignal : register(u0);
 #else
-VK_IMAGE_FORMAT("r8") RWTexture2D<float> u_ResolvedSignal : register(u0);
+RWTexture2D<float> u_ResolvedSignal : register(u0);
 #endif
 
 bool IsValidDepth(float depth)

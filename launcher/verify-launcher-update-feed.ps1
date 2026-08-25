@@ -13,7 +13,7 @@ $productionKeyId = 'uvsr-launcher-update-p256-2026-01'
 $productionPublicKeySpkiBase64 =
     'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEATbHkDwYIS0nMut5h9Q6m67qfabhuK+VRo6mDW1UlwZQIfeLI7zc1aKblCclkfgd8DDU0LcblFgTFdvoAWgCYg=='
 $productId = '0c47a7a8-1ec4-4ffd-b6c4-2f7614181223'
-$artifactName = 'UVSR-Launcher-Windows-11-x64.exe'
+$artifactName = 'uvsr-launcher.exe'
 $maximumFeedBytes = 16 * 1024
 $maximumLauncherBytes = 256L * 1024 * 1024
 $maximumReleaseSequence = 9007199254740991L

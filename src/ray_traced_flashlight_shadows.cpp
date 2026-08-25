@@ -1,16 +1,18 @@
 #include "ray_traced_flashlight_shadows.h"
+#include "renderer_common_passes.h"
+#include "renderer_log.h"
+#include "renderer_shader_factory.h"
 
 #include "ray_traced_flashlight_shadows_shared.h"
 
-#include <donut/core/log.h>
 #include <donut/core/math/math.h>
-#include <donut/engine/CommonRenderPasses.h>
 #include <donut/engine/SceneGraph.h>
-#include <donut/engine/ShaderFactory.h>
 #include <donut/engine/View.h>
 
 #include <cmath>
 #include <cstddef>
+#include <array>
+#include <vector>
 
 using namespace donut;
 using namespace donut::engine;
@@ -33,6 +35,25 @@ namespace uvsr
 {
     namespace
     {
+        constexpr std::array<uint32_t, 5> ReceiverSampleCounts = {
+            1u, 2u, 4u, 8u, 16u
+        };
+        constexpr std::array<const char*, 5> ReceiverSampleMacros = {
+            "1", "2", "4", "8", "16"
+        };
+
+        uint32_t FindVariant(uint32_t sampleCount)
+        {
+            for (uint32_t index = 0u;
+                index < ReceiverSampleCounts.size();
+                ++index)
+            {
+                if (ReceiverSampleCounts[index] == sampleCount)
+                    return index;
+            }
+            return uint32_t(ReceiverSampleCounts.size());
+        }
+
         bool HasFormatSupport(
             nvrhi::IDevice* device,
             nvrhi::Format format)
@@ -64,7 +85,9 @@ namespace uvsr
                 description.arraySize,
                 description.mipLevels,
                 description.sampleCount,
-                description.dimension == nvrhi::TextureDimension::Texture2D,
+                description.dimension == nvrhi::TextureDimension::Texture2D ||
+                    description.dimension ==
+                        nvrhi::TextureDimension::Texture2DMS,
                 description.isShaderResource
             };
         }
@@ -95,14 +118,18 @@ namespace uvsr
             nvrhi::IDevice* device,
             uint32_t width,
             uint32_t height,
+            uint32_t receiverSampleCount,
             nvrhi::Format format,
             const char* debugName)
         {
             nvrhi::TextureDesc description;
             description.width = width;
             description.height = height;
+            description.arraySize = receiverSampleCount;
             description.format = format;
-            description.dimension = nvrhi::TextureDimension::Texture2D;
+            description.dimension = receiverSampleCount > 1u
+                ? nvrhi::TextureDimension::Texture2DArray
+                : nvrhi::TextureDimension::Texture2D;
             description.isUAV = true;
             description.debugName = debugName;
             description.enableAutomaticStateTracking(
@@ -130,7 +157,7 @@ namespace uvsr
 
     RayTracedFlashlightShadowPass::RayTracedFlashlightShadowPass(
         nvrhi::IDevice* device,
-        const std::shared_ptr<ShaderFactory>& shaderFactory,
+        const std::shared_ptr<RendererShaderFactory>& shaderFactory,
         nvrhi::IBindingLayout* bindlessLayout)
         : m_Device(device)
         , m_BindlessLayout(bindlessLayout)
@@ -160,7 +187,8 @@ namespace uvsr
             nvrhi::BindingLayoutItem::StructuredBuffer_SRV(11),
             nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
             nvrhi::BindingLayoutItem::Sampler(0),
-            nvrhi::BindingLayoutItem::Texture_UAV(0)
+            nvrhi::BindingLayoutItem::Texture_UAV(0),
+            nvrhi::BindingLayoutItem::Texture_UAV(1)
         };
         m_VisibilityBindingLayout = device->createBindingLayout(
             visibilityLayoutDescription);
@@ -170,7 +198,7 @@ namespace uvsr
             nvrhi::BindingLayoutDesc hitDistanceLayoutDescription =
                 visibilityLayoutDescription;
             hitDistanceLayoutDescription.bindings.push_back(
-                nvrhi::BindingLayoutItem::Texture_UAV(1));
+                nvrhi::BindingLayoutItem::Texture_UAV(2));
             m_HitDistanceBindingLayout = device->createBindingLayout(
                 hitDistanceLayoutDescription);
         }
@@ -183,69 +211,87 @@ namespace uvsr
         constantBufferDescription.isConstantBuffer = true;
         constantBufferDescription.isVolatile = true;
         constantBufferDescription.maxVersions =
-            engine::c_MaxRenderPassConstantBufferVersions;
+            RendererMaxConstantBufferVersions;
         m_ConstantBuffer = device->createBuffer(constantBufferDescription);
         m_MaterialSampler = device->createSampler(
             nvrhi::SamplerDesc()
                 .setAllFilters(true)
                 .setAllAddressModes(nvrhi::SamplerAddressMode::Wrap));
 
-        m_VisibilityShader = shaderFactory->CreateShader(
-            "uvsr/ray_traced_flashlight_shadows_cs.hlsl",
-            "GenerateVisibility",
-            nullptr,
-            nvrhi::ShaderType::Compute);
-        if (m_HitDistanceSupported)
+        for (uint32_t variant = 0u;
+            variant < ReceiverSampleCounts.size();
+            ++variant)
         {
-            m_HitDistanceShader = shaderFactory->CreateShader(
+            const std::vector<RendererShaderMacro> macros = {{
+                "FLASHLIGHT_VISIBILITY_SAMPLES",
+                ReceiverSampleMacros[variant]
+            }};
+            m_VisibilityShaders[variant] = shaderFactory->CreateShader(
+                "uvsr/ray_traced_flashlight_shadows_cs.hlsl",
+                "GenerateVisibility",
+                &macros,
+                nvrhi::ShaderType::Compute);
+            if (m_VisibilityShaders[variant] &&
+                m_VisibilityBindingLayout)
+            {
+                nvrhi::ComputePipelineDesc pipelineDescription;
+                pipelineDescription.CS = m_VisibilityShaders[variant];
+                pipelineDescription.bindingLayouts = {
+                    m_VisibilityBindingLayout,
+                    m_BindlessLayout
+                };
+                m_VisibilityPipelines[variant] =
+                    device->createComputePipeline(pipelineDescription);
+            }
+
+            if (!m_HitDistanceSupported)
+                continue;
+            m_HitDistanceShaders[variant] = shaderFactory->CreateShader(
                 "uvsr/ray_traced_flashlight_shadows_cs.hlsl",
                 "GenerateVisibilityAndHitDistance",
-                nullptr,
+                &macros,
                 nvrhi::ShaderType::Compute);
+            if (m_HitDistanceShaders[variant] &&
+                m_HitDistanceBindingLayout)
+            {
+                nvrhi::ComputePipelineDesc pipelineDescription;
+                pipelineDescription.CS = m_HitDistanceShaders[variant];
+                pipelineDescription.bindingLayouts = {
+                    m_HitDistanceBindingLayout,
+                    m_BindlessLayout
+                };
+                m_HitDistancePipelines[variant] =
+                    device->createComputePipeline(pipelineDescription);
+            }
         }
 
-        if (m_VisibilityShader && m_VisibilityBindingLayout)
+        if (m_HitDistanceSupported)
         {
-            nvrhi::ComputePipelineDesc pipelineDescription;
-            pipelineDescription.CS = m_VisibilityShader;
-            pipelineDescription.bindingLayouts = {
-                m_VisibilityBindingLayout,
-                m_BindlessLayout
-            };
-            m_VisibilityPipeline = device->createComputePipeline(
-                pipelineDescription);
+            for (const auto& pipeline : m_HitDistancePipelines)
+                m_HitDistanceSupported = m_HitDistanceSupported &&
+                    bool(pipeline);
         }
-        if (m_HitDistanceSupported &&
-            m_HitDistanceShader && m_HitDistanceBindingLayout)
+        if (!m_HitDistanceSupported)
         {
-            nvrhi::ComputePipelineDesc pipelineDescription;
-            pipelineDescription.CS = m_HitDistanceShader;
-            pipelineDescription.bindingLayouts = {
-                m_HitDistanceBindingLayout,
-                m_BindlessLayout
-            };
-            m_HitDistancePipeline = device->createComputePipeline(
-                pipelineDescription);
-        }
-
-        if (m_HitDistanceSupported &&
-            (!m_HitDistanceBindingLayout || !m_HitDistanceShader ||
-                !m_HitDistancePipeline))
-        {
-            m_HitDistanceSupported = false;
             m_HitDistanceBindingLayout = nullptr;
-            m_HitDistanceShader = nullptr;
-            m_HitDistancePipeline = nullptr;
+            for (auto& shader : m_HitDistanceShaders)
+                shader = nullptr;
+            for (auto& pipeline : m_HitDistancePipelines)
+                pipeline = nullptr;
         }
 
         if (!m_VisibilityBindingLayout || !m_ConstantBuffer ||
-            !m_MaterialSampler ||
-            !m_VisibilityShader || !m_VisibilityPipeline)
+            !m_MaterialSampler)
         {
             m_Supported = false;
+        }
+        for (const auto& pipeline : m_VisibilityPipelines)
+            m_Supported = m_Supported && bool(pipeline);
+        if (!m_Supported)
+        {
             m_HitDistanceSupported = false;
             log::error(
-                "The ray traced flashlight shadow pipeline could not be created");
+                "The ray traced flashlight shadow pipelines could not be created");
         }
     }
 
@@ -271,13 +317,25 @@ namespace uvsr
             return false;
         }
 
+        const uint32_t receiverSampleCount = depthDescription.sampleCount;
+        const nvrhi::TextureDimension visibilityDimension =
+            receiverSampleCount > 1u
+                ? nvrhi::TextureDimension::Texture2DArray
+                : nvrhi::TextureDimension::Texture2D;
         const bool visibilityMatches = m_OutputVisibility &&
             m_OutputVisibility->getDesc().width == depthDescription.width &&
-            m_OutputVisibility->getDesc().height == depthDescription.height;
+            m_OutputVisibility->getDesc().height == depthDescription.height &&
+            m_OutputVisibility->getDesc().arraySize == receiverSampleCount &&
+            m_OutputVisibility->getDesc().dimension == visibilityDimension;
+        const bool closestMatches = m_OutputClosestVisibility &&
+            m_OutputClosestVisibility->getDesc().width ==
+                depthDescription.width &&
+            m_OutputClosestVisibility->getDesc().height ==
+                depthDescription.height;
         const bool hitDistanceMatches = m_OutputHitDistance &&
             m_OutputHitDistance->getDesc().width == depthDescription.width &&
             m_OutputHitDistance->getDesc().height == depthDescription.height;
-        if (visibilityMatches &&
+        if (visibilityMatches && closestMatches &&
             (outputHitDistance
                 ? hitDistanceMatches
                 : !m_OutputHitDistance))
@@ -286,6 +344,8 @@ namespace uvsr
         }
 
         nvrhi::TextureHandle visibility = m_OutputVisibility;
+        nvrhi::TextureHandle closestVisibility =
+            m_OutputClosestVisibility;
         nvrhi::TextureHandle hitDistance = m_OutputHitDistance;
         if (!visibilityMatches)
         {
@@ -293,8 +353,19 @@ namespace uvsr
                 m_Device,
                 depthDescription.width,
                 depthDescription.height,
+                receiverSampleCount,
                 nvrhi::Format::R8_UNORM,
-                "Ray Traced Flashlight Shadows/Visibility");
+                "Ray Traced Flashlight Shadows/Per Raster Sample");
+        }
+        if (!closestMatches)
+        {
+            closestVisibility = CreateOutputTexture(
+                m_Device,
+                depthDescription.width,
+                depthDescription.height,
+                1u,
+                nvrhi::Format::R8_UNORM,
+                "Ray Traced Flashlight Shadows/Closest Raster Sample");
         }
         if (outputHitDistance && !m_HitDistanceSupported)
             return false;
@@ -304,23 +375,27 @@ namespace uvsr
                 m_Device,
                 depthDescription.width,
                 depthDescription.height,
+                1u,
                 nvrhi::Format::R16_FLOAT,
-                "Ray Traced Flashlight Shadows/Hit Distance");
+                "Ray Traced Flashlight Shadows/Closest Hit Distance");
         }
         else if (!outputHitDistance && m_OutputHitDistance)
         {
             hitDistance = nullptr;
         }
-        if (!visibility || (outputHitDistance && !hitDistance))
+        if (!visibility || !closestVisibility ||
+            (outputHitDistance && !hitDistance))
             return false;
 
         ClearBindingSets();
         m_OutputVisibility = visibility;
+        m_OutputClosestVisibility = closestVisibility;
         m_OutputHitDistance = hitDistance;
         return true;
     }
 
     bool RayTracedFlashlightShadowPass::EnsureBindingSet(
+        uint32_t variant,
         const RayTracedFlashlightShadowInputs& inputs,
         const RayTracedMaterialVisibilityInputs& materialVisibility,
         nvrhi::rt::IAccelStruct* worldTlas,
@@ -328,8 +403,9 @@ namespace uvsr
         nvrhi::ITexture* attemptMask,
         bool outputHitDistance)
     {
-        if (!worldTlas || !materialVisibility || !noiseTexture ||
-            !m_OutputVisibility ||
+        if (variant >= ReceiverSampleCounts.size() || !worldTlas ||
+            !materialVisibility || !noiseTexture ||
+            !m_OutputVisibility || !m_OutputClosestVisibility ||
             (outputHitDistance && !m_OutputHitDistance))
         {
             return false;
@@ -351,8 +427,8 @@ namespace uvsr
         }
 
         nvrhi::BindingSetHandle& selectedBindingSet = outputHitDistance
-            ? m_HitDistanceBindingSet
-            : m_VisibilityBindingSet;
+            ? m_HitDistanceBindingSets[variant]
+            : m_VisibilityBindingSets[variant];
         if (selectedBindingSet)
             return true;
 
@@ -372,7 +448,9 @@ namespace uvsr
             nvrhi::BindingSetItem::StructuredBuffer_SRV(
                 12, materialVisibility.geometryIndexMap),
             nvrhi::BindingSetItem::Sampler(0, m_MaterialSampler),
-            nvrhi::BindingSetItem::Texture_UAV(0, m_OutputVisibility)
+            nvrhi::BindingSetItem::Texture_UAV(0, m_OutputVisibility),
+            nvrhi::BindingSetItem::Texture_UAV(
+                1, m_OutputClosestVisibility)
         };
         nvrhi::BindingLayoutHandle selectedLayout =
             m_VisibilityBindingLayout;
@@ -380,7 +458,7 @@ namespace uvsr
         {
             description.bindings.push_back(
                 nvrhi::BindingSetItem::Texture_UAV(
-                    1, m_OutputHitDistance));
+                    2, m_OutputHitDistance));
             selectedLayout = m_HitDistanceBindingLayout;
         }
         selectedBindingSet = m_Device->createBindingSet(
@@ -468,7 +546,17 @@ namespace uvsr
             }
             return {};
         }
+        const uint32_t receiverSampleCount =
+            inputs.depth->getDesc().sampleCount;
+        const uint32_t variant = FindVariant(receiverSampleCount);
+        if (variant >= ReceiverSampleCounts.size() ||
+            !m_VisibilityPipelines[variant] ||
+            (outputHitDistance && !m_HitDistancePipelines[variant]))
+        {
+            return {};
+        }
         if (!EnsureBindingSet(
+                variant,
                 inputs,
                 materialVisibility,
                 worldTlas,
@@ -488,12 +576,16 @@ namespace uvsr
 
         RayTracedFlashlightShadowConstants constants = {};
         view.FillPlanarViewConstants(constants.view);
-        constants.lightPositionAndRange = float4(
-            lightPosition,
-            light->range);
-        constants.lightDirectionAndEmitterRadius = float4(
-            lightDirection,
-            light->radius);
+        constants.lightPositionAndRange = {
+            lightPosition.x,
+            lightPosition.y,
+            lightPosition.z,
+            light->range };
+        constants.lightDirectionAndEmitterRadius = {
+            lightDirection.x,
+            lightDirection.y,
+            lightDirection.z,
+            light->radius };
         constants.beamProfile = beamProfile;
         constants.depthQuantizationStep = GetDepthQuantizationStep(
             inputs.depth->getDesc().format);
@@ -521,12 +613,12 @@ namespace uvsr
         commandList->beginMarker("Ray Traced Flashlight Shadows");
         nvrhi::ComputeState state;
         state.pipeline = outputHitDistance
-            ? m_HitDistancePipeline
-            : m_VisibilityPipeline;
+            ? m_HitDistancePipelines[variant]
+            : m_VisibilityPipelines[variant];
         state.bindings = {
             outputHitDistance
-                ? m_HitDistanceBindingSet
-                : m_VisibilityBindingSet,
+                ? m_HitDistanceBindingSets[variant]
+                : m_VisibilityBindingSets[variant],
             materialVisibility.descriptorTable
         };
         commandList->setComputeState(state);
@@ -538,8 +630,10 @@ namespace uvsr
 
         return {
             m_OutputVisibility,
+            m_OutputClosestVisibility,
             outputHitDistance ? m_OutputHitDistance.Get() : nullptr,
             light,
+            receiverSampleCount,
             true,
             stochastic
         };
@@ -557,7 +651,9 @@ namespace uvsr
 
     void RayTracedFlashlightShadowPass::ClearBindingSets()
     {
-        m_VisibilityBindingSet = nullptr;
-        m_HitDistanceBindingSet = nullptr;
+        for (auto& bindingSet : m_VisibilityBindingSets)
+            bindingSet = nullptr;
+        for (auto& bindingSet : m_HitDistanceBindingSets)
+            bindingSet = nullptr;
     }
 }

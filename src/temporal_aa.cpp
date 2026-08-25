@@ -1,9 +1,9 @@
 #include "temporal_aa.h"
+#include "renderer_common_passes.h"
+#include "renderer_log.h"
+#include "renderer_shader_factory.h"
 
-#include <donut/engine/CommonRenderPasses.h>
-#include <donut/engine/ShaderFactory.h>
 #include <donut/engine/View.h>
-#include <donut/core/log.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -81,8 +81,8 @@ namespace uvsr
 {
     TemporalAAPass::TemporalAAPass(
         nvrhi::IDevice* device,
-        const std::shared_ptr<ShaderFactory>& shaderFactory,
-        const std::shared_ptr<CommonRenderPasses>& commonPasses,
+        const std::shared_ptr<RendererShaderFactory>& shaderFactory,
+        const std::shared_ptr<RendererCommonPasses>& commonPasses,
         nvrhi::ITexture* sceneColor,
         nvrhi::ITexture* currentDepth,
         nvrhi::ITexture* motionVectors,
@@ -179,7 +179,7 @@ namespace uvsr
         constantBufferDesc.isConstantBuffer = true;
         constantBufferDesc.isVolatile = true;
         constantBufferDesc.maxVersions =
-            engine::c_MaxRenderPassConstantBufferVersions;
+            RendererMaxConstantBufferVersions;
         m_BlendConstantBuffer = device->createBuffer(constantBufferDesc);
 
         constantBufferDesc.byteSize = sizeof(TemporalAaOutputConstants);
@@ -188,7 +188,7 @@ namespace uvsr
 
         // NVRHI's default sampler is Temporal AA's s0 contract: min/mag/mip
         // linear with clamp addressing.
-        m_LinearClampSampler = commonPasses->m_LinearClampSampler;
+        m_LinearClampSampler = commonPasses->LinearClampSampler();
 
         nvrhi::BindingLayoutDesc blendLayoutDesc;
         blendLayoutDesc.visibility = nvrhi::ShaderType::Compute;
@@ -332,7 +332,7 @@ namespace uvsr
         if (m_PipelinePreparationStep < minimumPipelineCount)
         {
             const uint32_t runtimeBehavior = m_PipelinePreparationStep;
-            const std::vector<ShaderMacro> macros = {
+            const std::vector<RendererShaderMacro> macros = {
                 { "TAA_RUNTIME_BEHAVIOR",
                     std::to_string(runtimeBehavior) }
             };
@@ -402,7 +402,7 @@ namespace uvsr
         {
             const bool premultipliedInput =
                 m_PipelinePreparationStep == sharpenBegin;
-            const std::vector<ShaderMacro> macros = {
+            const std::vector<RendererShaderMacro> macros = {
                 { "TAA_SHARPEN_INPUT_PREMULTIPLIED",
                     premultipliedInput ? "1" : "0" }
             };
@@ -532,19 +532,23 @@ namespace uvsr
         if (pipeline)
             return true;
 
-        std::vector<ShaderMacro> macros = {
+        const uint32_t recipeIndex =
+            GetTemporalAaBlendPermutationIndex(options);
+        const TemporalAaOptions recipe = GetPresetTemporalOptions(
+            AntiAliasingQuality(recipeIndex));
+        std::vector<RendererShaderMacro> macros = {
             { "TAA_MOTION_SOURCE",
                 std::to_string(
-                    static_cast<uint32_t>(options.motionSource)) },
+                    static_cast<uint32_t>(recipe.motionSource)) },
             { "TAA_CURRENT_RECONSTRUCTION",
                 std::to_string(static_cast<uint32_t>(
-                    options.currentReconstruction)) },
+                    recipe.currentReconstruction)) },
             { "TAA_HISTORY_FILTER",
                 std::to_string(
-                    static_cast<uint32_t>(options.historyFilter)) },
+                    static_cast<uint32_t>(recipe.historyFilter)) },
             { "TAA_RECTIFICATION",
                 std::to_string(
-                    static_cast<uint32_t>(options.rectification)) },
+                    static_cast<uint32_t>(recipe.rectification)) },
             { "TAA_OPTIMIZED_COMPUTE",
                 performance.optimizedCompute ? "1" : "0" },
             { "TAA_FUSED_OUTPUT",

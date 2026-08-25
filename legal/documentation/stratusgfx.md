@@ -6,7 +6,7 @@
 - Status: Historical; no StratusGFX files are shipped
 - Confidence: Confirmed study; no copied-code claim
 - Upstream: [StratusGFX](https://github.com/KTStephano/StratusGFX)
-- Revision: Historical v0.11 virtual-shadow-map branches reviewed during the UVSR SVSM experiment; exact branch commits were not retained in the current plan
+- Revision: Historical v0.11 virtual-shadow-map branches reviewed during the UVSR SVSM experiment; exact branch commits were not retained
 - Governing Terms: Mozilla Public License 2.0 for the upstream repository
 
 ## UVSR Relationship
@@ -18,8 +18,9 @@ the current or recorded historical UVSR file list.
 
 ## Evidence
 
-- [Abandoned SVSM Plan](../../docs/exec-plans/abandoned/sparse-virtual-shadow-maps.md)
-- The plan classifies StratusGFX as evidence for packing and failure cross-checks, not as vendored source
+- Recovery commit `e29a41245dbd0e6fd7a819d2341646419ab76e72`,
+  `docs/exec-plans/abandoned/sparse-virtual-shadow-maps.md` and
+  `outputs/sparse-virtual-shadow-maps-technical-report.md`
 
 ## Commercial Clearance
 

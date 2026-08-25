@@ -61,7 +61,7 @@ and makes the future restoration boundary explicit.
 
 ## Archive Identity
 
-- Canonical pre-sunset checkpoint:
+- Verified pre-sunset checkpoint:
   `5f43205ecfe00e31fd64af34cad0f031472a224c`.
 - Original AgX pipeline introduction:
   `c90274a01f21db1f4c23e3629d3004e9160fbeb6`.
@@ -130,7 +130,7 @@ cameras, and reference captures. The combined candidate should then be judged
 against that baseline rather than tuned against a moving target.
 
 The local tonemapper does not need to be designed now. The future implementer
-must inspect the newest Canonical verified renderer and adapt the archived
+must inspect the newest verified renderer and adapt the archived
 bindings to its current display source, resource model, and shader interfaces.
 The global drawer and LUT code should otherwise return as close to the archived
 implementation as current interfaces safely allow.
@@ -139,8 +139,7 @@ implementation as current interfaces safely allow.
 
 1. Read this postmortem and
    `docs/postmortem/archive/tonemapper-drawer-v1.restore.json`.
-2. Start from the newest Canonical verified checkpoint in a new task branch and
-   isolated worktree.
+2. Start a new isolated experiment from the newest verified product commit.
 3. Verify the archive checksum.
 4. Check the focused restoration against the current tree:
 

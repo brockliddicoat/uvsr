@@ -2,7 +2,7 @@
 
 ## Technical Summary
 
-The August 3 candidate restores the useful information density and initial
+The August 3 restoration recovers the useful information density and initial
 presentation of the pre-cutdown interface without restoring any retired
 renderer route, resource family, shader permutation, benchmark planner, or
 shadow technique. The most visible result is a detailed one-effect Statistics
@@ -14,12 +14,10 @@ deliberately opened, bounded details view.
 This is a successor to the August 2 front-end-restoration addendum, not a
 revision of its artifact. The July 30 shader report and August 2 engine cleanup
 retain their original dates, counts, hashes, behavior, and confidence boundaries.
-This report owns only the August 3 follow-up.
-
-The candidate is local and uncommitted on `codex/engine-core-cleanup` over base
-commit `f7c0c87d8cba6880428fbc34400eb2882fb5182e`. It is technically verified but
-is not Canonical verified, merged, published, or a controlled performance
-result.
+This report owns only the August 3 follow-up. Exact source recovery uses base
+`f7c0c87d8cba6880428fbc34400eb2882fb5182e` and integrated commit
+`b4dc24128e4f38effdeaf5a2dbc33cae107e9134`; artifact hashes below are evidence,
+not source recovery objects or controlled performance results.
 
 ## Report Identity
 
@@ -27,18 +25,12 @@ result.
 | --- | --- |
 | Completion date | 2026-08-03 |
 | Scope | Front-end fidelity over the retained August 2 backend cutdown |
-| Branch | `codex/engine-core-cleanup` |
 | Base commit | `f7c0c87d8cba6880428fbc34400eb2882fb5182e` |
-| Prior artifact | `build-frontend-restoration/bin/uvsr.exe` |
 | Prior artifact SHA-256 | `58B58FBD643859D12CFB9A746BD5FA563048CB1F569B56449E31FBE6A5F82458` |
-| Replacement artifact | `build-frontend-fidelity/bin/uvsr.exe` |
 | Replacement artifact SHA-256 | `CF8D6519939D30CFB203862F6C3BDC411E23E9D608A484D1885539EF92B38EB6` |
 | Replacement artifact size | 2,500,096 bytes |
-| Replacement artifact write time | `2026-08-03T06:19:27.3007215Z` |
-| Frozen build-input diff identifier | `b3ebf1493c768697f14b9bb2caccc4a2c1010058` |
-| Untracked build inputs | None in the recorded build-input scope |
-| Completed execution plan | `docs/exec-plans/completed/frontend-fidelity-followup.md` |
-| Publication state | Local only; no commit, push, pull request, merge, or release requested |
+| Historical input fingerprint | `b3ebf1493c768697f14b9bb2caccc4a2c1010058` (evidence only) |
+| Integrated source commit | `b4dc24128e4f38effdeaf5a2dbc33cae107e9134` |
 
 ## Revert-Sensitive Changes First
 
@@ -188,14 +180,13 @@ views.
 | --- | --- | --- |
 | `src/uvsr.cpp` | Restored Statistics table hierarchy, retained typed timing snapshots, disclosure defaults, Debug copy, slash guidance, colored in-input results, and an explicit long-result details view | No shader, binding, resource, enum, command-domain, or render-pass change |
 | `tests/ui_source_contract_tests.cpp` | Added exact labels, conditional initial disclosure, table hierarchy, availability, retired-surface, command-row, and explicit-details contracts | Test-only |
-| `README.md` | Updated current-candidate summary and generated line counts | Documentation only |
+| `README.md` | Updated the accepted interface summary and generated line counts | Documentation only |
 | `docs/advanced-settings.md` | Documented current Statistics, Debug, Reconstruction, and command behavior | Documentation only |
 | `docs/screen-space-visibility.md` | Documented conditional Reconstruction disclosure, Default label, and retained Statistics rows | Documentation only |
 | `docs/pbr-foundation.md` | Updated current Debug selector copy | Documentation only |
 | `docs/ui-integration-agent-procedure.md` | Advanced the canonical UI contract to `2026-08-03.1` | Documentation only |
 | `docs/postmortem/engine-cutdowns/README.md` | Added this separately dated artifact boundary | Documentation only |
 | `docs/postmortem/engine-cutdowns/2026-08-03-frontend-fidelity-restoration.md` | Recorded the revert-sensitive change ledger, frozen artifact identity, evidence, confidence, and remaining cutdown opportunities | Documentation only |
-| `docs/exec-plans/completed/frontend-fidelity-followup.md` | Preserved scope, ownership, decisions, verification, and closeout | Documentation only |
 
 ## Count and Permutation Comparison
 
@@ -226,7 +217,7 @@ renderer and does not add shader tasks or runtime package files.
 
 | Check | August 3 Result |
 | --- | --- |
-| Fresh Visual Studio 2022 x64 configure | Passed in `build-frontend-fidelity` |
+| Fresh Visual Studio 2022 x64 configure | Passed |
 | Complete Release all-target build | Passed |
 | Core shader compilation | Passed, 268 of 268 tasks |
 | Screen-Space Directional Shadow compilation | Passed, 46 of 46 tasks |
@@ -243,29 +234,21 @@ renderer and does not add shader tasks or runtime package files.
 
 ## Final Artifact Evidence
 
-The final build inputs are identified by the output of:
+Historical input fingerprint
+`b3ebf1493c768697f14b9bb2caccc4a2c1010058` distinguishes the reviewed build
+inputs but is not recoverable source. Git commit
+`b4dc24128e4f38effdeaf5a2dbc33cae107e9134` and its named paths are the recovery
+authority.
 
-```text
-git diff --binary --no-ext-diff HEAD -- CMakeLists.txt LaunchUVSR.cmd src tests tools overrides | git hash-object --stdin
-```
-
-That frozen content identifier is
-`b3ebf1493c768697f14b9bb2caccc4a2c1010058`. The same scoped
-`git ls-files --others --exclude-standard` query returned no untracked build
-inputs. This identifier distinguishes the dirty source snapshot used for the
-build; it is not a stored Git object, a commit, or a recoverable patch.
-
-The frozen source completed a fresh Visual Studio 2022 x64 configure and a
-complete Release all-target build in `build-frontend-fidelity`. Compilation
+The reviewed source completed a fresh Visual Studio 2022 x64 configure and a
+complete Release all-target build. Compilation
 completed all 268 core shader tasks and all 46 Screen-Space Directional Shadow
 tasks. The integrated catalog remained 390 tasks, the runtime package contained
 exactly 39 shader binaries, and the fresh full CTest run passed 30 of 30 tests.
 
-The exact executable is
-`build-frontend-fidelity/bin/uvsr.exe`, 2,500,096 bytes, written at
-`2026-08-03T06:19:27.3007215Z`, with SHA-256
+The exact historical executable was 2,500,096 bytes with SHA-256
 `CF8D6519939D30CFB203862F6C3BDC411E23E9D608A484D1885539EF92B38EB6`.
-It launched through the task launcher as UVSR Renderer D3D12 on the NVIDIA
+It launched as UVSR Renderer D3D12 on the NVIDIA
 GeForce RTX 4090 Laptop GPU at 1920 by 1080, using Sponza Decorated and
 Benchmark Position 1 in the Amp interface.
 
@@ -275,17 +258,16 @@ selectors displaying `Default`. Visibility Reconstruction was collapsed at
 Full Resolution and expanded after selecting Half Resolution. Complete Renderer
 Statistics displayed the visible `Effect` label, full-width selector, striped
 table, complete-frame context, and populated renderer-stage timings. The command
-row was not manipulated after the computer-control guard detected live user
-input in the window; its slash guidance, green/red status, edit dismissal,
-history recall, removed automatic bar, and explicit details view are covered by
-the passing focused source contract and full test run instead.
+row was not interactively exercised; its slash guidance, green/red status, edit
+dismissal, history recall, removed automatic bar, and explicit details view are
+covered by the passing focused behavior contract and full test run.
 
 Independent frozen-source review found no unresolved priority-zero through
 priority-two issue. Independent report review recomputed every line-count delta,
 percentage, and the weighted confidence result, then its build-identity,
 evidence-boundary, source-map, and wording findings were incorporated. Final
 validation passed the README count checker, conventional Title Case scan,
-scoped local-link scan, `git diff --check`, and stale-living-document searches.
+scoped link scan, `git diff --check`, and stale-living-document searches.
 
 ## Confidence in Remaining Features
 
@@ -299,9 +281,8 @@ scoped local-link scan, `git diff --check`, and stale-living-document searches.
 | Interface and command catalog | 10% | 98% | Detailed Statistics, 122-entry parity, focused UI contracts, and exact-artifact presentation exercise |
 
 The evidence-weighted average confidence in the remaining features is 96.25
-percent, reported as **96.3 percent**. This is confidence in retained feature
-correctness for the local candidate, not a probability of performance
-improvement and not Canonical verification.
+percent, reported as **96.3 percent**. This is confidence in the reviewed
+retained feature surface, not a probability of performance improvement.
 
 Residual uncertainty is concentrated in exhaustive visual quality across every
 scene/camera/setting combination, long-duration resource behavior, adapters
@@ -310,8 +291,8 @@ performance comparisons.
 
 ## Remaining Cutdown Opportunities
 
-No item below was implemented in this follow-up. Each requires a fresh dirty-
-state ownership and consumer audit before deletion.
+No item below was implemented in this follow-up. Each requires a fresh source-
+ownership and consumer audit before deletion.
 
 | Rank | Candidate | Confidence | Why It May Be Redundant | Guardrail Before Removal |
 | ---: | --- | ---: | --- | --- |
@@ -350,8 +331,8 @@ frontend rollback does not authorize restoration of either retired backend.
 
 1. Obtain product acceptance on the exact August 3 executable and observed
    Settings state before considering the frontend fidelity settled.
-2. Keep the candidate local until any desired visual adjustments are made;
-   every artifact-changing edit invalidates the current live acceptance.
+2. Treat every artifact-changing edit as invalidating the recorded acceptance
+   until the new exact artifact is reverified.
 3. If further cutdown work resumes, start with the command catalog mirrors,
    because they offer a plausible line reduction without renderer-quality risk.
 4. Treat Donut shader reduction as a separate dependency-packaging project with
@@ -365,7 +346,7 @@ frontend rollback does not authorize restoration of either retired backend.
   be explored, or is the explicit row code easier for humans and agents to
   audit?
 
-## Final Interface Refinement and Publication Addendum — August 3, 2026
+## Final Interface Refinement Addendum — August 3, 2026
 
 This addendum preserves the final interface changes made after the `CF8D...`
 artifact above. It does not rewrite that earlier artifact's evidence. The items
@@ -376,13 +357,10 @@ copy and disclosure next, then command and maintenance plumbing.
 
 | Field | Final Accepted Candidate |
 | --- | --- |
-| Exact executable | `build-custom-default-copy/bin/uvsr.exe` |
 | SHA-256 | `194D1637CC271330D3CC3C800F723639D7A17ABEBB97DE93DE018C79752D11EF` |
 | Size | 2,516,480 bytes |
-| UTC write time | `2026-08-03T08:08:44.9587581Z` |
-| Artifact-producing build-input diff | `8a2a64d412d19828567b159dca64363f7dfa843e` |
-| Untracked build inputs | None |
-| Product acceptance | The user stated that this exact most recent build was verified and requested it be published to `main` as the new Canonical build |
+| Historical input fingerprint | `8a2a64d412d19828567b159dca64363f7dfa843e` (evidence only) |
+| Product acceptance | The user verified the requested cleanup and interface behavior on this exact artifact |
 
 The acceptance is scoped to the requested cleanup and interface behavior. The
 artifact's scene, camera, resolution/window state, interface skin, and complete
@@ -409,7 +387,7 @@ Statistics selector and breakdown, labels beside every dropdown, hover
 tooltips, animated nested groups, compact dash-separated summary line, and the
 one-word **Aliasing** drawer title.
 
-### Post-Acceptance Non-Binary Cleanup
+### Follow-Up Source Cleanup
 
 The renderer no longer reads `UVSR_EXPERIMENT`, but the launcher still required
 and exported that dead value after the accepted executable was built. The final
@@ -425,9 +403,9 @@ frozen-tree review found that a stale pre-tonemapping compatibility gate made
 Conservative Morphological Anti-Aliasing force the Minimum Temporal
 Reconstructive path onto its robust fallback. The gate is removed because the
 techniques now use separate history and display-linear resources, and a
-source-contract test prevents the regression. The final build-input diff
-identifier is `04bc8b8ad81f823290258b82bfd1870f9617a12b`; the committed tree and
-clean canonical executable own the final source evidence.
+source-contract test prevents the regression. Historical input fingerprint
+`04bc8b8ad81f823290258b82bfd1870f9617a12b` identifies that review only;
+integrated commit `b4dc24128e4f38effdeaf5a2dbc33cae107e9134` owns recoverable source.
 
 ### Final Source and Evidence Map
 
@@ -437,14 +415,12 @@ clean canonical executable own the final source evidence.
 | `src/screen_space_directional_shadows_cb.h` | Removes the retired transparent edge-overlay constant-buffer contract |
 | `src/screen_space_directional_shadows_cs.hlsl` | Removes the retired transparent edge-overlay shader output path |
 | `tests/ui_source_contract_tests.cpp` | Locks labels, duplicate-option absence, Custom propagation, layout, disclosure, Statistics, command, and overlay retirement contracts |
-| `LaunchUVSR.cmd` and `tools/launch_uvsr.ps1` | Launch the exact isolated build without the dead experiment-label interface |
+| `LaunchUVSR.cmd` and `tools/launch_uvsr.ps1` | Launch the renderer without the dead experiment-label interface |
 | `docs/visibility-sample-rotation-v1.md` | Keeps retired experiment restoration guidance compatible with the current launcher and single-bounce product |
-| `docs/exec-plans/abandoned/` | Preserves full Bend, Emissive, SVSM, and diagnostic CSM evidence without keeping stale plans active |
-| `docs/exec-plans/completed/ao-performance-optimization.md` | Preserves completed historical evidence without restoring packed or ambient-occlusion-only runtime routes |
 
-### Final Canonical Count Snapshot
+### Final Source Count Snapshot
 
-| Measure | Pre-Cutdown Baseline | Final Canonical Source | Reduction |
+| Measure | Pre-Cutdown Baseline | Final Integrated Source | Reduction |
 | --- | ---: | ---: | ---: |
 | First-party nonblank source lines | 145,256 | 64,615 | 80,641 fewer (55.52%) |
 | `src/uvsr.cpp` physical lines | 33,577 | 17,306 | 16,271 fewer (48.46%) |
@@ -455,33 +431,28 @@ clean canonical executable own the final source evidence.
 | Runtime shader package files | Historical package differs | 39 | Exact current package |
 | Command catalog entries | Earlier integrated catalog: 245 | 122 | 123 fewer (50.20%) |
 
-### Canonical Verification Addendum
+### Immutable Verification Addendum
 
-| Field | Canonical Renderer |
+| Field | Integrated Renderer |
 | --- | --- |
 | Commit | `b4dc24128e4f38effdeaf5a2dbc33cae107e9134` |
 | Tree | `8a3fbc4848a65e057bdabc669d0f6e73f074207f` |
-| Exact executable | `canonical-engine-core-cleanup-final/build-canonical/bin/uvsr.exe` |
 | SHA-256 | `5F3779B0EFDE94B9C9B202BEB5A069265869D111ACE32D1132CA3D16F9430362` |
 | Size | 2,516,480 bytes |
-| UTC write time | `2026-08-03T09:24:15.2747310Z` |
 | Runtime identity | `UVSR Renderer D3D12 (b4dc241)`, responsive at High priority |
 | Product acceptance | The user verified Temporal Reconstructive, Conservative Morphological, and Multisample Reference enabled together on this exact build |
-| Publication | Fast-forwarded to `origin/main`; README Line Counts and Document Title Case workflows passed |
 
 The final clean build compiled 268 core plus 46 Screen-Space Directional
 Shadow shader tasks and Donut's 76 tasks, synchronized the exact 39-file
 runtime shader package, and passed all 30 registered tests. The independent
 frozen-tree review found no unresolved priority-zero through priority-two
-issue. The renderer launched through the repaired build-directory launcher,
+issue. The renderer launched through the repaired launcher,
 reported its exact DirectX 12 commit title, remained responsive, and received
 renewed user acceptance after the composition repair.
 
 The renderer checkpoint is the three-commit fast-forward `f7c0c87` →
-`b9287b0` → `e6f1591` → `b4dc241`. The contaminated local `main` ancestry at
-`5e300c9` remains preserved and unpublished. The documentation-only closing
-commit records this evidence and does not supersede the renderer checkpoint or
-require a second executable build.
+`b9287b0` → `e6f1591` → `b4dc241`. Those immutable commits and named paths are
+the source recovery authority.
 
 The evidence-weighted confidence in remaining configurable features is
 **96.3 percent**. This confidence covers retained feature reachability,

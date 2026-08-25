@@ -24,10 +24,13 @@ The retained pipeline has three measured stages:
 3. **Composition** applies AO and/or indirect diffuse to deferred lighting.
 
 There is no visibility-owned temporal stage, depth hierarchy, recursive bounce
-frontier, indirect dispatch planner, or fused AO-only application route.
-Renderer TAA remains the complete image temporal reconstruction system. An
-optional NRD backend may instead own a dedicated AO or GI denoising history
-after the raw trace; it does not restore history inside this pass.
+frontier, indirect dispatch planner, or fused AO-only application route. With
+the default `noise.accumulate-samples=false`, requested renderer TAA owns
+complete-image history. When retained Ray Marching instead uses
+`noise.accumulate-samples=true`, its complete-image progressive mean/count owns
+history and TAA is suppressed. The retained NRD backend may separately own an
+eligible AO or GI denoising history after the raw trace. None of these histories
+belongs to Visibility.
 
 ## Quality Recipes
 
@@ -92,7 +95,7 @@ small parity specialization where loop structure materially differs.
 
 ## Automatic Upsampling
 
-Diffuse exposes no reconstruction mode, packed metadata, spatial-filter toggle,
+Diffuse exposes no selectable upsample mode, packed metadata, spatial-filter toggle,
 filter selector, or filter-radius control. A full-resolution trace proceeds
 directly to composition. A half- or quarter-resolution trace uses the same
 four-tap depth- and normal-guided upsample automatically. A denoiser result that
@@ -101,14 +104,14 @@ for AO and GI.
 
 Joint Bilateral and Gaussian Bilateral now belong to each signal in the
 Denoising drawer. They are executable first-party spatial methods rather than
-Diffuse reconstruction choices.
+Diffuse upsampling choices.
 
 ## Buffers and Lifetime
 
 Resources are allocated only for active consumers and the selected resolution
 and precision. The current pass owns raw/final AO and raw/final indirect
 textures, its constant buffer, and the active binding/pipeline cache. It owns no
-packed reconstruction metadata. The shared Noise texture belongs to the central
+packed upsample metadata. The shared Noise texture belongs to the central
 library and is reported once rather than duplicated as pass working memory.
 
 It does not own motion vectors, previous-frame color/depth, temporal moments,
@@ -137,10 +140,10 @@ anything other than a denoiser that needs the data.
 
 The Denoising drawer starts AO and GI at Raw. Both also support the first-party
 Joint Bilateral and Gaussian Bilateral methods without hit distance or NRD. AO
-optionally adds ReBLUR; GI optionally adds ReBLUR or ReLAX. Selecting any method
+additionally supports ReBLUR; GI supports ReBLUR and ReLAX. Selecting any method
 does not enable Output Hit Distance, change the Diffuse recipe, or alter
-sampling. Missing distance data or an unavailable optional NRD backend leaves a
-selected third-party route on the raw signal.
+sampling. Missing required distance data leaves a selected NRD route on the raw
+signal.
 
 ## Debug and Performance
 
@@ -156,7 +159,7 @@ Performance reports First Trace, Upsample, Composition, their exclusive
 sum as Complete Effect, logical texture payloads, and active resource/dispatch
 counts in a labeled table only after every submitted stage query for one
 latency slot has completed. The named values publish as one snapshot; a stage
-that was not submitted for that frame, such as reconstruction when NRD owns it,
+that was not submitted for that frame, such as upsample when NRD owns it,
 publishes zero instead of retaining an older value. The inclusive
 callback envelope is not presented as the effect cost. **Ambient Occlusion
 Denoise** and **Diffuse Illumination Denoise** are separate rows rather than
@@ -172,11 +175,14 @@ The retained automated boundary includes:
 
 - deterministic estimator and projection fixtures;
 - deterministic settings-inheritance, centered-noise, phase, and asset fixtures;
-- source contracts for exact current names, hit output variants, and removed
+- behavior contracts for exact current names, hit output variants, and removed
   temporal/bounce paths;
 - shader-manifest expansion and runtime package checks;
-- quality-recipe and resource-lifetime tests; and
-- a Release renderer build plus runtime scene smoke.
+- quality-recipe and resource-lifetime tests.
+
+A Release build and runtime scene smoke on local DXR-capable hardware remain a
+required separate validation gate; hosted automation does not establish that
+runtime evidence.
 
 Performance claims require a separate controlled comparison. A smaller shader
 catalog or a faster isolated stage is not by itself proof of a faster complete
@@ -184,7 +190,7 @@ frame.
 
 ## Restoration Boundary
 
-Do not restore selectable Diffuse reconstruction, private visibility history, a
+Do not restore selectable Diffuse upsampling, private visibility history, a
 depth hierarchy, recursive diffuse bounces, packed/fused AO only profiles, or planner/benchmark infrastructure
 without a current product need and equal-quality complete-frame evidence.
 Restoration must include the full CPU/HLSL ABI, resources, packaging,

@@ -3,6 +3,7 @@
 #include "lighting_accumulation_pass.h"
 #include "noise_settings.h"
 #include "screen_space_visibility_defaults.h"
+#include "visibility_timing_contract.h"
 
 #include <donut/core/math/math.h>
 #include <nvrhi/nvrhi.h>
@@ -12,18 +13,20 @@
 #include <functional>
 #include <memory>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace donut::engine
 {
-    class CommonRenderPasses;
     class ICompositeView;
-    class ShaderFactory;
-    struct ShaderMacro;
 }
 
 namespace uvsr
 {
+    class RendererCommonPasses;
+    class RendererShaderFactory;
+    struct RendererShaderMacro;
+
     inline constexpr uint32_t ImplementedVisibilityEstimatorCount = 3;
     inline constexpr uint32_t DefaultVisibilitySampleCount = 16u;
     inline constexpr float VisibilityHitDistanceInvalid = 0.f;
@@ -208,6 +211,56 @@ namespace uvsr
     // independent setting is enabled and null otherwise. Match flags are true
     // only when the corresponding texture exists and represents the same
     // population as its raw aggregate signal.
+    enum class ScreenSpaceVisibilityRenderStatus : std::uint8_t
+    {
+        Inactive,
+        Dispatched,
+        Failed
+    };
+
+    // The outer visibility marker and timer must be paired even when a lazy
+    // pipeline or binding allocation fails after base lighting was produced.
+    // Callbacks keep this narrow contract directly testable without a device.
+    class ScreenSpaceVisibilityInstrumentationScope
+    {
+    public:
+        using CloseCallback = std::function<void()>;
+
+        ScreenSpaceVisibilityInstrumentationScope(
+            CloseCallback closeMarker,
+            CloseCallback closeTimer) noexcept
+            : m_CloseMarker(std::move(closeMarker))
+            , m_CloseTimer(std::move(closeTimer))
+        {
+        }
+
+        ScreenSpaceVisibilityInstrumentationScope(
+            const ScreenSpaceVisibilityInstrumentationScope&) = delete;
+        ScreenSpaceVisibilityInstrumentationScope& operator=(
+            const ScreenSpaceVisibilityInstrumentationScope&) = delete;
+
+        ~ScreenSpaceVisibilityInstrumentationScope() noexcept
+        {
+            Close();
+        }
+
+        void Close() noexcept
+        {
+            if (m_Closed)
+                return;
+            m_Closed = true;
+            if (m_CloseMarker)
+                m_CloseMarker();
+            if (m_CloseTimer)
+                m_CloseTimer();
+        }
+
+    private:
+        CloseCallback m_CloseMarker;
+        CloseCallback m_CloseTimer;
+        bool m_Closed = false;
+    };
+
     struct ScreenSpaceVisibilityResult
     {
         nvrhi::ITexture* ambientVisibility = nullptr;
@@ -218,6 +271,13 @@ namespace uvsr
         bool ambientHitDistanceMatchesSignal = false;
         bool indirectDiffuseHitDistanceMatchesSignal = false;
         bool dispatched = false;
+        ScreenSpaceVisibilityRenderStatus status =
+            ScreenSpaceVisibilityRenderStatus::Inactive;
+
+        [[nodiscard]] bool HasFailed() const noexcept
+        {
+            return status == ScreenSpaceVisibilityRenderStatus::Failed;
+        }
     };
 
     struct ScreenSpaceVisibilityTimings
@@ -251,14 +311,22 @@ namespace uvsr
     public:
         ScreenSpaceVisibilityPass(
             nvrhi::IDevice* device,
-            const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory,
-            std::shared_ptr<donut::engine::CommonRenderPasses> commonPasses,
+            const std::shared_ptr<RendererShaderFactory>& shaderFactory,
+            std::shared_ptr<RendererCommonPasses> commonPasses,
             bool deferPipelineCreation = false);
 
         [[nodiscard]] bool PreparePipelinesStep();
         [[nodiscard]] bool ArePipelinesReady() const
         {
             return m_PipelinesReady;
+        }
+        [[nodiscard]] bool HasPipelineCreationFailed() const noexcept
+        {
+            return m_PipelineCreationFailed;
+        }
+        [[nodiscard]] bool HasTerminalRenderFailure() const noexcept
+        {
+            return m_TerminalRenderFailure;
         }
 
         ScreenSpaceVisibilityResult Render(
@@ -280,36 +348,28 @@ namespace uvsr
         }
 
     private:
-        enum class Stage : uint32_t
-        {
-            FirstTrace,
-            Upsample,
-            Composition,
-            EffectEnvelope,
-            Count
-        };
+        using Stage = VisibilityTimingStage;
 
         struct Pipeline
         {
             nvrhi::ShaderHandle shader;
             nvrhi::BindingLayoutHandle bindingLayout;
             nvrhi::ComputePipelineHandle pipeline;
+
+            [[nodiscard]] bool IsValid() const noexcept
+            {
+                return shader && bindingLayout && pipeline;
+            }
         };
 
         static constexpr uint32_t c_TimerLatency = 4;
         static constexpr uint32_t c_ConsumerVariantCount = 3;
 
-        struct TimerSlot
-        {
-            uint32_t submittedStageMask = 0u;
-            uint32_t resolvedStageMask = 0u;
-            std::array<float, static_cast<size_t>(Stage::Count)>
-                resolvedStageMilliseconds{};
-        };
+        using TimerSlot = VisibilityTimingSlot;
 
         nvrhi::DeviceHandle m_Device;
-        std::shared_ptr<donut::engine::ShaderFactory> m_ShaderFactory;
-        std::shared_ptr<donut::engine::CommonRenderPasses> m_CommonPasses;
+        std::shared_ptr<RendererShaderFactory> m_ShaderFactory;
+        std::shared_ptr<RendererCommonPasses> m_CommonPasses;
         nvrhi::BufferHandle m_ConstantBuffer;
 
         std::array<Pipeline, c_ConsumerVariantCount> m_Filter;
@@ -355,6 +415,8 @@ namespace uvsr
         ScreenSpaceVisibilityTimings m_Timings;
         uint32_t m_PipelinePreparationStep = 0u;
         bool m_PipelinesReady = false;
+        bool m_PipelineCreationFailed = false;
+        bool m_TerminalRenderFailure = false;
 
         void EnsureResources(
             dm::uint2 fullSize,
@@ -366,11 +428,11 @@ namespace uvsr
             bool indirectHitDistanceEnabled,
             const VisibilityBufferPrecisionSettings& bufferPrecision);
         void ReleaseResources();
-        Pipeline& GetOrCreateAdvancedPipeline(
+        Pipeline* GetOrCreateAdvancedPipeline(
             uint64_t key,
             const char* shaderName,
             const std::vector<nvrhi::BindingLayoutItem>& bindings,
-            const std::vector<donut::engine::ShaderMacro>* macros = nullptr);
+            const std::vector<RendererShaderMacro>* macros = nullptr);
 
         void BeginStage(nvrhi::ICommandList* commandList, Stage stage);
         void EndStage(nvrhi::ICommandList* commandList, Stage stage);

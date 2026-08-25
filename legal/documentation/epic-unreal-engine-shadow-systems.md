@@ -18,9 +18,9 @@ does not reproduce private source details or assert that Epic code was copied.
 
 ## Evidence
 
-- [Cascaded Shadow Map Plan](../../docs/exec-plans/completed/diagnostic-cascaded-shadow-maps.md)
-- [Unreal Engine Performance Parity Plan](../../docs/exec-plans/completed/diagnostic-csm-ue5-performance-parity.md)
-- [Abandoned Virtual Shadow Map Performance Plan](../../docs/exec-plans/abandoned/svsm-ue5-performance.md)
+- Recovery commit `e29a41245dbd0e6fd7a819d2341646419ab76e72`,
+  `docs/exec-plans/abandoned/svsm-ue5-performance.md` and
+  `docs/exec-plans/completed/diagnostic-csm-ue5-performance-parity.md`
 
 ## Commercial Clearance
 

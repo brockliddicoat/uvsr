@@ -1,12 +1,5 @@
 #include "denoiser_backend.h"
-
-#ifndef UVSR_WITH_NRD
-#define UVSR_WITH_NRD 0
-#endif
-
-#if UVSR_WITH_NRD
 #include "nrd_denoiser_backend.h"
-#endif
 
 #include <algorithm>
 #include <atomic>
@@ -105,49 +98,6 @@ namespace
             return false;
         }
     }
-
-    class UnavailableDenoiserSignalBackend final : public IDenoiserSignalBackend
-    {
-    public:
-        UnavailableDenoiserSignalBackend()
-        {
-            m_Capabilities.backendName = "NRD unavailable";
-        }
-
-        [[nodiscard]] const DenoiserBackendCapabilities& GetCapabilities()
-            const noexcept override { return m_Capabilities; }
-        [[nodiscard]] DenoiserMemoryStats GetMemoryStats() const noexcept override
-        {
-            return {};
-        }
-        DenoiserStatus Initialize(nvrhi::IDevice*, uint32_t) override
-        {
-            return Unavailable();
-        }
-        DenoiserStatus ConfigureSignal(
-            const DenoiserSignalDescription&,
-            const DenoiserSignalResources&,
-            const DenoiserSettings&) override
-        {
-            return Unavailable();
-        }
-        void RequestHistoryReset(DenoiserHistoryReset) noexcept override {}
-        DenoiserStatus Execute(
-            nvrhi::ICommandList*, const DenoiserFrameSettings&) override
-        {
-            return Unavailable();
-        }
-        void Shutdown() noexcept override {}
-
-    private:
-        DenoiserBackendCapabilities m_Capabilities;
-
-        [[nodiscard]] static DenoiserStatus Unavailable()
-        {
-            return DenoiserStatus::Error(DenoiserStatusCode::Unavailable,
-                "NRD support is unavailable in this build");
-        }
-    };
 
     std::atomic<uint64_t> g_NextDenoiserRegistryId{ 1 };
 
@@ -821,26 +771,11 @@ namespace uvsr
         return std::make_unique<DenoiserBackendRegistry>(std::move(factory));
     }
 
-    std::unique_ptr<IDenoiserBackend> CreateDenoiserBackend(
-        DenoiserBackendKind kind)
+    std::unique_ptr<IDenoiserBackend> CreateDenoiserBackend()
     {
-        if (kind != DenoiserBackendKind::Nrd)
-        {
-            return CreateDenoiserBackendRegistry([]
-            {
-                return std::make_unique<UnavailableDenoiserSignalBackend>();
-            });
-        }
-#if UVSR_WITH_NRD
         return CreateDenoiserBackendRegistry([]
         {
             return CreateCompiledNrdDenoiserSignalBackend();
         });
-#else
-        return CreateDenoiserBackendRegistry([]
-        {
-            return std::make_unique<UnavailableDenoiserSignalBackend>();
-        });
-#endif
     }
 }

@@ -17,16 +17,9 @@ internal sealed class ProcessRunner
         string executable,
         IEnumerable<string> arguments,
         string? workingDirectory,
-        IReadOnlyDictionary<string, string?>? environment,
         InstallLog log,
-        CancellationToken cancellationToken,
-        bool elevate = false,
-        bool clearEnvironment = false,
-        Action<ElevatedProcessIdentity>? onElevatedStarted = null)
+        CancellationToken cancellationToken)
     {
-        if (!elevate && onElevatedStarted is not null)
-            throw new InvalidOperationException(
-                "Elevated-process attribution requires an elevated process.");
         executable = Path.GetFullPath(executable);
         if (!File.Exists(executable))
             throw new InstallerException($"A required program was not found: {executable}");
@@ -35,76 +28,18 @@ internal sealed class ProcessRunner
         {
             FileName = executable,
             WorkingDirectory = workingDirectory ?? Path.GetDirectoryName(executable)!,
-            UseShellExecute = elevate,
-            CreateNoWindow = !elevate,
-            RedirectStandardOutput = !elevate,
-            RedirectStandardError = !elevate,
-            StandardOutputEncoding = !elevate ? Encoding.UTF8 : null,
-            StandardErrorEncoding = !elevate ? Encoding.UTF8 : null
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
         };
-        if (elevate)
-            start.Verb = "runas";
-        if (!elevate && clearEnvironment)
-            start.Environment.Clear();
         foreach (string argument in arguments)
             start.ArgumentList.Add(argument);
-        if (!elevate && environment is not null)
-        {
-            foreach ((string key, string? value) in environment)
-            {
-                if (value is null)
-                    start.Environment.Remove(key);
-                else
-                    start.Environment[key] = value;
-            }
-        }
 
         log.Write($"Starting {Path.GetFileName(executable)}.");
         cancellationToken.ThrowIfCancellationRequested();
-        if (elevate)
-        {
-            using Process process = new() { StartInfo = start };
-            try
-            {
-                if (!process.Start())
-                    throw new InstallerException($"Windows could not start {Path.GetFileName(executable)}.");
-            }
-            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
-            {
-                throw new InstallerException("Administrator approval was cancelled. The existing UVSR installation was preserved.", ex);
-            }
-            catch (System.ComponentModel.Win32Exception ex)
-            {
-                throw new InstallerException($"Windows could not start {Path.GetFileName(executable)}.", ex);
-            }
-
-            Exception? attributionFailure = null;
-            try
-            {
-                onElevatedStarted?.Invoke(new ElevatedProcessIdentity(
-                    process.Id,
-                    process.StartTime.ToUniversalTime().ToFileTimeUtc(),
-                    executable));
-            }
-            catch (Exception ex)
-            {
-                // The elevated process is already running and cannot safely be
-                // abandoned merely because its crash-recovery journal failed.
-                attributionFailure = ex;
-            }
-
-            // Once Windows has elevated a signed vendor setup program, the standard-user
-            // parent cannot reliably terminate it. Wait for its authoritative result.
-            await process.WaitForExitAsync(CancellationToken.None);
-            log.Write($"{Path.GetFileName(executable)} exited with code {process.ExitCode}.");
-            if (attributionFailure is not null)
-                throw new InstallerException(
-                    "UVSR Launcher could not record the elevated Microsoft setup process. " +
-                    "It waited for setup to finish before stopping safely.",
-                    attributionFailure);
-            return new ProcessResult(process.ExitCode, string.Empty, string.Empty);
-        }
-
         using ProcessJob job = new();
         using ContainedProcess child = ContainedProcess.Start(start, job);
         Process containedProcess = child.Process;
@@ -120,7 +55,7 @@ internal sealed class ProcessRunner
         {
             // WaitAndKillOnCancellationAsync does not return until the exact child
             // has exited. Drain both redirected pipes before releasing callers'
-            // operation lock so no compiler process can outlive cancellation.
+            // operation lock so no child process can outlive cancellation.
             await Task.WhenAll(stdoutTask, stderrTask);
             throw;
         }
@@ -138,9 +73,8 @@ internal sealed class ProcessRunner
         try
         {
             await process.WaitForExitAsync(token);
-            // Git, CMake, and MSBuild have no process contract that permits a
-            // background child to survive their authoritative process. Visual
-            // C++ can otherwise leave VCTIP or worker nodes alive indefinitely.
+            // A launcher health command has no contract permitting a background
+            // child to survive its authoritative process.
             job.Terminate();
             await job.WaitForEmptyAsync(CancellationToken.None);
         }
@@ -162,7 +96,7 @@ internal sealed class ProcessRunner
             await job.WaitForEmptyAsync(CancellationToken.None);
             if (terminationFailure is not null)
                 throw new InstallerException(
-                    "Cancellation was requested, but Windows would not stop a build process. UVSR Launcher waited for it to exit before continuing.",
+                    "Cancellation was requested, but Windows would not stop the launcher health process. UVSR Launcher waited for it to exit before continuing.",
                     terminationFailure);
             throw;
         }

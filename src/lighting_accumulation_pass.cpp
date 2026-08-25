@@ -1,13 +1,12 @@
 #include "lighting_accumulation_pass.h"
+#include "renderer_common_passes.h"
+#include "renderer_shader_factory.h"
 
 #include <donut/core/math/math.h>
-#include <donut/engine/CommonRenderPasses.h>
-#include <donut/engine/ShaderFactory.h>
 
 #include <algorithm>
 #include <cstddef>
 
-using namespace donut::engine;
 using namespace donut::math;
 
 #include "lighting_accumulation_cb.h"
@@ -16,24 +15,8 @@ static_assert(sizeof(LightingAccumulationConstants) % 16u == 0u,
     "Lighting accumulation constants must preserve HLSL alignment.");
 static_assert(offsetof(
         LightingAccumulationConstants,
-        resetHistory) == 16u,
-    "Lighting accumulation constants drifted across a register boundary.");
-static_assert(offsetof(
-        LightingAccumulationConstants,
-        accumulateSamples) == 20u,
-    "Lighting accumulation mode drifted within its register.");
-static_assert(offsetof(
-        LightingAccumulationConstants,
-        effectiveHistory) == 32u,
-    "Lighting accumulation policy drifted across its register boundary.");
-static_assert(static_cast<uint32_t>(
-    uvsr::SampleAccumulationAveraging::Cumulative) == 0u);
-static_assert(static_cast<uint32_t>(
-    uvsr::SampleAccumulationAveraging::Exponential) == 1u);
-static_assert(static_cast<uint32_t>(
-    uvsr::SampleAccumulationScheduling::EveryPixel) == 0u);
-static_assert(static_cast<uint32_t>(
-    uvsr::SampleAccumulationScheduling::VarianceGuided) == 1u);
+        resetHistory) == 8u,
+    "Lighting accumulation reset flag drifted within its register.");
 
 namespace uvsr
 {
@@ -61,7 +44,7 @@ namespace uvsr
 
     LightingAccumulationPass::LightingAccumulationPass(
         nvrhi::IDevice* device,
-        const std::shared_ptr<ShaderFactory>& shaderFactory)
+        const std::shared_ptr<RendererShaderFactory>& shaderFactory)
         : m_Device(device)
     {
         if (!device || !shaderFactory)
@@ -75,7 +58,7 @@ namespace uvsr
         constantDescription.isConstantBuffer = true;
         constantDescription.isVolatile = true;
         constantDescription.maxVersions =
-            c_MaxRenderPassConstantBufferVersions;
+            RendererMaxConstantBufferVersions;
         m_ConstantBuffer = device->createBuffer(constantDescription);
 
         m_DisabledAttemptMask = CreateHistoryTexture(
@@ -90,8 +73,6 @@ namespace uvsr
         prepareLayoutDescription.bindings = {
             nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
             nvrhi::BindingLayoutItem::Texture_SRV(0),
-            nvrhi::BindingLayoutItem::Texture_SRV(1),
-            nvrhi::BindingLayoutItem::Texture_SRV(2),
             nvrhi::BindingLayoutItem::Texture_UAV(0)
         };
         m_PrepareBindingLayout = device->createBindingLayout(
@@ -105,10 +86,8 @@ namespace uvsr
             nvrhi::BindingLayoutItem::Texture_SRV(1),
             nvrhi::BindingLayoutItem::Texture_SRV(2),
             nvrhi::BindingLayoutItem::Texture_SRV(3),
-            nvrhi::BindingLayoutItem::Texture_SRV(4),
             nvrhi::BindingLayoutItem::Texture_UAV(0),
-            nvrhi::BindingLayoutItem::Texture_UAV(1),
-            nvrhi::BindingLayoutItem::Texture_UAV(2)
+            nvrhi::BindingLayoutItem::Texture_UAV(1)
         };
         m_ResolveBindingLayout = device->createBindingLayout(
             resolveLayoutDescription);
@@ -164,8 +143,7 @@ namespace uvsr
     {
         if (width == 0u || height == 0u)
             return false;
-        if (m_Mean[0] && m_Count[0] && m_ColorVariance[0] &&
-            m_AttemptMask &&
+        if (m_Mean[0] && m_Count[0] && m_AttemptMask &&
             m_Width == width && m_Height == height)
         {
             return true;
@@ -174,7 +152,6 @@ namespace uvsr
         ResetBindingCache();
         m_Mean = {};
         m_Count = {};
-        m_ColorVariance = {};
         m_AttemptMask = nullptr;
         m_Width = width;
         m_Height = height;
@@ -196,20 +173,10 @@ namespace uvsr
                 index == 0u
                     ? "Lighting Accumulation Count A"
                     : "Lighting Accumulation Count B");
-            m_ColorVariance[index] = CreateHistoryTexture(
-                m_Device,
-                width,
-                height,
-                nvrhi::Format::RGBA32_FLOAT,
-                index == 0u
-                    ? "Lighting Accumulation Color Variance A"
-                    : "Lighting Accumulation Color Variance B");
-            if (!m_Mean[index] || !m_Count[index] ||
-                !m_ColorVariance[index])
+            if (!m_Mean[index] || !m_Count[index])
             {
                 m_Mean = {};
                 m_Count = {};
-                m_ColorVariance = {};
                 return false;
             }
         }
@@ -223,7 +190,6 @@ namespace uvsr
         {
             m_Mean = {};
             m_Count = {};
-            m_ColorVariance = {};
             return false;
         }
         m_WriteIndex = 0u;
@@ -236,8 +202,7 @@ namespace uvsr
         uint32_t writeIndex)
     {
         if (writeIndex > 1u || !m_AttemptMask ||
-            !m_Mean[writeIndex ^ 1u] || !m_Count[writeIndex ^ 1u] ||
-            !m_ColorVariance[writeIndex ^ 1u])
+            !m_Count[writeIndex ^ 1u])
         {
             return false;
         }
@@ -248,10 +213,7 @@ namespace uvsr
         nvrhi::BindingSetDesc description;
         description.bindings = {
             nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
-            nvrhi::BindingSetItem::Texture_SRV(0, m_Mean[readIndex]),
-            nvrhi::BindingSetItem::Texture_SRV(1, m_Count[readIndex]),
-            nvrhi::BindingSetItem::Texture_SRV(
-                2, m_ColorVariance[readIndex]),
+            nvrhi::BindingSetItem::Texture_SRV(0, m_Count[readIndex]),
             nvrhi::BindingSetItem::Texture_UAV(0, m_AttemptMask)
         };
         m_PrepareBindingSets[writeIndex] = m_Device->createBindingSet(
@@ -266,8 +228,7 @@ namespace uvsr
         uint32_t writeIndex)
     {
         if (!source || !attemptMask || writeIndex > 1u ||
-            !m_Mean[writeIndex] || !m_Count[writeIndex] ||
-            !m_ColorVariance[writeIndex])
+            !m_Mean[writeIndex] || !m_Count[writeIndex])
         {
             return false;
         }
@@ -288,13 +249,9 @@ namespace uvsr
             nvrhi::BindingSetItem::Texture_SRV(0, source),
             nvrhi::BindingSetItem::Texture_SRV(1, m_Mean[readIndex]),
             nvrhi::BindingSetItem::Texture_SRV(2, m_Count[readIndex]),
-            nvrhi::BindingSetItem::Texture_SRV(
-                3, m_ColorVariance[readIndex]),
-            nvrhi::BindingSetItem::Texture_SRV(4, attemptMask),
+            nvrhi::BindingSetItem::Texture_SRV(3, attemptMask),
             nvrhi::BindingSetItem::Texture_UAV(0, m_Mean[writeIndex]),
-            nvrhi::BindingSetItem::Texture_UAV(1, m_Count[writeIndex]),
-            nvrhi::BindingSetItem::Texture_UAV(
-                2, m_ColorVariance[writeIndex])
+            nvrhi::BindingSetItem::Texture_UAV(1, m_Count[writeIndex])
         };
         m_ResolveBindingSets[writeIndex] = m_Device->createBindingSet(
             description,
@@ -306,16 +263,8 @@ namespace uvsr
         nvrhi::ICommandList* commandList,
         uint32_t width,
         uint32_t height,
-        bool accumulateSamples,
-        const SampleAccumulationSettings& requestedSettings,
-        uint64_t schedulingSerial,
         uint64_t historyEpoch)
     {
-        // Disabled accumulation is a true bypass: do not allocate full-size
-        // mean/count history and do not create a transaction that would need a
-        // redundant resolve of the current source.
-        if (!accumulateSamples)
-            return GetDisabledSchedule();
         if (!IsValid() || !commandList ||
             !EnsureResources(width, height))
         {
@@ -342,9 +291,6 @@ namespace uvsr
         m_PreparedHistoryEpoch = historyEpoch;
         m_PreparedWriteIndex = writeIndex;
         m_PreparedResetHistory = resetHistory;
-        m_PreparedAccumulationEnabled = true;
-        m_PreparedSettings =
-            SanitizeSampleAccumulationSettings(requestedSettings);
         if (!EnsurePrepareBindingSet(writeIndex))
         {
             m_PreparedToken = 0u;
@@ -354,20 +300,7 @@ namespace uvsr
 
         LightingAccumulationConstants constants{};
         constants.extent = { width, height };
-        constants.schedulingSerialLow = uint32_t(schedulingSerial);
-        constants.schedulingSerialHigh = uint32_t(schedulingSerial >> 32u);
         constants.resetHistory = resetHistory ? 1u : 0u;
-        constants.accumulateSamples = 1u;
-        constants.averaging =
-            static_cast<uint32_t>(m_PreparedSettings.averaging);
-        constants.scheduling =
-            static_cast<uint32_t>(m_PreparedSettings.scheduling);
-        constants.effectiveHistory = m_PreparedSettings.effectiveHistory;
-        constants.minimumSamples = m_PreparedSettings.minimumSamples;
-        constants.targetRelativeError =
-            m_PreparedSettings.targetRelativeError;
-        constants.minimumUpdateRate =
-            m_PreparedSettings.minimumUpdateRate;
         commandList->writeBuffer(
             m_ConstantBuffer,
             &constants,
@@ -393,11 +326,9 @@ namespace uvsr
     {
         if (!IsValid() || !commandList || !source || !schedule ||
             schedule.token != m_PreparedToken ||
-            schedule.enabled != m_PreparedAccumulationEnabled ||
+            !schedule.enabled ||
             schedule.historyReset != m_PreparedResetHistory ||
-            schedule.attemptMask != (schedule.enabled
-                ? m_AttemptMask.Get()
-                : m_DisabledAttemptMask.Get()))
+            schedule.attemptMask != m_AttemptMask.Get())
         {
             CancelPreparedSchedule(schedule);
             return { source, false };
@@ -424,17 +355,6 @@ namespace uvsr
             sourceDescription.width,
             sourceDescription.height };
         constants.resetHistory = m_PreparedResetHistory ? 1u : 0u;
-        constants.accumulateSamples = schedule.enabled ? 1u : 0u;
-        constants.averaging =
-            static_cast<uint32_t>(m_PreparedSettings.averaging);
-        constants.scheduling =
-            static_cast<uint32_t>(m_PreparedSettings.scheduling);
-        constants.effectiveHistory = m_PreparedSettings.effectiveHistory;
-        constants.minimumSamples = m_PreparedSettings.minimumSamples;
-        constants.targetRelativeError =
-            m_PreparedSettings.targetRelativeError;
-        constants.minimumUpdateRate =
-            m_PreparedSettings.minimumUpdateRate;
         commandList->writeBuffer(
             m_ConstantBuffer,
             &constants,

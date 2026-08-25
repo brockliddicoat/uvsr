@@ -1,11 +1,78 @@
 #pragma once
 
+#include <mutex>
+
 // First-party diagnostics shared by UVSR's staged NVRHI D3D12 overrides.
 // This header is copied beside the patched sources at configure time; the
 // pinned dependency checkout remains unchanged.
 
 namespace nvrhi::d3d12::uvsr_diagnostics
 {
+    constexpr DWORD FenceWaitTimeoutMilliseconds = 30000u;
+
+    struct FenceCompletionObservation
+    {
+        uint64_t completedValue;
+        bool failed;
+
+        [[nodiscard]] bool HasReached(uint64_t targetValue) const
+        {
+            return !failed && completedValue >= targetValue;
+        }
+    };
+
+    [[nodiscard]] inline FenceCompletionObservation ObserveFenceCompletion(
+        uint64_t completedValue)
+    {
+        return {
+            completedValue == UINT64_MAX ? 0u : completedValue,
+            completedValue == UINT64_MAX
+        };
+    }
+
+    struct FenceSubmissionObservation
+    {
+        uint64_t candidateValue;
+        HRESULT result;
+        bool attempted;
+
+        [[nodiscard]] bool Succeeded() const
+        {
+            return SUCCEEDED(result);
+        }
+
+        [[nodiscard]] uint64_t PublishedValue() const
+        {
+            return Succeeded() ? candidateValue : 0u;
+        }
+    };
+
+    template <typename LastSubmitted, typename CompletionFailed,
+        typename Signal>
+    [[nodiscard]] FenceSubmissionObservation TrySignalFence(
+        std::mutex& submissionMutex,
+        LastSubmitted& lastSubmittedValue,
+        CompletionFailed& completionFailed,
+        Signal&& signal)
+    {
+        const std::lock_guard<std::mutex> lock(submissionMutex);
+        if (completionFailed.load())
+            return { 0u, E_ABORT, false };
+        const uint64_t previousValue = lastSubmittedValue.load();
+        if (previousValue == UINT64_MAX)
+        {
+            completionFailed.store(true);
+            return { 0u, E_FAIL, true };
+        }
+        const uint64_t candidateValue = previousValue + 1u;
+        const HRESULT result = signal(candidateValue);
+        if (FAILED(result))
+            completionFailed.store(true);
+        else
+            lastSubmittedValue.store(candidateValue);
+        return { candidateValue, result, true };
+    }
+
     inline bool IsDeviceRemovalFailure(
         HRESULT operationResult,
         HRESULT removedReason)
@@ -37,6 +104,12 @@ namespace nvrhi::d3d12::uvsr_diagnostics
         std::stringstream& stream,
         ID3D12Device* device)
     {
+        if (!device)
+        {
+            stream << "\nDRED device unavailable";
+            return;
+        }
+
         ID3D12DeviceRemovedExtendedData1* dred = nullptr;
         const HRESULT interfaceResult = device->QueryInterface(
             IID_PPV_ARGS(&dred));
@@ -112,5 +185,26 @@ namespace nvrhi::d3d12::uvsr_diagnostics
                 << static_cast<uint32_t>(pageFaultResult);
         }
         dred->Release();
+    }
+
+    [[nodiscard]] inline bool ReportFailure(
+        std::stringstream& stream,
+        HRESULT operationResult,
+        HRESULT removedReason,
+        ID3D12Device* device,
+        IMessageCallback* callback,
+        bool terminalWithoutDeviceRemoval)
+    {
+        const bool deviceRemoved = IsDeviceRemovalFailure(
+            operationResult, removedReason);
+        if (deviceRemoved)
+            AppendDredDetails(stream, device);
+
+        callback->message(
+            deviceRemoved || terminalWithoutDeviceRemoval
+                ? MessageSeverity::Fatal
+                : MessageSeverity::Error,
+            stream.str().c_str());
+        return false;
     }
 }

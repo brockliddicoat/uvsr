@@ -1,18 +1,25 @@
 #ifndef UVSR_RAY_TRACED_MATERIAL_VISIBILITY_HLSLI
 #define UVSR_RAY_TRACED_MATERIAL_VISIBILITY_HLSLI
 
-#include <donut/shaders/bindless.h>
-#include <donut/shaders/binding_helpers.hlsli>
+#include "renderer_gpu_contract.h"
+#include "ray_traced_material_bindings.h"
+#include "ray_material_visibility_contract.h"
 
-StructuredBuffer<GeometryData> t_RayMaterialGeometries : register(t10);
-StructuredBuffer<MaterialConstants> t_RayMaterials : register(t11);
-StructuredBuffer<uint> t_RayGeometryIndexMap : register(t12);
-SamplerState s_RayMaterialSampler : register(s0);
+StructuredBuffer<GeometryData> t_RayMaterialGeometries :
+    register(UVSR_RAY_MATERIAL_GEOMETRY_REGISTER);
+StructuredBuffer<MaterialConstants> t_RayMaterials :
+    register(UVSR_RAY_MATERIAL_CONSTANTS_REGISTER);
+StructuredBuffer<uint> t_RayGeometryIndexMap :
+    register(UVSR_RAY_MATERIAL_GEOMETRY_INDEX_REGISTER);
+SamplerState s_RayMaterialSampler :
+    register(UVSR_RAY_MATERIAL_SAMPLER_REGISTER);
 
-VK_BINDING(0, 1)
-ByteAddressBuffer t_RayMaterialBuffers[] : register(t0, space1);
-VK_BINDING(1, 1)
-Texture2D<float4> t_RayMaterialTextures[] : register(t0, space2);
+ByteAddressBuffer t_RayMaterialBuffers[] : register(
+    UVSR_RAY_MATERIAL_BUFFER_REGISTER,
+    UVSR_RAY_MATERIAL_BUFFER_SPACE);
+Texture2D<float4> t_RayMaterialTextures[] : register(
+    UVSR_RAY_MATERIAL_TEXTURE_REGISTER,
+    UVSR_RAY_MATERIAL_TEXTURE_SPACE);
 
 bool RayMaterialTryElementAddress(
     uint baseOffset,
@@ -180,56 +187,67 @@ bool RayMaterialCandidateIsCovered(
         t_RayMaterialGeometries[globalGeometryIndex];
     const MaterialConstants material =
         t_RayMaterials[geometry.materialIndex];
-    const bool doubleSided =
-        (material.flags & MaterialFlags_DoubleSided) != 0;
-    if (!candidateFrontFace && !doubleSided)
-        return false;
-    if (requirePathTransportMaterial &&
-        ((material.flags & (MaterialFlags_SubsurfaceScattering |
-                MaterialFlags_Hair)) != 0 ||
-            material.transmissionFactor > 0.0f))
+    const bool opacityTextureAvailable =
+        (material.flags & MaterialFlags_UseOpacityTexture) != 0 &&
+        material.opacityTextureIndex >= 0;
+    const bool baseAlphaTextureAvailable =
+        (material.flags & MaterialFlags_UseBaseOrDiffuseTexture) != 0 &&
+        material.baseOrDiffuseTextureIndex >= 0;
+    const RayMaterialCoveragePlan coveragePlan =
+        ResolveRayMaterialCoveragePlan(
+            candidateFrontFace,
+            (material.flags & MaterialFlags_DoubleSided) != 0,
+            requirePathTransportMaterial,
+            (material.flags & (MaterialFlags_SubsurfaceScattering |
+                    MaterialFlags_Hair)) != 0 ||
+                material.transmissionFactor > 0.0f,
+            material.domain == MaterialDomain_Opaque,
+            material.domain == MaterialDomain_AlphaTested,
+            opacityTextureAvailable,
+            baseAlphaTextureAvailable);
+    if (coveragePlan.mode == UVSR_RAY_MATERIAL_COVERAGE_OPAQUE)
+        return true;
+    if (coveragePlan.mode !=
+        UVSR_RAY_MATERIAL_COVERAGE_ALPHA_TESTED)
     {
         return false;
     }
-    if (material.domain == MaterialDomain_Opaque)
-        return true;
-    if (material.domain != MaterialDomain_AlphaTested)
-        return false;
 
-    const bool useOpacityTexture =
-        (material.flags & MaterialFlags_UseOpacityTexture) != 0 &&
-        material.opacityTextureIndex >= 0;
-    const bool useBaseAlphaTexture = !useOpacityTexture &&
-        (material.flags & MaterialFlags_UseBaseOrDiffuseTexture) != 0 &&
-        material.baseOrDiffuseTextureIndex >= 0;
     float2 texCoord = 0.0f;
-    if (useOpacityTexture || useBaseAlphaTexture)
+    if (coveragePlan.alphaSource != UVSR_RAY_MATERIAL_ALPHA_NONE)
     {
         texCoord = RayMaterialInterpolateTexCoord(
             geometry,
             primitiveIndex,
             candidateBarycentrics);
     }
-    float opacity = material.opacity;
-    if (useOpacityTexture)
+    float textureOpacity = 1.0f;
+    if (coveragePlan.alphaSource ==
+        UVSR_RAY_MATERIAL_ALPHA_OPACITY_TEXTURE)
     {
         Texture2D<float4> opacityTexture = t_RayMaterialTextures[
             NonUniformResourceIndex(material.opacityTextureIndex)];
-        opacity *= opacityTexture.SampleLevel(
+        textureOpacity = opacityTexture.SampleLevel(
             s_RayMaterialSampler,
             texCoord,
             0.0f).r;
     }
-    else if (useBaseAlphaTexture)
+    else if (coveragePlan.alphaSource ==
+        UVSR_RAY_MATERIAL_ALPHA_BASE_TEXTURE)
     {
         Texture2D<float4> baseTexture = t_RayMaterialTextures[
             NonUniformResourceIndex(material.baseOrDiffuseTextureIndex)];
-        opacity *= baseTexture.SampleLevel(
+        textureOpacity = baseTexture.SampleLevel(
             s_RayMaterialSampler,
             texCoord,
             0.0f).a;
     }
-    return saturate(opacity) >= material.alphaCutoff;
+    return ResolveRayMaterialCandidateCoverage(
+        coveragePlan,
+        material.opacity,
+        textureOpacity,
+        material.alphaCutoff,
+        true);
 }
 
 bool RayMaterialCandidateIsCoveredBounded(
@@ -252,39 +270,43 @@ bool RayMaterialCandidateIsCoveredBounded(
     {
         return false;
     }
-    const bool doubleSided =
-        (material.flags & MaterialFlags_DoubleSided) != 0;
-    if (!candidateFrontFace && !doubleSided)
-        return false;
-    if (requirePathTransportMaterial &&
-        ((material.flags & (MaterialFlags_SubsurfaceScattering |
-                MaterialFlags_Hair)) != 0 ||
-            material.transmissionFactor > 0.0f))
+    const bool opacityTextureAvailable =
+        (material.flags & MaterialFlags_UseOpacityTexture) != 0 &&
+        material.opacityTextureIndex >= 0;
+    const bool baseAlphaTextureAvailable =
+        (material.flags & MaterialFlags_UseBaseOrDiffuseTexture) != 0 &&
+        material.baseOrDiffuseTextureIndex >= 0;
+    const RayMaterialCoveragePlan coveragePlan =
+        ResolveRayMaterialCoveragePlan(
+            candidateFrontFace,
+            (material.flags & MaterialFlags_DoubleSided) != 0,
+            requirePathTransportMaterial,
+            (material.flags & (MaterialFlags_SubsurfaceScattering |
+                    MaterialFlags_Hair)) != 0 ||
+                material.transmissionFactor > 0.0f,
+            material.domain == MaterialDomain_Opaque,
+            material.domain == MaterialDomain_AlphaTested,
+            opacityTextureAvailable,
+            baseAlphaTextureAvailable);
+    if (coveragePlan.mode == UVSR_RAY_MATERIAL_COVERAGE_OPAQUE)
+        return true;
+    if (coveragePlan.mode !=
+        UVSR_RAY_MATERIAL_COVERAGE_ALPHA_TESTED)
     {
         return false;
     }
-    if (material.domain == MaterialDomain_Opaque)
-        return true;
-    if (material.domain != MaterialDomain_AlphaTested)
-        return false;
 
-    const bool requestsOpacityTexture =
-        (material.flags & MaterialFlags_UseOpacityTexture) != 0 &&
-        material.opacityTextureIndex >= 0;
-    const bool requestsBaseAlphaTexture = !requestsOpacityTexture &&
-        (material.flags & MaterialFlags_UseBaseOrDiffuseTexture) != 0 &&
-        material.baseOrDiffuseTextureIndex >= 0;
-    if ((requestsOpacityTexture &&
+    if ((coveragePlan.alphaSource ==
+            UVSR_RAY_MATERIAL_ALPHA_OPACITY_TEXTURE &&
             uint(material.opacityTextureIndex) >= limits.w) ||
-        (requestsBaseAlphaTexture &&
+        (coveragePlan.alphaSource ==
+            UVSR_RAY_MATERIAL_ALPHA_BASE_TEXTURE &&
             uint(material.baseOrDiffuseTextureIndex) >= limits.w))
     {
         return false;
     }
-    const bool useOpacityTexture = requestsOpacityTexture;
-    const bool useBaseAlphaTexture = requestsBaseAlphaTexture;
     float2 texCoord = 0.0f;
-    if ((useOpacityTexture || useBaseAlphaTexture) &&
+    if (coveragePlan.alphaSource != UVSR_RAY_MATERIAL_ALPHA_NONE &&
         !RayMaterialInterpolateTexCoordBounded(
             geometry,
             primitiveIndex,
@@ -294,22 +316,29 @@ bool RayMaterialCandidateIsCoveredBounded(
     {
         return false;
     }
-    float opacity = material.opacity;
-    if (useOpacityTexture)
+    float textureOpacity = 1.0f;
+    if (coveragePlan.alphaSource ==
+        UVSR_RAY_MATERIAL_ALPHA_OPACITY_TEXTURE)
     {
         Texture2D<float4> opacityTexture = t_RayMaterialTextures[
             NonUniformResourceIndex(material.opacityTextureIndex)];
-        opacity *= opacityTexture.SampleLevel(
+        textureOpacity = opacityTexture.SampleLevel(
             s_RayMaterialSampler, texCoord, 0.0f).r;
     }
-    else if (useBaseAlphaTexture)
+    else if (coveragePlan.alphaSource ==
+        UVSR_RAY_MATERIAL_ALPHA_BASE_TEXTURE)
     {
         Texture2D<float4> baseTexture = t_RayMaterialTextures[
             NonUniformResourceIndex(material.baseOrDiffuseTextureIndex)];
-        opacity *= baseTexture.SampleLevel(
+        textureOpacity = baseTexture.SampleLevel(
             s_RayMaterialSampler, texCoord, 0.0f).a;
     }
-    return saturate(opacity) >= material.alphaCutoff;
+    return ResolveRayMaterialCandidateCoverage(
+        coveragePlan,
+        material.opacity,
+        textureOpacity,
+        material.alphaCutoff,
+        true);
 }
 
 #define UVSR_COMMIT_COVERED_RAY_QUERY_CANDIDATE(query) \

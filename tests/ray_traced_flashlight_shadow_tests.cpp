@@ -1,19 +1,16 @@
 #include "flashlight_shared.h"
 #include "ray_traced_flashlight_shadows_shared.h"
+#include "ray_traced_material_visibility.h"
 
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
-#include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <iterator>
 #include <limits>
-#include <string>
-#include <string_view>
 
 namespace
 {
@@ -304,162 +301,51 @@ namespace
             { 1920u, 1080u, 1u, 1u, 1u, 1u, true, false }));
     }
 
-    std::string ReadSource(const std::filesystem::path& path)
+    void TestMaterialVisibilityInputIdentity()
     {
-        std::ifstream stream(path, std::ios::binary);
-        assert(stream.good());
-        return {
-            std::istreambuf_iterator<char>(stream),
-            std::istreambuf_iterator<char>()
+        using uvsr::RayTracedMaterialVisibilityInputs;
+        auto* const geometry = reinterpret_cast<nvrhi::IBuffer*>(
+            std::uintptr_t{ 0x1000u });
+        auto* const material = reinterpret_cast<nvrhi::IBuffer*>(
+            std::uintptr_t{ 0x2000u });
+        auto* const geometryMap = reinterpret_cast<nvrhi::IBuffer*>(
+            std::uintptr_t{ 0x3000u });
+        auto* const instances = reinterpret_cast<nvrhi::IBuffer*>(
+            std::uintptr_t{ 0x4000u });
+        auto* const descriptorTable =
+            reinterpret_cast<nvrhi::IDescriptorTable*>(
+                std::uintptr_t{ 0x5000u });
+
+        const RayTracedMaterialVisibilityInputs complete = {
+            geometry,
+            material,
+            geometryMap,
+            instances,
+            descriptorTable
         };
-    }
+        assert(static_cast<bool>(complete));
+        assert(complete == complete);
 
-    void RequireContains(
-        std::string_view source,
-        std::string_view token)
-    {
-        if (source.find(token) == std::string_view::npos)
-        {
-            std::cerr << "Missing source contract token: " << token << '\n';
-            std::exit(EXIT_FAILURE);
-        }
-    }
-
-    void TestSourceContract(const std::filesystem::path& root)
-    {
-        const std::string shader = ReadSource(
-            root / "src/ray_traced_flashlight_shadows_cs.hlsl");
-        const std::string pass = ReadSource(
-            root / "src/ray_traced_flashlight_shadows.cpp");
-        const std::string header = ReadSource(
-            root / "src/ray_traced_flashlight_shadows.h");
-        const std::string profile = ReadSource(
-            root / "src/flashlight_shared.h");
-        const std::string materialVisibility = ReadSource(
-            root / "src/ray_traced_material_visibility.hlsli");
-        const std::string materialVisibilityHeader = ReadSource(
-            root / "src/ray_traced_material_visibility.h");
-        const std::string denoisingPass = ReadSource(
-            root / "src/denoising_pass.cpp");
-
-        assert(shader.find("RAY_FLAG_FORCE_OPAQUE") == std::string::npos);
-        RequireContains(shader, "RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES");
-        assert(shader.find("RAY_FLAG_ACCEPT_FIRST_HIT") ==
-            std::string::npos);
-        RequireContains(
-            shader,
-            "UVSR_COMMIT_COVERED_RAY_QUERY_CANDIDATE(query)");
-        RequireContains(shader, "ray.TMax = flashlightRay.tMax;");
-        RequireContains(shader, "Texture2DArray<float> t_Noise : register(t4);");
-        RequireContains(shader, "UVSRSamplePrecomputedNoise(");
-        RequireContains(shader, "sampleIndex < sampleCount;");
-        RequireContains(shader, "ResolveRayTracedFlashlightShadowAggregate(");
-        RequireContains(shader, "query.CommittedRayT()");
-        RequireContains(shader, "void GenerateVisibility(");
-        RequireContains(shader, "void GenerateVisibilityAndHitDistance(");
-
-        const std::size_t opacityInitialization = materialVisibility.find(
-            "float opacity = material.opacity;");
-        const std::size_t opacityPreference = materialVisibility.find(
-            "const bool useBaseAlphaTexture = !useOpacityTexture &&");
-        const std::size_t opacityBranch = materialVisibility.find(
-            "if (useOpacityTexture)");
-        const std::size_t opacitySample = materialVisibility.find(
-            ").r;",
-            opacityBranch);
-        const std::size_t baseAlphaBranch = materialVisibility.find(
-            "else if (useBaseAlphaTexture)");
-        const std::size_t baseAlphaSample = materialVisibility.find(
-            ").a;",
-            baseAlphaBranch);
-        assert(opacityInitialization != std::string::npos);
-        assert(opacityPreference != std::string::npos);
-        assert(opacityBranch != std::string::npos);
-        assert(opacitySample != std::string::npos);
-        assert(baseAlphaBranch != std::string::npos);
-        assert(baseAlphaSample != std::string::npos);
-        assert(opacityPreference < opacityInitialization);
-        assert(opacityInitialization < opacityBranch);
-        assert(opacityBranch < opacitySample);
-        assert(opacitySample < baseAlphaBranch);
-        assert(baseAlphaBranch < baseAlphaSample);
-        for (const std::string_view token : {
-                "MaterialDomain_AlphaTested",
-                "NonUniformResourceIndex(geometry.indexBufferIndex)",
-                "NonUniformResourceIndex(geometry.vertexBufferIndex)",
-                "NonUniformResourceIndex(material.opacityTextureIndex)",
-                "NonUniformResourceIndex(material.baseOrDiffuseTextureIndex)",
-                "CandidateInstanceContributionToHitGroupIndex()",
-                "CandidateGeometryIndex()",
-                "CandidatePrimitiveIndex()",
-                "CandidateTriangleBarycentrics()",
-                "CommitNonOpaqueTriangleHit();",
-                "return saturate(opacity) >= material.alphaCutoff;" })
-        {
-            RequireContains(materialVisibility, token);
-        }
-        RequireContains(
-            materialVisibility,
-            "opacity *= opacityTexture.SampleLevel(");
-        RequireContains(
-            materialVisibility,
-            "opacity *= baseTexture.SampleLevel(");
-
-        RequireContains(pass, "nvrhi::Format::R8_UNORM");
-        RequireContains(pass, "nvrhi::Format::R16_FLOAT");
-        RequireContains(pass, "nvrhi::BindingLayoutItem::Texture_SRV(4)");
-        RequireContains(pass, "m_BoundNoiseTexture == noiseTexture");
-        RequireContains(pass, "constants.sampleSequencePhase = samplingPhase;");
-        RequireContains(
-            pass,
-            "light->range > beamProfile.emitterRadiusMeters");
-        RequireContains(
-            pass,
-            "nvrhi::BindingLayoutItem::StructuredBuffer_SRV(10)");
-        RequireContains(
-            pass,
-            "nvrhi::BindingLayoutItem::StructuredBuffer_SRV(11)");
-        RequireContains(
-            pass,
-            "nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12)");
-        RequireContains(pass, "nvrhi::BindingLayoutItem::Sampler(0)");
-        RequireContains(pass, "m_BindlessLayout");
-        RequireContains(
-            pass,
-            "m_BoundMaterialVisibility == materialVisibility &&");
-        RequireContains(
-            pass,
-            "materialVisibility.descriptorTable");
-        RequireContains(header, "const donut::engine::SpotLight* light");
-        RequireContains(
-            header,
-            "RayTracedMaterialVisibilityInputs m_BoundMaterialVisibility;");
-        RequireContains(
-            denoisingPass,
-            "inputs.localLightRadius >= 0.f");
-        for (const std::string_view resource : {
-                "geometryBuffer == other.geometryBuffer",
-                "materialBuffer == other.materialBuffer",
-                "geometryIndexMap == other.geometryIndexMap",
-                "descriptorTable == other.descriptorTable" })
-        {
-            RequireContains(materialVisibilityHeader, resource);
-        }
-        assert(shader.find("shadowChannel") == std::string::npos);
-        assert(pass.find("shadowChannel") == std::string::npos);
-        assert(profile.find("SHAPE_RADIUS_TAG") == std::string::npos);
-        assert(profile.find("shadowChannel") == std::string::npos);
+        RayTracedMaterialVisibilityInputs changed = complete;
+        changed.geometryBuffer = nullptr;
+        assert(!static_cast<bool>(changed) && changed != complete);
+        changed = complete;
+        changed.materialBuffer = nullptr;
+        assert(!static_cast<bool>(changed) && changed != complete);
+        changed = complete;
+        changed.geometryIndexMap = nullptr;
+        assert(!static_cast<bool>(changed) && changed != complete);
+        changed = complete;
+        changed.instanceBuffer = nullptr;
+        assert(static_cast<bool>(changed) && changed != complete);
+        changed = complete;
+        changed.descriptorTable = nullptr;
+        assert(!static_cast<bool>(changed) && changed != complete);
     }
 }
 
-int main(int argc, char** argv)
+int main()
 {
-    if (argc != 2)
-    {
-        std::cerr << "Usage: ray_traced_flashlight_shadow_tests <source root>\n";
-        return EXIT_FAILURE;
-    }
-
     TestProfileWeightsAndBinding();
     TestFiniteReceiverToLightRay();
     TestPointEmitterRay();
@@ -467,6 +353,6 @@ int main(int argc, char** argv)
     TestEligibilityRejections();
     TestOutputEncoding();
     TestTextureCompatibility();
-    TestSourceContract(argv[1]);
+    TestMaterialVisibilityInputIdentity();
     return EXIT_SUCCESS;
 }

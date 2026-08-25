@@ -14,26 +14,34 @@ namespace donut::engine
 
 namespace uvsr
 {
-    enum class DirectLightVisibilityEncoding : uint32_t
+    [[nodiscard]] constexpr bool IsDirectLightReceiverSampleCountSupported(
+        uint32_t sampleCount)
     {
-        ScalarR8Unorm,
-        RgbRgba16Float
-    };
+        return sampleCount == 1u || sampleCount == 2u ||
+            sampleCount == 4u || sampleCount == 8u ||
+            sampleCount == 16u;
+    }
 
     // A frame-local, non-owning direct-light modulation for one exact light.
-    // Scalar producers expose R8 visibility. Correlated ratio estimators expose
-    // RGB floating-point modulation because material response can vary by
-    // channel across an emitter. Incomplete or unmatched values are neutral.
+    // R8 visibility is Texture2D at 1x and Texture2DArray at MSAA, where array
+    // slice N belongs to raster sample N. Incomplete or unmatched values are
+    // neutral.
     struct DirectLightVisibility
     {
         nvrhi::ITexture* texture = nullptr;
         const donut::engine::Light* light = nullptr;
-        DirectLightVisibilityEncoding encoding =
-            DirectLightVisibilityEncoding::ScalarR8Unorm;
+        uint32_t receiverSampleCount = 1u;
+        // Optional single-surface raw/denoised pair. MSAA consumers remap
+        // each raw receiver sample monotonically through this correction,
+        // preserving per-sample endpoints instead of broadcasting one value.
+        nvrhi::ITexture* rawClosestTexture = nullptr;
+        nvrhi::ITexture* denoisedClosestTexture = nullptr;
 
         [[nodiscard]] constexpr bool IsComplete() const
         {
-            return texture != nullptr && light != nullptr;
+            return texture != nullptr && light != nullptr &&
+                IsDirectLightReceiverSampleCountSupported(
+                    receiverSampleCount);
         }
     };
 
@@ -46,8 +54,8 @@ namespace uvsr
         uint32_t mipLevels = 0u;
         uint32_t sampleCount = 0u;
         bool r8Unorm = false;
-        bool rgba16Float = false;
         bool texture2D = false;
+        bool texture2DArray = false;
         bool shaderResource = false;
     };
 
@@ -63,19 +71,18 @@ namespace uvsr
         const DirectLightVisibilityTextureProperties& properties,
         uint32_t outputWidth,
         uint32_t outputHeight,
-        DirectLightVisibilityEncoding encoding =
-            DirectLightVisibilityEncoding::ScalarR8Unorm)
+        uint32_t receiverSampleCount = 1u)
     {
-        const bool formatCompatible =
-            encoding == DirectLightVisibilityEncoding::ScalarR8Unorm
-                ? properties.r8Unorm
-                : properties.rgba16Float;
-        return formatCompatible &&
-            properties.texture2D &&
+        const bool topologyCompatible = receiverSampleCount == 1u
+            ? properties.texture2D && properties.arraySize == 1u
+            : properties.texture2DArray &&
+                properties.arraySize == receiverSampleCount;
+        return IsDirectLightReceiverSampleCountSupported(
+                receiverSampleCount) &&
+            properties.r8Unorm && topologyCompatible &&
             properties.width == outputWidth &&
             properties.height == outputHeight &&
             properties.depth == 1u &&
-            properties.arraySize == 1u &&
             properties.mipLevels == 1u &&
             properties.sampleCount == 1u &&
             properties.shaderResource;
@@ -107,5 +114,31 @@ namespace uvsr
                 ? accumulated
                 : ClampDirectLightVisibility(producerVisibility))
             : accumulated;
+    }
+
+    // Monotonic endpoint-preserving correction used after a single-surface
+    // denoiser. It maps the raw closest value to its denoised value while
+    // retaining every receiver sample's position below or above that pivot.
+    [[nodiscard]] constexpr float ApplyClosestVisibilityCorrection(
+        float receiverSample,
+        float rawClosest,
+        float denoisedClosest)
+    {
+        const float sample = ClampDirectLightVisibility(receiverSample);
+        const float raw = ClampDirectLightVisibility(rawClosest);
+        const float denoised = ClampDirectLightVisibility(denoisedClosest);
+        if (raw == denoised)
+            return sample;
+        if (sample >= raw)
+        {
+            const float range = 1.f - raw > 0.000001f
+                ? 1.f - raw
+                : 0.000001f;
+            return ClampDirectLightVisibility(
+                denoised + (sample - raw) * (1.f - denoised) / range);
+        }
+        const float range = raw > 0.000001f ? raw : 0.000001f;
+        return ClampDirectLightVisibility(
+            denoised - (raw - sample) * denoised / range);
     }
 }

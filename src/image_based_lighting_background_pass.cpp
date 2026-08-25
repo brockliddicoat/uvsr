@@ -1,13 +1,13 @@
 #include "image_based_lighting_background_pass.h"
+#include "renderer_common_passes.h"
+#include "renderer_shader_factory.h"
 
 #include <donut/core/math/math.h>
-#include <donut/engine/CommonRenderPasses.h>
-#include <donut/engine/FramebufferFactory.h>
-#include <donut/engine/ShaderFactory.h>
 #include <donut/engine/View.h>
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 using namespace donut;
 using namespace donut::engine;
@@ -19,18 +19,18 @@ namespace uvsr
 {
     ImageBasedLightingBackgroundPass::ImageBasedLightingBackgroundPass(
         nvrhi::IDevice* device,
-        const std::shared_ptr<ShaderFactory>& shaderFactory,
-        const std::shared_ptr<CommonRenderPasses>& commonPasses,
-        const std::shared_ptr<FramebufferFactory>& framebufferFactory,
+        const std::shared_ptr<RendererShaderFactory>& shaderFactory,
+        const std::shared_ptr<RendererCommonPasses>& commonPasses,
+        nvrhi::FramebufferHandle framebuffer,
         const ICompositeView& compositeView,
         nvrhi::ITexture* radianceCube)
         : m_CommonPasses(commonPasses)
-        , m_FramebufferFactory(framebufferFactory)
+        , m_Framebuffer(std::move(framebuffer))
     {
         if (!device ||
             !shaderFactory ||
             !commonPasses ||
-            !framebufferFactory ||
+            !m_Framebuffer ||
             !radianceCube)
         {
             return;
@@ -49,7 +49,7 @@ namespace uvsr
         constantBufferDesc.isConstantBuffer = true;
         constantBufferDesc.isVolatile = true;
         constantBufferDesc.maxVersions =
-            c_MaxRenderPassConstantBufferVersions;
+            RendererMaxConstantBufferVersions;
         m_ConstantBuffer = device->createBuffer(constantBufferDesc);
 
         nvrhi::BindingLayoutDesc bindingLayoutDesc;
@@ -62,6 +62,14 @@ namespace uvsr
         m_BindingLayout =
             device->createBindingLayout(bindingLayoutDesc);
 
+        if (!m_PixelShader || !m_ConstantBuffer || !m_BindingLayout ||
+            !commonPasses->LinearWrapSampler() ||
+            !commonPasses->FullscreenVertexShader() ||
+            !commonPasses->FullscreenVertexShader(true))
+        {
+            return;
+        }
+
         nvrhi::BindingSetDesc bindingSetDesc;
         bindingSetDesc.bindings = {
             nvrhi::BindingSetItem::ConstantBuffer(
@@ -69,18 +77,26 @@ namespace uvsr
             nvrhi::BindingSetItem::Texture_SRV(
                 0, radianceCube),
             nvrhi::BindingSetItem::Sampler(
-                0, commonPasses->m_LinearWrapSampler)
+                0, commonPasses->LinearWrapSampler())
         };
         m_BindingSet = device->createBindingSet(
             bindingSetDesc, m_BindingLayout);
 
+        if (!m_BindingSet ||
+            compositeView.GetNumChildViews(ViewType::PLANAR) == 0u)
+        {
+            return;
+        }
         const IView* sampleView =
             compositeView.GetChildView(ViewType::PLANAR, 0u);
+        if (!sampleView)
+            return;
+        m_ReverseDepth = sampleView->IsReverseDepth();
         nvrhi::GraphicsPipelineDesc pipelineDesc;
         pipelineDesc.primType = nvrhi::PrimitiveType::TriangleStrip;
-        pipelineDesc.VS = sampleView->IsReverseDepth()
-            ? commonPasses->m_FullscreenVS
-            : commonPasses->m_FullscreenAtOneVS;
+        pipelineDesc.VS = m_ReverseDepth
+            ? commonPasses->FullscreenVertexShader()
+            : commonPasses->FullscreenVertexShader(true);
         pipelineDesc.PS = m_PixelShader;
         pipelineDesc.bindingLayouts = { m_BindingLayout };
         pipelineDesc.renderState.rasterState.setCullNone();
@@ -88,61 +104,66 @@ namespace uvsr
             .enableDepthTest()
             .disableDepthWrite()
             .disableStencil()
-            .setDepthFunc(sampleView->IsReverseDepth()
+            .setDepthFunc(m_ReverseDepth
                 ? nvrhi::ComparisonFunc::GreaterOrEqual
                 : nvrhi::ComparisonFunc::LessOrEqual);
         m_Pipeline = device->createGraphicsPipeline(
             pipelineDesc,
-            framebufferFactory->GetFramebufferInfo());
+            m_Framebuffer->getFramebufferInfo());
     }
 
-    void ImageBasedLightingBackgroundPass::Render(
+    ImageBasedLightingBackgroundRenderResult
+        ImageBasedLightingBackgroundPass::Render(
         nvrhi::ICommandList* commandList,
         const ICompositeView& compositeView,
         float radianceScale)
     {
-        if (!commandList ||
-            !m_Pipeline ||
-            !m_BindingSet ||
-            !m_FramebufferFactory)
-        {
-            return;
-        }
+        const uint32_t viewCount =
+            compositeView.GetNumChildViews(ViewType::PLANAR);
+        const bool passReady = commandList && IsValid();
+        if (passReady && viewCount > 0u)
+            commandList->beginMarker("Image-Based Lighting Background");
+        const ImageBasedLightingBackgroundRenderResult result =
+            ExecuteImageBasedLightingBackgroundViews(
+                passReady,
+                viewCount,
+                [&](uint32_t viewIndex)
+                {
+                    const IView* view = compositeView.GetChildView(
+                        ViewType::PLANAR, viewIndex);
+                    if (!view ||
+                        view->IsReverseDepth() != m_ReverseDepth)
+                    {
+                        return false;
+                    }
+                    ImageBasedLightingBackgroundConstants constants{};
+                    constants.matClipToTranslatedWorld =
+                        view->GetInverseViewProjectionMatrix() *
+                        affineToHomogeneous(
+                            translation(-view->GetViewOrigin()));
+                    constants.radianceScale = std::max(
+                        std::isfinite(radianceScale)
+                            ? radianceScale
+                            : 0.f,
+                        0.f);
+                    commandList->writeBuffer(
+                        m_ConstantBuffer, &constants, sizeof(constants));
 
-        commandList->beginMarker("Image-Based Lighting Background");
-        for (uint32_t viewIndex = 0u;
-            viewIndex <
-                compositeView.GetNumChildViews(ViewType::PLANAR);
-            ++viewIndex)
-        {
-            const IView* view = compositeView.GetChildView(
-                ViewType::PLANAR, viewIndex);
-            ImageBasedLightingBackgroundConstants constants{};
-            constants.matClipToTranslatedWorld =
-                view->GetInverseViewProjectionMatrix() *
-                affineToHomogeneous(
-                    translation(-view->GetViewOrigin()));
-            constants.radianceScale = std::max(
-                std::isfinite(radianceScale)
-                    ? radianceScale
-                    : 0.f,
-                0.f);
-            commandList->writeBuffer(
-                m_ConstantBuffer, &constants, sizeof(constants));
+                    nvrhi::GraphicsState state;
+                    state.pipeline = m_Pipeline;
+                    state.framebuffer = m_Framebuffer;
+                    state.bindings = { m_BindingSet };
+                    state.viewport = view->GetViewportState();
+                    commandList->setGraphicsState(state);
 
-            nvrhi::GraphicsState state;
-            state.pipeline = m_Pipeline;
-            state.framebuffer =
-                m_FramebufferFactory->GetFramebuffer(*view);
-            state.bindings = { m_BindingSet };
-            state.viewport = view->GetViewportState();
-            commandList->setGraphicsState(state);
-
-            nvrhi::DrawArguments arguments;
-            arguments.instanceCount = 1u;
-            arguments.vertexCount = 4u;
-            commandList->draw(arguments);
-        }
-        commandList->endMarker();
+                    nvrhi::DrawArguments arguments;
+                    arguments.instanceCount = 1u;
+                    arguments.vertexCount = 4u;
+                    commandList->draw(arguments);
+                    return true;
+                });
+        if (passReady && viewCount > 0u)
+            commandList->endMarker();
+        return result;
     }
 }

@@ -507,7 +507,7 @@ internal sealed class MainForm : Form
         if (_snapshot.IsInstalled && !_snapshot.IsDamaged)
         {
             string choice = LauncherDialog.Show(this, "UVSR Is Already Installed",
-                "UVSR is ready to use. You can launch it now or rebuild the latest version.",
+                "UVSR is ready to use. You can launch it now or reinstall its trusted package.",
                 new DialogAction("launch", "Launch", Primary: true),
                 new DialogAction("reinstall", "Reinstall"),
                 new DialogAction("cancel", "Cancel", Cancel: true));
@@ -530,8 +530,8 @@ internal sealed class MainForm : Form
         }
 
         string install = LauncherDialog.Show(this, "Install UVSR",
-            "UVSR Launcher will download what this PC needs, build the latest UVSR version, " +
-            "and keep the installation ready to update. The first install can take several minutes.",
+            "UVSR Launcher will authenticate, download, and install the latest renderer package. " +
+            "The installed package remains available during a safe update.",
             new DialogAction("install", "Install", Primary: true),
             new DialogAction("cancel", "Cancel", Cancel: true));
         if (install == "install")
@@ -600,7 +600,7 @@ internal sealed class MainForm : Form
                         ? InstallerOperation.Reinstall
                         : InstallerOperation.Update;
                     OperationResult updated = await Task.Run(() => _engine.ExecuteAsync(
-                        operation, _desktopShortcut.Checked, PromptAsync, progress,
+                        operation, _desktopShortcut.Checked, progress,
                         AppendLog, token));
                     HandleOperationResult(updated);
                     return;
@@ -637,7 +637,7 @@ internal sealed class MainForm : Form
         {
             Progress<InstallerProgress> progress = new(UpdateProgress);
             OperationResult result = await Task.Run(() => _engine.ExecuteAsync(operation,
-                _desktopShortcut.Checked, PromptAsync, progress, AppendLog,
+                _desktopShortcut.Checked, progress, AppendLog,
                 _operationCancellation!.Token));
             HandleOperationResult(result);
             return true;
@@ -766,23 +766,6 @@ internal sealed class MainForm : Form
             "Your renderer settings and history will be kept. Shared Microsoft components will also stay installed.",
             new DialogAction("uninstall", "Uninstall", Destructive: true),
             new DialogAction("cancel", "Cancel", Primary: true, Cancel: true)) == "uninstall";
-    }
-
-    private Task<bool> PromptAsync(PromptRequest request)
-    {
-        TaskCompletionSource<bool> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        void ShowPrompt()
-        {
-            string result = LauncherDialog.Show(this, request.Title, request.Message,
-                new DialogAction("yes", "Continue", Primary: true),
-                new DialogAction("no", "Cancel", Cancel: true));
-            completion.SetResult(result == "yes");
-        }
-        if (InvokeRequired)
-            BeginInvoke(ShowPrompt);
-        else
-            ShowPrompt();
-        return completion.Task;
     }
 
     private void UpdateProgress(InstallerProgress update)
@@ -1159,11 +1142,10 @@ internal sealed class MainForm : Form
     private void ShowError(Exception exception)
     {
         string message = FriendlyMessage(exception);
-        ShowTerminalStatus(DetermineErrorTerminalState(
-            exception is RebootRequiredException, message));
+        ShowTerminalStatus(DetermineErrorTerminalState(false, message));
         SetDetailsVisible(true);
         LauncherDialog.ShowError(this,
-            exception is RebootRequiredException ? "Restart Required" : "UVSR Launcher Stopped",
+            "UVSR Launcher Stopped",
             message,
             new DialogAction("ok", "OK", Primary: true, Cancel: true));
     }

@@ -1,9 +1,6 @@
 #include "denoiser_backend.h"
 #include "denoising_settings.h"
-
-#if UVSR_WITH_NRD
 #include "nrd_denoiser_backend.h"
-#endif
 
 #ifdef NRD_VERSION_MAJOR
 #error "The renderer denoiser API must not expose NRD SDK headers"
@@ -428,12 +425,11 @@ namespace
             "signal unregistration did not release its backend");
     }
 
-    void TestUnavailableFactory()
+    void TestCompiledFactory()
     {
         std::unique_ptr<IDenoiserBackend> backend = CreateDenoiserBackend();
         Require(backend != nullptr,
             "factory must always return a backend object");
-#if UVSR_WITH_NRD
         Require(backend->GetCapabilities().backendAvailable,
             "compiled NRD backend reports unavailable");
         Require(backend->GetCapabilities().maximumReblurHistoryLength == 63 &&
@@ -443,18 +439,8 @@ namespace
         Require(backend->Initialize(nullptr, 2).code ==
                 DenoiserStatusCode::InvalidArgument,
             "compiled backend must reject a null device safely");
-#else
-        Require(!backend->GetCapabilities().backendAvailable,
-            "NRD off stub reports available");
-        Require(backend->GetMemoryStats().TotalBytes() == 0,
-            "NRD off stub allocated backend memory");
-        Require(backend->Initialize(nullptr, 2).code ==
-                DenoiserStatusCode::Unavailable,
-            "NRD off stub did not fail open as unavailable");
-#endif
     }
 
-#if UVSR_WITH_NRD
     void TestTypedUavPolicy()
     {
         const nvrhi::FormatSupport complete =
@@ -468,7 +454,6 @@ namespace
                 complete & ~nvrhi::FormatSupport::ShaderUavLoad),
             "typed UAV loads were not required");
     }
-#endif
 }
 
 int main()
@@ -479,10 +464,8 @@ int main()
     TestMethodAndResourceContracts();
     TestAliasContract();
     TestIndependentSignalRegistry();
-    TestUnavailableFactory();
-#if UVSR_WITH_NRD
+    TestCompiledFactory();
     TestTypedUavPolicy();
-#endif
     std::cout << "Denoiser backend validation passed\n";
     return EXIT_SUCCESS;
 }

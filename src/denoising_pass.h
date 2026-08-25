@@ -15,11 +15,12 @@
 namespace donut::engine
 {
     class IView;
-    class ShaderFactory;
 }
 
 namespace uvsr
 {
+    class RendererShaderFactory;
+
     struct DenoisingInputs
     {
         nvrhi::ITexture* rawSignal = nullptr;
@@ -66,7 +67,7 @@ namespace uvsr
     public:
         DenoisingPass(
             nvrhi::IDevice* device,
-            const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory,
+            const std::shared_ptr<RendererShaderFactory>& shaderFactory,
             uint32_t framesInFlight = 3);
         ~DenoisingPass();
 

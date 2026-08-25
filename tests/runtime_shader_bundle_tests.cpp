@@ -118,11 +118,17 @@ int main(int argc, char** argv)
     for (const std::filesystem::directory_entry& entry :
         std::filesystem::recursive_directory_iterator(runtimeRoot))
     {
-        if (!entry.is_regular_file() || entry.path().extension() != ".bin")
+        Require(!entry.is_symlink(),
+            "runtime shader tree contains a symbolic link");
+        if (entry.is_directory())
             continue;
-        actual.emplace(std::filesystem::relative(
-            entry.path(),
-            runtimeRoot).generic_string());
+        Require(entry.is_regular_file(),
+            "runtime shader tree contains a non-file entry");
+        const std::string relativePath = std::filesystem::relative(
+            entry.path(), runtimeRoot).generic_string();
+        Require(IsSafeRelativeShaderPath(relativePath),
+            "runtime shader tree contains an unexpected file");
+        actual.emplace(relativePath);
     }
     Require(
         actual == expected,

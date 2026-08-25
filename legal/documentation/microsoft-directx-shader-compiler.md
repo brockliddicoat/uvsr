@@ -2,26 +2,34 @@
 
 ## Record
 
-- Relationship: Dependency Integration
-- Status: Current
+- Relationship: Direct Build-Tool Integration
+- Status: Current, Build Only
 - Confidence: Confirmed
 - Upstream: [DirectX Shader Compiler](https://github.com/microsoft/DirectXShaderCompiler)
-- Revision: ShaderMake release selection `v1.9.2602`, dated `2026_02_20`
-- Governing Terms: University of Illinois Open Source License plus the upstream `ThirdPartyNotices.txt`
+- Revision: release `v1.9.2602`, asset dated `2026_02_20`
+- Archive SHA-256: `a1e89031421cf3c1fca6627766ab3020ca4f962ac7e2caa7fab2b33a8436151e`
+- `dxc.exe`: version 1.9.2602.17, SHA-256 `b9cff94181248e080804b385da8964b6319fd07760721baa9053a891cf7a727f`
+- Governing Terms: University of Illinois Open Source License and upstream `ThirdPartyNotices.txt`
 
 ## UVSR Relationship
 
-ShaderMake downloads and invokes DXC to turn HLSL into DXIL. UVSR does not
-incorporate compiler source into the renderer. Compiled shader output is not
-presented as copied DXC code.
+UVSR fetches and verifies the pinned archive directly. Its CMake shader catalog
+invokes `dxc.exe` per task, consumes compiler depfiles, and builds deterministic
+owned shader-family blobs for UVSR, Donut, and retained NRD shaders. No
+transitive compiler wrapper owns the active build.
+
+DXC is a development tool. The production renderer package contains compiled
+DXIL, not DXC executables, libraries, source, or notices. Anyone redistributing
+the compiler bundle must include its complete license and third-party notices;
+they are retained in the fetched archive rather than mirrored here.
 
 ## Evidence
 
-- [Root Build Configuration](../../CMakeLists.txt)
-- [ShaderMake Build Configuration](../../donut/ShaderMake/CMakeLists.txt) at revision `5daebdbef45088fc2369d441391ecab0eba25e54`
+- [Pinned Compiler Fetch](../../CMakeLists.txt)
+- [Direct Shader Catalog](../../cmake/DirectXShaderCatalog.cmake)
 
 ## Commercial Clearance
 
-The compiler's complete license and third-party notices must accompany any
-redistributed compiler bundle. They are not currently mirrored in this legal
-directory because the compiler is fetched as a build tool.
+Compiled output does not make the compiler part of the renderer package.
+Redistributing DXC itself is a separate distribution action requiring the
+upstream license and notices.

@@ -40,8 +40,9 @@ grants only rights you control and does not clear third-party content.
 ## Verification
 
 Follow [AGENTS.md](AGENTS.md) and the relevant engineering documentation. Run
-the focused checks for your change, the document-title validator for Markdown,
-and the full build/test suite when source or packaging changes require it.
+focused checks for your change and the full build/test suite when source or
+packaging changes require it. Check changed-document headings and links
+directly; the repository intentionally has no broad casing parser.
 
 ## Conduct and Review
 

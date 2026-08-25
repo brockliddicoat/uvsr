@@ -7,11 +7,6 @@
 #include <string_view>
 #include <vector>
 
-namespace donut::vfs
-{
-    class IFileSystem;
-}
-
 namespace uvsr
 {
     struct SceneInitialCamera
@@ -24,10 +19,9 @@ namespace uvsr
 
     struct SceneCatalogEntry
     {
-        // FileName is the normalized native path passed to Donut's scene
-        // loader. DisplayName is UI-only metadata and is never used to locate
-        // an asset, so friendly labels cannot make command-line paths
-        // ambiguous.
+        // FileName is the normalized native scene path. DisplayName is UI-only
+        // metadata and is never used to locate an asset, so friendly labels
+        // cannot make command-line paths ambiguous.
         std::string FileName;
         std::string DisplayName;
         std::optional<SceneInitialCamera> InitialCamera;
@@ -38,7 +32,6 @@ namespace uvsr
         const std::filesystem::path& fileName);
 
     std::vector<SceneCatalogEntry> BuildSceneCatalog(
-        donut::vfs::IFileSystem& fileSystem,
         const std::filesystem::path& sceneDirectory,
         const std::vector<std::string>& discoveredSceneFiles);
 

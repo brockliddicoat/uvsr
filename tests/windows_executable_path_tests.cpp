@@ -10,7 +10,7 @@ int main()
         L"C:\\Users\\Miyuki-\u7F8E\u96EA\\AppData\\Local\\Programs\\UVSR\\bin");
     const std::filesystem::path actual =
         uvsr::ExecutableDirectoryFromModulePath(
-            L"C:\\Users\\Miyuki-\u7F8E\u96EA\\AppData\\Local\\Programs\\UVSR\\bin\\uvsr.exe");
+            L"C:\\Users\\Miyuki-\u7F8E\u96EA\\AppData\\Local\\Programs\\UVSR\\bin\\uvsr-engine.exe");
     assert(actual == expected);
 
     const std::filesystem::path runningDirectory =

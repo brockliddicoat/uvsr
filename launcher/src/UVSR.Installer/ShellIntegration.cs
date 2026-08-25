@@ -6,7 +6,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace UvsrInstaller;
 
-internal sealed class ShellIntegration
+internal sealed class ShellIntegration : IInstallerShell
 {
     private const string UninstallParentPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall";
     private const string UninstallKeyName = "UVSR";
@@ -16,7 +16,7 @@ internal sealed class ShellIntegration
 
     internal ShellIntegration(InstallerPaths paths) => _paths = paths;
 
-    internal void ValidateCanApply(
+    public void ValidateCanApply(
         Guid installationId,
         LauncherState? previousLauncher,
         bool desktopShortcut,
@@ -41,7 +41,7 @@ internal sealed class ShellIntegration
         }
     }
 
-    internal void Apply(
+    public void Apply(
         Guid installationId,
         InstallState? rendererState,
         LauncherState launcherState,
@@ -97,9 +97,6 @@ internal sealed class ShellIntegration
             "Install, launch, update, or remove UVSR",
             shortcut => IsOwnedLauncherShortcut(shortcut, installationId));
         mutation.StartMenuShortcut = ShellMutationState.OwnedPresent;
-        if (DeleteShortcutIfOwned(_paths.LegacyStartMenuShortcut,
-                IsOwnedLegacyManagerShortcut, log))
-            mutation.LegacyStartMenuShortcut = ShellMutationState.ExpectedAbsent;
 
         if (launcherState.DesktopShortcut)
         {
@@ -115,10 +112,6 @@ internal sealed class ShellIntegration
                     shortcut => IsOwnedLauncherShortcut(shortcut, installationId), log))
                 mutation.DesktopShortcut = ShellMutationState.ExpectedAbsent;
         }
-        if (DeleteShortcutIfOwned(_paths.LegacyDesktopShortcut,
-                shortcut => IsOwnedLegacyDesktopShortcut(shortcut, installationId), log))
-            mutation.LegacyDesktopShortcut = ShellMutationState.ExpectedAbsent;
-
         using RegistryKey? existing = Registry.CurrentUser.OpenSubKey(
             UninstallKeyPath, writable: true);
         if (existing is not null)
@@ -219,7 +212,7 @@ internal sealed class ShellIntegration
         key.DeleteValue("UVSRTransactionId", throwOnMissingValue: false);
     }
 
-    internal void Remove(Guid installationId, InstallLog log)
+    public void Remove(Guid installationId, InstallLog log)
     {
         RemoveOwnedStagedRegistryEntries(installationId, log);
         ShellSnapshot snapshot = CaptureSnapshot();
@@ -258,12 +251,6 @@ internal sealed class ShellIntegration
         if (DeleteShortcutIfOwned(_paths.StartMenuShortcut,
                 shortcut => IsOwnedLauncherShortcut(shortcut, installationId), log))
             mutation.StartMenuShortcut = ShellMutationState.ExpectedAbsent;
-        if (DeleteShortcutIfOwned(_paths.LegacyDesktopShortcut,
-                shortcut => IsOwnedLegacyDesktopShortcut(shortcut, installationId), log))
-            mutation.LegacyDesktopShortcut = ShellMutationState.ExpectedAbsent;
-        if (DeleteShortcutIfOwned(_paths.LegacyStartMenuShortcut,
-                IsOwnedLegacyManagerShortcut, log))
-            mutation.LegacyStartMenuShortcut = ShellMutationState.ExpectedAbsent;
         if (Directory.Exists(_paths.StartMenuDirectory))
         {
             _paths.ValidateShellPath(_paths.StartMenuDirectory,
@@ -274,7 +261,7 @@ internal sealed class ShellIntegration
         log.Write("Removed UVSR's owned per-user shortcuts and Apps & Features entry.");
     }
 
-    internal void RemoveTransactionArtifacts(
+    public void RemoveTransactionArtifacts(
         Guid installationId,
         Guid transactionId,
         InstallLog log)
@@ -328,7 +315,7 @@ internal sealed class ShellIntegration
         }
     }
 
-    internal void Launch(InstallState state)
+    public void Launch(InstallState state)
     {
         state.Validate(state.InstallationId);
         string executable = _paths.VersionExecutable(state.ActiveVersionId);
@@ -345,7 +332,9 @@ internal sealed class ShellIntegration
         System.Diagnostics.Process.Start(start);
     }
 
-    private bool IsOwnedLauncherShortcut(ShortcutInfo shortcut, Guid installationId)
+    internal bool IsOwnedLauncherShortcut(
+        ShortcutInfo shortcut,
+        Guid installationId)
     {
         if (!string.IsNullOrWhiteSpace(shortcut.Arguments) || string.IsNullOrWhiteSpace(shortcut.Target))
             return false;
@@ -399,33 +388,6 @@ internal sealed class ShellIntegration
         }
     }
 
-    private bool IsOwnedLegacyManagerShortcut(ShortcutInfo shortcut) =>
-        string.IsNullOrWhiteSpace(shortcut.Arguments) &&
-        PathsEqual(shortcut.Target, _paths.LegacyManagerPath);
-
-    private bool IsOwnedLegacyDesktopShortcut(ShortcutInfo shortcut, Guid installationId)
-    {
-        if (!string.IsNullOrWhiteSpace(shortcut.Arguments) ||
-            string.IsNullOrWhiteSpace(shortcut.Target))
-            return false;
-        if (PathsEqual(shortcut.Target, _paths.LegacyManagerPath) ||
-            IsOwnedLauncherShortcut(shortcut, installationId))
-            return true;
-        try
-        {
-            string target = Path.GetFullPath(shortcut.Target);
-            return SafePaths.IsStrictDescendant(target, _paths.VersionsDirectory) &&
-                   string.Equals(Path.GetFileName(target), "uvsr.exe",
-                       StringComparison.OrdinalIgnoreCase) &&
-                   string.Equals(Path.GetFileName(Path.GetDirectoryName(target)), "bin",
-                       StringComparison.OrdinalIgnoreCase);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return false;
-        }
-    }
-
     private static bool PathsEqual(string? first, string second)
     {
         if (string.IsNullOrWhiteSpace(first))
@@ -464,7 +426,7 @@ internal sealed class ShellIntegration
             throw new InstallerException(error);
     }
 
-    private void CreateOrReplaceShortcut(
+    internal void CreateOrReplaceShortcut(
         string path,
         string target,
         string arguments,
@@ -501,7 +463,7 @@ internal sealed class ShellIntegration
         }
     }
 
-    private static ShortcutInfo ReadShortcut(string path)
+    internal static ShortcutInfo ReadShortcut(string path)
     {
         try
         {
@@ -566,8 +528,6 @@ internal sealed class ShellIntegration
         return new ShellSnapshot(
             CaptureFile(_paths.DesktopShortcut),
             CaptureFile(_paths.StartMenuShortcut),
-            CaptureFile(_paths.LegacyDesktopShortcut),
-            CaptureFile(_paths.LegacyStartMenuShortcut),
             CaptureRegistry());
     }
 
@@ -702,13 +662,6 @@ internal sealed class ShellIntegration
             RestoreFile(_paths.DesktopShortcut, snapshot.DesktopShortcut,
                 mutation.DesktopShortcut,
                 shortcut => IsOwnedLauncherShortcut(shortcut, installationId));
-            RestoreFile(_paths.LegacyStartMenuShortcut,
-                snapshot.LegacyStartMenuShortcut,
-                mutation.LegacyStartMenuShortcut, IsOwnedLegacyManagerShortcut);
-            RestoreFile(_paths.LegacyDesktopShortcut,
-                snapshot.LegacyDesktopShortcut,
-                mutation.LegacyDesktopShortcut,
-                shortcut => IsOwnedLegacyDesktopShortcut(shortcut, installationId));
         }
         catch (Exception rollbackFailure)
         {
@@ -727,8 +680,6 @@ internal sealed class ShellIntegration
     private sealed record ShellSnapshot(
         byte[]? DesktopShortcut,
         byte[]? StartMenuShortcut,
-        byte[]? LegacyDesktopShortcut,
-        byte[]? LegacyStartMenuShortcut,
         RegistrySnapshot Registry);
 
     private enum ShellMutationState
@@ -742,12 +693,10 @@ internal sealed class ShellIntegration
     {
         internal ShellMutationState DesktopShortcut { get; set; }
         internal ShellMutationState StartMenuShortcut { get; set; }
-        internal ShellMutationState LegacyDesktopShortcut { get; set; }
-        internal ShellMutationState LegacyStartMenuShortcut { get; set; }
         internal ShellMutationState Registry { get; set; }
     }
 
-    private sealed record ShortcutInfo(string Target, string Arguments);
+    internal sealed record ShortcutInfo(string Target, string Arguments);
 
     [ComImport]
     [Guid("00021401-0000-0000-C000-000000000046")]

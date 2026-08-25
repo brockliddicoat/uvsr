@@ -2,24 +2,27 @@
 
 ## Record
 
-- Relationship: Dependency Integration and Indirect Lineage
+- Relationship: Dependency Integration
 - Status: Current
 - Confidence: Confirmed
 - Upstream: [JsonCpp](https://github.com/open-source-parsers/jsoncpp)
-- Revision: Amalgamated copy vendored by pinned Donut
+- Revision: `89e2973c754a9c02a49974d839779b151e95afd6` (`1.9.6`)
+- Archive SHA-256: `02f0804596c1e18c064d890ac9497fa17d585e822fcacf07ff8a8aa0b344a7bd`
 - Governing Terms: Upstream public-domain/MIT choice; copyright Baptiste Lepilleur and the JsonCpp Authors where applicable
+- License SHA-256: `cec0db5f6d7ed6b3a72647bd50aed02e13c3377fd44382b96dc2915534c042ad`
 
 ## UVSR Relationship
 
-Donut uses JsonCpp for JSON scene and configuration data. UVSR consumes that
-functionality through Donut and does not identify JsonCpp code as first-party.
+UVSR fetches the immutable upstream `1.9.6` source archive directly and owns
+the narrow static target. Donut's remaining JSON callers consume that target;
+JsonCpp is not first-party code.
 
 ## Evidence
 
-- [Donut Third-Party License Inventory](../../donut/ThirdPartyLicenses.txt) at Donut revision `bc1ea24b0486f1c00d89327fe16c0b4dd11c5937`
-- [Scene Catalog](../../src/scene_catalog.cpp)
+- [Direct Pin and Target](../../cmake/DirectThirdParty.cmake)
+- [Transitional Donut JSON Wrapper](../../donut/include/donut/core/json.h)
 
 ## Commercial Clearance
 
-Retaining Donut's full JsonCpp notice is the conservative redistribution path,
-including the MIT text for portions not treated as public domain.
+The complete upstream choice-of-terms file is installed as
+`bin/licenses/JsonCpp-Public-Domain-or-MIT.txt`.

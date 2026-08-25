@@ -1,9 +1,10 @@
 #include "fast_approximate_aa.h"
+#include "fast_approximate_aa_contract.h"
+#include "renderer_common_passes.h"
+#include "renderer_log.h"
+#include "renderer_shader_factory.h"
 
-#include <donut/core/log.h>
 #include <donut/core/math/math.h>
-#include <donut/engine/CommonRenderPasses.h>
-#include <donut/engine/ShaderFactory.h>
 #include <donut/engine/View.h>
 
 using namespace donut;
@@ -32,8 +33,8 @@ namespace uvsr
 {
     FastApproximateAAPass::FastApproximateAAPass(
         nvrhi::IDevice* device,
-        const std::shared_ptr<ShaderFactory>& shaderFactory,
-        const std::shared_ptr<CommonRenderPasses>& commonPasses,
+        const std::shared_ptr<RendererShaderFactory>& shaderFactory,
+        const std::shared_ptr<RendererCommonPasses>& commonPasses,
         nvrhi::ITexture* sourceColor)
         : m_Device(device)
         , m_CommonPasses(commonPasses)
@@ -42,11 +43,11 @@ namespace uvsr
             return;
 
         const nvrhi::TextureDesc& sourceDesc = sourceColor->getDesc();
-        if (sourceDesc.width == 0u ||
-            sourceDesc.height == 0u ||
-            sourceDesc.sampleCount != 1u ||
-            sourceDesc.dimension != nvrhi::TextureDimension::Texture2D ||
-            sourceDesc.format != nvrhi::Format::RGBA16_FLOAT)
+        if (!IsFastApproximateAaSourceCompatible(
+                sourceDesc,
+                sourceDesc.width,
+                sourceDesc.height,
+                true))
         {
             log::error(
                 "Fast Approximate AA requires UVSR's single-sample "
@@ -67,7 +68,7 @@ namespace uvsr
         outputDesc.height = m_Height;
         outputDesc.dimension = nvrhi::TextureDimension::Texture2D;
         outputDesc.mipLevels = 1u;
-        outputDesc.format = nvrhi::Format::RGBA16_FLOAT;
+        outputDesc.format = FastApproximateAaColorFormat;
         outputDesc.isRenderTarget = true;
         outputDesc.initialState = nvrhi::ResourceStates::ShaderResource;
         outputDesc.keepInitialState = true;
@@ -82,7 +83,7 @@ namespace uvsr
         constantBufferDesc.isConstantBuffer = true;
         constantBufferDesc.isVolatile = true;
         constantBufferDesc.maxVersions =
-            c_MaxRenderPassConstantBufferVersions;
+            RendererMaxConstantBufferVersions;
         m_ConstantBuffer = device->createBuffer(constantBufferDesc);
 
         nvrhi::BindingLayoutDesc layoutDesc;
@@ -100,7 +101,7 @@ namespace uvsr
 
         nvrhi::GraphicsPipelineDesc pipelineDesc;
         pipelineDesc.primType = nvrhi::PrimitiveType::TriangleStrip;
-        pipelineDesc.VS = commonPasses->m_FullscreenVS;
+        pipelineDesc.VS = commonPasses->FullscreenVertexShader();
         pipelineDesc.PS = m_PixelShader;
         pipelineDesc.bindingLayouts = { m_BindingLayout };
         pipelineDesc.renderState.rasterState.setCullNone();
@@ -114,14 +115,14 @@ namespace uvsr
     bool FastApproximateAAPass::IsCompatibleSource(
         nvrhi::ITexture* sourceColor) const
     {
-        if (!sourceColor || sourceColor == m_OutputColor.Get())
+        if (!sourceColor)
             return false;
         const nvrhi::TextureDesc& sourceDesc = sourceColor->getDesc();
-        return sourceDesc.width == m_Width &&
-            sourceDesc.height == m_Height &&
-            sourceDesc.sampleCount == 1u &&
-            sourceDesc.dimension == nvrhi::TextureDimension::Texture2D &&
-            sourceDesc.format == nvrhi::Format::RGBA16_FLOAT;
+        return IsFastApproximateAaSourceCompatible(
+            sourceDesc,
+            m_Width,
+            m_Height,
+            sourceColor != m_OutputColor.Get());
     }
 
     void FastApproximateAAPass::RebuildBindingSet(
@@ -148,7 +149,7 @@ namespace uvsr
             nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
             nvrhi::BindingSetItem::Texture_SRV(0, sourceColor),
             nvrhi::BindingSetItem::Sampler(
-                0, m_CommonPasses->m_LinearClampSampler)
+                0, m_CommonPasses->LinearClampSampler())
         };
         m_BindingSet = m_Device->createBindingSet(
             setDesc, m_BindingLayout);
@@ -188,7 +189,9 @@ namespace uvsr
             return sourceColor;
         }
 
-        if (compositeView.GetNumChildViews(ViewType::PLANAR) != 1u)
+        const uint32_t planarViewCount =
+            compositeView.GetNumChildViews(ViewType::PLANAR);
+        if (planarViewCount != 1u)
             return sourceColor;
         const IView* view = compositeView.GetChildView(
             ViewType::PLANAR, 0u);
@@ -197,14 +200,20 @@ namespace uvsr
         const nvrhi::TextureSubresourceSet subresources =
             view->GetSubresources();
         const nvrhi::Rect extent = view->GetViewExtent();
-        if (subresources.baseMipLevel != 0u ||
-            subresources.numMipLevels != 1u ||
-            subresources.baseArraySlice != 0u ||
-            subresources.numArraySlices != 1u ||
-            extent.minX != 0 ||
-            extent.minY != 0 ||
-            extent.maxX != static_cast<int>(m_Width) ||
-            extent.maxY != static_cast<int>(m_Height))
+        const FastApproximateAaViewContract viewContract = {
+            planarViewCount,
+            true,
+            subresources.baseMipLevel,
+            subresources.numMipLevels,
+            subresources.baseArraySlice,
+            subresources.numArraySlices,
+            extent.minX,
+            extent.minY,
+            extent.maxX,
+            extent.maxY
+        };
+        if (!IsFastApproximateAaFullImageView(
+                viewContract, m_Width, m_Height))
         {
             // The owned output framebuffer represents one complete 2D image.
             // Fail closed instead of returning partly stale multi-view data.

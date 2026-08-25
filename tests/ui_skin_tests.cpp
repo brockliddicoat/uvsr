@@ -82,7 +82,7 @@ int main()
     };
     const std::string_view expectedCommandValues[] = {
         "amp",
-        "og"
+        "ogg"
     };
 
     std::set<int> enumValues;
@@ -126,9 +126,7 @@ int main()
         { "amp", UiSkin::Amp },
         { " AMP ", UiSkin::Amp },
         { "ogg", UiSkin::Og },
-        { "OGG", UiSkin::Og },
-        { "og", UiSkin::Og },
-        { "OG", UiSkin::Og }
+        { "OGG", UiSkin::Og }
     };
     for (const AliasCase& alias : aliases)
     {
@@ -136,6 +134,10 @@ int main()
             ParseUiSkin(alias.text) == alias.expected,
             "normalized ASCII aliases must resolve deterministically");
     }
+    Require(
+        !ParseUiSkin("og") && !ParseUiSkin("OG"),
+        "the retired short spelling must fail rather than bypass the "
+        "canonical command domain");
 
     UiSkin retained = UiSkin::Og;
     Require(

@@ -158,7 +158,7 @@ namespace uvsr
         case UiSkin::Amp:
             return "amp";
         case UiSkin::Og:
-            return "og";
+            return "ogg";
         case UiSkin::Count:
             break;
         }
@@ -269,7 +269,7 @@ namespace uvsr
 
         if (normalized == "amp")
             return UiSkin::Amp;
-        if (normalized == "ogg" || normalized == "og")
+        if (normalized == "ogg")
             return UiSkin::Og;
 
         return std::nullopt;

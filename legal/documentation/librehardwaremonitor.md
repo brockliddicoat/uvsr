@@ -19,7 +19,6 @@ binary is linked into or distributed with the renderer.
 ## Evidence
 
 - [Pinned Download, Hash, And Notice Logic](../../tools/get_uvsr_performance_tools.ps1)
-- [Historical Performance-Tool Plan](../../docs/exec-plans/abandoned/sparse-virtual-shadow-maps.md)
 - Tool integration introduced at `ea566bc67f744059e6f62e33c541c5b25bde9bd8`
 
 ## Commercial Clearance

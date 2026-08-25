@@ -3,10 +3,8 @@ cmake_minimum_required(VERSION 3.24)
 set(_uvsr_github_file_limit_bytes 100000000)
 set(_uvsr_repack_buffer_limit_bytes 90000000)
 set(_uvsr_scene_names
-    intel_sponza
     bistro_interior_retextured
-    san_miguel_retextured
-    blender_classroom)
+    san_miguel_retextured)
 
 function(_uvsr_fail detail)
     message(FATAL_ERROR "Scene asset provenance check failed: ${detail}")
@@ -223,7 +221,10 @@ function(_uvsr_assert_file_sha256 path expected label)
     endif()
 endfunction()
 
-foreach (_required_variable IN ITEMS SOURCE_MODELS_ROOT STAGED_MODELS_ROOT)
+foreach (_required_variable IN ITEMS
+        SOURCE_MODELS_ROOT
+        STAGED_MODELS_ROOT
+        RUNTIME_MEDIA_INVENTORY)
     if (NOT DEFINED ${_required_variable} OR "${${_required_variable}}" STREQUAL "")
         _uvsr_fail("-${_required_variable}=<path> is required")
     endif()
@@ -231,16 +232,73 @@ endforeach()
 
 set(_uvsr_source_models_root "${SOURCE_MODELS_ROOT}")
 set(_uvsr_staged_models_root "${STAGED_MODELS_ROOT}")
+set(_uvsr_runtime_media_inventory "${RUNTIME_MEDIA_INVENTORY}")
 cmake_path(ABSOLUTE_PATH _uvsr_source_models_root NORMALIZE
     OUTPUT_VARIABLE _uvsr_source_models_root)
 cmake_path(ABSOLUTE_PATH _uvsr_staged_models_root NORMALIZE
     OUTPUT_VARIABLE _uvsr_staged_models_root)
+cmake_path(ABSOLUTE_PATH _uvsr_runtime_media_inventory NORMALIZE
+    OUTPUT_VARIABLE _uvsr_runtime_media_inventory)
 if (NOT IS_DIRECTORY "${_uvsr_source_models_root}")
     _uvsr_fail("SOURCE_MODELS_ROOT is not a directory: ${_uvsr_source_models_root}")
 endif()
 if (NOT IS_DIRECTORY "${_uvsr_staged_models_root}")
     _uvsr_fail("STAGED_MODELS_ROOT is not a directory: ${_uvsr_staged_models_root}")
 endif()
+if (NOT EXISTS "${_uvsr_runtime_media_inventory}" OR
+    IS_DIRECTORY "${_uvsr_runtime_media_inventory}" OR
+    IS_SYMLINK "${_uvsr_runtime_media_inventory}")
+    _uvsr_fail(
+        "RUNTIME_MEDIA_INVENTORY is not a regular file: ${_uvsr_runtime_media_inventory}")
+endif()
+
+# Derive the staged scene membership from the same package authority used by
+# the runtime-media sync and validator. Source-only provenance and license files
+# remain checked independently below.
+set(_uvsr_runtime_scene_prefix "media/glTF-Sample-Assets/Models/")
+string(LENGTH "${_uvsr_runtime_scene_prefix}" _uvsr_runtime_scene_prefix_length)
+file(STRINGS "${_uvsr_runtime_media_inventory}" _uvsr_runtime_media_entries)
+foreach (_entry IN LISTS _uvsr_runtime_media_entries)
+    _uvsr_validate_relative_path(
+        _entry "${_entry}" "runtime media inventory entry")
+    string(FIND "${_entry}" "${_uvsr_runtime_scene_prefix}" _prefix_index)
+    if (NOT _prefix_index EQUAL 0)
+        continue()
+    endif()
+
+    string(SUBSTRING "${_entry}" ${_uvsr_runtime_scene_prefix_length} -1
+        _scene_path)
+    string(FIND "${_scene_path}" "/" _scene_separator)
+    if (_scene_separator LESS 1)
+        _uvsr_fail("runtime media inventory has malformed scene entry '${_entry}'")
+    endif()
+    string(SUBSTRING "${_scene_path}" 0 ${_scene_separator} _scene)
+    math(EXPR _relative_offset "${_scene_separator} + 1")
+    string(SUBSTRING "${_scene_path}" ${_relative_offset} -1 _relative)
+    _uvsr_validate_relative_path(
+        _relative "${_relative}" "${_scene} runtime inventory path")
+
+    list(FIND _uvsr_scene_names "${_scene}" _scene_index)
+    if (_scene_index EQUAL -1)
+        _uvsr_fail("runtime media inventory names unsupported scene '${_scene}'")
+    endif()
+    set(_expected_variable "_uvsr_expected_${_scene}_files")
+    list(FIND ${_expected_variable} "${_relative}" _duplicate_index)
+    if (NOT _duplicate_index EQUAL -1)
+        _uvsr_fail("runtime media inventory repeats scene entry '${_entry}'")
+    endif()
+    list(APPEND ${_expected_variable} "${_relative}")
+endforeach()
+foreach (_scene IN LISTS _uvsr_scene_names)
+    set(_expected_variable "_uvsr_expected_${_scene}_files")
+    if (NOT DEFINED ${_expected_variable} OR
+        "${${_expected_variable}}" STREQUAL "")
+        _uvsr_fail("runtime media inventory has no files for scene '${_scene}'")
+    endif()
+    list(SORT ${_expected_variable})
+    _uvsr_assert_case_unique(
+        ${_expected_variable} "${_scene} canonical runtime inventory")
+endforeach()
 
 # These source bytes are independently hashed below. Prevent Git's text filters
 # from rewriting the exact downloaded/license/glTF containers on checkout.
@@ -257,13 +315,7 @@ set(_uvsr_required_binary_attribute_rules
     "assets/scenes/bistro_interior_retextured/SOURCE-README.txt -diff -text"
     "assets/scenes/bistro_interior_retextured/components/bistro_interior.gltf -diff -text"
     "assets/scenes/san_miguel_retextured/LICENSE.txt -diff -text"
-    "assets/scenes/san_miguel_retextured/components/san_miguel.gltf -diff -text"
-    "assets/scenes/blender_classroom/LICENSE.txt -diff -text"
-    "assets/scenes/blender_classroom/SOURCE-README.txt -diff -text"
-    "assets/scenes/blender_classroom/components/blender_classroom.gltf -diff -text"
-    "assets/scenes/blender_classroom/components/blender-export-report.json -diff -text"
-    "assets/scenes/blender_classroom/components/buffer-repack-report.json -diff -text"
-    "tools/export_blender_classroom.py -diff -text")
+    "assets/scenes/san_miguel_retextured/components/san_miguel.gltf -diff -text")
 foreach (_rule IN LISTS _uvsr_required_binary_attribute_rules)
     list(FIND _uvsr_gitattributes_lines "${_rule}" _rule_index)
     if (_rule_index EQUAL -1)
@@ -335,8 +387,20 @@ _uvsr_json_expect_hash("${_uvsr_bistro_provenance}" "Bistro sourceReadmeSha256"
     "${_uvsr_bistro_source_readme_sha256}" source sourceReadmeSha256)
 _uvsr_json_expect_hash("${_uvsr_bistro_provenance}" "Bistro licenseSha256"
     "${_uvsr_bistro_license_sha256}" source licenseSha256)
-_uvsr_json_expect_string("${_uvsr_bistro_provenance}" "Bistro repack tool"
-    "tools/repack_gltf_buffers.py" conversion tool)
+# Conversion-tool filenames are immutable historical provenance, not active
+# build or regeneration dependencies. Keep the manifest bytes exact while
+# proving that the retired first-party tool is absent.
+_uvsr_json_get_string(_uvsr_bistro_historical_repack_tool
+    "${_uvsr_bistro_provenance}" "Bistro historical repack tool"
+    conversion tool)
+if (NOT _uvsr_bistro_historical_repack_tool STREQUAL
+        "tools/repack_gltf_buffers.py")
+    _uvsr_fail("Bistro historical repack identity changed")
+endif()
+if (EXISTS
+        "${_uvsr_repository_root}/${_uvsr_bistro_historical_repack_tool}")
+    _uvsr_fail("Bistro historical repack tool must remain retired")
+endif()
 _uvsr_json_expect_string("${_uvsr_bistro_provenance}" "Bistro conversion method"
     "lossless buffer-view repack plus explicit opaque material-domain fallback"
     conversion method)
@@ -387,14 +451,32 @@ _uvsr_json_expect_hash("${_uvsr_san_provenance}" "San Miguel materialLibrarySha2
     "${_uvsr_san_material_sha256}" source materialLibrarySha256)
 _uvsr_json_expect_hash("${_uvsr_san_provenance}" "San Miguel licenseSha256"
     "${_uvsr_san_license_sha256}" source licenseSha256)
-_uvsr_json_expect_string("${_uvsr_san_provenance}" "San Miguel import tool"
-    "tools/import_san_miguel.py" conversion importTool)
+_uvsr_json_get_string(_uvsr_san_historical_import_tool
+    "${_uvsr_san_provenance}" "San Miguel historical import tool"
+    conversion importTool)
+if (NOT _uvsr_san_historical_import_tool STREQUAL
+        "tools/import_san_miguel.py")
+    _uvsr_fail("San Miguel historical import identity changed")
+endif()
+if (EXISTS
+        "${_uvsr_repository_root}/${_uvsr_san_historical_import_tool}")
+    _uvsr_fail("San Miguel historical import tool must remain retired")
+endif()
 _uvsr_json_expect_string("${_uvsr_san_provenance}" "San Miguel Blender version"
     "5.1.2" conversion blenderVersion)
 _uvsr_json_expect_string("${_uvsr_san_provenance}" "San Miguel Blender build hash"
     "ec6e62d40fa9" conversion blenderBuildHash)
-_uvsr_json_expect_string("${_uvsr_san_provenance}" "San Miguel repack tool"
-    "tools/repack_gltf_buffers.py" conversion repackTool)
+_uvsr_json_get_string(_uvsr_san_historical_repack_tool
+    "${_uvsr_san_provenance}" "San Miguel historical repack tool"
+    conversion repackTool)
+if (NOT _uvsr_san_historical_repack_tool STREQUAL
+        "tools/repack_gltf_buffers.py")
+    _uvsr_fail("San Miguel historical repack identity changed")
+endif()
+if (EXISTS
+        "${_uvsr_repository_root}/${_uvsr_san_historical_repack_tool}")
+    _uvsr_fail("San Miguel historical repack tool must remain retired")
+endif()
 _uvsr_json_expect_string("${_uvsr_san_provenance}" "San Miguel conversion method"
     "full-detail OBJ import with explicit opaque material-domain fallbacks followed by lossless buffer-view repack"
     conversion method)
@@ -533,638 +615,6 @@ foreach (_index RANGE 0 ${_uvsr_san_localized_image_last})
 endforeach()
 _uvsr_assert_case_unique(_uvsr_san_localized_images "San Miguel localizedImages")
 list(SORT _uvsr_san_localized_images)
-
-function(_uvsr_validate_classroom_reports)
-    set(_scene "blender_classroom")
-    set(_scene_root "${_uvsr_source_models_root}/${_scene}")
-    set(_component_root "${_scene_root}/components")
-    set(_provenance_path "${_scene_root}/source-provenance.json")
-    set(_export_report_path "${_component_root}/blender-export-report.json")
-    set(_repack_report_path "${_component_root}/buffer-repack-report.json")
-
-    foreach (_required_path IN ITEMS
-        "${_provenance_path}"
-        "${_export_report_path}"
-        "${_repack_report_path}"
-        "${_component_root}/blender_classroom.gltf"
-        "${_scene_root}/LICENSE.txt"
-        "${_scene_root}/SOURCE-README.txt")
-        if (NOT EXISTS "${_required_path}" OR IS_DIRECTORY "${_required_path}" OR
-            IS_SYMLINK "${_required_path}")
-            _uvsr_fail("Blender Classroom required file is missing: ${_required_path}")
-        endif()
-    endforeach()
-
-    file(READ "${_provenance_path}" _provenance)
-    _uvsr_json_type(_provenance_type "${_provenance}"
-        "Blender Classroom provenance document")
-    if (NOT _provenance_type STREQUAL "OBJECT")
-        _uvsr_fail("Blender Classroom source-provenance.json must be a JSON object")
-    endif()
-    _uvsr_json_expect_uint("${_provenance}"
-        "Blender Classroom provenance schemaVersion" 1 schemaVersion)
-    _uvsr_json_expect_string("${_provenance}"
-        "Blender Classroom provenance scene" "blender_classroom" scene)
-    _uvsr_json_expect_uint("${_provenance}"
-        "Blender Classroom archive-file source images" 19
-        conversion sourceTextureRestoration archiveFileImagesCopiedByteForByte)
-    _uvsr_json_expect_uint("${_provenance}"
-        "Blender Classroom restored output images" 19
-        conversion sourceTextureRestoration outputImages)
-    _uvsr_json_expect_uint("${_provenance}"
-        "Blender Classroom restored generated normals" 0
-        conversion sourceTextureRestoration generatedNormalTextures)
-    _uvsr_json_expect_uint("${_provenance}"
-        "Blender Classroom packaged output images" 19
-        conversion outputImageCount)
-    _uvsr_json_length(_generated_source_image_count "${_provenance}"
-        "Blender Classroom generated source image inventory" ARRAY
-        conversion sourceTextureRestoration blenderGeneratedSourceImages)
-    if (NOT _generated_source_image_count EQUAL 0)
-        _uvsr_fail(
-            "Blender Classroom must not package Blender-generated source images")
-    endif()
-    _uvsr_json_expect_string("${_provenance}"
-        "Blender Classroom diagnostic source image" "checker"
-        conversion sourceTextureRestoration diagnosticUvTestReplacement sourceImage)
-    _uvsr_json_expect_string("${_provenance}"
-        "Blender Classroom diagnostic source material" "drawing"
-        conversion sourceTextureRestoration diagnosticUvTestReplacement sourceMaterial)
-    _uvsr_json_expect_string("${_provenance}"
-        "Blender Classroom blank-paper appearance reference" "drawing.004"
-        conversion sourceTextureRestoration diagnosticUvTestReplacement
-        appearanceReferenceMaterial)
-    _uvsr_json_expect_uint("${_provenance}"
-        "Blender Classroom diagnostic sheet count" 8
-        conversion sourceTextureRestoration diagnosticUvTestReplacement
-        affectedSheets)
-    _uvsr_json_expect_bool("${_provenance}"
-        "Blender Classroom diagnostic image packaging" false
-        conversion sourceTextureRestoration diagnosticUvTestReplacement packaged)
-    _uvsr_json_expect_uint("${_provenance}"
-        "Blender Classroom provenance spawn-corner omitted triangles" 58320
-        conversion geometry removedTriangles spawnCornerTrashCluster)
-    _uvsr_json_expect_uint("${_provenance}"
-        "Blender Classroom provenance exported triangles" 545830
-        conversion geometry exportedTriangles)
-    _uvsr_json_length(_output_domain_count "${_provenance}"
-        "Blender Classroom provenance output domains" ARRAY
-        conversion materialCompatibility outputDomains)
-    if (NOT _output_domain_count EQUAL 1)
-        _uvsr_fail(
-            "Blender Classroom provenance must record one output material domain")
-    endif()
-    _uvsr_json_expect_string("${_provenance}"
-        "Blender Classroom provenance output material domain" "OPAQUE"
-        conversion materialCompatibility outputDomains 0)
-
-    _uvsr_json_get_string(_manifest_export_tool_sha256 "${_provenance}"
-        "Blender Classroom provenance export tool SHA-256"
-        conversion exportToolSha256)
-    _uvsr_normalize_hex(_manifest_export_tool_sha256
-        "${_manifest_export_tool_sha256}" 64
-        "Blender Classroom provenance export tool SHA-256")
-    _uvsr_assert_file_sha256(
-        "${_uvsr_repository_root}/tools/export_blender_classroom.py"
-        "${_manifest_export_tool_sha256}"
-        "Blender Classroom exporter")
-
-    _uvsr_json_get_string(_manifest_export_report_sha256 "${_provenance}"
-        "Blender Classroom provenance export report SHA-256"
-        conversion exportReportSha256)
-    _uvsr_normalize_hex(_manifest_export_report_sha256
-        "${_manifest_export_report_sha256}" 64
-        "Blender Classroom provenance export report SHA-256")
-    _uvsr_assert_file_sha256(
-        "${_export_report_path}"
-        "${_manifest_export_report_sha256}"
-        "Blender Classroom export report")
-    _uvsr_json_get_uint(_manifest_export_report_bytes "${_provenance}"
-        "Blender Classroom provenance export report bytes"
-        conversion exportReportBytes)
-    file(SIZE "${_export_report_path}" _actual_export_report_bytes)
-    if (NOT _actual_export_report_bytes EQUAL _manifest_export_report_bytes)
-        _uvsr_fail(
-            "Blender Classroom export report has ${_actual_export_report_bytes} bytes, expected ${_manifest_export_report_bytes}")
-    endif()
-
-    _uvsr_json_get_string(_manifest_repack_report_sha256 "${_provenance}"
-        "Blender Classroom provenance repack report SHA-256"
-        conversion repackReportSha256)
-    _uvsr_normalize_hex(_manifest_repack_report_sha256
-        "${_manifest_repack_report_sha256}" 64
-        "Blender Classroom provenance repack report SHA-256")
-    _uvsr_assert_file_sha256(
-        "${_repack_report_path}"
-        "${_manifest_repack_report_sha256}"
-        "Blender Classroom repack report")
-    _uvsr_json_get_uint(_manifest_repack_report_bytes "${_provenance}"
-        "Blender Classroom provenance repack report bytes"
-        conversion repackReportBytes)
-    file(SIZE "${_repack_report_path}" _actual_repack_report_bytes)
-    if (NOT _actual_repack_report_bytes EQUAL _manifest_repack_report_bytes)
-        _uvsr_fail(
-            "Blender Classroom repack report has ${_actual_repack_report_bytes} bytes, expected ${_manifest_repack_report_bytes}")
-    endif()
-
-    file(READ "${_export_report_path}" _export_report)
-    _uvsr_json_type(_export_report_type "${_export_report}"
-        "Blender Classroom export report")
-    if (NOT _export_report_type STREQUAL "OBJECT")
-        _uvsr_fail("Blender Classroom export report must be a JSON object")
-    endif()
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom export schemaVersion" 1 schemaVersion)
-    _uvsr_json_expect_string("${_export_report}"
-        "Blender Classroom export scene" "blender_classroom" scene)
-    _uvsr_json_expect_string("${_export_report}"
-        "Blender Classroom export displayName" "Blender Classroom" displayName)
-    _uvsr_json_expect_string("${_export_report}"
-        "Blender Classroom export Blender version" "5.1.2" blenderVersion)
-    _uvsr_json_expect_string("${_export_report}"
-        "Blender Classroom export Blender build hash" "ec6e62d40fa9"
-        blenderBuildHash)
-    _uvsr_json_expect_hash("${_export_report}"
-        "Blender Classroom source blend hash"
-        "5C526EA3F280566E80253673C9955640527CD0F247EA41B1742620B5BC39F7A4"
-        source sha256)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom source frame triangles" 607484
-        geometry sourceFrameOneTriangles)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom evaluated instances" 910
-        geometry evaluatedInstances)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom evaluated mesh instances" 854
-        geometry meshInstances)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom unique evaluated meshes" 400
-        geometry uniqueEvaluatedMeshes)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom converted curve instances" 56
-        geometry curveInstancesConverted)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom omitted portal triangles" 6
-        geometry droppedTrianglesByMaterial dayLight_portal)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom omitted clock-glass triangles" 3328
-        geometry droppedTrianglesByMaterial wallClock_Glass)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom omitted spawn-corner triangles" 58320
-        geometry omittedTrianglesTotal)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom omitted Cylinder instances" 1
-        geometry omittedInstancesBySourceObject Cylinder)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom omitted Cylinder triangles" 768
-        geometry omittedTrianglesBySourceObject Cylinder)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom omitted Cylinder.056 instances" 1
-        geometry omittedInstancesBySourceObject Cylinder.056)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom omitted Cylinder.056 triangles" 880
-        geometry omittedTrianglesBySourceObject Cylinder.056)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom omitted Cylinder.057 instances" 1
-        geometry omittedInstancesBySourceObject Cylinder.057)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom omitted Cylinder.057 triangles" 3840
-        geometry omittedTrianglesBySourceObject Cylinder.057)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom omitted Paper instances" 13
-        geometry omittedInstancesBySourceObject Paper)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom omitted Paper triangles" 52832
-        geometry omittedTrianglesBySourceObject Paper)
-    _uvsr_json_expect_string("${_export_report}"
-        "Blender Classroom omitted hierarchy root" "dustBin"
-        geometry omittedSourceHierarchy root)
-    _uvsr_json_length(_omitted_owner_count "${_export_report}"
-        "Blender Classroom omitted hierarchy owners" ARRAY
-        geometry omittedSourceHierarchy owners)
-    if (NOT _omitted_owner_count EQUAL 14)
-        _uvsr_fail(
-            "Blender Classroom omitted hierarchy must contain dustBin and 13 paper-ball owners")
-    endif()
-    _uvsr_json_length(_omitted_instance_count "${_export_report}"
-        "Blender Classroom omitted hierarchy instances" ARRAY
-        geometry omittedSourceHierarchy instances)
-    if (NOT _omitted_instance_count EQUAL 16)
-        _uvsr_fail(
-            "Blender Classroom omitted hierarchy must contain 16 evaluated instances")
-    endif()
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom expected output triangles" 545830
-        geometry exportedTrianglesExpected)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom glTF triangles" 545830 gltf triangles)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom exported nodes" 876 gltf nodes)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom exported meshes" 381 gltf meshes)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom exported materials" 66 gltf materials)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom exported images" 19 gltf images)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom exported texture bindings" 36 gltf textures)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom exported buffer views" 1665 gltf bufferViews)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom exported accessors" 1665 gltf accessors)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom opaque material count" 66
-        gltf alphaModes OPAQUE)
-    _uvsr_json_length(_gltf_extension_count "${_export_report}"
-        "Blender Classroom glTF extensions" ARRAY gltf extensionsUsed)
-    if (NOT _gltf_extension_count EQUAL 0)
-        _uvsr_fail(
-            "Blender Classroom glTF must not require material extensions")
-    endif()
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom exported camera count" 1 gltf cameras)
-    _uvsr_json_expect_uint("${_export_report}"
-        "Blender Classroom exported source buffer count" 1 gltf buffers)
-    _uvsr_json_expect_bool("${_export_report}"
-        "Blender Classroom source-image byte preservation" true
-        conversion materialPolicy sourceBaseColorImagesCopiedByteForByte)
-    _uvsr_json_expect_bool("${_export_report}"
-        "Blender Classroom generated-normal policy" false
-        conversion materialPolicy generatedNormalTextures)
-    _uvsr_json_expect_bool("${_export_report}"
-        "Blender Classroom generated UV-test packaging policy" false
-        conversion materialPolicy sourceGeneratedUvTestImagesPackaged)
-    _uvsr_json_expect_string("${_export_report}"
-        "Blender Classroom diagnostic UV-test source image" "checker"
-        conversion materialPolicy diagnosticUvTestImagePolicy drawing sourceImage)
-    _uvsr_json_expect_string("${_export_report}"
-        "Blender Classroom diagnostic UV-test appearance reference" "drawing.004"
-        conversion materialPolicy diagnosticUvTestImagePolicy drawing
-        appearanceReferenceMaterial)
-    _uvsr_json_expect_bool("${_export_report}"
-        "Blender Classroom diagnostic UV-test packaged state" false
-        conversion materialPolicy diagnosticUvTestImagePolicy drawing packaged)
-
-    _uvsr_json_length(_source_image_count "${_export_report}"
-        "Blender Classroom source image inventory" ARRAY source images)
-    set(_source_image_paths)
-    set(_source_image_sizes)
-    set(_source_image_hashes)
-    math(EXPR _source_image_last "${_source_image_count} - 1")
-    foreach (_index RANGE 0 ${_source_image_last})
-        _uvsr_json_get_string(_source_path "${_export_report}"
-            "Blender Classroom source image ${_index} path"
-            source images ${_index} path)
-        _uvsr_validate_relative_path(_source_path "${_source_path}"
-            "Blender Classroom source image ${_index} path")
-        _uvsr_json_get_uint(_source_bytes "${_export_report}"
-            "Blender Classroom source image ${_index} bytes"
-            source images ${_index} bytes)
-        _uvsr_json_get_string(_source_sha256 "${_export_report}"
-            "Blender Classroom source image ${_index} SHA-256"
-            source images ${_index} sha256)
-        _uvsr_normalize_hex(_source_sha256 "${_source_sha256}" 64
-            "Blender Classroom source image ${_index} SHA-256")
-        list(APPEND _source_image_paths "${_source_path}")
-        list(APPEND _source_image_sizes "${_source_bytes}")
-        list(APPEND _source_image_hashes "${_source_sha256}")
-    endforeach()
-    _uvsr_assert_case_unique(_source_image_paths
-        "Blender Classroom source images")
-
-    _uvsr_json_length(_source_export_count "${_export_report}"
-        "Blender Classroom source image exports" ARRAY
-        conversion sourceImageExports)
-    if (NOT _source_export_count EQUAL 19)
-        _uvsr_fail(
-            "Blender Classroom export must record 19 source-authored images, found ${_source_export_count}")
-    endif()
-    set(_source_export_paths)
-    set(_archive_image_count 0)
-    set(_generated_source_image_count 0)
-    math(EXPR _source_export_last "${_source_export_count} - 1")
-    foreach (_index RANGE 0 ${_source_export_last})
-        _uvsr_json_get_string(_output_path "${_export_report}"
-            "Blender Classroom source image export ${_index} output path"
-            conversion sourceImageExports ${_index} outputPath)
-        if (NOT _output_path MATCHES "^components/(.+)$")
-            _uvsr_fail(
-                "Blender Classroom source image export is outside components: '${_output_path}'")
-        endif()
-        set(_component_path "${CMAKE_MATCH_1}")
-        _uvsr_validate_relative_path(_component_path "${_component_path}"
-            "Blender Classroom source image export ${_index} output path")
-        if (_component_path MATCHES "_normal\\.png$")
-            _uvsr_fail(
-                "Blender Classroom source-texture package contains a generated normal: '${_component_path}'")
-        endif()
-        if (_component_path STREQUAL "textures/checker.png")
-            _uvsr_fail(
-                "Blender Classroom source-texture package must not contain the diagnostic checker")
-        endif()
-        list(APPEND _source_export_paths "${_component_path}")
-
-        _uvsr_json_get_uint(_output_bytes "${_export_report}"
-            "Blender Classroom source image export ${_index} bytes"
-            conversion sourceImageExports ${_index} outputBytes)
-        _uvsr_json_get_string(_output_sha256 "${_export_report}"
-            "Blender Classroom source image export ${_index} SHA-256"
-            conversion sourceImageExports ${_index} outputSha256)
-        _uvsr_normalize_hex(_output_sha256 "${_output_sha256}" 64
-            "Blender Classroom source image export ${_index} SHA-256")
-        set(_actual_path "${_component_root}/${_component_path}")
-        if (NOT EXISTS "${_actual_path}" OR IS_DIRECTORY "${_actual_path}" OR
-            IS_SYMLINK "${_actual_path}")
-            _uvsr_fail(
-                "Blender Classroom source image export is missing: '${_component_path}'")
-        endif()
-        file(SIZE "${_actual_path}" _actual_bytes)
-        file(SHA256 "${_actual_path}" _actual_sha256)
-        string(TOUPPER "${_actual_sha256}" _actual_sha256)
-        if (NOT _actual_bytes EQUAL _output_bytes OR
-            NOT _actual_sha256 STREQUAL _output_sha256)
-            _uvsr_fail(
-                "Blender Classroom source image export metadata differs from '${_component_path}'")
-        endif()
-
-        _uvsr_json_get_string(_source_type "${_export_report}"
-            "Blender Classroom source image export ${_index} type"
-            conversion sourceImageExports ${_index} sourceType)
-        if (_source_type STREQUAL "archiveFile")
-            math(EXPR _archive_image_count "${_archive_image_count} + 1")
-            _uvsr_json_get_string(_archive_path "${_export_report}"
-                "Blender Classroom source image export ${_index} archive path"
-                conversion sourceImageExports ${_index} sourcePath)
-            _uvsr_json_get_uint(_archive_bytes "${_export_report}"
-                "Blender Classroom source image export ${_index} archive bytes"
-                conversion sourceImageExports ${_index} sourceBytes)
-            _uvsr_json_get_string(_archive_sha256 "${_export_report}"
-                "Blender Classroom source image export ${_index} archive SHA-256"
-                conversion sourceImageExports ${_index} sourceSha256)
-            _uvsr_normalize_hex(_archive_sha256 "${_archive_sha256}" 64
-                "Blender Classroom source image export ${_index} archive SHA-256")
-            list(FIND _source_image_paths "${_archive_path}" _archive_index)
-            if (_archive_index EQUAL -1)
-                _uvsr_fail(
-                    "Blender Classroom exported image is absent from the archive inventory: '${_archive_path}'")
-            endif()
-            list(GET _source_image_sizes ${_archive_index} _expected_archive_bytes)
-            list(GET _source_image_hashes ${_archive_index} _expected_archive_sha256)
-            if (NOT _archive_bytes EQUAL _expected_archive_bytes OR
-                NOT _archive_sha256 STREQUAL _expected_archive_sha256 OR
-                NOT _output_bytes EQUAL _archive_bytes OR
-                NOT _output_sha256 STREQUAL _archive_sha256)
-                _uvsr_fail(
-                    "Blender Classroom archive image was not copied byte-for-byte: '${_archive_path}'")
-            endif()
-        else()
-            _uvsr_fail(
-                "Blender Classroom source image export has unsupported type '${_source_type}'")
-        endif()
-    endforeach()
-    _uvsr_assert_case_unique(_source_export_paths
-        "Blender Classroom source image exports")
-    if (NOT _archive_image_count EQUAL 19 OR
-        NOT _generated_source_image_count EQUAL 0)
-        _uvsr_fail(
-            "Blender Classroom source image exports must contain 19 archive files and no Blender-generated images")
-    endif()
-
-    file(GLOB _packaged_normal_files LIST_DIRECTORIES false
-        "${_component_root}/textures/*_normal.png")
-    if (_packaged_normal_files)
-        _uvsr_fail(
-            "Blender Classroom source-texture package must not contain generated normal maps")
-    endif()
-    file(READ "${_component_root}/blender_classroom.gltf" _classroom_gltf)
-    string(FIND "${_classroom_gltf}" "\"normalTexture\""
-        _normal_texture_property)
-    if (NOT _normal_texture_property EQUAL -1)
-        _uvsr_fail(
-            "Blender Classroom glTF must not bind generated normal textures")
-    endif()
-    _uvsr_json_length(_unused_material_count "${_export_report}"
-        "Blender Classroom unused source materials" ARRAY gltf unusedSourceMaterials)
-    set(_found_unused_cork false)
-    if (_unused_material_count GREATER 0)
-        math(EXPR _unused_material_last "${_unused_material_count} - 1")
-        foreach (_index RANGE 0 ${_unused_material_last})
-            _uvsr_json_get_string(_unused_material "${_export_report}"
-                "Blender Classroom unused material ${_index}"
-                gltf unusedSourceMaterials ${_index})
-            if (_unused_material STREQUAL "cork")
-                set(_found_unused_cork true)
-            endif()
-        endforeach()
-    endif()
-    if (NOT _found_unused_cork)
-        _uvsr_fail(
-            "Blender Classroom export does not audit cork as an unused source material")
-    endif()
-
-    _uvsr_json_length(_export_file_count "${_export_report}"
-        "Blender Classroom Blender-export files" ARRAY files)
-    set(_export_paths)
-    set(_export_sizes)
-    set(_export_hashes)
-    set(_export_gltf_count 0)
-    set(_export_buffer_count 0)
-    math(EXPR _export_file_last "${_export_file_count} - 1")
-    foreach (_index RANGE 0 ${_export_file_last})
-        _uvsr_json_get_string(_path "${_export_report}"
-            "Blender Classroom export files[${_index}].path" files ${_index} path)
-        if (NOT _path MATCHES "^components/(.+)$")
-            _uvsr_fail(
-                "Blender Classroom export file is outside components: '${_path}'")
-        endif()
-        set(_path "${CMAKE_MATCH_1}")
-        _uvsr_validate_relative_path(_path "${_path}"
-            "Blender Classroom export files[${_index}].path")
-        _uvsr_json_get_uint(_bytes "${_export_report}"
-            "Blender Classroom export files[${_index}].bytes" files ${_index} bytes)
-        _uvsr_json_get_string(_sha256 "${_export_report}"
-            "Blender Classroom export files[${_index}].sha256" files ${_index} sha256)
-        _uvsr_normalize_hex(_sha256 "${_sha256}" 64
-            "Blender Classroom export files[${_index}].sha256")
-        list(APPEND _export_paths "${_path}")
-        list(APPEND _export_sizes "${_bytes}")
-        list(APPEND _export_hashes "${_sha256}")
-        if (_path STREQUAL "blender_classroom.gltf")
-            math(EXPR _export_gltf_count "${_export_gltf_count} + 1")
-            set(_export_gltf_bytes "${_bytes}")
-            set(_export_gltf_sha256 "${_sha256}")
-        elseif (_path STREQUAL "blender_classroom.bin")
-            math(EXPR _export_buffer_count "${_export_buffer_count} + 1")
-        endif()
-    endforeach()
-    _uvsr_assert_case_unique(_export_paths "Blender Classroom Blender-export files")
-    if (NOT _export_gltf_count EQUAL 1 OR NOT _export_buffer_count EQUAL 1)
-        _uvsr_fail(
-            "Blender Classroom Blender export must contain one glTF and one source buffer")
-    endif()
-
-    file(READ "${_repack_report_path}" _repack_report)
-    _uvsr_json_expect_uint("${_repack_report}"
-        "Blender Classroom repack schemaVersion" 2 schemaVersion)
-    _uvsr_json_expect_string("${_repack_report}"
-        "Blender Classroom repack sourceContainer" "gltf" sourceContainer)
-    _uvsr_json_expect_string("${_repack_report}"
-        "Blender Classroom repack sourceId"
-        "blender-classroom-cc0-20240926" sourceId)
-    _uvsr_json_expect_uint("${_repack_report}"
-        "Blender Classroom repack sourceContainerBytes"
-        ${_export_gltf_bytes} sourceContainerBytes)
-    _uvsr_json_expect_hash("${_repack_report}"
-        "Blender Classroom repack sourceContainerSha256"
-        "${_export_gltf_sha256}" sourceContainerSha256)
-    _uvsr_json_expect_hash("${_repack_report}"
-        "Blender Classroom repack sourceSha256"
-        "${_export_gltf_sha256}" sourceSha256)
-    _uvsr_json_expect_uint("${_repack_report}"
-        "Blender Classroom repack sourceBufferCount" 1 sourceBufferCount)
-    _uvsr_json_expect_uint("${_repack_report}"
-        "Blender Classroom repack outputBufferCount" 1 outputBufferCount)
-    _uvsr_json_expect_uint("${_repack_report}"
-        "Blender Classroom repack maxBufferBytes"
-        ${_uvsr_repack_buffer_limit_bytes} maxBufferBytes)
-    _uvsr_json_expect_uint("${_repack_report}"
-        "Blender Classroom repack trackedFileLimitBytes"
-        ${_uvsr_github_file_limit_bytes} trackedFileLimitBytes)
-    _uvsr_json_length(_external_image_count "${_repack_report}"
-        "Blender Classroom copied images" ARRAY externalImagesCopied)
-    if (NOT _external_image_count EQUAL 19)
-        _uvsr_fail(
-            "Blender Classroom repack report must copy 19 source images, found ${_external_image_count}")
-    endif()
-    _uvsr_json_length(_material_override_count "${_repack_report}"
-        "Blender Classroom repack material overrides" ARRAY
-        materialCompatibilityOverrides)
-    if (NOT _material_override_count EQUAL 0)
-        _uvsr_fail(
-            "Blender Classroom renderer compatibility must be resolved before repacking")
-    endif()
-
-    _uvsr_json_length(_source_file_count "${_repack_report}"
-        "Blender Classroom repack sourceFiles" ARRAY sourceFiles)
-    if (NOT _source_file_count EQUAL _export_file_count)
-        _uvsr_fail(
-            "Blender Classroom repack source inventory differs from the Blender export")
-    endif()
-    set(_repack_source_paths)
-    math(EXPR _source_file_last "${_source_file_count} - 1")
-    foreach (_index RANGE 0 ${_source_file_last})
-        _uvsr_json_get_string(_path "${_repack_report}"
-            "Blender Classroom sourceFiles[${_index}].path"
-            sourceFiles ${_index} path)
-        _uvsr_validate_relative_path(_path "${_path}"
-            "Blender Classroom sourceFiles[${_index}].path")
-        _uvsr_json_get_uint(_bytes "${_repack_report}"
-            "Blender Classroom sourceFiles[${_index}].bytes"
-            sourceFiles ${_index} bytes)
-        _uvsr_json_get_string(_sha256 "${_repack_report}"
-            "Blender Classroom sourceFiles[${_index}].sha256"
-            sourceFiles ${_index} sha256)
-        _uvsr_normalize_hex(_sha256 "${_sha256}" 64
-            "Blender Classroom sourceFiles[${_index}].sha256")
-        list(FIND _export_paths "${_path}" _export_index)
-        if (_export_index EQUAL -1)
-            _uvsr_fail(
-                "Blender Classroom repack source is absent from its export report: '${_path}'")
-        endif()
-        list(GET _export_sizes ${_export_index} _expected_bytes)
-        list(GET _export_hashes ${_export_index} _expected_sha256)
-        if (NOT _bytes EQUAL _expected_bytes OR
-            NOT _sha256 STREQUAL _expected_sha256)
-            _uvsr_fail(
-                "Blender Classroom repack source differs from its export report: '${_path}'")
-        endif()
-        list(APPEND _repack_source_paths "${_path}")
-    endforeach()
-    _uvsr_assert_case_unique(_repack_source_paths
-        "Blender Classroom repack sourceFiles")
-    list(SORT _export_paths)
-    list(SORT _repack_source_paths)
-    _uvsr_assert_lists_equal(_export_paths _repack_source_paths
-        "Blender Classroom Blender-export/repack source inventory")
-
-    _uvsr_json_length(_output_file_count "${_repack_report}"
-        "Blender Classroom repack files" ARRAY files)
-    if (_output_file_count EQUAL 0)
-        _uvsr_fail("Blender Classroom repack report has an empty file inventory")
-    endif()
-    set(_output_paths)
-    set(_output_bin_count 0)
-    set(_output_gltf_count 0)
-    math(EXPR _output_file_last "${_output_file_count} - 1")
-    foreach (_index RANGE 0 ${_output_file_last})
-        _uvsr_json_get_string(_path "${_repack_report}"
-            "Blender Classroom files[${_index}].path" files ${_index} path)
-        _uvsr_validate_relative_path(_path "${_path}"
-            "Blender Classroom files[${_index}].path")
-        _uvsr_json_get_uint(_bytes "${_repack_report}"
-            "Blender Classroom files[${_index}].bytes" files ${_index} bytes)
-        _uvsr_json_get_string(_sha256 "${_repack_report}"
-            "Blender Classroom files[${_index}].sha256" files ${_index} sha256)
-        _uvsr_normalize_hex(_sha256 "${_sha256}" 64
-            "Blender Classroom files[${_index}].sha256")
-        if (_bytes GREATER_EQUAL _uvsr_github_file_limit_bytes)
-            _uvsr_fail(
-                "Blender Classroom output '${_path}' is too large for GitHub: ${_bytes} bytes")
-        endif()
-
-        set(_actual_path "${_component_root}/${_path}")
-        if (NOT EXISTS "${_actual_path}" OR IS_DIRECTORY "${_actual_path}" OR
-            IS_SYMLINK "${_actual_path}")
-            _uvsr_fail("Blender Classroom report output is missing: ${_path}")
-        endif()
-        file(SIZE "${_actual_path}" _actual_bytes)
-        file(SHA256 "${_actual_path}" _actual_sha256)
-        string(TOUPPER "${_actual_sha256}" _actual_sha256)
-        if (NOT _actual_bytes EQUAL _bytes OR NOT _actual_sha256 STREQUAL _sha256)
-            _uvsr_fail(
-                "Blender Classroom report metadata differs from '${_path}'")
-        endif()
-
-        list(APPEND _output_paths "${_path}")
-        if (_path MATCHES "^buffers/[^/]+\\.bin$")
-            math(EXPR _output_bin_count "${_output_bin_count} + 1")
-            if (_bytes GREATER _uvsr_repack_buffer_limit_bytes)
-                _uvsr_fail("Blender Classroom buffer exceeds the audited repack cap")
-            endif()
-        elseif (_path STREQUAL "blender_classroom.gltf")
-            math(EXPR _output_gltf_count "${_output_gltf_count} + 1")
-        endif()
-    endforeach()
-    _uvsr_assert_case_unique(_output_paths "Blender Classroom repack files")
-    if (NOT _output_bin_count EQUAL 1 OR NOT _output_gltf_count EQUAL 1)
-        _uvsr_fail(
-            "Blender Classroom repack must contain one glTF and one external buffer")
-    endif()
-
-    file(GLOB_RECURSE _component_inventory
-        LIST_DIRECTORIES false
-        RELATIVE "${_component_root}"
-        "${_component_root}/*")
-    set(_component_outputs)
-    foreach (_path IN LISTS _component_inventory)
-        file(TO_CMAKE_PATH "${_path}" _path)
-        _uvsr_validate_relative_path(_path "${_path}"
-            "Blender Classroom component path")
-        if (_path STREQUAL "buffer-repack-report.json" OR
-            _path STREQUAL "blender-export-report.json")
-            continue()
-        endif()
-        list(APPEND _component_outputs "${_path}")
-    endforeach()
-    _uvsr_assert_case_unique(_component_outputs
-        "Blender Classroom component inventory")
-    list(SORT _component_outputs)
-    list(SORT _output_paths)
-    _uvsr_assert_lists_equal(_component_outputs _output_paths
-        "Blender Classroom report/component inventory")
-endfunction()
-
-_uvsr_validate_classroom_reports()
 
 function(_uvsr_validate_repack_report
     scene expected_container expected_container_path expected_container_bytes
@@ -1539,8 +989,8 @@ _uvsr_validate_repack_report(
     "${_uvsr_san_output_buffer_sha256}"
     5)
 
-# Compare the complete runtime inventories for exactly the four supported scene
-# roots, allowing only the build-generated stamp in a staged scene root.
+# Compare the canonical runtime subset for exactly the two retained scene roots,
+# allowing only the build-generated stamp in a staged scene root.
 file(GLOB _uvsr_staged_top_level
     LIST_DIRECTORIES true
     RELATIVE "${_uvsr_staged_models_root}"
@@ -1562,18 +1012,31 @@ foreach (_scene IN LISTS _uvsr_scene_names)
         "${_uvsr_source_models_root}" "${_scene}" false _source_files)
     _uvsr_collect_scene_files(
         "${_uvsr_staged_models_root}" "${_scene}" true _staged_files)
-    _uvsr_assert_lists_equal(_source_files _staged_files
-        "${_scene} source/staged inventory")
+    set(_expected_variable "_uvsr_expected_${_scene}_files")
+    set(_expected_runtime_files "${${_expected_variable}}")
+    _uvsr_assert_lists_equal(_expected_runtime_files _staged_files
+        "${_scene} canonical/staged runtime inventory")
 
     foreach (_relative IN LISTS _source_files)
         set(_source "${_uvsr_source_models_root}/${_scene}/${_relative}")
-        set(_staged "${_uvsr_staged_models_root}/${_scene}/${_relative}")
         file(SIZE "${_source}" _source_bytes)
-        file(SIZE "${_staged}" _staged_bytes)
         if (_source_bytes GREATER_EQUAL _uvsr_github_file_limit_bytes)
             _uvsr_fail(
                 "source file '${_scene}/${_relative}' is ${_source_bytes} bytes; every tracked file must be strictly below ${_uvsr_github_file_limit_bytes}")
         endif()
+        list(APPEND _uvsr_all_source_paths "${_scene}/${_relative}")
+    endforeach()
+
+    foreach (_relative IN LISTS _expected_runtime_files)
+        list(FIND _source_files "${_relative}" _source_index)
+        if (_source_index EQUAL -1)
+            _uvsr_fail(
+                "canonical runtime file is missing from source: '${_scene}/${_relative}'")
+        endif()
+        set(_source "${_uvsr_source_models_root}/${_scene}/${_relative}")
+        set(_staged "${_uvsr_staged_models_root}/${_scene}/${_relative}")
+        file(SIZE "${_source}" _source_bytes)
+        file(SIZE "${_staged}" _staged_bytes)
         if (_staged_bytes GREATER_EQUAL _uvsr_github_file_limit_bytes)
             _uvsr_fail(
                 "staged file '${_scene}/${_relative}' is ${_staged_bytes} bytes; every staged file must be strictly below ${_uvsr_github_file_limit_bytes}")
@@ -1588,7 +1051,6 @@ foreach (_scene IN LISTS _uvsr_scene_names)
         if (NOT _source_sha256 STREQUAL _staged_sha256)
             _uvsr_fail("staged file digest differs for '${_scene}/${_relative}'")
         endif()
-        list(APPEND _uvsr_all_source_paths "${_scene}/${_relative}")
         list(APPEND _uvsr_all_staged_paths "${_scene}/${_relative}")
     endforeach()
 endforeach()
@@ -1596,4 +1058,4 @@ _uvsr_assert_case_unique(_uvsr_all_source_paths "combined source scene inventory
 _uvsr_assert_case_unique(_uvsr_all_staged_paths "combined staged scene inventory")
 
 message(STATUS
-    "Scene asset provenance, GitHub file limits, and exact staged parity are valid")
+    "Scene asset provenance, GitHub file limits, and canonical staged parity are valid")

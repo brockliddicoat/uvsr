@@ -1,7 +1,6 @@
 #pragma pack_matrix(row_major)
 
-#include <donut/shaders/gbuffer.hlsli>
-#include <donut/shaders/binding_helpers.hlsli>
+#include "renderer_gpu_helpers.hlsli"
 #include "denoising_cb.h"
 
 #ifndef DENOISING_OUTPUT_FORMAT
@@ -26,15 +25,15 @@ Texture2D<float> t_Depth : register(t1);
 Texture2D<float4> t_NormalRoughness : register(t2);
 
 #if DENOISING_OUTPUT_FORMAT == DENOISING_OUTPUT_R8_UNORM
-VK_IMAGE_FORMAT("r8") RWTexture2D<float> u_Output : register(u0);
+RWTexture2D<float> u_Output : register(u0);
 #elif DENOISING_OUTPUT_FORMAT == DENOISING_OUTPUT_R16_FLOAT
-VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_Output : register(u0);
+RWTexture2D<float> u_Output : register(u0);
 #elif DENOISING_OUTPUT_FORMAT == DENOISING_OUTPUT_R32_FLOAT
-VK_IMAGE_FORMAT("r32f") RWTexture2D<float> u_Output : register(u0);
+RWTexture2D<float> u_Output : register(u0);
 #elif DENOISING_OUTPUT_FORMAT == DENOISING_OUTPUT_RGBA16_FLOAT
-VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_Output : register(u0);
+RWTexture2D<float4> u_Output : register(u0);
 #elif DENOISING_OUTPUT_FORMAT == DENOISING_OUTPUT_RGBA32_FLOAT
-VK_IMAGE_FORMAT("rgba32f") RWTexture2D<float4> u_Output : register(u0);
+RWTexture2D<float4> u_Output : register(u0);
 #else
 #error Unsupported DENOISING_OUTPUT_FORMAT
 #endif

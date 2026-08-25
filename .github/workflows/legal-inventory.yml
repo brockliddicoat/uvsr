@@ -3,25 +3,26 @@ name: Legal Inventory
 on:
   pull_request:
     paths:
+      - "CMakeLists.txt"
       - "LICENSE.md"
       - "README.md"
       - "CONTRIBUTING.md"
       - "legal/**"
       - "src/third_party/**"
       - "third_party/**"
-      - "tools/check_legal_inventory.py"
+      - "tools/legal_inventory_validator.cpp"
       - ".github/workflows/legal-inventory.yml"
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
+      - "CMakeLists.txt"
       - "LICENSE.md"
       - "README.md"
       - "CONTRIBUTING.md"
       - "legal/**"
       - "src/third_party/**"
       - "third_party/**"
-      - "tools/check_legal_inventory.py"
+      - "tools/legal_inventory_validator.cpp"
       - ".github/workflows/legal-inventory.yml"
 
 permissions:
@@ -29,16 +30,16 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: windows-2025
     steps:
       - name: Check Out Repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
-          submodules: false
-      - name: Set Up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - name: Check Legal Inventory
-        run: python tools/check_legal_inventory.py
+          submodules: recursive
+      - name: Configure Validator
+        run: cmake -S . -B "${{ runner.temp }}/uvsr-legal" -A x64 -DBUILD_TESTING=ON
+      - name: Build Validator
+        run: cmake --build "${{ runner.temp }}/uvsr-legal" --config Release --target uvsr_legal_inventory_validator
+      - name: Run Legal Inventory
+        run: ctest --test-dir "${{ runner.temp }}/uvsr-legal" -C Release -R "^uvsr_legal_inventory_reference$" --output-on-failure

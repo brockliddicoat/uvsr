@@ -4,18 +4,8 @@
 struct LightingAccumulationConstants
 {
     uint2 extent;
-    uint schedulingSerialLow;
-    uint schedulingSerialHigh;
-
     uint resetHistory;
-    uint accumulateSamples;
-    uint averaging;
-    uint scheduling;
-
-    uint effectiveHistory;
-    uint minimumSamples;
-    float targetRelativeError;
-    float minimumUpdateRate;
+    uint padding;
 };
 
 #endif // UVSR_LIGHTING_ACCUMULATION_CB_H

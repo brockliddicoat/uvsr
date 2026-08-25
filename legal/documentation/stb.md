@@ -2,25 +2,27 @@
 
 ## Record
 
-- Relationship: Dependency Integration and Indirect Lineage
+- Relationship: Dependency Integration
 - Status: Current
 - Confidence: Confirmed
 - Upstream: [stb](https://github.com/nothings/stb)
 - Revision: `2e2bef463a5b53ddf8bb788e25da6b8506314c08`
+- Archive SHA-256: `f6a4669309a29dd8634c3c2c7a955da72469c2dc61471f68d9c499e517ab823f`
 - Governing Terms: Upstream choice of MIT or public-domain dedication; copyright Sean Barrett
+- License SHA-256: `bebfe904b14301657e4e5d655c811d51fd31b97c455b9cc2d8600d6bac6cff63`
 
 ## UVSR Relationship
 
-Donut uses stb image readers and writers in its texture pipeline. UVSR does not
-claim the stb implementation or modify its pinned submodule.
+UVSR fetches the immutable upstream archive directly and owns the `stb`
+interface target. First-party environment loading and Donut's transitional
+texture pipeline consume the same unmodified target.
 
 ## Evidence
 
-- [Texture Loading Override](../../overrides/donut-loading.patch)
-- [Donut Submodule Declarations](../../donut/.gitmodules)
-- [Donut Third-Party License Inventory](../../donut/ThirdPartyLicenses.txt) at Donut revision `bc1ea24b0486f1c00d89327fe16c0b4dd11c5937`
+- [Direct Pin and Target](../../cmake/DirectThirdParty.cmake)
+- [First-Party Environment Loader](../../src/image_based_lighting_environment.cpp)
 
 ## Commercial Clearance
 
-Use the MIT option for predictable notice preservation unless a distributor
-deliberately documents another valid upstream option.
+The complete choice-of-terms file is installed as
+`bin/licenses/stb-MIT-or-Public-Domain.txt`.

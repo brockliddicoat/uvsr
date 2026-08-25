@@ -9,7 +9,7 @@ The projected-angle measure follows
 [Screen Space Indirect Lighting with Visibility Bitmask](https://arxiv.org/abs/2301.11376).
 Solid Angle and Cosine Weighted are UVSR alternatives tested against explicit
 slice integrals. Activision's
-[Practical Realtime Strategies for Accurate Indirect Occlusion](https://www.activision.com/cdn/research/PracticalRealtimeStrategiesTRfinal.pdf)
+[Practical Realtime Strategies for Accurate Indirect Occlusion](https://research.activision.com/publications/2020-03/practical-real-time-strategies-for-accurate-indirect-occlusion)
 informs traversal and reconstruction, but GTAO does not define UVSR's finite-
 thickness bitmask sectors.
 

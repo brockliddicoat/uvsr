@@ -34,8 +34,8 @@ namespace uvsr
     // mixed separately below, so either kind of schema change produces a new
     // full fingerprint.
     inline constexpr std::string_view SettingsSnapshotSerializationPolicy =
-        "uvsr-settings-snapshot-policy-v3\n"
-        "membership=non-action-get-except-ui.settings-collapsed-and-material-editor.visible\n"
+        "uvsr-settings-snapshot-policy-v6\n"
+        "membership=complete-settings-value-catalog-with-persistence\n"
         "ordering=command-name-ascending\n"
         "line=name=escaped-value-newline\n"
         "float=maximum-round-trip-precision\n"
@@ -46,10 +46,8 @@ namespace uvsr
     [[nodiscard]] constexpr bool IsSettingsSnapshotValue(
         const UiSettingsCommandDefinition& definition) noexcept
     {
-        return definition.kind != UiSettingsCommandKind::Action &&
-            definition.Supports(UiSettingsCommandVerb::Get) &&
-            definition.name != "ui.settings-collapsed" &&
-            definition.name != "material-editor.visible";
+        return definition.persistence ==
+            UiSettingsPersistence::SnapshotCatalog;
     }
 
     class SettingsSnapshotSchemaFingerprintBuilder
@@ -98,13 +96,29 @@ namespace uvsr
     {
         SettingsSnapshotSchemaFingerprintBuilder builder;
         builder.MixString(policy);
-        std::size_t representedCount = 0u;
-        for (const UiSettingsCommandDefinition& definition : catalog)
+        std::array<std::size_t, Size> ordered{};
+        std::size_t valueCount = 0u;
+        for (std::size_t index = 0u; index < catalog.size(); ++index)
         {
-            if (!IsSettingsSnapshotValue(definition))
-                continue;
-
-            ++representedCount;
+            if (catalog[index].kind != UiSettingsCommandKind::Action)
+                ordered[valueCount++] = index;
+        }
+        for (std::size_t right = 1u; right < valueCount; ++right)
+        {
+            const std::size_t selected = ordered[right];
+            std::size_t left = right;
+            while (left > 0u &&
+                catalog[selected].name < catalog[ordered[left - 1u]].name)
+            {
+                ordered[left] = ordered[left - 1u];
+                --left;
+            }
+            ordered[left] = selected;
+        }
+        for (std::size_t ordinal = 0u; ordinal < valueCount; ++ordinal)
+        {
+            const UiSettingsCommandDefinition& definition =
+                catalog[ordered[ordinal]];
             builder.MixByte(0x1eu);
             builder.MixString(definition.name);
             builder.MixByte(static_cast<std::uint8_t>(definition.kind));
@@ -112,9 +126,13 @@ namespace uvsr
             builder.MixByte(definition.supportedVerbs);
             builder.MixByte(definition.dynamic ? 1u : 0u);
             builder.MixString(definition.domain);
+            builder.MixByte(static_cast<std::uint8_t>(
+                definition.persistence));
+            builder.MixString(definition.defaultValue);
+            builder.MixByte(IsSettingsSnapshotValue(definition) ? 1u : 0u);
         }
         builder.MixByte(0x1fu);
-        builder.MixSize(representedCount);
+        builder.MixSize(valueCount);
         return builder.Finish();
     }
 

@@ -1,73 +1,89 @@
 # Settings Snapshot Schema Versions
 
-The first four hexadecimal characters of a UVSR settings snapshot identify its
-serialization schema. A version belongs to one complete schema fingerprint, not
-to an agent, task, branch, worktree, or commit. The fingerprint covers the
-serialization policy and every represented command descriptor's name, kind,
-section, supported verbs, dynamic-selection status, and value domain.
+## Version 0007 Contract
 
-The authoritative append-only registry is
-`src/settings_snapshot_schema_versions.def`. Version `0001` is permanently
-reserved for the pre-registry design. Registered versions begin at `0002` and
-advance past the highest recorded version; gaps are never reused.
+The first four lowercase hexadecimal characters of a 32-character UVSR
+settings code identify its serialization schema. Stage two uses schema `0007`.
+The remaining 28 characters fingerprint one canonical sorted value payload; the
+local catalog is required to recover every value reversibly.
 
-## Allocation Procedure
+The authoritative represented surface is the descriptor catalog in
+`src/ui_settings_command_catalog.h`. Its 176 sorted `Value` descriptors each
+have one canonical default from `src/ui_settings_canonical_defaults.def` and
+one explicit persistence class:
 
-Compose all settings-catalog and serialization-policy changes first. Then build
-and run the schema probe:
+- `SnapshotCatalog` values participate in schema membership and copied codes;
+- `SessionOnly` values have canonical defaults but are excluded from copied
+  snapshots (`ui.settings-collapsed` and `material-editor.visible`); and
+- the four `Action` descriptors use `None` and are excluded from settings
+  identity and copied snapshots.
+
+The schema fingerprint mixes serialization policy plus each represented
+`Value` descriptor's name, kind, section, verbs, dynamic flag, domain,
+persistence, and canonical default. Session-only values participate in this
+identity even though copied snapshots omit them. Unrelated action changes do
+not version settings. Changing a value default or persistence rule is a schema
+change even when the command name remains.
+
+The current unreleased schema `0007` row has canonical settings-number hash
+`9c50b0f1515e89d856c8ebb627b86984` and derived four-part engine version
+`40016.45297.20830.35288`. That identity owns executable diagnostics,
+launcher-visible data, numeric Windows metadata, and package metadata; do not
+maintain another version. Before release, a composed catalog change replaces
+the provisional row and every bound identity together.
+
+## Fixed Known-Answer Tests
+
+The payload hash uses the registered version prefix plus FNV64 and masked FNV48
+payload components. These vectors are fixed for schema `0007`:
+
+| Canonical Payload | Expected Code |
+| --- | --- |
+| Empty | `0007cbf29ce4842223256c62272e07bb` |
+| `a=b\n` | `0007ec8b8c82c37596fba90fe6756c5c` |
+| `ui.skin=amp\n` | `0007582ac8a06042865d4c6f64bb61a4` |
+
+The engine identity test must pin the final 128-bit settings-number hash and its
+derived four-part numeric Windows version after the catalog freezes. A catalog,
+default, persistence, policy, KAT, or identity change without the corresponding
+registry/test update must fail the developer gate.
+
+## Serialization and Storage
+
+Represented values are sorted by command name. Each line is
+`name=escaped-value` followed by a newline; floats use maximum round-trip
+precision and unavailable dynamic values serialize as `<unavailable>`. Copying
+a code writes a bracketed code/payload entry to the versioned catalog under the
+current user's writable Local App Data. Package-local routing may redirect that
+root but may not change schema or payload identity.
+
+Build `uvsr_settings_snapshot_decoder` for decoding. It accepts a 32-digit code
+and optional catalog paths, verifies version and payload fingerprint, rejects
+malformed/duplicate values and collisions, and prints text or JSON. No
+interpreter or decoder fallback is part of the product.
+
+## Allocation and Coordination
+
+The append-only registry is `src/settings_snapshot_schema_versions.def`.
+Version `0001` remains reserved; registered fingerprints begin at `0002`.
+Never reuse a version or fingerprint, hand-edit a hash, or allocate from task or
+branch order.
+
+Compose every descriptor, default, and serialization-policy change first. In
+the matching external developer build tree, build and run:
 
 ```powershell
-cmake --build <build-directory> --config Release --target uvsr_settings_snapshot_schema_probe
-<build-directory>\bin\uvsr_settings_snapshot_schema_probe.exe
+cmake --build <external-build-root> --config Release --target uvsr_settings_snapshot_schema_probe
+<external-build-root>\bin\uvsr_settings_snapshot_schema_probe.exe --check
 ```
 
-If the fingerprint is already registered, reuse that version. Otherwise append
-the exact row printed by the probe, rebuild it, and require:
+If the live fingerprint is unregistered, run the probe without `--check`, append
+its exact row, rebuild, and rerun `--check`. The integration coordinator owns
+that row. Isolated branches report schema changes but do not create globally
+observable reservations. Identical composed fingerprints reuse an existing row;
+different fingerprints receive different versions.
 
-```powershell
-<build-directory>\bin\uvsr_settings_snapshot_schema_probe.exe --check
-```
-
-Do not allocate a version for a presentation-only change whose represented
-catalog and serialization policy are unchanged. Do not hand-edit a fingerprint,
-reuse a deleted gap, or assign a number from task order or agent identity.
-
-## Concurrent Branches
-
-The integration coordinator owns the authoritative registry update. A row on an
-isolated branch is provisional until that branch is composed with the current
-integration target. Communicating workers report represented catalog or policy
-changes in their handoff and let the coordinator allocate after composition.
-
-Two branches may provisionally select the same next number. They cannot silently
-integrate with different schemas: duplicate version rows, duplicate fingerprint
-rows, and an unregistered composed fingerprint fail the C++ registry check. The
-integrator keeps the target's authoritative rows, composes the schema edits,
-discards or renumbers conflicting provisional rows, and runs the probe again.
-Identical fingerprints reuse one existing version.
-
-## Disconnected or Unseen Work
-
-Uncommitted, unreachable, or otherwise unseen work cannot make a globally
-observable reservation. No local allocator can determine that hidden state.
-Such a branch therefore carries only a provisional row, if any.
-
-When the work becomes visible, the integrator first refreshes the target
-registry, then composes the represented schema changes and runs the same probe.
-The combined fingerprint either reuses an identical registered row or receives
-the next version after the target registry's maximum. This makes late discovery
-a deterministic reconciliation rather than a silent collision.
-
-## Mechanical Enforcement
-
-`settings_snapshot_schema.h` rejects reserved versions, zero fingerprints,
-duplicate versions, and duplicate fingerprints at compile time. The application
-also refuses to compile when its live collision-resistant schema fingerprint is
-not registered. `uvsr_settings_snapshot_schema_probe --check` repeats the live
-mapping check as CTest coverage. The Python decoder independently rejects
-reserved, malformed, duplicate, and zero-fingerprint registry rows and selects
-the catalog named by the code's registered prefix.
-
-The fingerprint is collision-resistant, not a mathematical proof that two
-arbitrary schemas can never hash alike. The one-to-one registry, focused tests,
-and semantic integration review remain required.
+Compile-time validation rejects reserved or zero rows, duplicate versions,
+duplicate fingerprints, and an unregistered live schema. Focused snapshot,
+catalog, decoder, probe, and engine-identity tests must pass before the full
+developer gate and exact production-package verification.

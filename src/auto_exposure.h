@@ -9,11 +9,12 @@
 namespace donut::engine
 {
     class ICompositeView;
-    class ShaderFactory;
 }
 
 namespace uvsr
 {
+    class RendererShaderFactory;
+
     inline constexpr float AutoExposureMinimumCompensationEV = -18.f;
     inline constexpr float AutoExposureMaximumCompensationEV = 8.f;
     inline constexpr float AutoExposureDefaultCompensationEV = 0.f;
@@ -38,6 +39,64 @@ namespace uvsr
         float adjustmentPeriodSeconds =
             AutoExposureDefaultAdjustmentPeriodSeconds;
     };
+
+    struct AutoExposureFrameHistory
+    {
+        bool resetRequested = true;
+        bool wasEnabled = false;
+        bool exposureInitialized = false;
+    };
+
+    struct AutoExposureFrameDecision
+    {
+        bool dispatch = false;
+        bool resetExposure = false;
+    };
+
+    inline void AbandonAutoExposureFrame(
+        AutoExposureFrameHistory& history) noexcept
+    {
+        history = {};
+    }
+
+    [[nodiscard]] inline AutoExposureFrameDecision BeginAutoExposureFrame(
+        AutoExposureFrameHistory& history,
+        const AutoExposureSettings& settings,
+        bool diagnosticView,
+        bool resourcesAvailable,
+        bool sceneColorAvailable) noexcept
+    {
+        if (!settings.enabled || diagnosticView || !resourcesAvailable ||
+            !sceneColorAvailable)
+        {
+            AbandonAutoExposureFrame(history);
+            return {};
+        }
+
+        const bool resetExposure = history.resetRequested ||
+            !history.wasEnabled || !history.exposureInitialized;
+        history.resetRequested = false;
+        history.wasEnabled = true;
+        return { true, resetExposure };
+    }
+
+    inline void CompleteAutoExposureFrame(
+        AutoExposureFrameHistory& history,
+        bool histogramDispatched) noexcept
+    {
+        if (!histogramDispatched)
+        {
+            AbandonAutoExposureFrame(history);
+            return;
+        }
+        history.exposureInitialized = true;
+    }
+
+    inline void RequestAutoExposureReset(
+        AutoExposureFrameHistory& history) noexcept
+    {
+        history.resetRequested = true;
+    }
 
     [[nodiscard]] inline AutoExposureSettings SanitizeAutoExposureSettings(
         AutoExposureSettings settings)
@@ -158,7 +217,7 @@ namespace uvsr
     public:
         AutoExposurePass(
             nvrhi::IDevice* device,
-            const std::shared_ptr<donut::engine::ShaderFactory>&
+            const std::shared_ptr<RendererShaderFactory>&
                 shaderFactory);
 
         [[nodiscard]] bool IsAvailable() const;
@@ -191,9 +250,7 @@ namespace uvsr
         nvrhi::ComputePipelineHandle m_HistogramPipeline;
         nvrhi::ComputePipelineHandle m_ResolvePipeline;
         nvrhi::ITexture* m_BoundSceneColor = nullptr;
-        bool m_ResetRequested = true;
-        bool m_WasEnabled = false;
-        bool m_ExposureInitialized = false;
+        AutoExposureFrameHistory m_FrameHistory;
         bool m_DispatchedThisFrame = false;
     };
 }

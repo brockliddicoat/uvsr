@@ -1,137 +1,68 @@
-name: Windows 11 Launcher
+name: Windows Launcher
 
 on:
-  workflow_dispatch:
   push:
     paths:
-      - ".gitattributes"
-      - ".github/workflows/windows-launcher.yml"
       - "launcher/**"
-      - "installer/launcher-feed-v1.json"
-      - ".gitmodules"
-      - "CMakeLists.txt"
-      - "cmake/**"
-      - "src/**"
-      - "tests/**"
-      - "overrides/**"
-      - "assets/**"
-      - "legal/**"
       - "LICENSE.md"
-      - "donut"
+      - "cmake/runtime-shader-inventory.def"
+      - "assets/fonts/noto-sans/**"
+      - ".github/workflows/windows-launcher.yml"
   pull_request:
     paths:
-      - ".gitattributes"
-      - ".github/workflows/windows-launcher.yml"
       - "launcher/**"
-      - "installer/launcher-feed-v1.json"
-      - ".gitmodules"
-      - "CMakeLists.txt"
-      - "cmake/**"
-      - "src/**"
-      - "tests/**"
-      - "overrides/**"
-      - "assets/**"
-      - "legal/**"
       - "LICENSE.md"
-      - "donut"
+      - "cmake/runtime-shader-inventory.def"
+      - "assets/fonts/noto-sans/**"
+      - ".github/workflows/windows-launcher.yml"
+  workflow_dispatch:
+    inputs:
+      require-publication-signature:
+        description: Fail unless the built launcher has a valid Authenticode signature
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build Windows 11 x64 Renderer and Launcher
-    runs-on: windows-latest
-    timeout-minutes: 60
-
+    runs-on: windows-2025
+    timeout-minutes: 30
     steps:
-      - name: Check Out UVSR
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Check Out Exact Sources
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
+          persist-credentials: false
           submodules: recursive
-          fetch-depth: 0
 
-      - name: Verify Launcher Feed Compatibility Alias
-        shell: pwsh
-        run: |
-          ./launcher/verify-launcher-feed-alias.ps1
-          ./launcher/tests/launcher-feed-alias-tests.ps1
-
-      - name: Verify Signed Launcher Update Feed Tools
-        shell: pwsh
-        run: |
-          ./launcher/tests/launcher-update-feed-tests.ps1
-          if (Test-Path -LiteralPath launcher/launcher-update-feed-v2.json) {
-            ./launcher/verify-launcher-update-feed.ps1 | Out-Null
-          }
-
-      - name: Verify Launcher Release Identity Advance
-        shell: pwsh
-        env:
-          BASE_COMMIT: ${{ github.event.pull_request.base.sha || github.event.before }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          $base = $env:BASE_COMMIT
-          if ([string]::IsNullOrWhiteSpace($base) -or $base -match '^0{40}$') {
-            $default = (& git rev-parse "origin/$env:DEFAULT_BRANCH").Trim()
-            $head = (& git rev-parse HEAD).Trim()
-            if ($head -eq $default) {
-              $base = (& git rev-parse HEAD^).Trim()
-            }
-            else {
-              $base = (& git merge-base HEAD $default).Trim()
-            }
-          }
-          ./launcher/verify-launcher-identity.ps1 -BaseCommit $base
-
-      - name: Configure Exact Renderer
-        shell: pwsh
-        run: >-
-          cmake -S . -B build -A x64
-          -DUVSR_BUILD_APPLICATION=ON
-          -DUVSR_WITH_NRD=OFF
-
-      - name: Build and Verify Exact Renderer Package Inputs
-        shell: pwsh
-        run: |
-          cmake --build build --config Release --target uvsr -- /m /nodeReuse:false
-          cmake --build build --config Release --target uvsr_gpu_capabilities_tests uvsr_windows_executable_path_tests uvsr_runtime_shader_bundle_tests uvsr_production_shader_bundle_tests uvsr_ui_source_contract_tests -- /m /nodeReuse:false
-          ctest --test-dir build -C Release --output-on-failure -R "uvsr_gpu_capabilities_reference|uvsr_windows_executable_path_reference|uvsr_runtime_shader_bundle_contract|uvsr_production_shader_bundle_contract|uvsr_ui_source_contract"
-
-      - name: Set Up .NET 10
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+      - name: Use Pinned .NET SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: 10.0.400
 
-      - name: Prepare Exact Renderer Source Bridge
+      - name: Build And Verify Launcher
         shell: pwsh
         run: |
-          $smokeRoot = Join-Path $env:RUNNER_TEMP "uvsr-source-bridge-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          dotnet run --project launcher/tests/UVSR.Installer.Tests/UVSR.Installer.Tests.csproj -c Release -- --source-bridge-prepare-smoke $smokeRoot
+          $output = Join-Path $env:RUNNER_TEMP "uvsr-launcher-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          ./launcher/build.ps1 -OutputDirectory $output -DotNetPath (Get-Command dotnet).Source -SourceCommit $env:GITHUB_SHA
+          "UVSR_LAUNCHER_OUTPUT=$output" >> $env:GITHUB_ENV
 
-      - name: Build and Test Launcher
+      - name: Enforce Public Signing Gate
         shell: pwsh
+        env:
+          REQUIRE_PUBLICATION_SIGNATURE: ${{ inputs.require-publication-signature || false }}
         run: |
-          ./launcher/build.ps1
-          dotnet run --project launcher/tests/UVSR.Installer.Tests/UVSR.Installer.Tests.csproj -c Release -- --validate-build-output "$PWD" "$PWD/build"
-
-      - name: Resolve Immutable Artifact Identity
-        id: identity
-        shell: pwsh
-        run: |
-          $constants = [IO.File]::ReadAllText('launcher/src/UVSR.Installer/ProductConstants.cs')
-          $version = [regex]::Match($constants, 'LauncherVersion = "([0-9]+\.[0-9]+\.[0-9]+)"').Groups[1].Value
-          $sequence = [regex]::Match($constants, 'LauncherReleaseSequence = ([0-9]+)').Groups[1].Value
-          if (-not $version -or -not $sequence) { throw 'Launcher identity was not found.' }
-          $shortCommit = '${{ github.sha }}'.Substring(0, 8)
-          "name=UVSR-Launcher-$version-seq$sequence-$shortCommit-Windows-11-x64" >> $env:GITHUB_OUTPUT
-
-      - name: Upload Launcher Artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ steps.identity.outputs.name }}
-          path: |
-            launcher/artifacts/UVSR-Launcher-Windows-11-x64.exe
-            launcher/artifacts/UVSR-Launcher-Windows-11-x64.exe.sha256
-          if-no-files-found: error
-          retention-days: 14
+          $launcher = Join-Path $env:UVSR_LAUNCHER_OUTPUT "uvsr-launcher.exe"
+          $signature = Get-AuthenticodeSignature -LiteralPath $launcher
+          if ([string]$signature.Status -notin @("Valid", "NotSigned")) {
+            throw "Launcher Authenticode status is invalid: $($signature.Status)"
+          }
+          if ($env:REQUIRE_PUBLICATION_SIGNATURE -eq "true" -and
+              [string]$signature.Status -ne "Valid") {
+            throw "Public launcher publication is blocked until an authorized certificate produces a valid Authenticode signature."
+          }
+          if ([string]$signature.Status -eq "NotSigned") {
+            Write-Output "Local CI artifact is unsigned; no upload or publication step is enabled."
+          }
