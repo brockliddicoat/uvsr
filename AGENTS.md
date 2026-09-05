@@ -1,6 +1,6 @@
 # agent contract
 
-policy `2026-09-04.4`. keep this file below 1,000 words. shorten existing rules
+policy `2026-09-04.5`. keep this file below 1,000 words. shorten existing rules
 before adding more. keep task notes and measurements in ignored work files.
 
 ## scope
@@ -21,9 +21,7 @@ inspect relevant changes and callers. preserve unrelated work and the Git index.
 remove obsolete code from all its consumers without leaving duplicate paths.
 keep generated files out of Git.
 
-finish authorized work. make reasonable assumptions for routine reversible details.
-ask only when uncertainty affects scope, correctness, product behavior, or authority.
-advice requests do not authorize edits. commits, branch changes, pushes, merges,
+commits, branch changes, pushes, merges,
 releases, and publication require authority for that action.
 
 Astra coordinates and owns design, edits, integration, and final acceptance. use
@@ -42,10 +40,7 @@ update only affected documents unless broader cleanup was requested. preserve us
 recovery evidence and legal text. keep each fact in one place and README.md below
 1,200 words. check changed documents only. test a checker only when it changes.
 
-use plain, concise, lowercase prose, comments, and headings. preserve technical names,
-code syntax, quotations, legal text, and existing UI labels. use connected paragraphs
-and concrete facts. omit filler, invented compound labels, and repeated summaries.
-comments explain reasons the code does not show. for UI work, read docs/ui.md,
+for UI work, read docs/ui.md,
 then only the relevant procedure or incident.
 
 ## builds and checks
