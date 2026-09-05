@@ -1,6 +1,6 @@
 # agent contract
 
-policy `2026-09-04.3`. keep this file below 1,000 words. shorten existing rules
+policy `2026-09-04.4`. keep this file below 1,000 words. shorten existing rules
 before adding more. keep task notes and measurements in ignored work files.
 
 ## scope
@@ -8,7 +8,6 @@ before adding more. keep task notes and measurements in ignored work files.
 choose the simplest correct design, not merely the smallest diff. reduce duplicate
 code, dependencies, and state without losing required behavior. add complexity only
 when requirements or evidence justify it. do not build for imagined needs.
-broad cutdown applies only when requested. otherwise stay within the task.
 
 repair faulty behavior behind existing controls. get explicit approval before
 removing a visible feature or control. do not restore deliberate removals.
@@ -62,42 +61,17 @@ failures, or new uncertainty. investigate checks taking over ten minutes, but le
 justified checks continue while progressing. planning needs no build. policy edits
 need content, instruction discovery, diff, and word count checks.
 
-research and prose answers need no executable proof. code handoffs and requested
-build identification need exact source and binary records. distinguish build,
-visual, runtime, and production package evidence.
+distinguish build, visual, runtime, and production package evidence.
 
-[not be changed below this point]
+---
 
-everything below this line is immutable unless the user explicitly authorizes
-that exact change.
+# protected instructions
 
-## product contract
+**[not be changed below this point]**
 
-UVSR is DirectX 12 only. ImGui is permanent. developer and production builds
-use one renderer feature set. preserve unless the user explicitly changes it:
-
-- 2x, 4x, 8x, and correct 16x MSAA with ray-traced shadows.
-- every current AO/GI option and supported combination.
-- ray-traced sky visibility, the flashlight, and its ray-traced shadows.
-- Bistro, San Miguel, every retained HDR and STBN/noise asset.
-- the conventional path tracer, material editing, pixel zoom, timing, and
-  shared rendering data required by current techniques.
-
-absence from this list is not permission to remove another visible feature.
-
-a deliberate sunset is part of the product baseline and stays removed unless
-the user asks to restore it. a removal candidate is only a proposal and remains
-until approved. preserve useful controls in retained features.
+**everything below this line is immutable unless the user explicitly authorizes that exact change.**
 
 ## architecture contract
-
-Donut is retained. do not plan or perform its detachment, replace its owned
-framework slices, remove its targets or gitlink, or treat direct first party
-ownership as migration away from it. keep exact pins and apply patches only in
-the build tree. never edit Donut or add unnecessary coupling. changing this
-boundary requires new explicit user authority. remove Python from first-party source,
-build, CI, tests, tools, launcher, documentation, and packages after porting
-required behavior to C++.
 
 the renderer must accommodate many lighting systems, GPU-driven rendering,
 meshlets, and one coherent screen-space and world-space lighting pipeline
@@ -123,7 +97,9 @@ compilers, SDKs, debug layers, symbols, tests, or benchmark tools.
 publication requires explicit authority, current remote identity, a fresh
 exact-package proof, signatures or hashes, and complete legal material.
 
-a code handoff is complete only when it links the exact `uvsr-launcher.exe` and
-`uvsr-engine.exe` for the active lineage, gives each SHA-256, and states whether
-each was rebuilt. if either identity is missing, stale, or from another lineage,
-report the handoff blocked.
+every final response, including research, policy, and documentation work, must link
+the exact most recent `uvsr-launcher.exe` and `uvsr-engine.exe` for the active lineage,
+give each SHA-256, and say whether each was rebuilt. prove identity from source and
+build records, never timestamps. if unchanged, reuse the last proven pair and label
+it unchanged. if either identity cannot be proven, say what is missing and do not
+claim completion.
