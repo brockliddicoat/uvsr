@@ -1,6 +1,6 @@
 # agent contract
 
-policy `2026-09-04.5`. keep this file below 1,000 words. shorten existing rules
+policy `2026-09-04.6`. keep this file below 1,000 words. shorten existing rules
 before adding more. keep task notes and measurements in ignored work files.
 
 ## scope
@@ -92,9 +92,9 @@ compilers, SDKs, debug layers, symbols, tests, or benchmark tools.
 publication requires explicit authority, current remote identity, a fresh
 exact-package proof, signatures or hashes, and complete legal material.
 
-every final response, including research, policy, and documentation work, must link
+code handoffs and requested build identification must link
 the exact most recent `uvsr-launcher.exe` and `uvsr-engine.exe` for the active lineage,
 give each SHA-256, and say whether each was rebuilt. prove identity from source and
 build records, never timestamps. if unchanged, reuse the last proven pair and label
 it unchanged. if either identity cannot be proven, say what is missing and do not
-claim completion.
+claim the code handoff complete.
