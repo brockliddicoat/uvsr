@@ -1,70 +1,75 @@
 # agent contract
 
-policy `2026-09-04.2`. keep this file below 1,000 words. replace or shorten
-overlapping rules. store task state and measurements in ignored work records.
+policy `2026-09-04.3`. keep this file below 1,000 words. shorten existing rules
+before adding more. keep task notes and measurements in ignored work files.
 
-## direction
+## scope
 
-prefer the smallest new mechanism that achieves the requested capability, not
-the smallest diff. broad cutdown applies when requested; otherwise preserve task
-scope. reduce owners, dependencies, states, and concepts while preserving behavior.
-add complexity only when required behavior or concrete evidence justifies it.
-avoid speculative frameworks, inactive paths, registries, and fallbacks.
+choose the simplest correct design, not merely the smallest diff. reduce duplicate
+code, dependencies, and state without losing required behavior. add complexity only
+when requirements or evidence justify it. do not build for imagined needs.
+broad cutdown applies only when requested. otherwise stay within the task.
 
-repair or replace faulty implementations behind retained controls. propose visible
-feature or control removals separately and wait for explicit approval. preserve
-deliberate removals. metrics never justify lost behavior, evidence, or clarity.
+repair faulty behavior behind existing controls. get explicit approval before
+removing a visible feature or control. do not restore deliberate removals.
+smaller code or better metrics never justify lost behavior, evidence, or clarity.
 
 ## work
 
-start in the checkout being edited and read its current instructions. confirm the
-target when checkout or policy identities disagree. do not import historical
-instructions as current policy. inspect status and relevant diffs; preserve
-unrelated work and the index. trace current and released consumers before deletion.
-remove obsolete owners end to end without dual paths. keep generated files out of Git.
+work in the intended checkout and read its current instructions. resolve conflicting
+targets before editing. old reports are evidence, not current instructions.
+inspect relevant changes and callers. preserve unrelated work and the Git index.
+remove obsolete code from all its consumers without leaving duplicate paths.
+keep generated files out of Git.
 
-finish authorized implementation, including routine reversible details. preserve
-prior authorization. ask only about material uncertainty in scope, correctness,
-product behavior, or authority. advice requests do not authorize implementation.
-no commit, branch change, push, merge, release, deployment, or publication without
-authority for that action. never edit Donut.
+finish authorized work. make reasonable assumptions for routine reversible details.
+ask only when uncertainty affects scope, correctness, product behavior, or authority.
+advice requests do not authorize edits. commits, branch changes, pushes, merges,
+releases, and publication require authority for that action.
 
-keep Astra as coordinator with Sol medium for bounded independent investigation
-or second review. workers do not edit or delegate. Astra owns design, critical
-changes, integration, and acceptance, and checks decisive source evidence. use
-commands for mechanical work. load docs/agent-collaboration.md only for shared
-resources or integration. one owner per file, build tree, renderer, and GPU session.
+Astra coordinates and owns design, edits, integration, and final acceptance. use
+Sol medium explicitly for useful independent research or review. give workers a
+focused brief and require source references and uncertainty. workers do not edit
+or delegate. Astra checks decisive evidence. use commands for mechanical tasks.
+one owner controls each file, build tree, renderer, and GPU session. read
+docs/agent-collaboration.md only for shared resources or integration.
 
-use named checkpoints for major work. freeze metric scopes once. report counts and
-context estimates at checkpoints, not every update. label estimates. ordinary
-updates describe findings, decisions, and remaining work.
+set checkpoints for major work. keep measurement definitions fixed. report counts
+and labeled estimates at checkpoints. other updates cover findings and next steps.
 
-## documentation
+## writing
 
-update affected documents only; broader cleanup requires scope. preserve useful
-recovery evidence and legal text. each maintained fact has one owner. keep root
-README.md below 1,200 words. check changed documents only; self-test a checker only
-when it changes. use lowercase authored prose, comments, and headings, preserving
-technical names, identifiers, syntax, quotations, legal text, and existing UI labels.
-write concrete, evidenced statements in connected paragraphs. omit filler, invented
-compound labels, ceremony, and repeated summaries. explain nonobvious reasons in
-comments. load docs/ui.md for UI work, then only relevant procedures or incidents.
+update only affected documents unless broader cleanup was requested. preserve useful
+recovery evidence and legal text. keep each fact in one place and README.md below
+1,200 words. check changed documents only. test a checker only when it changes.
 
-## build and proof
+use plain, concise, lowercase prose, comments, and headings. preserve technical names,
+code syntax, quotations, legal text, and existing UI labels. use connected paragraphs
+and concrete facts. omit filler, invented compound labels, and repeated summaries.
+comments explain reasons the code does not show. for UI work, read docs/ui.md,
+then only the relevant procedure or incident.
 
-reuse an isolated build tree only when source lineage, generator, toolchain,
-configuration, options, and dependencies match. build affected targets incrementally.
-reconfigure only for changed build inputs; clean only for proven contamination.
-rebuild shaders and restage assets only when their inputs changed.
+## builds and checks
 
-use focused checks while iterating and the full applicable developer and exact
-package gate once per named checkpoint or final code handoff. repeat only after
-relevant changes, failures, or new uncertainty. investigate checks exceeding ten
-minutes; continue justified checks that are progressing without restarting them.
-planning needs no build. policy changes need content, discovery, diff, and word
-counts. research and prose answers need no executable proof. code handoffs and
-requested build identification retain exact provenance. distinguish developer,
+reuse a separate build tree only when its source, tools, configuration, options,
+and dependencies match. build affected targets incrementally. reconfigure only when
+build inputs change. clean only for proven contamination. rebuild shaders and copy
+assets only when their inputs change.
+
+run focused checks while editing. run the full required developer and exact package
+checks once at a checkpoint or final code handoff. repeat only after relevant changes,
+failures, or new uncertainty. investigate checks taking over ten minutes, but let
+justified checks continue while progressing. planning needs no build. policy edits
+need content, instruction discovery, diff, and word count checks.
+
+research and prose answers need no executable proof. code handoffs and requested
+build identification need exact source and binary records. distinguish build,
 visual, runtime, and production package evidence.
+
+[not be changed below this point]
+
+everything below this line is immutable unless the user explicitly authorizes
+that exact change.
 
 ## product contract
 
@@ -113,7 +118,7 @@ assets, settings, notices, and licenses. public downloads contain signed
 launcher or renderer artifacts, never source, interpreters, Git, CMake,
 compilers, SDKs, debug layers, symbols, tests, or benchmark tools.
 
-## publication and handoff
+## publication and artifact canary
 
 publication requires explicit authority, current remote identity, a fresh
 exact-package proof, signatures or hashes, and complete legal material.
