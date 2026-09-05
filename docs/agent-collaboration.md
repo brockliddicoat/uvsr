@@ -1,76 +1,76 @@
-# Agent Collaboration
+# agent collaboration
 
-Use this procedure for concurrent writers, cross-worktree integration, or a
-shared build/GPU task. Root `AGENTS.md` is sufficient for ordinary single-writer
-and read-only work.
+use this procedure for concurrent writers, integration across worktrees, or a
+shared build, renderer, package, or GPU task. `AGENTS.md` is sufficient for one
+writer and read only work.
 
-## Ownership
+## ownership
 
-One coordinator owns decomposition, contracts, integration order, shared state,
-user communication, and the completion claim. Assign the smallest useful team.
-Each writable file or resource has one owner; other agents may inspect it but
-must not edit it. One designated operator owns each build tree, executable,
-renderer window, and GPU measurement session.
+one coordinator owns decomposition, interfaces, integration order, shared
+state, user communication, and the completion claim. assign the smallest useful
+team. each writable file, resource, build tree, executable, renderer window,
+and GPU session has one owner.
 
-Parallelize independent discovery, review, or disjoint implementations. Keep
-schema, ABI, shader-layout, migration, shared-resource, and producer/consumer
-decisions serial until their contract is stable. A free slot is not a reason to
-create work.
+use Sol medium for independent discovery or second review. workers do not edit or delegate; Astra owns implementation and integration. keep
+schema, ABI, shader layout, migration, shared resource, and producer or consumer
+decisions serial until their contract is stable. more available workers do not
+make coupled work independent.
 
-## Preflight and Assignment
+## assignment
 
-The coordinator records the exact base, relevant status, loaded instructions,
-owned and excluded paths, dependencies, protected behavior, acceptance evidence,
-verification, and authorized Git/external actions. Inspect live remote state only
-when recency or publication matters.
+before work starts, record the exact base, relevant status, instructions, owned
+and excluded paths, dependencies, protected behavior, acceptance evidence,
+verification, and authorized Git or external actions. inspect a live remote
+only when recency or publication matters.
 
-Give each worker one bounded objective with its base, read/write/no-touch scope,
-settled interfaces, done conditions, required checks, and concise return format.
-Do not make the user choose agents, branches, worktrees, files, or commands.
+give each worker one bounded objective with settled interfaces and read
+scope, no touch paths, done conditions, required checks, and return format. the
+coordinator chooses the work split. use an execution plan only when a complex
+dependency order cannot be held safely in the task. one coordinator owns it.
 
-Use an execution plan only when complex multiwriter dependencies cannot be held
-safely in the task. One coordinator owns that file. Routine work needs none.
+## shared work
 
-## Shared Work
+D1 workers return evidence without edits. any separately authorized writer edits only assigned paths. they do not stage, commit, switch, merge,
+stash, clean, update submodules, run repository wide generators, or alter a peer
+process unless assigned that exact action. recheck a file immediately before
+editing. treat unexpected movement as peer or user work, stop that write scope,
+and notify the coordinator. never discard or reformat it.
 
-Workers edit only assigned paths and do not stage, commit, switch, merge, stash,
-clean, update submodules, run repository-wide generators, or alter peer-owned
-processes unless explicitly assigned. Re-read a file immediately before
-patching and treat every unexpected change as peer- or user-owned. Stop that
-write scope and notify the coordinator rather than discarding or reformatting it.
+send evidence when a discovery changes another slice's interface, input,
+verification, order, or risk. state the path, fact, consumer, and requested
+action. after two identical failures with no new evidence, preserve the result
+and replan.
 
-Send an update when a discovery changes another slice's input, interface,
-verification, order, or risk. Report exact evidence and requested action, not
-status chatter. After two identical no-progress failures, preserve evidence and
-replan instead of repeating the same attempt.
+prefer isolated worktrees and build trees for independent writers. isolation
+does not make incompatible designs composable. serialize work that shares a
+build tree, renderer, GPU, profiler, package stage, or external account. a timed
+out process may leave children alive, so inspect ownership before retrying.
 
-Use isolated worktrees and build trees for independent writers when practical.
-Isolation does not make incompatible designs composable. Serialize builds that
-share a tree and all renderer, GPU, profiler, and package operations. A timed-out
-build may leave children alive; inspect before retrying.
+## integration and proof
 
-## Integration and Evidence
+only the coordinator integrates shared hotspots or changes history. freeze the
+affected writers, inspect every scoped diff, integrate in dependency order, run
+focused checks after meaningful slices, then inspect the combined diff. run the
+full applicable developer and exact package gates once at the checkpoint. the
+applicable validation contract owns evidence requirements.
 
-Only the coordinator integrates shared hotspots or changes repository history.
-Freeze affected writers, inspect each scoped diff, integrate in dependency order,
-run focused checks after meaningful slices, then inspect the combined diff and
-run the full applicable gate once. Resolve conflicts by preserving both valid
-intents, never by wholesale side selection.
+resolve conflicts by preserving compatible intent, not by choosing one side
+wholesale. reestablish acceptance after any repair or rebuild that changes the
+observed source, binary, package, or settings.
 
-Visual acceptance, passing tests, compilation, launch, and performance are
-different evidence. Bind claims to exact source, configuration, settings,
-scene/camera, package, and artifact. Re-establish acceptance after any repair or
-rebuild that changes the observed code or settings.
+visual acceptance, compilation, semantic tests, fault injection, runtime
+output, performance, and package validation are different evidence. bind every
+claim to exact source, configuration, settings identity, executable SHA-256,
+scene, camera, and package when applicable.
 
-## Handoff
+## handoff
 
-A worker returns under roughly 200 words: status, exact base/final identity,
-changed paths/contracts, result, checks and outcomes, unrun checks, risks,
-dependencies, next action, and explicit ownership release. Store large logs or
-captures as referenced artifacts, not transcript.
+a worker returns concise status, base and final identity, changed paths and
+contracts, checks and outcomes, unrun checks, risks, dependencies, next action,
+and explicit ownership release. store large logs and captures as referenced
+artifacts.
 
-The coordinator declares completion only after ownership is released, the
-integrated diff is reviewed, acceptance criteria map to evidence, applicable
-developer and production checks pass, and risks/external actions are reported
-truthfully. Move durable decisions and recovery facts into maintained docs or
-the existing postmortem archive, then delete transient plans.
+the coordinator claims completion only after ownership is released, the
+integrated diff is reviewed, acceptance criteria map to evidence, required
+gates pass, and risks and external actions are reported accurately. move durable
+facts into their canonical maintained document and delete transient plans.
