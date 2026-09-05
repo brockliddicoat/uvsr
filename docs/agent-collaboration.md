@@ -11,7 +11,7 @@ state, user communication, and the completion claim. assign the smallest useful
 team. each writable file, resource, build tree, executable, renderer window,
 and GPU session has one owner.
 
-use Sol medium for independent discovery or second review. workers do not edit or delegate; Astra owns implementation and integration. keep
+use workers for independent discovery or second review. workers do not edit or delegate; the coordinator owns implementation and integration. keep
 schema, ABI, shader layout, migration, shared resource, and producer or consumer
 decisions serial until their contract is stable. more available workers do not
 make coupled work independent.
@@ -30,7 +30,7 @@ dependency order cannot be held safely in the task. one coordinator owns it.
 
 ## shared work
 
-D1 workers return evidence without edits. any separately authorized writer edits only assigned paths. they do not stage, commit, switch, merge,
+workers return evidence without edits. any separately authorized writer edits only assigned paths. they do not stage, commit, switch, merge,
 stash, clean, update submodules, run repository wide generators, or alter a peer
 process unless assigned that exact action. recheck a file immediately before
 editing. treat unexpected movement as peer or user work, stop that write scope,

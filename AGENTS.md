@@ -6,8 +6,7 @@ before adding more. keep task notes and measurements in ignored work files.
 ## scope
 
 choose the simplest correct design, not merely the smallest diff. reduce duplicate
-code, dependencies, and state without losing required behavior. add complexity only
-when requirements or evidence justify it. do not build for imagined needs.
+code, dependencies, and state without losing required behavior. only add complexity when requirements or evidence justify it. during long sessions, check that the work still serves the original request and any later user changes. pause for input when continuing would likely depart from that intent.
 
 repair faulty behavior behind existing controls. get explicit approval before
 removing a visible feature or control. do not restore deliberate removals.
@@ -24,12 +23,12 @@ keep generated files out of Git.
 commits, branch changes, pushes, merges,
 releases, and publication require authority for that action.
 
-Astra coordinates and owns design, edits, integration, and final acceptance. use
-Sol medium explicitly for useful independent research or review. give workers a
-focused brief and require source references and uncertainty. workers do not edit
-or delegate. Astra checks decisive evidence. use commands for mechanical tasks.
-one owner controls each file, build tree, renderer, and GPU session. read
-docs/agent-collaboration.md only for shared resources or integration.
+the coordinator owns design, edits, integration, and final acceptance. delegate only
+useful independent research or review. give workers focused briefs and require
+source references and uncertainty. workers do not edit or delegate. the coordinator
+checks decisive evidence. use commands for mechanical tasks. one owner controls
+each file, build tree, renderer, and GPU session. read docs/agent-collaboration.md
+only for shared resources or integration.
 
 set checkpoints for major work. keep measurement definitions fixed. report counts
 and labeled estimates at checkpoints. other updates cover findings and next steps.
@@ -58,15 +57,7 @@ need content, instruction discovery, diff, and word count checks.
 
 distinguish build, visual, runtime, and production package evidence.
 
----
-
-# protected instructions
-
-**[not be changed below this point]**
-
-**everything below this line is immutable unless the user explicitly authorizes that exact change.**
-
-## architecture contract
+## current architecture contract
 
 the renderer must accommodate many lighting systems, GPU-driven rendering,
 meshlets, and one coherent screen-space and world-space lighting pipeline
@@ -74,6 +65,14 @@ without parallel framework layers, inactive-technique cost, or duplicated data.
 prefer explicit frame orchestration, concrete technique owners, and shared data
 only for real consumers. use Wicked Engine as a pinned read-only design
 reference, never as a dependency or wholesale template.
+
+---
+
+# protected instructions
+
+everything below this line is not to be changed unless the user explicitly authorizes otherwise.
+
+changes below this line are intended to be made, but only very sparingly and with specific approval.
 
 ## identity and distribution
 
@@ -92,9 +91,9 @@ compilers, SDKs, debug layers, symbols, tests, or benchmark tools.
 publication requires explicit authority, current remote identity, a fresh
 exact-package proof, signatures or hashes, and complete legal material.
 
-code handoffs and requested build identification must link
+every final response, including research, policy, and documentation work, must link
 the exact most recent `uvsr-launcher.exe` and `uvsr-engine.exe` for the active lineage,
 give each SHA-256, and say whether each was rebuilt. prove identity from source and
 build records, never timestamps. if unchanged, reuse the last proven pair and label
 it unchanged. if either identity cannot be proven, say what is missing and do not
-claim the code handoff complete.
+claim completion.
