@@ -90,6 +90,8 @@ jobs:
           }
           "PATH=$sanitized" >> $env:GITHUB_ENV
           "UVSR_PYTHON_UNAVAILABLE=true" >> $env:GITHUB_ENV
+          # where.exe returns 1 when the forbidden command is absent.
+          exit 0
 
       - name: Configure Developer Renderer
         shell: pwsh
@@ -127,6 +129,7 @@ jobs:
             throw "Debug incorrectly produced a production renderer package."
           }
           Write-Output "PASS production package rejects Debug configuration"
+          exit 0
 
       - name: Build Exact Production Package
         shell: pwsh

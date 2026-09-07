@@ -59,7 +59,7 @@ if (-not $BuildDirectory) { $BuildDirectory = Join-Path $output 'build' }
 $build = [IO.Path]::GetFullPath($BuildDirectory)
 $production = if ($DeveloperBuild) { 'OFF' } else { 'ON' }
 $binaryDirectory = Join-Path $build "bin/$($inputHash.Substring(0,12))"
-& cmake -S $PSScriptRoot -B $build -G 'Visual Studio 17 2022' -A x64 "-DUVSR_LAUNCHER_SOURCE_IDENTITY=$identity" "-DUVSR_LAUNCHER_SOURCE_COMMIT=$head" "-DUVSR_LAUNCHER_PRODUCTION=$production" "-DUVSR_LAUNCHER_BINARY_DIRECTORY=$binaryDirectory" -DBUILD_TESTING=ON
+& cmake -S $PSScriptRoot -B $build -A x64 "-DUVSR_LAUNCHER_SOURCE_IDENTITY=$identity" "-DUVSR_LAUNCHER_SOURCE_COMMIT=$head" "-DUVSR_LAUNCHER_PRODUCTION=$production" "-DUVSR_LAUNCHER_BINARY_DIRECTORY=$binaryDirectory" -DBUILD_TESTING=ON
 if ($LASTEXITCODE -ne 0) { throw 'native launcher configuration failed.' }
 $targets = @('uvsr-launcher')
 if (-not $SkipTests -or -not $NoApplicationLaunch) { $targets += 'uvsr_launcher_tests' }
