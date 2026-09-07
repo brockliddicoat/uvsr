@@ -176,7 +176,7 @@ namespace
     {
         Fixture f; f.Package(); auto owner = EnsureOwnership(f.paths); InstallOldLauncher(f.paths, owner);
         auto version = NewVersionId(Commit); auto package = f.paths.Renderer(version); auto oldFeed = MakePackage(package,15,true);
-        auto manifest = ReadRecord(package / PackageName);
+        auto manifest = ReadRecord(package / PackageName, 16u << 20);
         auto state = JObject({{"schemaVersion",JNumber(1)}, {"installationId",JString(owner)}, {"activeVersionId",JString(version)}, {"releaseSequence",JNumber(15)},
             {"commit",JString(Commit)}, {"settingsHash",JString(oldFeed.settingsHash)}, {"engineVersion",JString(oldFeed.version)}, {"artifactSha256",JString(std::string(64,'a'))},
             {"executableSha256",Member(manifest,"executableSha256")}, {"desktopShortcut",JBool(true)}, {"installedUtc",JString(UtcNow())}});
