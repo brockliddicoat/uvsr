@@ -1,25 +1,23 @@
-# Bundled Scenes
+# bundled scenes
 
-UVSR packages two scenes:
+UVSR packages exactly two scenes:
 
-- [Bistro Interior](bistro_interior_retextured/README.md), the Wine variant of
-  Amazon Lumberyard Bistro Interior.
-- [San Miguel](san_miguel_retextured/README.md), the full San Miguel 2.1 model.
+- [Bistro Interior](bistro_interior_retextured/README.md), a converted Wine
+  variant associated with Amazon Lumberyard Bistro
+- [San Miguel](san_miguel_retextured/README.md), the converted full San Miguel
+  2.1 model
 
-Each directory contains a loadable descriptor, adjacent attribution, source
-provenance, and components. CMake uses an explicit allowlist so downloads and
-working files cannot enter a package accidentally.
+each scene keeps its source provenance, license, conversion report, loadable
+descriptor, and runtime components together. the JSON reports are generated
+evidence and remain byte for byte records. tool names inside them describe how
+the retained bytes were made; they are not active tool dependencies.
 
-Conversion-tool filenames in the protected provenance JSON record how the
-retained bytes were produced. Those strings are immutable history, not active
-or recoverable tool dependencies; the named first-party scripts are retired.
+[`CMakeLists.txt`](../../CMakeLists.txt) stages only `.scene.json`, `.gltf`,
+`.glb`, `.bin`, and `.png` files from these two directories. the exact package
+allowlist is
+[`cmake/runtime-asset-map.def`](../../cmake/runtime-asset-map.def).
+provenance and legal files are not inferred from directory contents.
 
-Geometry uses ordinary glTF external buffers split only at buffer-view
-boundaries to keep every tracked file below GitHub's 100,000,000-byte limit.
-UVSR loads these resources directly without reconstruction. Conversion reports
-record component sizes, hashes, and the few opaque-material fallbacks required
-because UVSR has no blended or transmissive draw pass.
-
-Both retained scene directories are protected byte-for-byte. Change an asset
-only for a separately proven asset defect, then update its provenance and legal
-record in the same change.
+the scene assets are protected byte for byte. a replacement or repaired asset
+must update its adjacent provenance, generated reports, package inventory, and
+legal record in the same change.

@@ -10,18 +10,11 @@
 
 namespace uvsr
 {
-    inline constexpr std::uint16_t SettingsSnapshotVersion =
-        ResolveSettingsSnapshotSchemaVersion(
-            CurrentSettingsSnapshotSchemaFingerprint);
+    extern const std::uint16_t SettingsSnapshotVersion;
     inline constexpr std::size_t SettingsSnapshotCodeLength = 32u;
 
-    static_assert(
-        SettingsSnapshotVersion != 0u,
-        "The represented Settings catalog has no registered snapshot schema; "
-        "build and run uvsr_settings_snapshot_schema_probe to reserve one");
-
-    [[nodiscard]] constexpr std::array<char, 5>
-    BuildSettingsSnapshotVersionText() noexcept
+[[nodiscard]] constexpr std::array<char, 5>
+    BuildSettingsSnapshotVersionText(std::uint16_t version = SettingsSnapshotVersion) noexcept
     {
         constexpr char HexDigits[] = "0123456789abcdef";
         std::array<char, 5> text{};
@@ -30,13 +23,12 @@ namespace uvsr
             const unsigned int shift =
                 static_cast<unsigned int>((3u - index) * 4u);
             text[index] = HexDigits[
-                (SettingsSnapshotVersion >> shift) & 0x0fu];
+                (version >> shift) & 0x0fu];
         }
         return text;
     }
 
-    inline constexpr auto SettingsSnapshotVersionText =
-        BuildSettingsSnapshotVersionText();
+    extern const std::array<char, 5> SettingsSnapshotVersionText;
 
     [[nodiscard]] constexpr std::uint64_t HashSettingsSnapshotBytes(
         std::string_view canonicalSettings,

@@ -1,7 +1,5 @@
 #pragma once
 
-#include "world_space_representation_settings.h"
-
 #include <cstdint>
 
 namespace uvsr
@@ -41,12 +39,5 @@ namespace uvsr
         Domain opaque) noexcept
     {
         return domain == opaque;
-    }
-
-    [[nodiscard]] constexpr bool RetainsRayVisibilityGeometryMap(
-        WorldSpaceRepresentationInvalidation invalidation) noexcept
-    {
-        return invalidation !=
-            WorldSpaceRepresentationInvalidation::BlasAndTlas;
     }
 }

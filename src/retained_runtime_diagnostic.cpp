@@ -1,104 +1,114 @@
 #include "retained_runtime_diagnostic.h"
+#include "json_document.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
-#include <functional>
-#include <iterator>
 #include <limits>
 #include <map>
-#include <set>
-#include <tuple>
+#include <stdexcept>
 
 namespace uvsr
 {
     namespace
     {
+        [[nodiscard]] UiSettingsValue DomainTokenValue(
+            SettingId id,
+            std::size_t tokenIndex)
+        {
+            const UiSettingsCommandDefinition* definition =
+                FindSettingsCommandDefinition(id);
+            if (!definition ||
+                tokenIndex >= definition->typedDomain.tokenCount)
+            {
+                throw std::logic_error(
+                    "retained runtime case has an invalid domain token");
+            }
+            return UiSettingsValue::Token(std::string(
+                definition->typedDomain.tokens[tokenIndex]));
+        }
+
+        [[nodiscard]] RetainedRuntimeCase::Setting BooleanSetting(
+            SettingId id, bool value)
+        {
+            return { id, UiSettingsValue::Boolean(value) };
+        }
+
+        [[nodiscard]] RetainedRuntimeCase::Setting FloatSetting(
+            SettingId id, float value)
+        {
+            return { id, UiSettingsValue::Float(value) };
+        }
+
+        [[nodiscard]] RetainedRuntimeCase::Setting TokenSetting(
+            SettingId id, std::size_t tokenIndex)
+        {
+            return { id, DomainTokenValue(id, tokenIndex) };
+        }
+
+        [[nodiscard]] RetainedRuntimeCase::Setting SelectorSetting(
+            SettingId id, std::string value)
+        {
+            return { id, UiSettingsValue::Selector(std::move(value)) };
+        }
+
         void Set(
             RetainedRuntimeCase& runtimeCase,
-            std::string name,
-            std::string value)
+            RetainedRuntimeCase::Setting setting)
         {
             const auto existing = std::find_if(
                 runtimeCase.settings.begin(),
                 runtimeCase.settings.end(),
-                [&name](const auto& setting)
+                [id = setting.id](const auto& candidate)
                 {
-                    return setting.first == name;
+                    return candidate.id == id;
                 });
             if (existing != runtimeCase.settings.end())
-                existing->second = std::move(value);
+                existing->value = std::move(setting.value);
             else
-                runtimeCase.settings.emplace_back(
-                    std::move(name), std::move(value));
+                runtimeCase.settings.push_back(std::move(setting));
         }
 
-        [[nodiscard]] std::string_view Get(
+        [[nodiscard]] const UiSettingsValue* Get(
             const RetainedRuntimeCase& runtimeCase,
-            std::string_view name)
+            SettingId id)
         {
             const auto setting = std::find_if(
                 runtimeCase.settings.begin(),
                 runtimeCase.settings.end(),
-                [name](const auto& candidate)
+                [id](const auto& candidate)
                 {
-                    return candidate.first == name;
+                    return candidate.id == id;
                 });
             return setting == runtimeCase.settings.end()
-                ? std::string_view{}
-                : std::string_view(setting->second);
+                ? nullptr
+                : &setting->value;
+        }
+
+        [[nodiscard]] bool IsBoolean(
+            const UiSettingsValue* value, bool expected) noexcept
+        {
+            return value && value->kind == UiSettingsValueKind::Boolean &&
+                value->boolean == expected;
         }
 
         [[nodiscard]] RetainedRuntimeCase Raster(std::string name)
         {
             RetainedRuntimeCase runtimeCase;
             runtimeCase.name = std::move(name);
-            runtimeCase.expectedSampleCount = 1u;
             runtimeCase.settings = {
-                { "lighting.solution", "ray-marching" },
-                { "representation.allow-ray-traversal", "on" },
-                { "anti-aliasing.taa.enabled", "off" },
-                { "anti-aliasing.msaa.enabled", "off" },
-                { "visibility.enabled", "off" },
-                { "visibility.ao.enabled", "off" },
-                { "visibility.gi.enabled", "off" },
-                { "sky.visibility.enabled", "off" },
-                { "light.selected", "flashlight_1" },
-                { "light.selected.flashlight.enabled", "off" },
-                { "light.selected.flashlight.cast-shadows", "on" },
-                { "shadows.ray-traced.enabled", "on" }
+                TokenSetting(SettingId::LightingSolution, 0u),
+                BooleanSetting(
+                    SettingId::RepresentationAllowRayTraversal, true),
+                BooleanSetting(SettingId::SkyVisibilityEnabled, false),
+                SelectorSetting(SettingId::LightSelected, "flashlight_1"),
+                BooleanSetting(
+                    SettingId::LightSelectedFlashlightEnabled, false),
+                BooleanSetting(
+                    SettingId::LightSelectedFlashlightCastShadows, true),
+                BooleanSetting(SettingId::ShadowsRayTracedEnabled, true)
             };
-            return runtimeCase;
-        }
-
-        [[nodiscard]] RetainedRuntimeCase Visibility(
-            std::string name,
-            bool ambientOcclusion,
-            bool globalIllumination)
-        {
-            RetainedRuntimeCase runtimeCase = Raster(std::move(name));
-            Set(runtimeCase, "visibility.enabled", "on");
-            Set(runtimeCase, "visibility.ao.enabled",
-                ambientOcclusion ? "on" : "off");
-            Set(runtimeCase, "visibility.gi.enabled",
-                globalIllumination ? "on" : "off");
-            if (ambientOcclusion)
-            {
-                Set(runtimeCase, "denoising.ao.method", "reblur");
-                Set(runtimeCase,
-                    "visibility.ao.output-hit-distance", "on");
-                runtimeCase.expectAmbientOcclusionDenoising = true;
-            }
-            if (globalIllumination)
-            {
-                Set(runtimeCase, "denoising.gi.method", "relax");
-                Set(runtimeCase,
-                    "visibility.gi.output-hit-distance", "on");
-                runtimeCase.expectGlobalIlluminationDenoising = true;
-            }
-            runtimeCase.expectScreenVisibility =
-                ambientOcclusion || globalIllumination;
             return runtimeCase;
         }
 
@@ -123,7 +133,7 @@ namespace uvsr
             const RetainedRuntimeCase& runtimeCase) noexcept
         {
             if (runtimeCase.exerciseRetainedStateChanges)
-                return 4u;
+                return 3u;
             return runtimeCase.action == RetainedRuntimeAction::None
                 ? 0u
                 : 1u;
@@ -141,9 +151,8 @@ namespace uvsr
             }
             constexpr std::array Actions = {
                 RetainedRuntimeAction::NudgeCamera,
-                RetainedRuntimeAction::ResizeViewport,
                 RetainedRuntimeAction::ChangeScene,
-                RetainedRuntimeAction::ChangeSetting
+                RetainedRuntimeAction::ResizeViewport
             };
             return index < Actions.size()
                 ? Actions[index]
@@ -163,18 +172,11 @@ namespace uvsr
             case RetainedRuntimeAction::ChangeMaterial: return "material";
             case RetainedRuntimeAction::ChangeLight: return "light";
             case RetainedRuntimeAction::ToggleFlashlight: return "flashlight";
+            case RetainedRuntimeAction::CyclePrerequisite: return "prerequisite-cycle";
             case RetainedRuntimeAction::CycleLightingSolution:
                 return "lighting-solution";
             }
             return "invalid";
-        }
-
-        [[nodiscard]] bool StartsWith(
-            std::string_view value,
-            std::string_view prefix) noexcept
-        {
-            return value.size() >= prefix.size() &&
-                value.substr(0u, prefix.size()) == prefix;
         }
 
         [[nodiscard]] std::string DescribeSnapshotMismatch(
@@ -216,42 +218,6 @@ namespace uvsr
                 lineAt(expected) + "', got '" + lineAt(actual) + "'";
         }
 
-        [[nodiscard]] std::pair<std::string, std::size_t>
-            SemanticDomain(std::string_view family)
-        {
-            if (family == "ao-only-save-load-reset" ||
-                family == "gi-only-save-load-reset" ||
-                family == "ao-gi-save-load-reset" ||
-                family == "lighting-accumulation-fixed-cumulative")
-            {
-                return { "ao-gi-mode", 0u };
-            }
-            if (StartsWith(family, "visibility-preset-"))
-                return { "visibility-preset", 1u };
-            if (StartsWith(family, "visibility-custom-estimator-"))
-                return { "visibility-estimator", 2u };
-            if (StartsWith(family, "visibility-custom-resolution-"))
-                return { "visibility-resolution", 3u };
-            if (StartsWith(family, "visibility-custom-samples-"))
-                return { "visibility-sample-quality", 4u };
-            if (StartsWith(family, "ao-gi-filter-"))
-                return { "ao-gi-filter", 5u };
-            if (StartsWith(family, "ao-gi-quality-"))
-                return { "ao-gi-quality", 6u };
-            if (StartsWith(family, "ao-gi-resolution-"))
-                return { "ao-gi-denoising-resolution", 7u };
-            if (StartsWith(family, "visibility-custom-noise-"))
-                return { "visibility-noise", 8u };
-            if (StartsWith(family, "ao-gi-hit-precision-"))
-                return { "ao-gi-hit-precision", 9u };
-            if (StartsWith(family, "ao-gi-continuous-"))
-                return { "ao-gi-continuous", 10u };
-            if (StartsWith(family, "debug-visibility-view-"))
-                return { "visibility-debug-view", 11u };
-            if (StartsWith(family, "global-noise-domain-"))
-                return { "global-noise", 12u };
-            return { {}, 13u };
-        }
     }
 
     template <typename Scalar, typename Decode>
@@ -437,15 +403,11 @@ namespace uvsr
     }
 
     RuntimeSemanticSignature BuildRuntimeSemanticSignature(
-        const RuntimeOutputEvidence& output,
-        std::uint32_t receiverSampleCount,
-        double cpuFrameMilliseconds,
-        double gpuFrameMilliseconds) noexcept
+        const RuntimeOutputEvidence& output) noexcept
     {
         RuntimeSemanticSignature signature;
         signature.width = output.width;
         signature.height = output.height;
-        signature.receiverSampleCount = receiverSampleCount;
         signature.meanLinearLuminance = output.meanLinearLuminance;
         signature.rmsLinearLuminance = output.rmsLinearLuminance;
         signature.meanLinearHorizontalGradient =
@@ -454,8 +416,6 @@ namespace uvsr
             output.linearLuminanceHistogram;
         for (const std::uint64_t count : output.linearLuminanceHistogram)
             signature.linearLuminanceSampleCount += count;
-        signature.cpuFrameMilliseconds = cpuFrameMilliseconds;
-        signature.gpuFrameMilliseconds = gpuFrameMilliseconds;
         return signature;
     }
 
@@ -464,9 +424,7 @@ namespace uvsr
         const RuntimeSemanticSignature& right) noexcept
     {
         if (left.width == 0u || left.height == 0u ||
-            left.width != right.width || left.height != right.height ||
-            left.receiverSampleCount == 0u ||
-            right.receiverSampleCount == 0u)
+            left.width != right.width || left.height != right.height)
         {
             return false;
         }
@@ -511,243 +469,47 @@ namespace uvsr
             histogramDistance > 0.001;
     }
 
-    bool RuntimeSemanticTimingsAreDistinct(
-        const RuntimeSemanticSignature& left,
-        const RuntimeSemanticSignature& right) noexcept
-    {
-        if (left.width == 0u || left.height == 0u ||
-            left.width != right.width || left.height != right.height)
-        {
-            return false;
-        }
-        const auto differs = [](
-            double leftValue,
-            double rightValue)
-        {
-            if (!std::isfinite(leftValue) || !std::isfinite(rightValue))
-                return false;
-            const double difference = std::fabs(leftValue - rightValue);
-            const double scale = std::max(
-                std::fabs(leftValue), std::fabs(rightValue));
-            return difference > std::max(0.25, scale * 0.20);
-        };
-        return
-            differs(left.cpuFrameMilliseconds,
-                right.cpuFrameMilliseconds) ||
-            differs(left.gpuFrameMilliseconds,
-                right.gpuFrameMilliseconds);
-    }
-
     bool ValidateRetainedRuntimeSemanticCaptures(
         const std::vector<RetainedRuntimeCase>& cases,
         const std::vector<RetainedRuntimeSemanticCapture>& captures,
         std::string& reason)
     {
         std::map<std::string, const RetainedRuntimeCase*> expected;
-        for (const RetainedRuntimeCase& runtimeCase : cases)
+        for (const auto& runtimeCase : cases)
         {
-            if (!runtimeCase.requireCrossCaseDistinctness)
-                continue;
-            if (runtimeCase.semanticFamily.empty() ||
-                !expected.emplace(runtimeCase.name, &runtimeCase).second)
+            if (runtimeCase.exerciseRetainedStateChanges &&
+                (runtimeCase.name.empty() ||
+                 !expected.emplace(runtimeCase.name, &runtimeCase).second))
             {
-                reason = "AO/GI semantic case identity was empty or duplicated";
+                reason = "runtime scene case identity was empty or duplicated";
                 return false;
             }
         }
-
-        std::map<std::string,
-            std::vector<const RetainedRuntimeSemanticCapture*>> observed;
-        std::map<std::string,
-            std::vector<const RetainedRuntimeSemanticCapture*>> byFamily;
-        std::map<std::string, std::set<std::string>> domainFamilies;
-        for (const RetainedRuntimeSemanticCapture& capture : captures)
+        std::map<std::string, std::vector<const RetainedRuntimeSemanticCapture*>> observed;
+        for (const auto& capture : captures)
         {
-            const auto expectedCase = expected.find(capture.caseName);
-            if (expectedCase == expected.end() ||
-                capture.family != expectedCase->second->semanticFamily ||
-                capture.domain != expectedCase->second->semanticDomain ||
-                capture.sceneToken.empty() ||
-                capture.signature.receiverSampleCount !=
-                    expectedCase->second->expectedSampleCount ||
-                capture.signature.width == 0u ||
-                capture.signature.height == 0u)
+            const auto found = expected.find(capture.caseName);
+            if (found == expected.end() || capture.sceneToken.empty() ||
+                (capture.sceneToken != found->second->actionBaselineSceneToken &&
+                 capture.sceneToken != found->second->expectedSceneToken) ||
+                capture.signature.width == 0u || capture.signature.height == 0u)
             {
-                reason = "AO/GI semantic capture identity or dimensions drifted";
+                reason = "runtime scene capture identity or dimensions drifted";
                 return false;
             }
             observed[capture.caseName].push_back(&capture);
-            byFamily[capture.family].push_back(&capture);
-            if (!capture.domain.empty())
-                domainFamilies[capture.domain].insert(capture.family);
         }
-        if (observed.size() != expected.size() ||
-            captures.size() != expected.size() * 2u)
+        if (observed.size() != expected.size() || captures.size() != expected.size() * 2u)
         {
-            reason = "AO/GI semantic capture coverage was incomplete";
+            reason = "runtime scene capture coverage was incomplete";
             return false;
         }
-        for (const auto& [caseName, caseCaptures] : observed)
+        for (const auto& [name, pair] : observed)
         {
-            if (caseCaptures.size() != 2u ||
-                caseCaptures[0]->sceneToken == caseCaptures[1]->sceneToken)
+            if (pair.size() != 2u || pair[0]->sceneToken == pair[1]->sceneToken ||
+                !RuntimeSemanticSignaturesAreDistinct(pair[0]->signature, pair[1]->signature))
             {
-                reason = "AO/GI semantic case '" + caseName +
-                    "' lacked two distinct scene captures";
-                return false;
-            }
-        }
-
-        const auto distinct = [&expected]
-        (
-            const RetainedRuntimeSemanticCapture& left,
-            const RetainedRuntimeSemanticCapture& right,
-            bool& compatible)
-        {
-            const bool leftTimingOnly =
-                expected.at(left.caseName)->semanticTimingOnly;
-            const bool rightTimingOnly =
-                expected.at(right.caseName)->semanticTimingOnly;
-            compatible = leftTimingOnly == rightTimingOnly;
-            if (!compatible)
-                return false;
-            return leftTimingOnly
-                ? RuntimeSemanticTimingsAreDistinct(
-                    left.signature, right.signature)
-                : RuntimeSemanticSignaturesAreDistinct(
-                    left.signature, right.signature);
-        };
-
-        for (const auto& [family, familyCaptures] : byFamily)
-        {
-            const bool requireCrossSampleDistinctness = expected.at(
-                familyCaptures.front()->caseName)
-                    ->requireCrossSampleDistinctness;
-            for (const RetainedRuntimeSemanticCapture* capture :
-                familyCaptures)
-            {
-                if (expected.at(capture->caseName)
-                        ->requireCrossSampleDistinctness !=
-                    requireCrossSampleDistinctness)
-                {
-                    reason = "AO/GI family '" + family +
-                        "' mixed cross-sample evidence contracts";
-                    return false;
-                }
-            }
-            if (!requireCrossSampleDistinctness)
-                continue;
-
-            std::set<std::uint32_t> samples;
-            for (const RetainedRuntimeSemanticCapture* capture : familyCaptures)
-                samples.insert(capture->signature.receiverSampleCount);
-            for (auto leftSample = samples.begin();
-                leftSample != samples.end(); ++leftSample)
-            {
-                for (auto rightSample = std::next(leftSample);
-                    rightSample != samples.end(); ++rightSample)
-                {
-                    bool comparable = false;
-                    bool pairDistinct = false;
-                    for (const RetainedRuntimeSemanticCapture* left :
-                        familyCaptures)
-                    for (const RetainedRuntimeSemanticCapture* right :
-                        familyCaptures)
-                    {
-                        if (left->signature.receiverSampleCount !=
-                                *leftSample ||
-                            right->signature.receiverSampleCount !=
-                                *rightSample ||
-                            left->sceneToken != right->sceneToken ||
-                            left->signature.width != right->signature.width ||
-                            left->signature.height != right->signature.height)
-                        {
-                            continue;
-                        }
-                        bool compatible = false;
-                        const bool contextDistinct = distinct(
-                            *left, *right, compatible);
-                        if (!compatible)
-                        {
-                            reason = "AO/GI family '" + family +
-                                "' mixed output and performance-only evidence";
-                            return false;
-                        }
-                        comparable = true;
-                        pairDistinct = pairDistinct || contextDistinct;
-                    }
-                    if (!comparable || !pairDistinct)
-                    {
-                        reason = "AO/GI family '" + family + "' samples " +
-                            std::to_string(*leftSample) + "x and " +
-                            std::to_string(*rightSample) +
-                            (comparable
-                                ? " mapped identically"
-                                : " lacked comparable scene output");
-                        return false;
-                    }
-                }
-            }
-        }
-
-        for (const auto& [domain, families] : domainFamilies)
-        {
-            if (families.size() < 2u)
-            {
-                reason = "AO/GI semantic domain '" + domain +
-                    "' had fewer than two option families";
-                return false;
-            }
-            bool compared = false;
-            for (auto leftFamily = families.begin();
-                leftFamily != families.end(); ++leftFamily)
-            {
-                for (auto rightFamily = std::next(leftFamily);
-                    rightFamily != families.end(); ++rightFamily)
-                {
-                    bool pairComparable = false;
-                    bool pairDistinct = false;
-                    for (const auto* left : byFamily[*leftFamily])
-                    for (const auto* right : byFamily[*rightFamily])
-                    {
-                        if (left->sceneToken != right->sceneToken ||
-                            left->signature.receiverSampleCount !=
-                                right->signature.receiverSampleCount ||
-                            left->signature.width != right->signature.width ||
-                            left->signature.height != right->signature.height)
-                        {
-                            continue;
-                        }
-                        pairComparable = true;
-                        bool compatible = false;
-                        const bool contextDistinct = distinct(
-                            *left, *right, compatible);
-                        if (!compatible)
-                        {
-                            reason = "AO/GI semantic domain '" + domain +
-                                "' mixed output and performance-only evidence";
-                            return false;
-                        }
-                        pairDistinct = pairDistinct || contextDistinct;
-                    }
-                    if (pairComparable)
-                    {
-                        compared = true;
-                        if (!pairDistinct)
-                        {
-                            reason = "AO/GI options '" + *leftFamily +
-                                "' and '" + *rightFamily +
-                                "' mapped identically in domain '" +
-                                domain + "'";
-                            return false;
-                        }
-                    }
-                }
-            }
-            if (!compared)
-            {
-                reason = "AO/GI semantic domain '" + domain +
-                    "' lacked a same-scene/sample comparison";
+                reason = "runtime scene case '" + name + "' lacked distinct scene output";
                 return false;
             }
         }
@@ -755,44 +517,11 @@ namespace uvsr
         return true;
     }
 
-    std::string EscapeRuntimeDiagnosticJson(std::string_view value)
-    {
-        std::string escaped;
-        escaped.reserve(value.size() + 8u);
-        constexpr char Hex[] = "0123456789abcdef";
-        for (const unsigned char character : value)
-        {
-            switch (character)
-            {
-            case '\"': escaped += "\\\""; break;
-            case '\\': escaped += "\\\\"; break;
-            case '\b': escaped += "\\b"; break;
-            case '\f': escaped += "\\f"; break;
-            case '\n': escaped += "\\n"; break;
-            case '\r': escaped += "\\r"; break;
-            case '\t': escaped += "\\t"; break;
-            default:
-                if (character < 0x20u)
-                {
-                    escaped += "\\u00";
-                    escaped.push_back(Hex[character >> 4u]);
-                    escaped.push_back(Hex[character & 0x0fu]);
-                }
-                else
-                {
-                    escaped.push_back(static_cast<char>(character));
-                }
-                break;
-            }
-        }
-        return escaped;
-    }
-
     namespace
     {
         [[nodiscard]] std::string Quoted(std::string_view value)
         {
-            return "\"" + EscapeRuntimeDiagnosticJson(value) + "\"";
+            return "\"" + json::Escape(value) + "\"";
         }
 
         [[nodiscard]] const char* JsonBool(bool value) noexcept
@@ -814,6 +543,7 @@ namespace uvsr
             case RetainedRuntimeAction::ChangeLight: return "light";
             case RetainedRuntimeAction::ToggleFlashlight:
                 return "flashlight";
+            case RetainedRuntimeAction::CyclePrerequisite: return "prerequisite-cycle";
             case RetainedRuntimeAction::CycleLightingSolution:
                 return "lighting-solution";
             }
@@ -891,7 +621,7 @@ namespace uvsr
         const RetainedRuntimeProvenance& provenance,
         std::size_t caseCount)
     {
-        return "{\"event\":\"start\",\"schema\":3," +
+        return "{\"event\":\"start\",\"schema\":4," +
             ProvenanceJsonMembers(provenance) +
             ",\"cases\":" + std::to_string(caseCount) +
             ",\"timingPolicy\":\"baseline<=1000ms; phases<=max(4x-baseline,baseline+50ms)\"}";
@@ -915,27 +645,18 @@ namespace uvsr
         return "{\"event\":\"case\",\"index\":" +
             std::to_string(caseIndex) + ",\"name\":" +
             Quoted(runtimeCase.name) + ",\"status\":\"pass\"," +
-            "\"semanticFamily\":" +
-            Quoted(runtimeCase.semanticFamily) +
-            ",\"semanticDomain\":" +
-            Quoted(runtimeCase.semanticDomain) + "," +
             "\"phase\":" + Quoted(runtimeCase.exerciseRetainedStateChanges
-                ? "reference"
+                ? "resize"
                 : CaptureLabel(runtimeCase.action)) + "," +
             "\"activeScene\":" + Quoted(telemetry.currentScene) +
             ",\"expectedAction\":" +
             Quoted(runtimeCase.exerciseRetainedStateChanges
-                ? "camera-resize-scene-reference"
+                ? "camera-scene-resize-reference"
                 : ActionName(runtimeCase.action)) +
             ",\"appliedAction\":" +
             Quoted(ActionName(telemetry.lastAppliedAction)) +
-            "," +
-            "\"receiverSamples\":" +
-            std::to_string(telemetry.receiverSampleCount) +
             ",\"pathHistory\":" +
             std::to_string(telemetry.pathHistoryCount) +
-            ",\"screenVisibility\":" +
-            JsonBool(telemetry.screenVisibilityDispatched) +
             ",\"directional\":" +
             JsonBool(telemetry.directionalVisibilityDispatched) +
             ",\"sky\":" + JsonBool(telemetry.skyVisibilityDispatched) +
@@ -943,14 +664,6 @@ namespace uvsr
             JsonBool(telemetry.flashlightLightingSubmitted) +
             ",\"flashlightShadow\":" +
             JsonBool(telemetry.flashlightVisibilityDispatched) +
-            ",\"shadowDenoising\":" +
-            JsonBool(telemetry.shadowDenoisingDispatched) +
-            ",\"skyDenoising\":" +
-            JsonBool(telemetry.skyDenoisingDispatched) +
-            ",\"aoDenoising\":" +
-            JsonBool(telemetry.ambientOcclusionDenoisingDispatched) +
-            ",\"giDenoising\":" +
-            JsonBool(telemetry.globalIlluminationDenoisingDispatched) +
             ",\"accumulation\":" +
             JsonBool(telemetry.lightingAccumulationCommitted) +
             ",\"autoExposure\":" +
@@ -1013,15 +726,7 @@ namespace uvsr
         return "{\"event\":\"capture\",\"index\":" +
             std::to_string(caseIndex) + ",\"name\":" +
             Quoted(runtimeCase.name) + ",\"phase\":" + Quoted(phase) +
-            ",\"semanticFamily\":" +
-            Quoted(runtimeCase.semanticFamily) +
-            ",\"semanticDomain\":" +
-            Quoted(runtimeCase.semanticDomain) +
             ",\"activeScene\":" + Quoted(telemetry.currentScene) +
-            ",\"receiverSamples\":" +
-            std::to_string(telemetry.receiverSampleCount) +
-            ",\"screenVisibility\":" +
-            JsonBool(telemetry.screenVisibilityDispatched) +
             ",\"flashlightLightingSubmitted\":" +
             JsonBool(telemetry.flashlightLightingSubmitted) +
             ",\"flashlightShadow\":" +
@@ -1038,10 +743,6 @@ namespace uvsr
             JsonBool(telemetry.globalNoiseAnimateSamples) +
             ",\"accumulateSamples\":" +
             JsonBool(telemetry.globalNoiseAccumulateSamples) + "}" +
-            ",\"aoDenoising\":" +
-            JsonBool(telemetry.ambientOcclusionDenoisingDispatched) +
-            ",\"giDenoising\":" +
-            JsonBool(telemetry.globalIlluminationDenoisingDispatched) +
             ",\"cpuFrameUs\":" +
             std::to_string(FrameMicroseconds(
                 telemetry.cpuFrameMilliseconds)) +
@@ -1094,834 +795,371 @@ namespace uvsr
         const std::string& bistroScene,
         const std::string& sanMiguelScene)
     {
+        constexpr std::string_view BistroToken =
+            "bistro_interior_retextured";
+        constexpr std::string_view SanMiguelToken =
+            "san_miguel_retextured";
+
         std::vector<RetainedRuntimeCase> cases;
-        std::vector<RetainedRuntimeCase> visibilityCases;
-        std::size_t visibilityVariantIndex = 0u;
-        const auto append = [&cases, &bistroScene](
-            RetainedRuntimeCase runtimeCase)
-        {
-            if (Get(runtimeCase, "scene.current").empty())
-                Set(runtimeCase, "scene.current", bistroScene);
-            if (runtimeCase.expectedSceneToken.empty())
-                runtimeCase.expectedSceneToken =
-                    "bistro_interior_retextured";
-            cases.push_back(std::move(runtimeCase));
-        };
-        const auto add = [
-            &append,
-            &bistroScene,
-            &sanMiguelScene,
-            &visibilityCases,
-            &visibilityVariantIndex](RetainedRuntimeCase runtimeCase)
-        {
-            if (!runtimeCase.expectScreenVisibility)
-            {
-                append(std::move(runtimeCase));
-                return;
-            }
-            const std::string semanticFamily = runtimeCase.name;
-            const auto [semanticDomain, noiseGroup] =
-                SemanticDomain(semanticFamily);
-            const bool semanticCase = !StartsWith(
-                semanticFamily, "scene-mixed-coverage-");
-            for (const std::uint32_t samples :
-                { 1u, 2u, 4u, 8u, 16u })
-            {
-                const bool startsInBistro =
-                    visibilityVariantIndex++ % 2u == 0u;
-                const std::string_view initialLabel = startsInBistro
-                    ? "bistro"
-                    : "san-miguel";
-                const std::string_view finalLabel = startsInBistro
-                    ? "san-miguel"
-                    : "bistro";
-                const std::string_view initialToken = startsInBistro
-                    ? "bistro_interior_retextured"
-                    : "san_miguel_retextured";
-                const std::string_view finalToken = startsInBistro
-                    ? "san_miguel_retextured"
-                    : "bistro_interior_retextured";
-                const std::string& initialScene = startsInBistro
-                    ? bistroScene
-                    : sanMiguelScene;
-                const std::string& finalScene = startsInBistro
-                    ? sanMiguelScene
-                    : bistroScene;
+        cases.reserve(30u);
 
-                RetainedRuntimeCase variant = runtimeCase;
-                const std::size_t noiseVariant = noiseGroup;
-                constexpr std::array<std::string_view, 3> GlobalPatterns = {
-                    "spatial-white", "spatial-blue", "spatiotemporal-blue"
-                };
-                constexpr std::array<std::string_view, 4> GlobalResolutions = {
-                    "64x64", "128x128", "256x256", "512x512"
-                };
-                const bool explicitGlobalNoise = StartsWith(
-                    semanticFamily, "global-noise-domain-");
-                if (!explicitGlobalNoise)
-                {
-                    const bool accumulate =
-                        (noiseVariant % 2u) != 0u ||
-                        semanticFamily ==
-                            "lighting-accumulation-fixed-cumulative";
-                    const bool animate =
-                        ((noiseVariant / 2u) % 2u) != 0u;
-                    Set(variant, "noise.pattern", std::string(
-                        GlobalPatterns[(noiseVariant / 16u) %
-                            GlobalPatterns.size()]));
-                    Set(variant, "noise.resolution", std::string(
-                        GlobalResolutions[(noiseVariant / 4u) %
-                            GlobalResolutions.size()]));
-                    Set(variant, "noise.animate-samples",
-                        animate ? "on" : "off");
-                    Set(variant, "noise.accumulate-samples",
-                        accumulate ? "on" : "off");
-                }
-                if (!StartsWith(
-                        semanticFamily, "visibility-custom-noise-"))
-                {
-                    Set(variant, "visibility.specify-noise", "off");
-                }
-                const bool accumulate =
-                    Get(variant, "noise.accumulate-samples") == "on";
-                const std::string_view visibilityDebugView =
-                    Get(variant, "debug.visibility.view");
-                const bool accumulationSelected = accumulate &&
-                    (visibilityDebugView.empty() ||
-                        visibilityDebugView == "final");
-                variant.assertLightingAccumulationState = true;
-                variant.expectLightingAccumulation = accumulationSelected;
-                if (accumulate)
-                {
-                    // Accumulation mode never chains an AO/GI denoiser. The
-                    // final view commits the cumulative mean; diagnostic
-                    // views expose the corresponding raw signals.
-                    variant.expectAmbientOcclusionDenoising = false;
-                    variant.expectGlobalIlluminationDenoising = false;
-                }
-                if (Get(variant, "visibility.ao.strength") == "0")
-                    variant.expectAmbientOcclusionDenoising = false;
-                if (Get(variant, "visibility.gi.intensity") == "0")
-                    variant.expectGlobalIlluminationDenoising = false;
-                variant.semanticFamily = semanticCase
-                    ? semanticFamily
-                    : std::string{};
-                variant.semanticDomain = semanticCase
-                    ? semanticDomain
-                    : std::string{};
-                variant.requireCrossCaseDistinctness = semanticCase;
-                variant.name += "-" + std::string(initialLabel) +
-                    "-to-" + std::string(finalLabel) + "-" +
-                    std::to_string(samples) + "x";
-                variant.actionBaselineSceneToken = initialToken;
-                variant.expectedSceneToken = finalToken;
-                variant.expectedSampleCount = samples;
-                variant.expectDirectionalVisibility = true;
-                variant.snapshotRoundTrip = true;
-                variant.exerciseRetainedStateChanges = true;
-                variant.actionSettingName = "scene.current";
-                variant.actionBaselineValue = initialScene;
-                variant.actionValue = finalScene;
-                variant.resizeWidth = 704;
-                variant.resizeHeight = 400;
-                Set(variant, "scene.current", initialScene);
-                Set(variant, "anti-aliasing.msaa.enabled",
-                    samples == 1u ? "off" : "on");
-                if (samples > 1u)
-                {
-                    Set(variant, "anti-aliasing.msaa.samples",
-                        std::to_string(samples) + "x");
-                }
-                visibilityCases.push_back(std::move(variant));
-            }
+        const auto setScene = [](
+            RetainedRuntimeCase& runtimeCase,
+            const std::string& scene,
+            std::string_view token)
+        {
+            Set(runtimeCase, SelectorSetting(SettingId::SceneCurrent, scene));
+            runtimeCase.expectedSceneToken = token;
         };
 
-        RetainedRuntimeCase aoOnly =
-            Visibility("ao-only-save-load-reset", true, false);
-        Set(aoOnly, "denoising.ao.method", "reblur");
-        aoOnly.snapshotRoundTrip = true;
-        add(std::move(aoOnly));
-
-        RetainedRuntimeCase giOnly =
-            Visibility("gi-only-save-load-reset", false, true);
-        Set(giOnly, "denoising.gi.method", "relax");
-        giOnly.snapshotRoundTrip = true;
-        add(std::move(giOnly));
-
-        RetainedRuntimeCase together =
-            Visibility("ao-gi-save-load-reset", true, true);
-        Set(together, "visibility.samples", "8");
-        together.snapshotRoundTrip = true;
-        add(std::move(together));
-
-        constexpr std::array<std::string_view, 4> AoMethods = {
-            "raw", "joint-bilateral", "gaussian-bilateral", "reblur"
-        };
-        constexpr std::array<std::string_view, 5> GiMethods = {
-            "raw", "joint-bilateral", "gaussian-bilateral", "reblur",
-            "relax"
-        };
-        constexpr std::array<std::string_view, 4> Qualities = {
-            "performance", "balanced", "quality", "ultra"
-        };
-        constexpr std::array<std::string_view, 3> DenoisingResolutions = {
-            "quarter", "half", "full"
-        };
-        constexpr std::array<std::string_view, 3> Estimators = {
-            "projected-angle", "solid-angle", "cosine-weighted"
-        };
-        constexpr std::array<std::string_view, 3> VisibilityResolutions = {
-            "full", "half", "quarter"
-        };
-        constexpr std::array<std::string_view, 7> VisibilitySamples = {
-            "1", "2", "4", "8", "16", "32", "64"
-        };
-        constexpr std::array<std::string_view, 3> NoisePatterns = {
-            "spatial-white", "spatial-blue", "spatiotemporal-blue"
-        };
-        constexpr std::array<std::string_view, 4> NoiseResolutions = {
-            "64x64", "128x128", "256x256", "512x512"
-        };
-
-        for (const std::string_view quality : {
-            "low", "medium", "high", "ultra" })
-        {
-            RetainedRuntimeCase runtimeCase = Visibility(
-                "visibility-preset-" + std::string(quality), true, true);
-            Set(runtimeCase, "visibility.quality", std::string(quality));
-            add(std::move(runtimeCase));
-        }
-
-        for (const std::string_view estimator : Estimators)
-        {
-            RetainedRuntimeCase runtimeCase = Visibility(
-                "visibility-custom-estimator-" +
-                    std::string(estimator),
-                true,
-                true);
-            Set(runtimeCase, "visibility.quality", "custom");
-            Set(runtimeCase, "visibility.estimator",
-                std::string(estimator));
-            add(std::move(runtimeCase));
-        }
-
-        for (const std::string_view resolution : VisibilityResolutions)
-        {
-            RetainedRuntimeCase runtimeCase = Visibility(
-                "visibility-custom-resolution-" +
-                    std::string(resolution),
-                true,
-                true);
-            Set(runtimeCase, "visibility.quality", "custom");
-            Set(runtimeCase, "visibility.resolution",
-                std::string(resolution));
-            add(std::move(runtimeCase));
-        }
-
-        for (const std::string_view samples : VisibilitySamples)
-        {
-            RetainedRuntimeCase runtimeCase = Visibility(
-                "visibility-custom-samples-" + std::string(samples),
-                true,
-                true);
-            Set(runtimeCase, "visibility.quality", "custom");
-            Set(runtimeCase, "visibility.samples", std::string(samples));
-            add(std::move(runtimeCase));
-        }
-
-        RetainedRuntimeCase cumulative = Visibility(
-            "lighting-accumulation-fixed-cumulative", true, true);
-        Set(cumulative, "noise.accumulate-samples", "on");
-        cumulative.expectLightingAccumulation = true;
-        add(std::move(cumulative));
-
-        for (const std::string_view aoMethod : AoMethods)
-        {
-            for (const std::string_view giMethod : GiMethods)
-            {
-                RetainedRuntimeCase runtimeCase = Visibility(
-                    "ao-gi-filter-" + std::string(aoMethod) + "-" +
-                        std::string(giMethod), true, true);
-                Set(runtimeCase, "denoising.ao.method",
-                    std::string(aoMethod));
-                Set(runtimeCase, "denoising.gi.method",
-                    std::string(giMethod));
-                runtimeCase.expectAmbientOcclusionDenoising =
-                    aoMethod != "raw";
-                runtimeCase.expectGlobalIlluminationDenoising =
-                    giMethod != "raw";
-                add(std::move(runtimeCase));
-            }
-        }
-
-        for (const std::string_view aoQuality : Qualities)
-        {
-            for (const std::string_view giQuality : Qualities)
-            {
-                RetainedRuntimeCase runtimeCase = Visibility(
-                    "ao-gi-quality-" + std::string(aoQuality) + "-" +
-                        std::string(giQuality), true, true);
-                Set(runtimeCase, "denoising.ao.quality",
-                    std::string(aoQuality));
-                Set(runtimeCase, "denoising.gi.quality",
-                    std::string(giQuality));
-                Set(runtimeCase, "denoising.ao.method", "reblur");
-                Set(runtimeCase, "denoising.gi.method", "relax");
-                add(std::move(runtimeCase));
-            }
-        }
-
-        for (const std::string_view aoResolution : DenoisingResolutions)
-        {
-            for (const std::string_view giResolution : DenoisingResolutions)
-            {
-                RetainedRuntimeCase runtimeCase = Visibility(
-                    "ao-gi-resolution-" + std::string(aoResolution) + "-" +
-                        std::string(giResolution), true, true);
-                Set(runtimeCase, "denoising.ao.resolution",
-                    std::string(aoResolution));
-                Set(runtimeCase, "denoising.gi.resolution",
-                    std::string(giResolution));
-                add(std::move(runtimeCase));
-            }
-        }
-
-        for (const std::string_view pattern : NoisePatterns)
-        for (const std::string_view resolution : NoiseResolutions)
-        for (const bool animate : { false, true })
-        {
-            RetainedRuntimeCase runtimeCase = Visibility(
-                "visibility-custom-noise-" + std::string(pattern) + "-" +
-                    std::string(resolution) +
-                    (animate ? "-animated" : "-stationary"),
-                true,
-                true);
-            Set(runtimeCase, "visibility.quality", "custom");
-            Set(runtimeCase, "visibility.specify-noise", "on");
-            Set(runtimeCase, "visibility.noise-pattern",
-                std::string(pattern));
-            Set(runtimeCase, "visibility.noise-resolution",
-                std::string(resolution));
-            Set(runtimeCase, "visibility.animate-samples",
-                animate ? "on" : "off");
-            add(std::move(runtimeCase));
-        }
-
-        for (const std::string_view aoOutput : { "off", "on" })
-        for (const std::string_view giOutput : { "off", "on" })
-        for (const std::string_view aoPrecision : { "16-bit", "32-bit" })
-        for (const std::string_view giPrecision : { "16-bit", "32-bit" })
-        {
-            RetainedRuntimeCase runtimeCase = Visibility(
-                "ao-gi-hit-precision-" + std::string(aoOutput) + "-" +
-                    std::string(giOutput) + "-" +
-                    std::string(aoPrecision) + "-" +
-                    std::string(giPrecision), true, true);
-            Set(runtimeCase, "visibility.ao.output-hit-distance",
-                std::string(aoOutput));
-            Set(runtimeCase, "visibility.gi.output-hit-distance",
-                std::string(giOutput));
-            Set(runtimeCase, "denoising.ao.method",
-                aoOutput == "on" ? "reblur" : "joint-bilateral");
-            Set(runtimeCase, "denoising.gi.method",
-                giOutput == "on" ? "relax" : "joint-bilateral");
-            Set(runtimeCase, "visibility.ao.precision",
-                std::string(aoPrecision));
-            Set(runtimeCase, "visibility.gi.precision",
-                std::string(giPrecision));
-            add(std::move(runtimeCase));
-        }
-
-        struct ContinuousControl
+        struct DiscreteSpec
         {
             std::string_view name;
-            std::string_view label;
-            std::string_view minimum;
-            std::string_view maximum;
+            RetainedRuntimeCase::Setting value;
         };
-        constexpr std::array<ContinuousControl, 13> ContinuousControls = {{
-            { "visibility.radius", "visibility-radius", "0.1", "10" },
-            { "visibility.thickness", "visibility-thickness", "0.01", "2" },
-            { "visibility.distribution", "visibility-distribution", "0.25", "8" },
-            { "visibility.ao.strength", "ao-strength", "0", "8" },
-            { "visibility.gi.intensity", "gi-intensity", "0", "16" },
-            { "denoising.ao.radius", "ao-denoising-radius", "1", "8" },
-            { "denoising.gi.radius", "gi-denoising-radius", "1", "8" },
-            { "denoising.ao.history", "ao-history", "1", "32" },
-            { "denoising.gi.history", "gi-history", "1", "32" },
-            { "denoising.ao.disocclusion", "ao-disocclusion", "0.001", "0.1" },
-            { "denoising.gi.disocclusion", "gi-disocclusion", "0.001", "0.1" },
-            { "denoising.ao.anti-lag", "ao-anti-lag", "0", "1" },
-            { "denoising.gi.anti-lag", "gi-anti-lag", "0", "1" }
+        const std::array<DiscreteSpec, 7> DiscreteCases = {{
+            { "noise-pattern-spatial-white",
+                TokenSetting(SettingId::NoisePattern, 0u) },
+            { "noise-pattern-spatial-blue",
+                TokenSetting(SettingId::NoisePattern, 1u) },
+            { "noise-resolution-64x64",
+                TokenSetting(SettingId::NoiseResolution, 0u) },
+            { "noise-resolution-256x256",
+                TokenSetting(SettingId::NoiseResolution, 2u) },
+            { "noise-resolution-512x512",
+                TokenSetting(SettingId::NoiseResolution, 3u) },
+            { "noise-animate-off",
+                BooleanSetting(SettingId::NoiseAnimateSamples, false) },
+            { "noise-accumulate-on",
+                BooleanSetting(SettingId::NoiseAccumulateSamples, true) },
         }};
-        for (const ContinuousControl& control : ContinuousControls)
-        for (const bool maximum : { false, true })
+        for (std::size_t index = 0u; index < DiscreteCases.size(); ++index)
         {
-            RetainedRuntimeCase runtimeCase = Visibility(
-                "ao-gi-continuous-" + std::string(control.label) +
-                    (maximum ? "-maximum" : "-minimum"),
-                true,
-                true);
-            Set(runtimeCase, std::string(control.name), std::string(
-                maximum ? control.maximum : control.minimum));
-            add(std::move(runtimeCase));
-        }
-
-        for (const std::string_view view : {
-            "final", "ambient-visibility", "traced-indirect",
-            "applied-indirect" })
-        {
-            RetainedRuntimeCase runtimeCase = Visibility(
-                "debug-visibility-view-" + std::string(view), true, true);
-            Set(runtimeCase, "debug.visibility.view", std::string(view));
-            // Non-final visibility views present the single-sample
-            // visibility composite directly in both raster paths. They still
-            // exercise every MSAA pipeline, but their pixels are intentionally
-            // independent of raster sample count.
-            runtimeCase.requireCrossSampleDistinctness = view == "final";
-            add(std::move(runtimeCase));
-        }
-
-        for (const std::string_view pattern : NoisePatterns)
-        for (const std::string_view resolution : NoiseResolutions)
-        for (const bool animate : { false, true })
-        for (const bool accumulate : { false, true })
-        {
-            RetainedRuntimeCase runtimeCase = Visibility(
-                "global-noise-domain-" + std::string(pattern) + "-" +
-                    std::string(resolution) +
-                    (animate ? "-animated" : "-stationary") +
-                    (accumulate ? "-cumulative" : "-single"),
-                true,
-                true);
-            Set(runtimeCase, "noise.pattern", std::string(pattern));
-            Set(runtimeCase, "noise.resolution", std::string(resolution));
-            Set(runtimeCase, "noise.animate-samples",
-                animate ? "on" : "off");
-            Set(runtimeCase, "noise.accumulate-samples",
-                accumulate ? "on" : "off");
-            Set(runtimeCase, "visibility.specify-noise", "off");
-            add(std::move(runtimeCase));
-        }
-
-        for (const std::uint32_t samples : { 1u, 2u, 4u, 8u, 16u })
-        {
-            const auto configureSamples = [samples](
-                RetainedRuntimeCase& runtimeCase)
-            {
-                runtimeCase.expectedSampleCount = samples;
-                Set(runtimeCase, "anti-aliasing.msaa.enabled",
-                    samples == 1u ? "off" : "on");
-                if (samples > 1u)
-                {
-                    Set(runtimeCase, "anti-aliasing.msaa.samples",
-                        std::to_string(samples) + "x");
-                }
-            };
-
-            RetainedRuntimeCase unshadowed = Raster(
-                "flashlight-visible-unshadowed-" +
-                    std::to_string(samples) + "x");
-            configureSamples(unshadowed);
-            unshadowed.expectFlashlightLightingSubmitted = true;
-            unshadowed.assertFlashlightLightingState = true;
-            unshadowed.assertFlashlightVisibilityState = true;
-            unshadowed.action = RetainedRuntimeAction::ChangeSetting;
-            unshadowed.actionSettingName =
-                "light.selected.flashlight.enabled";
-            unshadowed.actionBaselineValue = "on";
-            unshadowed.actionValue = "off";
-            unshadowed.requireActionOutputDifference = true;
-            Set(unshadowed,
-                "light.selected.flashlight.cast-shadows", "off");
-            append(std::move(unshadowed));
-
-            RetainedRuntimeCase shadowed = Raster(
-                "flashlight-visible-shadowed-" +
-                    std::to_string(samples) + "x");
-            configureSamples(shadowed);
-            shadowed.expectFlashlightLightingSubmitted = true;
-            shadowed.assertFlashlightLightingState = true;
-            shadowed.expectFlashlightVisibility = true;
-            shadowed.assertFlashlightVisibilityState = true;
-            shadowed.action = RetainedRuntimeAction::ChangeSetting;
-            shadowed.actionSettingName =
-                "light.selected.flashlight.cast-shadows";
-            shadowed.actionBaselineValue = "on";
-            shadowed.actionValue = "off";
-            shadowed.requireActionOutputDifference = true;
-            Set(shadowed,
-                "light.selected.flashlight.enabled", "on");
-            Set(shadowed,
-                "light.selected.flashlight.output-hit-distance", "off");
-            Set(shadowed, "denoising.shadows.method", "raw");
-            append(std::move(shadowed));
-        }
-
-        for (const std::uint32_t samples : { 1u, 2u, 4u, 8u, 16u })
-        {
-            RetainedRuntimeCase runtimeCase = Raster(
-                "per-sample-directional-sky-flashlight-" +
-                    std::to_string(samples) + "x");
-            runtimeCase.expectedSampleCount = samples;
+            const DiscreteSpec& spec = DiscreteCases[index];
+            RetainedRuntimeCase runtimeCase = Raster(std::string(spec.name));
+            Set(runtimeCase, TokenSetting(SettingId::NoisePattern, 2u));
+            Set(runtimeCase, TokenSetting(SettingId::NoiseResolution, 1u));
+            Set(runtimeCase, BooleanSetting(SettingId::NoiseAnimateSamples, true));
+            Set(runtimeCase, BooleanSetting(SettingId::NoiseAccumulateSamples, false));
             runtimeCase.expectDirectionalVisibility = true;
-            runtimeCase.expectSkyVisibility = true;
-            runtimeCase.expectFlashlightLightingSubmitted = true;
-            runtimeCase.assertFlashlightLightingState = true;
-            runtimeCase.expectFlashlightVisibility = true;
-            runtimeCase.assertFlashlightVisibilityState = true;
-            runtimeCase.expectShadowDenoising = true;
-            runtimeCase.expectSkyDenoising = true;
-            Set(runtimeCase, "anti-aliasing.msaa.enabled",
-                samples == 1u ? "off" : "on");
-            if (samples > 1u)
-            {
-                Set(runtimeCase, "anti-aliasing.msaa.samples",
-                    std::to_string(samples) + "x");
-            }
-            Set(runtimeCase, "sky.visibility.enabled", "on");
-            Set(runtimeCase, "sky.visibility.diffuse-ibl", "on");
-            Set(runtimeCase, "sky.visibility.specular-ibl", "on");
-            Set(runtimeCase, "sky.visibility.samples-per-pixel",
-                std::to_string(samples));
-            Set(runtimeCase, "sky.visibility.output-hit-distance", "on");
-            Set(runtimeCase, "denoising.sky.method", "reblur");
-            Set(runtimeCase, "light.selected.flashlight.enabled", "on");
-            Set(runtimeCase,
-                "light.selected.flashlight.cast-shadows", "on");
-            Set(runtimeCase,
-                "light.selected.flashlight.output-hit-distance", "on");
-            Set(runtimeCase, "denoising.shadows.method", "sigma");
-            add(std::move(runtimeCase));
+            runtimeCase.assertLightingAccumulationState = true;
+            runtimeCase.expectLightingAccumulation =
+                spec.value.id == SettingId::NoiseAccumulateSamples;
+            Set(runtimeCase, spec.value);
+            if ((index % 2u) == 0u)
+                setScene(runtimeCase, bistroScene, BistroToken);
+            else
+                setScene(runtimeCase, sanMiguelScene, SanMiguelToken);
+            cases.push_back(std::move(runtimeCase));
         }
 
-        for (const std::string_view samples : { "32", "64" })
+        struct AllSignalSpec
         {
-            RetainedRuntimeCase runtimeCase = Raster(
-                "sky-quality-" + std::string(samples) + "-rays");
-            runtimeCase.expectDirectionalVisibility = true;
-            runtimeCase.expectSkyVisibility = true;
-            Set(runtimeCase, "sky.visibility.enabled", "on");
-            Set(runtimeCase, "sky.visibility.diffuse-ibl", "on");
-            Set(runtimeCase, "sky.visibility.samples-per-pixel",
-                std::string(samples));
-            add(std::move(runtimeCase));
-        }
-
-        for (const std::string_view pattern : NoisePatterns)
-        for (const std::string_view resolution : NoiseResolutions)
-        for (const bool animate : { false, true })
-        {
-            RetainedRuntimeCase runtimeCase = Raster(
-                "sky-custom-noise-" + std::string(pattern) + "-" +
-                    std::string(resolution) +
-                    (animate ? "-animated" : "-stationary"));
-            runtimeCase.expectSkyVisibility = true;
-            Set(runtimeCase, "sky.visibility.enabled", "on");
-            Set(runtimeCase, "sky.visibility.diffuse-ibl", "on");
-            Set(runtimeCase, "sky.visibility.specify-noise", "on");
-            Set(runtimeCase, "sky.visibility.noise-pattern",
-                std::string(pattern));
-            Set(runtimeCase, "sky.visibility.noise-resolution",
-                std::string(resolution));
-            Set(runtimeCase, "sky.visibility.animate-samples",
-                animate ? "on" : "off");
-            append(std::move(runtimeCase));
-        }
-
-        constexpr std::array<std::string_view, 4> ShadowMethods = {
-            "raw", "joint-bilateral", "gaussian-bilateral", "sigma"
+            std::string_view name;
+            bool startsInBistro;
         };
-        for (const std::string_view method : ShadowMethods)
+        constexpr std::array<AllSignalSpec, 2> AllSignalCases = {{
+            { "all-signal-bistro-to-san-miguel", true },
+            { "all-signal-san-miguel-to-bistro", false }
+        }};
+        for (const AllSignalSpec& spec : AllSignalCases)
         {
-            RetainedRuntimeCase runtimeCase = Raster(
-                "flashlight-shadow-denoising-" + std::string(method));
-            runtimeCase.expectFlashlightVisibility = true;
-            runtimeCase.expectFlashlightLightingSubmitted = true;
-            runtimeCase.assertFlashlightLightingState = true;
-            runtimeCase.assertFlashlightVisibilityState = true;
-            runtimeCase.expectShadowDenoising = method != "raw";
-            Set(runtimeCase, "light.selected.flashlight.enabled", "on");
-            Set(runtimeCase,
-                "light.selected.flashlight.cast-shadows", "on");
-            Set(runtimeCase,
-                "light.selected.flashlight.output-hit-distance", "on");
-            Set(runtimeCase, "denoising.shadows.method",
-                std::string(method));
-            append(std::move(runtimeCase));
-        }
-        for (const std::string_view quality : Qualities)
-        for (const std::string_view resolution : DenoisingResolutions)
-        {
-            RetainedRuntimeCase runtimeCase = Raster(
-                "flashlight-shadow-denoising-" + std::string(quality) +
-                    "-" + std::string(resolution));
-            runtimeCase.expectFlashlightVisibility = true;
-            runtimeCase.expectFlashlightLightingSubmitted = true;
-            runtimeCase.assertFlashlightLightingState = true;
-            runtimeCase.assertFlashlightVisibilityState = true;
-            runtimeCase.expectShadowDenoising = true;
-            Set(runtimeCase, "light.selected.flashlight.enabled", "on");
-            Set(runtimeCase,
-                "light.selected.flashlight.cast-shadows", "on");
-            Set(runtimeCase,
-                "light.selected.flashlight.output-hit-distance", "on");
-            Set(runtimeCase, "denoising.shadows.method", "sigma");
-            Set(runtimeCase, "denoising.shadows.quality",
-                std::string(quality));
-            Set(runtimeCase, "denoising.shadows.resolution",
-                std::string(resolution));
-            append(std::move(runtimeCase));
-        }
-
-        for (const std::string_view method : GiMethods)
-        {
-            RetainedRuntimeCase runtimeCase = Raster(
-                "sky-denoising-" + std::string(method));
-            runtimeCase.expectSkyVisibility = true;
-            runtimeCase.expectSkyDenoising = method != "raw";
-            Set(runtimeCase, "sky.visibility.enabled", "on");
-            Set(runtimeCase, "sky.visibility.diffuse-ibl", "on");
-            Set(runtimeCase, "sky.visibility.output-hit-distance", "on");
-            Set(runtimeCase, "denoising.sky.method", std::string(method));
-            append(std::move(runtimeCase));
-        }
-        for (const std::string_view quality : Qualities)
-        for (const std::string_view resolution : DenoisingResolutions)
-        {
-            RetainedRuntimeCase runtimeCase = Raster(
-                "sky-denoising-" + std::string(quality) + "-" +
-                    std::string(resolution));
-            runtimeCase.expectSkyVisibility = true;
-            runtimeCase.expectSkyDenoising = true;
-            Set(runtimeCase, "sky.visibility.enabled", "on");
-            Set(runtimeCase, "sky.visibility.diffuse-ibl", "on");
-            Set(runtimeCase, "sky.visibility.output-hit-distance", "on");
-            Set(runtimeCase, "denoising.sky.method", "reblur");
-            Set(runtimeCase, "denoising.sky.quality", std::string(quality));
-            Set(runtimeCase, "denoising.sky.resolution",
-                std::string(resolution));
-            append(std::move(runtimeCase));
-        }
-
-        std::size_t environmentIndex = 0u;
-        for (const std::string_view environment : {
-            "day", "bright-overcast", "soft-day", "night",
-            "starry-night", "cloudy" })
-        {
-            RetainedRuntimeCase runtimeCase = Raster(
-                "hdr-environment-" + std::string(environment));
-            runtimeCase.expectSkyVisibility = true;
-            Set(runtimeCase, "sky.environment", std::string(environment));
-            Set(runtimeCase, "sky.visibility.enabled", "on");
-            Set(runtimeCase, "sky.visibility.diffuse-ibl", "on");
-            Set(runtimeCase, "sky.visibility.samples-per-pixel", "4");
-            const bool automaticExposure =
-                (environmentIndex % 2u) != 0u;
-            Set(runtimeCase, "sky.auto-exposure.enabled",
-                automaticExposure ? "on" : "off");
-            if (automaticExposure)
-            {
-                constexpr std::array<std::string_view, 3> Compensation = {
-                    "-18", "0", "8"
-                };
-                constexpr std::array<std::string_view, 3> Movement = {
-                    "0", "8", "16"
-                };
-                constexpr std::array<std::string_view, 3> Period = {
-                    "0.05", "0.2", "5"
-                };
-                const std::size_t profile = environmentIndex / 2u;
-                Set(runtimeCase,
-                    "sky.auto-exposure.exposure-compensation",
-                    std::string(Compensation[profile]));
-                Set(runtimeCase,
-                    "sky.auto-exposure.maximum-brightening",
-                    std::string(Movement[profile]));
-                Set(runtimeCase,
-                    "sky.auto-exposure.maximum-darkening",
-                    std::string(Movement[2u - profile]));
-                Set(runtimeCase,
-                    "sky.auto-exposure.adjustment-period",
-                    std::string(Period[profile]));
-            }
-            runtimeCase.expectAutoExposure = automaticExposure;
-            runtimeCase.assertAutoExposureState = true;
-            add(std::move(runtimeCase));
-            ++environmentIndex;
-        }
-
-        // Each AO/GI configuration starts in the scene left active by the
-        // preceding row, then switches once. This proves both retained scenes
-        // without bouncing through an unrelated factory-default scene.
-        for (RetainedRuntimeCase& runtimeCase : visibilityCases)
-            append(std::move(runtimeCase));
-
-        for (const std::uint32_t samples : { 1u, 2u, 4u, 8u, 16u })
-        {
-            const bool startsInBistro =
-                visibilityVariantIndex++ % 2u == 0u;
-            const std::string& initialScene = startsInBistro
+            RetainedRuntimeCase runtimeCase = Raster(std::string(spec.name));
+            const std::string& initialScene = spec.startsInBistro
                 ? bistroScene
                 : sanMiguelScene;
-            const std::string& finalScene = startsInBistro
+            const std::string& finalScene = spec.startsInBistro
                 ? sanMiguelScene
                 : bistroScene;
-            RetainedRuntimeCase runtimeCase = Visibility(
-                "scene-mixed-coverage-" +
-                    std::string(startsInBistro
-                        ? "bistro-to-san-miguel-"
-                        : "san-miguel-to-bistro-") +
-                    std::to_string(samples) + "x",
-                true,
-                true);
-            runtimeCase.expectedSampleCount = samples;
-            runtimeCase.expectDirectionalVisibility = true;
-            runtimeCase.expectSkyVisibility = true;
-            runtimeCase.expectFlashlightVisibility = true;
-            runtimeCase.expectFlashlightLightingSubmitted = true;
-            runtimeCase.assertFlashlightLightingState = true;
-            runtimeCase.assertFlashlightVisibilityState = true;
-            runtimeCase.expectShadowDenoising = true;
-            runtimeCase.expectSkyDenoising = true;
             runtimeCase.snapshotRoundTrip = true;
             runtimeCase.exerciseRetainedStateChanges = true;
-            runtimeCase.actionSettingName = "scene.current";
-            runtimeCase.actionBaselineValue = initialScene;
-            runtimeCase.actionValue = finalScene;
-            runtimeCase.actionBaselineSceneToken = startsInBistro
-                ? "bistro_interior_retextured"
-                : "san_miguel_retextured";
-            runtimeCase.expectedSceneToken = startsInBistro
-                ? "san_miguel_retextured"
-                : "bistro_interior_retextured";
             runtimeCase.resizeWidth = 704;
             runtimeCase.resizeHeight = 400;
-            Set(runtimeCase, "scene.current", initialScene);
-            Set(runtimeCase, "anti-aliasing.msaa.enabled",
-                samples == 1u ? "off" : "on");
-            if (samples > 1u)
-            {
-                Set(runtimeCase, "anti-aliasing.msaa.samples",
-                    std::to_string(samples) + "x");
-            }
-            Set(runtimeCase, "sky.visibility.enabled", "on");
-            Set(runtimeCase, "sky.visibility.diffuse-ibl", "on");
-            Set(runtimeCase, "sky.visibility.specular-ibl", "on");
-            Set(runtimeCase, "sky.visibility.samples-per-pixel", "8");
-            Set(runtimeCase, "sky.visibility.output-hit-distance", "on");
-            Set(runtimeCase, "denoising.sky.method", "reblur");
+            runtimeCase.actionBaselineSceneToken = spec.startsInBistro
+                ? BistroToken
+                : SanMiguelToken;
+            runtimeCase.expectedSceneToken = spec.startsInBistro
+                ? SanMiguelToken
+                : BistroToken;
+            runtimeCase.actionSettingId = SettingId::SceneCurrent;
+            runtimeCase.actionBaselineValue =
+                UiSettingsValue::Selector(initialScene);
+            runtimeCase.actionValue = UiSettingsValue::Selector(finalScene);
             Set(runtimeCase,
-                "light.selected.flashlight.enabled", "on");
+                SelectorSetting(SettingId::SceneCurrent, initialScene));
             Set(runtimeCase,
-                "light.selected.flashlight.cast-shadows", "on");
+                BooleanSetting(SettingId::SkyVisibilityEnabled, true));
             Set(runtimeCase,
-                "light.selected.flashlight.output-hit-distance", "on");
-            Set(runtimeCase, "denoising.shadows.method", "sigma");
-            append(std::move(runtimeCase));
+                BooleanSetting(SettingId::SkyVisibilityDiffuseIbl, true));
+            Set(runtimeCase,
+                BooleanSetting(SettingId::SkyVisibilitySpecularIbl, true));
+            Set(runtimeCase,
+                TokenSetting(SettingId::SkyVisibilitySamplesPerPixel, 3u));
+            Set(runtimeCase,
+                SelectorSetting(SettingId::LightSelected, "flashlight_1"));
+            Set(runtimeCase, BooleanSetting(
+                SettingId::LightSelectedFlashlightEnabled, true));
+            Set(runtimeCase, BooleanSetting(
+                SettingId::LightSelectedFlashlightCastShadows, true));
+            Set(runtimeCase,
+                BooleanSetting(SettingId::ShadowsRayTracedEnabled, true));
+            runtimeCase.expectDirectionalVisibility = true;
+            runtimeCase.expectSkyVisibility = true;
+            runtimeCase.expectFlashlightLightingSubmitted = true;
+            runtimeCase.assertFlashlightLightingState = true;
+            runtimeCase.expectFlashlightVisibility = true;
+            runtimeCase.assertFlashlightVisibilityState = true;
+            cases.push_back(std::move(runtimeCase));
         }
 
-        const auto pathCase = [](
-            std::string name,
-            const std::string& scene)
+        const std::array<UiSettingsValue, 6> Environments = {
+            DomainTokenValue(SettingId::SkyEnvironment, 0u),
+            DomainTokenValue(SettingId::SkyEnvironment, 1u),
+            DomainTokenValue(SettingId::SkyEnvironment, 2u),
+            DomainTokenValue(SettingId::SkyEnvironment, 3u),
+            DomainTokenValue(SettingId::SkyEnvironment, 4u),
+            DomainTokenValue(SettingId::SkyEnvironment, 5u)
+        };
+        constexpr std::array<float, 3> Compensation = { -18.f, 0.f, 8.f };
+        constexpr std::array<float, 3> Brightening = { 0.f, 8.f, 16.f };
+        constexpr std::array<float, 3> Darkening = { 16.f, 8.f, 0.f };
+        constexpr std::array<float, 3> AdjustmentPeriod = {
+            0.05f, 0.2f, 5.f
+        };
+        for (std::size_t index = 0u; index < Environments.size(); ++index)
         {
-            RetainedRuntimeCase runtimeCase;
-            runtimeCase.name = std::move(name);
-            runtimeCase.expectedSampleCount = 1u;
+            RetainedRuntimeCase runtimeCase = Raster(
+                "hdr-environment-" + Environments[index].text);
+            setScene(runtimeCase,
+                (index % 2u) == 0u ? bistroScene : sanMiguelScene,
+                (index % 2u) == 0u ? BistroToken : SanMiguelToken);
+            Set(runtimeCase,
+                { SettingId::SkyEnvironment, Environments[index] });
+            runtimeCase.action = RetainedRuntimeAction::ChangeSetting;
+            runtimeCase.actionSettingId = SettingId::SkyEnvironment;
+            runtimeCase.actionBaselineValue = Environments[
+                (index + Environments.size() - 1u) % Environments.size()];
+            runtimeCase.actionValue = Environments[index];
+            runtimeCase.requireActionOutputDifference = true;
+            Set(runtimeCase,
+                BooleanSetting(SettingId::SkyDiffuseIbl, true));
+            Set(runtimeCase,
+                BooleanSetting(SettingId::SkySpecularIbl, true));
+            Set(runtimeCase,
+                BooleanSetting(SettingId::SkyEnvironmentBackground, true));
+            Set(runtimeCase,
+                BooleanSetting(SettingId::SkyVisibilityEnabled, true));
+            Set(runtimeCase,
+                BooleanSetting(SettingId::SkyVisibilityDiffuseIbl, true));
+            Set(runtimeCase,
+                BooleanSetting(SettingId::SkyVisibilitySpecularIbl, true));
+            Set(runtimeCase,
+                TokenSetting(SettingId::SkyVisibilitySamplesPerPixel, 2u));
+            const bool automaticExposure = (index % 2u) != 0u;
+            Set(runtimeCase, BooleanSetting(
+                SettingId::SkyAutoExposureEnabled, automaticExposure));
+            if (automaticExposure)
+            {
+                const std::size_t profile = index / 2u;
+                Set(runtimeCase, FloatSetting(
+                    SettingId::SkyAutoExposureExposureCompensation,
+                    Compensation[profile]));
+                Set(runtimeCase, FloatSetting(
+                    SettingId::SkyAutoExposureMaximumBrightening,
+                    Brightening[profile]));
+                Set(runtimeCase, FloatSetting(
+                    SettingId::SkyAutoExposureMaximumDarkening,
+                    Darkening[profile]));
+                Set(runtimeCase, FloatSetting(
+                    SettingId::SkyAutoExposureAdjustmentPeriod,
+                    AdjustmentPeriod[profile]));
+            }
+            runtimeCase.expectSkyVisibility = true;
+            runtimeCase.expectAutoExposure = automaticExposure;
+            runtimeCase.assertAutoExposureState = true;
+            cases.push_back(std::move(runtimeCase));
+        }
+
+        RetainedRuntimeCase flashlightLighting = Raster(
+            "flashlight-lighting-toggle-bistro-1x");
+        setScene(flashlightLighting, bistroScene, BistroToken);
+        Set(flashlightLighting, BooleanSetting(
+            SettingId::LightSelectedFlashlightEnabled, true));
+        Set(flashlightLighting, BooleanSetting(
+            SettingId::LightSelectedFlashlightCastShadows, false));
+        flashlightLighting.expectFlashlightLightingSubmitted = true;
+        flashlightLighting.assertFlashlightLightingState = true;
+        flashlightLighting.assertFlashlightVisibilityState = true;
+        flashlightLighting.action = RetainedRuntimeAction::ChangeSetting;
+        flashlightLighting.actionSettingId =
+            SettingId::LightSelectedFlashlightEnabled;
+        flashlightLighting.actionBaselineValue =
+            UiSettingsValue::Boolean(true);
+        flashlightLighting.actionValue = UiSettingsValue::Boolean(false);
+        flashlightLighting.requireActionOutputDifference = true;
+        cases.push_back(std::move(flashlightLighting));
+
+        RetainedRuntimeCase flashlightShadow = Raster(
+            "flashlight-shadow-toggle-san-miguel");
+        setScene(flashlightShadow, sanMiguelScene, SanMiguelToken);
+        Set(flashlightShadow, BooleanSetting(
+            SettingId::LightSelectedFlashlightEnabled, true));
+        Set(flashlightShadow, BooleanSetting(
+            SettingId::LightSelectedFlashlightCastShadows, true));
+        flashlightShadow.expectFlashlightLightingSubmitted = true;
+        flashlightShadow.assertFlashlightLightingState = true;
+        flashlightShadow.expectFlashlightVisibility = true;
+        flashlightShadow.assertFlashlightVisibilityState = true;
+        flashlightShadow.action = RetainedRuntimeAction::ChangeSetting;
+        flashlightShadow.actionSettingId =
+            SettingId::LightSelectedFlashlightCastShadows;
+        flashlightShadow.actionBaselineValue =
+            UiSettingsValue::Boolean(true);
+        flashlightShadow.actionValue = UiSettingsValue::Boolean(false);
+        flashlightShadow.requireActionOutputDifference = true;
+        cases.push_back(std::move(flashlightShadow));
+
+        const auto pathCase = [&bistroScene](std::string name)
+        {
+            RetainedRuntimeCase runtimeCase = Raster(std::move(name));
             runtimeCase.expectedPathHistoryCount = 3u;
-            runtimeCase.settings = {
-                { "scene.current", scene },
-                { "anti-aliasing.msaa.enabled", "off" },
-                { "visibility.enabled", "off" },
-                { "sky.visibility.enabled", "off" },
-                { "lighting.solution", "path-tracing" }
-            };
+            Set(runtimeCase,
+                SelectorSetting(SettingId::SceneCurrent, bistroScene));
+            Set(runtimeCase,
+                BooleanSetting(SettingId::SkyVisibilityEnabled, false));
+            Set(runtimeCase,
+                TokenSetting(SettingId::LightingSolution, 1u));
+            Set(runtimeCase,
+                TokenSetting(SettingId::NoisePattern, 2u));
+            runtimeCase.expectedSceneToken =
+                "bistro_interior_retextured";
             return runtimeCase;
         };
 
-        RetainedRuntimeCase bistro =
-            pathCase("path-tracing-bistro", bistroScene);
-        bistro.snapshotRoundTrip = true;
-        bistro.expectedSceneToken = "bistro_interior_retextured";
-        add(std::move(bistro));
+        RetainedRuntimeCase pathBaseline =
+            pathCase("path-tracing-bistro");
+        pathBaseline.snapshotRoundTrip = true;
+        cases.push_back(std::move(pathBaseline));
 
-        RetainedRuntimeCase camera =
-            pathCase("path-history-camera-reset", bistroScene);
-        camera.action = RetainedRuntimeAction::NudgeCamera;
-        camera.requirePathHistoryRestart = true;
-        camera.expectedSceneToken = "bistro_interior_retextured";
-        add(std::move(camera));
+        RetainedRuntimeCase pathCamera =
+            pathCase("path-history-camera-reset");
+        pathCamera.action = RetainedRuntimeAction::NudgeCamera;
+        pathCamera.requirePathHistoryRestart = true;
+        cases.push_back(std::move(pathCamera));
 
-        RetainedRuntimeCase resize =
-            pathCase("path-history-resize-reset", bistroScene);
-        resize.action = RetainedRuntimeAction::ResizeViewport;
-        resize.resizeWidth = 800;
-        resize.resizeHeight = 448;
-        resize.requirePathHistoryRestart = true;
-        resize.expectedSceneToken = "bistro_interior_retextured";
-        add(std::move(resize));
+        RetainedRuntimeCase pathResize =
+            pathCase("path-history-resize-reset");
+        pathResize.action = RetainedRuntimeAction::ResizeViewport;
+        pathResize.resizeWidth = 800;
+        pathResize.resizeHeight = 448;
+        pathResize.requirePathHistoryRestart = true;
+        cases.push_back(std::move(pathResize));
 
-        RetainedRuntimeCase san = pathCase(
-            "path-tracing-san-miguel-scene-reset", sanMiguelScene);
-        san.snapshotRoundTrip = true;
-        san.action = RetainedRuntimeAction::ChangeScene;
-        san.actionSettingName = "scene.current";
-        san.actionBaselineValue = bistroScene;
-        san.actionBaselineSceneToken = "bistro_interior_retextured";
-        san.actionValue = sanMiguelScene;
-        san.requirePathHistoryRestart = true;
-        san.expectedSceneToken = "san_miguel_retextured";
-        add(std::move(san));
+        RetainedRuntimeCase pathScene =
+            pathCase("path-tracing-san-miguel-scene-reset");
+        pathScene.action = RetainedRuntimeAction::ChangeScene;
+        pathScene.actionSettingId = SettingId::SceneCurrent;
+        pathScene.actionBaselineValue =
+            UiSettingsValue::Selector(bistroScene);
+        pathScene.actionBaselineSceneToken = BistroToken;
+        pathScene.actionValue = UiSettingsValue::Selector(sanMiguelScene);
+        pathScene.expectedSceneToken = SanMiguelToken;
+        pathScene.requirePathHistoryRestart = true;
+        cases.push_back(std::move(pathScene));
 
-        const auto addPathRestart = [
-            &add, &pathCase, &bistroScene](
+        const auto appendPathRestart = [
+            &cases, &pathCase](
                 std::string name,
                 RetainedRuntimeAction action,
-                std::string settingName = {},
-                std::string baselineValue = {},
-                std::string actionValue = {},
+                SettingId settingId = SettingId::Invalid,
+                UiSettingsValue baselineValue = {},
+                UiSettingsValue actionValue = {},
                 bool requireOutputDifference = false)
         {
-            RetainedRuntimeCase runtimeCase =
-                pathCase(std::move(name), bistroScene);
+            RetainedRuntimeCase runtimeCase = pathCase(std::move(name));
             runtimeCase.action = action;
-            runtimeCase.actionSettingName = std::move(settingName);
+            runtimeCase.actionSettingId = settingId;
             runtimeCase.actionBaselineValue = std::move(baselineValue);
             runtimeCase.actionValue = std::move(actionValue);
+            if (runtimeCase.action == RetainedRuntimeAction::ChangeSetting)
+            {
+                Set(runtimeCase, { runtimeCase.actionSettingId,
+                    runtimeCase.actionBaselineValue });
+            }
             runtimeCase.requirePathHistoryRestart = true;
             runtimeCase.requireActionOutputDifference =
                 requireOutputDifference;
-            runtimeCase.expectedSceneToken =
-                "bistro_interior_retextured";
-            add(std::move(runtimeCase));
+            cases.push_back(std::move(runtimeCase));
         };
-
-        addPathRestart(
+        appendPathRestart(
             "path-history-environment-reset",
             RetainedRuntimeAction::ChangeSetting,
-            "sky.environment", "day", "night", true);
-        addPathRestart(
+            SettingId::SkyEnvironment,
+            DomainTokenValue(SettingId::SkyEnvironment, 0u),
+            DomainTokenValue(SettingId::SkyEnvironment, 3u), true);
+        appendPathRestart(
             "path-history-exposure-reset",
             RetainedRuntimeAction::ChangeSetting,
-            "sky.exposure", "-2.75", "-1.75", true);
-        addPathRestart(
+            SettingId::SkyExposure,
+            UiSettingsValue::Float(-2.75f),
+            UiSettingsValue::Float(-1.75f), true);
+        appendPathRestart(
             "path-history-global-noise-reset",
             RetainedRuntimeAction::ChangeSetting,
-            "noise.pattern", "spatiotemporal-blue", "spatial-blue");
-        addPathRestart(
+            SettingId::NoisePattern,
+            DomainTokenValue(SettingId::NoisePattern, 2u),
+            DomainTokenValue(SettingId::NoisePattern, 1u));
+        appendPathRestart(
             "path-history-material-reset",
             RetainedRuntimeAction::ChangeMaterial);
-        addPathRestart(
+        appendPathRestart(
             "path-history-light-reset",
             RetainedRuntimeAction::ChangeLight);
-        addPathRestart(
+        appendPathRestart(
             "path-history-flashlight-reset",
             RetainedRuntimeAction::ToggleFlashlight);
-        addPathRestart(
+        appendPathRestart(
             "path-history-lighting-solution-cycle",
             RetainedRuntimeAction::CycleLightingSolution);
+
+        appendPathRestart("path-history-maximum-bounces-reset",
+            RetainedRuntimeAction::ChangeSetting, SettingId::PathingMaximumBounces,
+            UiSettingsValue::Integer(1), UiSettingsValue::Integer(8), true);
+        appendPathRestart("path-history-minimum-bounces-reset",
+            RetainedRuntimeAction::ChangeSetting, SettingId::PathingMinimumBounces,
+            UiSettingsValue::Integer(1), UiSettingsValue::Integer(4));
+        appendPathRestart("path-history-firefly-filter-reset",
+            RetainedRuntimeAction::ChangeSetting, SettingId::PathingFireflyFilter,
+            UiSettingsValue::Boolean(false), UiSettingsValue::Boolean(true), true);
+        Set(cases.back(), FloatSetting(SettingId::PathingFireflyThreshold, 10.f));
+        Set(cases.back(), FloatSetting(SettingId::SkyExposure, 3.f));
+        appendPathRestart("path-history-firefly-threshold-reset",
+            RetainedRuntimeAction::ChangeSetting, SettingId::PathingFireflyThreshold,
+            UiSettingsValue::Float(10.f), UiSettingsValue::Float(1000000.f), true);
+        Set(cases.back(), FloatSetting(SettingId::SkyExposure, 3.f));
+
+        const auto appendCycle = [&](RetainedRuntimeCase runtimeCase, SettingId id,
+            UiSettingsValue baselineValue = UiSettingsValue::Boolean(true),
+            UiSettingsValue disabledValue = UiSettingsValue::Boolean(false))
+        {
+            runtimeCase.action = RetainedRuntimeAction::CyclePrerequisite;
+            runtimeCase.actionSettingId = id;
+            runtimeCase.actionBaselineValue = std::move(baselineValue);
+            runtimeCase.actionValue = std::move(disabledValue);
+            setScene(runtimeCase, bistroScene, BistroToken);
+            cases.push_back(std::move(runtimeCase));
+        };
+        auto pathTraversal = pathCase("path-traversal-cycle");
+        pathTraversal.requirePathHistoryRestart = true;
+        appendCycle(std::move(pathTraversal), SettingId::RepresentationAllowRayTraversal);
+        auto rasterTraversal = Raster("ray-marching-traversal-cycle");
+        rasterTraversal.expectDirectionalVisibility = true;
+        appendCycle(std::move(rasterTraversal), SettingId::RepresentationAllowRayTraversal);
+
+        std::rotate(cases.begin(), cases.end() - 2, cases.end());
         return cases;
     }
+
 
     RetainedRuntimeDiagnosticState::RetainedRuntimeDiagnosticState(
         std::vector<RetainedRuntimeCase> cases,
@@ -2003,8 +1241,8 @@ namespace uvsr
             return false;
         }
         const bool baselineScenePhase = beforeAction ||
-            m_CurrentAction == RetainedRuntimeAction::NudgeCamera ||
-            m_CurrentAction == RetainedRuntimeAction::ResizeViewport;
+            (runtimeCase.exerciseRetainedStateChanges &&
+                m_CurrentAction == RetainedRuntimeAction::NudgeCamera);
         const std::string& expectedScene =
             baselineScenePhase &&
                 !runtimeCase.actionBaselineSceneToken.empty()
@@ -2018,32 +1256,7 @@ namespace uvsr
                 expectedScene + "'";
             return false;
         }
-        if (runtimeCase.expectedSampleCount > 0u &&
-            telemetry.receiverSampleCount != runtimeCase.expectedSampleCount)
-        {
-            reason = "receiver sample count is " +
-                std::to_string(telemetry.receiverSampleCount) +
-                ", expected " +
-                std::to_string(runtimeCase.expectedSampleCount);
-            return false;
-        }
-        const bool disabledVisibilityReference =
-            runtimeCase.exerciseRetainedStateChanges &&
-            m_CurrentAction == RetainedRuntimeAction::ChangeSetting &&
-            m_CompletedActionCount == 3u;
-        if (disabledVisibilityReference &&
-            telemetry.screenVisibilityDispatched)
-        {
-            reason = "visibility-off reference still dispatched AO/GI";
-            return false;
-        }
-        if (!disabledVisibilityReference &&
-            runtimeCase.expectScreenVisibility &&
-            !telemetry.screenVisibilityDispatched)
-        {
-            reason = "AO/GI visibility did not dispatch";
-            return false;
-        }
+
         if (runtimeCase.expectDirectionalVisibility &&
             !telemetry.directionalVisibilityDispatched)
         {
@@ -2058,15 +1271,15 @@ namespace uvsr
         }
         const bool flashlightDisabledReference = !beforeAction &&
             m_CurrentAction == RetainedRuntimeAction::ChangeSetting &&
-            runtimeCase.actionSettingName ==
-                "light.selected.flashlight.enabled" &&
-            runtimeCase.actionValue == "off";
+            runtimeCase.actionSettingId ==
+                SettingId::LightSelectedFlashlightEnabled &&
+            IsBoolean(&runtimeCase.actionValue, false);
         const bool flashlightShadowsDisabledReference = !beforeAction &&
             m_CurrentAction == RetainedRuntimeAction::ChangeSetting &&
             (flashlightDisabledReference ||
-                (runtimeCase.actionSettingName ==
-                        "light.selected.flashlight.cast-shadows" &&
-                    runtimeCase.actionValue == "off"));
+                (runtimeCase.actionSettingId ==
+                        SettingId::LightSelectedFlashlightCastShadows &&
+                    IsBoolean(&runtimeCase.actionValue, false)));
         const bool expectedFlashlightLighting =
             runtimeCase.expectFlashlightLightingSubmitted &&
             !flashlightDisabledReference;
@@ -2098,47 +1311,10 @@ namespace uvsr
             reason = "flashlight per-sample visibility did not dispatch";
             return false;
         }
-        if (!disabledVisibilityReference &&
-            runtimeCase.expectShadowDenoising &&
-            !telemetry.shadowDenoisingDispatched)
-        {
-            reason = "shadow denoising did not dispatch";
-            return false;
-        }
-        if (!disabledVisibilityReference &&
-            runtimeCase.expectSkyDenoising &&
-            !telemetry.skyDenoisingDispatched)
-        {
-            reason = "sky denoising did not dispatch";
-            return false;
-        }
-        if (!disabledVisibilityReference &&
-            runtimeCase.expectAmbientOcclusionDenoising &&
-            !telemetry.ambientOcclusionDenoisingDispatched)
-        {
-            reason = "AO denoising did not dispatch";
-            return false;
-        }
-        if (!disabledVisibilityReference &&
-            runtimeCase.expectGlobalIlluminationDenoising &&
-            !telemetry.globalIlluminationDenoisingDispatched)
-        {
-            reason = "GI denoising did not dispatch";
-            return false;
-        }
-        if (!disabledVisibilityReference &&
-            runtimeCase.expectLightingAccumulation &&
+        if (runtimeCase.expectLightingAccumulation &&
             !telemetry.lightingAccumulationCommitted)
         {
             reason = "fixed cumulative lighting history did not commit";
-            return false;
-        }
-        if (!disabledVisibilityReference &&
-            runtimeCase.expectLightingAccumulation &&
-            (telemetry.ambientOcclusionDenoisingDispatched ||
-                telemetry.globalIlluminationDenoisingDispatched))
-        {
-            reason = "fixed cumulative lighting also dispatched AO/GI denoising";
             return false;
         }
         if (runtimeCase.assertLightingAccumulationState &&
@@ -2159,24 +1335,33 @@ namespace uvsr
                 : "auto exposure dispatched while disabled";
             return false;
         }
-        const std::string_view expectedNoisePattern =
-            Get(runtimeCase, "noise.pattern");
-        const std::string_view expectedNoiseResolution =
-            Get(runtimeCase, "noise.resolution");
-        const std::string_view expectedNoiseAnimate =
-            Get(runtimeCase, "noise.animate-samples");
-        const std::string_view expectedNoiseAccumulate =
-            Get(runtimeCase, "noise.accumulate-samples");
-        if ((!expectedNoisePattern.empty() &&
-                telemetry.globalNoisePattern != expectedNoisePattern) ||
-            (!expectedNoiseResolution.empty() &&
-                telemetry.globalNoiseResolution != expectedNoiseResolution) ||
-            (!expectedNoiseAnimate.empty() &&
+        const auto phaseValue = [&](SettingId id) -> const UiSettingsValue*
+        {
+            if (!beforeAction &&
+                m_CurrentAction == RetainedRuntimeAction::ChangeSetting &&
+                runtimeCase.actionSettingId == id)
+                return &runtimeCase.actionValue;
+            return Get(runtimeCase, id);
+        };
+        const UiSettingsValue* expectedNoisePattern =
+            phaseValue(SettingId::NoisePattern);
+        const UiSettingsValue* expectedNoiseResolution =
+            phaseValue(SettingId::NoiseResolution);
+        const UiSettingsValue* expectedNoiseAnimate =
+            phaseValue(SettingId::NoiseAnimateSamples);
+        const UiSettingsValue* expectedNoiseAccumulate =
+            phaseValue(SettingId::NoiseAccumulateSamples);
+        if ((expectedNoisePattern &&
+                telemetry.globalNoisePattern != expectedNoisePattern->text) ||
+            (expectedNoiseResolution &&
+                telemetry.globalNoiseResolution !=
+                    expectedNoiseResolution->text) ||
+            (expectedNoiseAnimate &&
                 telemetry.globalNoiseAnimateSamples !=
-                    (expectedNoiseAnimate == "on")) ||
-            (!expectedNoiseAccumulate.empty() &&
+                    expectedNoiseAnimate->boolean) ||
+            (expectedNoiseAccumulate &&
                 telemetry.globalNoiseAccumulateSamples !=
-                    (expectedNoiseAccumulate == "on")))
+                    expectedNoiseAccumulate->boolean))
         {
             reason = "the applied global noise state did not match the case";
             return false;
@@ -2279,10 +1464,11 @@ namespace uvsr
                 return {};
             if (!telemetry.settingsSnapshot)
                 return Finish(false, "RESET snapshot was not observed");
-            if (*telemetry.settingsSnapshot == m_SavedSnapshot)
+            if ((*telemetry.settingsSnapshot != m_SavedSnapshot) != runtimeCase.expectSnapshotResetChange)
             {
-                return Finish(false,
-                    "RESET left the non-default snapshot unchanged");
+                return Finish(false, runtimeCase.expectSnapshotResetChange
+                    ? "RESET left the non-default snapshot unchanged"
+                    : "RESET changed the factory-default snapshot");
             }
             m_SettledFrames = 0u;
             m_Phase = Phase::WaitForRestoredEvidence;
@@ -2493,48 +1679,33 @@ namespace uvsr
             }
             else
             {
-                const bool referenceCapture =
-                    runtimeCase.exerciseRetainedStateChanges &&
-                    m_CurrentAction ==
-                        RetainedRuntimeAction::ChangeSetting &&
-                    m_CompletedActionCount == 3u;
                 const bool mustDifferFromPrior =
                     runtimeCase.requireActionOutputDifference ||
                     (runtimeCase.exerciseRetainedStateChanges &&
                         (m_CurrentAction ==
                             RetainedRuntimeAction::NudgeCamera ||
                         m_CurrentAction ==
-                            RetainedRuntimeAction::ChangeScene ||
-                        referenceCapture));
+                            RetainedRuntimeAction::ChangeScene));
                 if (mustDifferFromPrior &&
                     output.linearHash == m_LastActiveLinearHash)
                 {
                     return Finish(false,
-                        referenceCapture
-                            ? "AO/GI output matched its visibility-off reference"
-                            : "named camera/scene action did not change rendered output");
+                        "named camera/scene action did not change rendered output");
                 }
-                if (!referenceCapture)
-                    m_LastActiveLinearHash = output.linearHash;
+                m_LastActiveLinearHash = output.linearHash;
             }
 
-            if (runtimeCase.requireCrossCaseDistinctness &&
+            if (runtimeCase.exerciseRetainedStateChanges &&
                 (m_CurrentAction == RetainedRuntimeAction::None ||
                     m_CurrentAction == RetainedRuntimeAction::ChangeScene))
             {
                 RetainedRuntimeSemanticCapture capture;
                 capture.caseName = runtimeCase.name;
-                capture.family = runtimeCase.semanticFamily;
-                capture.domain = runtimeCase.semanticDomain;
                 capture.sceneToken =
                     m_CurrentAction == RetainedRuntimeAction::ChangeScene
                         ? runtimeCase.expectedSceneToken
                         : runtimeCase.actionBaselineSceneToken;
-                capture.signature = BuildRuntimeSemanticSignature(
-                    output,
-                    telemetry.receiverSampleCount,
-                    m_CaptureCpuMilliseconds,
-                    m_CaptureGpuMilliseconds);
+                capture.signature = BuildRuntimeSemanticSignature(output);
                 m_SemanticCaptures.push_back(std::move(capture));
             }
 
@@ -2569,20 +1740,13 @@ namespace uvsr
                 {
                     if (nextAction == RetainedRuntimeAction::ChangeScene)
                     {
-                        directive.actionSettingName = "scene.current";
+                        directive.actionSettingId = SettingId::SceneCurrent;
                         directive.actionValue = runtimeCase.actionValue;
-                    }
-                    else if (nextAction ==
-                        RetainedRuntimeAction::ChangeSetting)
-                    {
-                        directive.actionSettingName = "visibility.enabled";
-                        directive.actionValue = "off";
                     }
                 }
                 else
                 {
-                    directive.actionSettingName =
-                        runtimeCase.actionSettingName;
+                    directive.actionSettingId = runtimeCase.actionSettingId;
                     directive.actionValue = runtimeCase.actionValue;
                 }
                 directive.hasStableFrameTiming = true;

@@ -50,9 +50,6 @@ void main(
     out float4 o_channel2 : SV_Target2,
     out float4 o_channel3 : SV_Target3,
     out float o_materialAmbientOcclusion : SV_Target4
-#if MOTION_VECTORS
-    , out float4 o_motion : SV_Target5
-#endif
 )
 {
     MaterialTextureSample textures = SampleMaterialTexturesAuto(
@@ -133,19 +130,4 @@ void main(
         o_channel3,
         o_materialAmbientOcclusion);
 
-#if MOTION_VECTORS
-    // The alpha channel distinguishes a valid zero velocity from the cleared
-    // background and from a previous position behind the camera. Donut's
-    // helper returns zero in the latter case, so test the previous clip W here
-    // without changing the pinned dependency. XY remains de-jittered
-    // current-to-previous motion in pixels; Z remains previous minus current
-    // device depth.
-    float4 previousClip = mul(float4(i_vtx.prevPos, 1.0f),
-        c_GBuffer.viewPrev.matWorldToClip);
-    bool validPreviousPosition = previousClip.w > 0.0f && isfinite(previousClip.w);
-    o_motion = validPreviousPosition
-        ? float4(GetMotionVector(
-            i_position.xyz, i_vtx.prevPos, c_GBuffer.view, c_GBuffer.viewPrev), 1.0f)
-        : 0.0f;
-#endif
 }

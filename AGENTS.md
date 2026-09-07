@@ -1,88 +1,66 @@
 # agent contract
 
-policy `2026-08-25.3`. keep this file durable and short. store task state,
-measurements, recipes, and detailed procedures in ignored `work/` records or
-focused nearby documents.
+policy `2026-09-04.6`. keep this file below 1,000 words. shorten existing rules
+before adding more. keep task notes and measurements in ignored work files.
 
-## direction
+## scope
 
-optimize for the smallest new mechanism that unlocks the requested capability,
-not the smallest diff. use it to enable the largest safe backend deletion or
-rewrite. broad changes are welcome when they leave fewer owners, concepts,
-dependencies, states, and context.
+choose the simplest correct design, not merely the smallest diff. reduce duplicate
+code, dependencies, and state without losing required behavior. only add complexity when requirements or evidence justify it. during long sessions, check that the work still serves the original request and any later user changes. pause for input when continuing would likely depart from that intent.
 
-preserve useful user-facing control. prefer repairing or replacing faulty
-implementations behind current controls. remove a control only when its visible
-outcome is broken, misleading, materially redundant, or the user explicitly
-approves the product cut.
-
-future-proof through direct ownership, stable data contracts, and replaceable
-slices. do not add generic frameworks, inactive paths, registries, fallbacks, or
-abstraction for imagined needs.
+repair faulty behavior behind existing controls. get explicit approval before
+removing a visible feature or control. do not restore deliberate removals.
+smaller code or better metrics never justify lost behavior, evidence, or clarity.
 
 ## work
 
-inspect status and relevant diffs; preserve unrelated work. trace current and
-released consumers before deletion. remove an obsolete owner end to end,
-including settings, UI, persistence, shaders, tests, build/package rules,
-documentation, and legal records where applicable. do not leave dual paths.
+prefer C++ for new first party runtime and substantive tool logic. retain HLSL,
+CMake and small shell glue where appropriate.
 
-use one writer per file and one coordinator for integration. no commit, branch
-change, push, merge, release, deployment, publication, or other external action
-without authority for that exact action and candidate. never edit Donut.
+work in the intended checkout and read its current instructions. resolve conflicting
+targets before editing. old reports are evidence, not current instructions.
+inspect relevant changes and callers. preserve unrelated work and the Git index.
+remove obsolete code from all its consumers without leaving duplicate paths.
+keep generated files out of Git.
 
-major work uses named targets and recoverable checkpoints. freeze metric scopes
-at the start. status updates report checklist progress, additions, deletions,
-net lines, and estimated context reduction. label context reduction as an
-estimate; metrics never justify lost behavior, control, evidence, or clarity.
+commits, branch changes, pushes, merges,
+releases, and publication require authority for that action.
 
-## documentation
+the coordinator owns design, edits, integration, and final acceptance. delegate only
+useful independent research or review. give workers focused briefs and require
+source references and uncertainty. workers do not edit or delegate. the coordinator
+checks decisive evidence. use commands for mechanical tasks. one owner controls
+each file, build tree, renderer, and GPU session. read docs/agent-collaboration.md
+only for shared resources or integration.
 
-rewrite maintained documentation in the shared style below. keep current
-contracts, decisions, necessary use, recovery facts, and required legal text.
-delete obsolete history, duplicate guides, stale plans, and repeated policy.
-root `README.md` has a 1,200-word ceiling. use lowercase headings and preserve
-exact capitalization in identifiers, product names, quoted text, and licenses.
+set checkpoints for major work. keep measurement definitions fixed. report counts
+and labeled estimates at checkpoints. other updates cover findings and next steps.
 
-## build and proof
+## writing
 
-use the cheapest check that can catch the changed failure. do not build or test
-during planning. ordinary checks have a 10-minute ceiling; narrow or stop work
-that exceeds it instead of starting repeated broad runs. build affected targets
-incrementally while iterating. run one full developer gate and one fresh exact
-production-package smoke only at a named checkpoint or final code handoff.
-policy-only work needs content, discovery, diff, and word-count checks.
+update only affected documents unless broader cleanup was requested. preserve useful
+recovery evidence and legal text. keep each fact in one place and README.md below
+1,200 words. check changed documents only. test a checker only when it changes.
 
-[not be changed below this point]
+for UI work, read docs/ui.md,
+then only the relevant procedure or incident.
 
-everything below this line is immutable unless the user explicitly authorizes
-that exact change.
+## builds and checks
 
-## product contract
+reuse a separate build tree only when its source, tools, configuration, options,
+and dependencies match. build affected targets incrementally. reconfigure only when
+build inputs change. clean only for proven contamination. rebuild shaders and copy
+assets only when their inputs change.
 
-UVSR is DirectX 12 only. ImGui is permanent. developer and production builds
-use one renderer feature set. preserve unless the user explicitly changes it:
+run focused checks while editing. run the full required developer and exact package
+checks once at a checkpoint or final code handoff. repeat only after relevant changes,
+failures, or new uncertainty. investigate checks taking over ten minutes, but let
+justified checks continue while progressing. planning needs no build. policy edits
+need content, instruction discovery, diff, and word count checks.
 
-- 2x, 4x, 8x, and correct 16x MSAA with ray-traced shadows.
-- every current AO/GI option and supported combination.
-- ray-traced sky visibility, the flashlight, and its ray-traced shadows.
-- Bistro, San Miguel, every retained HDR and STBN/noise asset.
-- the conventional path tracer, material editing, pixel zoom, timing, and
-  shared rendering data required by current techniques.
+distinguish build, visual, runtime, and production package evidence.
 
-absence from this list is not permission to remove another visible feature.
-
-a deliberate sunset is part of the product baseline and stays removed unless
-the user asks to restore it. a removal candidate is only a proposal and remains
-until approved. preserve useful controls in retained features.
-
-## architecture contract
-
-Donut is transitional. replace each used slice with direct first-party ownership
-and delete the old path in the same change; remove the gitlink last. do not edit
-Donut, add coupling, or retain it as fallback. remove Python from first-party
-source, build, CI, tests, tools, launcher, documentation, and packages after
-porting required behavior to C++.
+## current architecture contract
 
 the renderer must accommodate many lighting systems, GPU-driven rendering,
 meshlets, and one coherent screen-space and world-space lighting pipeline
@@ -91,12 +69,21 @@ prefer explicit frame orchestration, concrete technique owners, and shared data
 only for real consumers. use Wicked Engine as a pinned read-only design
 reference, never as a dependency or wholesale template.
 
+---
+
+# protected instructions
+
+everything below this line is not to be changed unless the user explicitly authorizes otherwise.
+
+changes below this line are intended to be made, but only very sparingly and with specific approval.
+
 ## identity and distribution
 
 the only shipped executable names are `uvsr-launcher.exe` and
 `uvsr-engine.exe`. recognize an old name only for one exact installed-state
-migration. one authoritative C++ settings-schema hash owns engine identity,
+migration. one authoritative C++ settings-schema hash owns engine artifact identity,
 Windows version fields, diagnostics, launcher data, and package metadata.
+keep generated version numbers out of the window title.
 
 ship only launcher, engine, required runtime DLLs, compiled shaders, retained
 assets, settings, notices, and licenses. public downloads contain signed
@@ -108,19 +95,9 @@ compilers, SDKs, debug layers, symbols, tests, or benchmark tools.
 publication requires explicit authority, current remote identity, a fresh
 exact-package proof, signatures or hashes, and complete legal material.
 
-a code handoff is complete only when it links the exact `uvsr-launcher.exe` and
-`uvsr-engine.exe` for the active lineage, gives each SHA-256, and states whether
-each was rebuilt. if either identity is missing, stale, or from another lineage,
-report the handoff blocked.
-
-## shared personalization
-
-write concise, direct, lowercase prose while preserving exact technical capitalization. use plain, educated english and simple sentence structure. prefer periods, commas, and parentheses over em dashes and semicolons. avoid hyphenated word pairs.
-
-start with useful content. omit filler, repetition, and unnecessary validation. use headings and lists only when they improve understanding. group related sentences into readable paragraphs.
-
-prefer simple, direct solutions with few concepts and moving parts, while preserving readability and correctness. document only nonobvious constraints, invariants, and reasons. do not narrate obvious code.
-
-apply prior context only when it clearly fits. do not restore deliberate removals unless asked. prefer the smallest implementation addition that unlocks the goal, not the smallest total change. pursue the largest justified backend cutdown while preserving useful user controls. treat control removal as a separate product decision. if a visible feature is faulty, prefer a clean reimplementation behind its controls unless the user explicitly approves removal.
-
-maximize process simplicity and understandability, not response length. often, less is more.
+every final response, including research, policy, and documentation work, must link
+the exact most recent `uvsr-launcher.exe` and `uvsr-engine.exe` for the active lineage,
+give each SHA-256, and say whether each was rebuilt. prove identity from source and
+build records, never timestamps. if unchanged, reuse the last proven pair and label
+it unchanged. if either identity cannot be proven, say what is missing and do not
+claim completion.

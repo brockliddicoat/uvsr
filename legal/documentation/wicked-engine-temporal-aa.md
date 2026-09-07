@@ -1,26 +1,34 @@
-# Wicked Engine Temporal Anti-Aliasing
+# Wicked Engine architectural reference
 
-## Record
+## record
 
-- Relationship: Contextual Reference
-- Status: Current reference; no copied-code or adapted-code claim
-- Confidence: Confirmed reference
-- Upstream: [Wicked Engine](https://github.com/turanszkij/WickedEngine)
-- Revision: Not recorded
-- Governing Terms: Upstream MIT License
+- relationship: pinned read only architectural reference
+- status: current reference; not a dependency or source adaptation
+- confidence: confirmed
+- upstream: [Wicked Engine at `ad283cdf10ac4989078c77fc8b02a6d8daec6699`](https://github.com/turanszkij/WickedEngine/tree/ad283cdf10ac4989078c77fc8b02a6d8daec6699)
+- revision: `ad283cdf10ac4989078c77fc8b02a6d8daec6699`
+- terms: [upstream MIT license](https://github.com/turanszkij/WickedEngine/blob/ad283cdf10ac4989078c77fc8b02a6d8daec6699/LICENSE)
 
-## UVSR Relationship
+## UVSR relationship
 
-Current documentation identifies only a comparable policy class. No exact
-revision, file, source header, or copied block is identified, so this record
-does not claim adapted code.
+the pinned tree is evidence for explicit high level render path orchestration,
+CPU visibility and GPU preparation, concrete pass ownership, indexed GPU scene
+data, meshlets, and shared CPU and shader contracts. relevant reference points
+are `wiRenderPath3D`, `wiRenderer`, `wiScene_Components`,
+`ShaderInterop_Renderer`, and `globals.hlsli`.
 
-## Evidence
+UVSR may study these boundaries while building its own focused DX12 renderer.
+it does not adopt Wicked Engine's ECS, editor, render path inheritance, global
+renderer state, cross platform layer, scripting, job system, or inactive
+feature breadth. no Wicked Engine code, data, binary, or package dependency is
+present.
 
-- [Temporal Options](../../docs/temporal-aa-options.md)
-- Wording introduced by commit `b9287b04874cbdf0a3b805a37a6952104df77c29`
+## evidence
 
-## Commercial Clearance
+- [UVSR architectural constraint](../../AGENTS.md)
+- original reference wording introduced by commit
+  `b9287b04874cbdf0a3b805a37a6952104df77c29`
 
-If future work adapts code or recognizable data, record the exact upstream
-revision and preserve its MIT notice.
+if recognizable upstream code or data is later incorporated, record the exact
+files and preserve the MIT notice. architectural study alone does not make the
+upstream source package content.

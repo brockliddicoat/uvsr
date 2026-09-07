@@ -1,52 +1,51 @@
-# Bistro Interior
+# Bistro interior
 
-This UVSR scene packages a user-supplied Blender GLB of the Wine variant of the
-Amazon Lumberyard Bistro Interior associated with Morgan McGuire's Computer
-Graphics Archive. It retains every geometry buffer view, material, embedded
-texture, and camera represented by that GLB. The GLB contains no analytic lights.
+UVSR packages a converted, user supplied Blender GLB of the Wine variant
+associated with Amazon Lumberyard Bistro. the exact source and conversion facts
+are in [`source-provenance.json`](source-provenance.json). the source notes,
+license, provenance JSON, and generated reports are preserved records.
 
-## Source and Attribution
+## source identity and terms
 
-Amazon Lumberyard created the Bistro scene and released it under the Creative
-Commons Attribution 4.0 International license. The original citation and scene
-notes are preserved in `SOURCE-README.txt`, and the complete license is preserved
-in `LICENSE.txt`.
+| item | bytes | SHA-256 |
+| --- | ---: | --- |
+| supporting `Bistro_v5_2.zip` archive | 894,377,473 | `0D50E3C724C6C5DA19F8EB99AD3F53E36FEC37FFA2DF9621F9CCF0603F3934E1` |
+| supplied `BistroInterior_Wine.glb` | 421,517,664 | `47C71CF9FC3F0BBDF213F5788993BA5732565E7EACAE616DF26BC60818FDBC6A` |
+| [`SOURCE-README.txt`](SOURCE-README.txt) | 1,686 | `C87C5B60992CEDEE49FCE1EA9BFE10CF60498EBF1113685B723D6DC9006C2BEF` |
+| [CC BY 4.0 license](LICENSE.txt) | 19,044 | `9A9EF3C33320EEBE6126B0C7DC327885806BDE242283BBE6E4AE77641AD703E4` |
 
-Archive entry: <https://casual-effects.com/data>
+the supporting archive and citation come from the
+[Computer Graphics Archive](https://casual-effects.com/data/) and
+[NVIDIA ORCA](https://developer.nvidia.com/orca/amazon-lumberyard-bistro).
+Amazon Lumberyard created the original Bistro asset, and the supporting package
+states Creative Commons Attribution 4.0.
 
-Upstream ORCA page:
-<https://developer.nvidia.com/orca/amazon-lumberyard-bistro>
+the supplied GLB is a separate Blender export. it is not a member of the hashed
+`Bistro_v5_2.zip`. the supporting package therefore does not by itself prove
+that the CC BY 4.0 grant covers this exact GLB. preserve the attribution and
+modification disclosures, and confirm the GLB's chain of title before commercial
+distribution. the [legal record](../../../legal/documentation/amazon-lumberyard-bistro.md)
+owns that clearance boundary.
 
-The user-supplied `BistroInterior_Wine.glb` is a separate Blender-exported file,
-not a member of the supporting `Bistro_v5_2.zip` upstream archive. Its asset
-metadata records UVSR ORM repair version 4. The model, ZIP, license, and source
-README identities are recorded independently so their relationship is not
-implied by proximity.
+## conversion
 
-## UVSR Packaging
+the GLB was repacked as standard glTF with five external buffers. buffer views
+were copied without decoding or reencoding; only alignment padding was added.
+the generated
+[`components/buffer-repack-report.json`](components/buffer-repack-report.json)
+records all six output files, 423,001,606 output bytes, and every SHA-256. its
+own SHA-256 is
+`0E65F90AF33D12DF98DE3AAD1868507768A829391B51FBEAD372B995343E65F0`.
 
-The GLB was rewritten as standard glTF with five external buffers. Every buffer
-view was copied byte-for-byte, with only alignment padding added between views.
-No geometry or texture data was decoded, simplified, or re-encoded.
+UVSR has no blended draw pass. the conversion changes `Water`, `Ice`, `Beer`,
+`Red_Wine`, and `White_Wine` from BLEND to OPAQUE while preserving their other
+recorded values. this keeps 227 primitives and 109,600 triangles visible, but
+does not preserve liquid transparency. no analytic lights are present.
 
-UVSR does not submit blended material domains. To keep all meshes visible, the
-repacker changes the five intentional BLEND materials (`Water`, `Ice`, `Beer`,
-`Red_Wine`, and `White_Wine`) to OPAQUE while preserving their authored RGB,
-base alpha, roughness, metallic value, and two-sided state. This opaque fallback
-keeps 227 primitives and 109,600 triangles in the draw stream; it does not
-preserve liquid transparency. The report records every changed material index
-and source value. Each packaged file is strictly smaller than GitHub's
-100,000,000-byte tracked-file limit.
+## initial camera
 
-`source-provenance.json` records the immutable archive and model hashes.
-`components/buffer-repack-report.json` records and hashes every generated
-component.
-
-## Initial Camera
-
-The scene descriptor preserves the source GLB camera's direction, up vector, and
-approximately 34-degree vertical field of view. Its position is translated
-exactly one metre along +X and half a metre along -Z from the embedded pose into
-a nearby enclosed portion of the room. UVSR applies that pose after generic
-scene framing. The geometry contract verifies floor proximity, collision
-clearance, forward visibility, and enclosure on four horizontal sides.
+the descriptor retains the source direction, up vector, and 33.9666 degree
+vertical field of view. its position is the embedded camera translated 1 metre
+along +X and 0.5 metre along -Z into a nearby enclosed area. the descriptor is
+408 bytes with SHA-256
+`BDAC7D44996BDB76335F1A504CCAD272BA0717F4ABBCCD50C2E26222497CE7A1`.

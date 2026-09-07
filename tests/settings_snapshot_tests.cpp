@@ -1,4 +1,5 @@
 #include "settings_snapshot.h"
+#include "engine_identity.h"
 
 #include <array>
 #include <cstdlib>
@@ -25,118 +26,122 @@ namespace
 int main()
 {
     using namespace uvsr;
+    using Definition = UiSettingsCommandDefinition;
+    const auto find = [](SettingId id) -> const Definition&
+    {
+        for (const auto& definition : UiSettingsCommandCatalog)
+        {
+            if (definition.id == id)
+                return definition;
+        }
+        Fail("canonical setting fixture is absent");
+    };
+    Require(ValidateCanonicalSettingsSchema(), "the immutable catalog must satisfy its complete contract");
+    for (std::size_t index = 0u; index < static_cast<std::size_t>(UiSettingsCommandSection::Count); ++index)
+    {
+        const auto section = static_cast<UiSettingsCommandSection>(index);
+        Require(!IsUiSettingsRuntimeMutationLocked(section, false) &&
+                IsUiSettingsRuntimeMutationLocked(section, true) == (section != UiSettingsCommandSection::Ui),
+            "scene loading must lock renderer settings while leaving interface controls available");
+    }
+    for (const auto& definition : UiSettingsCommandCatalog)
+        Require(!FormatUiSettingsDomain(definition).empty() && !FormatUiSettingsDefault(definition).empty(),
+            "diagnostic text must format from the canonical typed metadata");
+    auto invalidCatalog = UiSettingsCommandCatalog;
+    std::swap(invalidCatalog[0].bindingIndex, invalidCatalog[1].bindingIndex);
+    Require(!ValidateCanonicalSettingsSchema(invalidCatalog), "a setting ID and binding mismatch must reject");
+    invalidCatalog = UiSettingsCommandCatalog;
+    invalidCatalog[find(SettingId::SkyEnvironment).bindingIndex].valueDependsOn = SettingId::SkyExposure;
+    Require(!ValidateCanonicalSettingsSchema(invalidCatalog), "a value dependency cycle must reject");
+    invalidCatalog = UiSettingsCommandCatalog;
+    invalidCatalog[1].name = invalidCatalog[0].name;
+    Require(!ValidateCanonicalSettingsSchema(invalidCatalog), "duplicate command identity must reject");
+    Require(FormatUiSettingsDomain(find(SettingId::LightingSolution)) == "ray-marching|path-tracing" &&
+            FormatUiSettingsTokenLabel(SettingId::LightingSolution, 0u) == "Ray Tracing",
+        "renderer labels must preserve their persisted tokens");
+    Require(FormatUiSettingsTokenLabel(SettingId::NoiseResolution, 0u) == "64x64" &&
+            FormatUiSettingsTokenLabel(SettingId::NoisePattern, 2u) == "Spatiotemporal Blue" &&
+            FormatUiSettingsTokenLabel(SettingId::NoisePattern, 99u).empty(),
+        "authored enum labels and fallback formatting must remain distinct");
+    constexpr SettingsNumberHash knownHash{ 0x0123456789abcdefull, 0xfedcba9876543210ull };
+    static_assert(DeriveEngineVersion(knownHash) == EngineVersion{ 0x0123u, 0x4567u, 0x89abu, 0xcdefu });
+    constexpr auto knownText = BuildSettingsNumberHashText(knownHash);
+    static_assert(std::string_view(knownText.data(), 32u) == "0123456789abcdeffedcba9876543210");
+    Require(CanonicalSettingsNumberHash == CurrentSettingsSnapshotSchemaFingerprint &&
+            CurrentEngineVersion == DeriveEngineVersion(CanonicalSettingsNumberHash) &&
+            GetSettingsNumberHashText() == std::string(CanonicalSettingsNumberHashText.data(), 32u),
+        "the exported engine identity must derive from the one canonical catalog");
 
-    constexpr auto BaselineCatalog = std::array{
-        Value(
-            "example.enabled",
-            Kind::Boolean,
-            Section::General,
-            "on|off",
-            true,
-            false,
-            "on")
+    const auto baseline = std::array{ find(SettingId::SkyExposure) };
+    const auto fingerprint = BuildSettingsSnapshotSchemaFingerprint(baseline);
+    struct Change
+    {
+        const char* name;
+        void (*apply)(Definition&);
     };
-    constexpr auto ChangedDomainCatalog = std::array{
-        Value(
-            "example.enabled",
-            Kind::Boolean,
-            Section::General,
-            "false|true",
-            true,
-            false,
-            "on")
+    const Change changes[] = {
+        { "minimum", [](Definition& d) { d.typedDomain.minimum = 0.2; } },
+        { "maximum", [](Definition& d) { d.typedDomain.maximum = 9.0; } },
+        { "default value", [](Definition& d) { d.typedDefault.value.scalar = 4.f; } },
+        { "persistence", [](Definition& d) { d.persistence = UiSettingsPersistence::SessionOnly; } },
+        { "stable identity", [](Definition& d) { d.id = SettingId::UiVisible; } },
+        { "default policy", [](Definition& d) { d.typedDefault.policy = UiSettingsDefaultPolicy::SceneAuthored; } },
+        { "application role", [](Definition& d) { d.applicationRole = UiSettingsApplicationRole::LiveDependent; } },
+        { "selector dependency", [](Definition& d) { d.dependsOn = SettingId::MaterialSelected; } },
+        { "value dependency", [](Definition& d) { d.valueDependsOn = SettingId::NoisePattern; } },
+        { "availability", [](Definition& d) { d.availability = UiSettingsAvailability::SelectedLight; } },
+        { "latent storage", [](Definition& d) { d.storage = UiSettingsStoragePolicy::Latent; } },
+        { "snapshot read", [](Definition& d) { d.snapshotRead = UiSettingsSnapshotReadPolicy::LatentValue; } },
+        { "factory reset", [](Definition& d) { d.factoryReset = UiSettingsFactoryResetPolicy::Preserve; } },
+        { "effects", [](Definition& d) { d.effects = UiSettingsMutationEffect::Material; } },
+        { "track range", [](Definition& d) { d.presentation.trackMaximum = 9.0; } },
+        { "display scale", [](Definition& d) { d.presentation.displayScale = 100.f; } },
+        { "display unit", [](Definition& d) { d.presentation.displayUnit = UiSettingsDisplayUnit::Percent; } }
     };
-    constexpr auto ChangedDefaultCatalog = std::array{
-        Value(
-            "example.enabled",
-            Kind::Boolean,
-            Section::General,
-            "on|off",
-            true,
-            false,
-            "off")
-    };
-    constexpr auto ChangedPersistenceCatalog = [BaselineCatalog] {
-        auto catalog = BaselineCatalog;
-        catalog[0].persistence = UiSettingsPersistence::SessionOnly;
-        return catalog;
-    }();
-    constexpr auto SessionDefaultCatalog = [] {
-        auto definition = Value(
-            "example.session",
-            Kind::Boolean,
-            Section::Ui,
-            "on|off",
-            true,
-            false,
-            "off");
-        definition.persistence = UiSettingsPersistence::SessionOnly;
-        return std::array{ definition };
-    }();
-    constexpr auto ChangedSessionDefaultCatalog = [SessionDefaultCatalog] {
-        auto catalog = SessionDefaultCatalog;
-        catalog[0].defaultValue = "on";
-        return catalog;
-    }();
-    constexpr auto ActionCatalog = std::array{
-        Action("example.reset", Section::General, "")
-    };
-    constexpr auto ChangedActionCatalog = [ActionCatalog] {
-        auto catalog = ActionCatalog;
-        catalog[0].domain = "changed-action-domain";
-        return catalog;
-    }();
-    constexpr auto BaselineWithUnrelatedAction = std::array{
-        BaselineCatalog[0],
-        ActionCatalog[0]
-    };
-    constexpr auto ReorderedCatalog = std::array{
-        Value(
-            "example.second",
-            Kind::Integer,
-            Section::General,
-            "0..9",
-            true,
-            false,
-            "2"),
-        BaselineCatalog[0]
-    };
-    constexpr auto CanonicallyOrderedCatalog = std::array{
-        BaselineCatalog[0],
-        ReorderedCatalog[0]
-    };
-    constexpr SettingsSnapshotSchemaFingerprint BaselineFingerprint =
-        BuildSettingsSnapshotSchemaFingerprint(BaselineCatalog);
-    constexpr SettingsSnapshotSchemaFingerprint ChangedFingerprint =
-        BuildSettingsSnapshotSchemaFingerprint(ChangedDomainCatalog);
-    constexpr SettingsSnapshotSchemaFingerprint ChangedDefaultFingerprint =
-        BuildSettingsSnapshotSchemaFingerprint(ChangedDefaultCatalog);
-    constexpr SettingsSnapshotSchemaFingerprint
-        ChangedPersistenceFingerprint =
-            BuildSettingsSnapshotSchemaFingerprint(
-                ChangedPersistenceCatalog);
-    constexpr SettingsSnapshotSchemaFingerprint ChangedPolicyFingerprint =
-        BuildSettingsSnapshotSchemaFingerprint(
-            BaselineCatalog,
-            "synthetic-policy-change");
-    constexpr SettingsSnapshotSchemaFingerprint SessionDefaultFingerprint =
-        BuildSettingsSnapshotSchemaFingerprint(SessionDefaultCatalog);
-    constexpr SettingsSnapshotSchemaFingerprint
-        ChangedSessionDefaultFingerprint =
-            BuildSettingsSnapshotSchemaFingerprint(
-                ChangedSessionDefaultCatalog);
-    constexpr SettingsSnapshotSchemaFingerprint ActionFingerprint =
-        BuildSettingsSnapshotSchemaFingerprint(ActionCatalog);
-    constexpr SettingsSnapshotSchemaFingerprint ChangedActionFingerprint =
-        BuildSettingsSnapshotSchemaFingerprint(ChangedActionCatalog);
-    constexpr SettingsSnapshotSchemaFingerprint
-        BaselineWithUnrelatedActionFingerprint =
-            BuildSettingsSnapshotSchemaFingerprint(
-                BaselineWithUnrelatedAction);
-    constexpr SettingsSnapshotSchemaFingerprint ReorderedFingerprint =
-        BuildSettingsSnapshotSchemaFingerprint(ReorderedCatalog);
-    constexpr SettingsSnapshotSchemaFingerprint CanonicallyOrderedFingerprint =
-        BuildSettingsSnapshotSchemaFingerprint(CanonicallyOrderedCatalog);
+    for (const Change& change : changes)
+    {
+        auto changed = baseline;
+        change.apply(changed[0]);
+        Require(!(fingerprint == BuildSettingsSnapshotSchemaFingerprint(changed)),
+            std::string(change.name) + " must participate in schema identity");
+    }
+    auto label = std::array{ find(SettingId::NoiseResolution) };
+    const auto labelFingerprint = BuildSettingsSnapshotSchemaFingerprint(label);
+    label[0].presentation.tokenLabels[1] = "Changed Label";
+    Require(!(labelFingerprint == BuildSettingsSnapshotSchemaFingerprint(label)),
+        "authored token labels must participate in schema identity");
+    auto session = std::array{ find(SettingId::UiSettingsCollapsed) };
+    const auto sessionFingerprint = BuildSettingsSnapshotSchemaFingerprint(session);
+    session[0].typedDefault.value.boolean = true;
+    Require(!(sessionFingerprint == BuildSettingsSnapshotSchemaFingerprint(session)),
+        "session defaults must participate in schema identity");
+    auto binding = baseline;
+    binding[0].bindingIndex = 42u;
+    Require(fingerprint == BuildSettingsSnapshotSchemaFingerprint(binding),
+        "internal binding order must not change schema identity");
+    Require(!(fingerprint == BuildSettingsSnapshotSchemaFingerprint(baseline, "synthetic-policy-change")),
+        "serialization policy must participate in schema identity");
+    auto action = UiSettingsCommandCatalog.back();
+    const auto withAction = std::array{ baseline[0], action };
+    action.typedDomain.presentation = "changed action domain";
+    Require(fingerprint == BuildSettingsSnapshotSchemaFingerprint(withAction) &&
+            fingerprint == BuildSettingsSnapshotSchemaFingerprint(std::array{ action, baseline[0] }),
+        "actions and their presentation must not affect snapshot identity");
+    const auto secondDefinition = find(SettingId::ShadowsRayTracedSamplesPerPixel);
+    Require(BuildSettingsSnapshotSchemaFingerprint(std::array{ baseline[0], secondDefinition }) ==
+            BuildSettingsSnapshotSchemaFingerprint(std::array{ secondDefinition, baseline[0] }),
+        "schema identity must be independent of catalog order");
+    Require(SettingsSnapshotVersion != 0u &&
+            ResolveSettingsSnapshotSchemaVersion(CurrentSettingsSnapshotSchemaFingerprint) == SettingsSnapshotVersion,
+        "the compiled catalog must resolve to its registered version");
+    Require(IsSettingsSnapshotValue(find(SettingId::UiOverrideVisualMaxes)) &&
+            !IsSettingsSnapshotValue(find(SettingId::UiSettingsCollapsed)) &&
+            !IsSettingsSnapshotValue(find(SettingId::MaterialEditorVisible)) &&
+            !IsSettingsSnapshotValue(find(SettingId::PresentationVerticalSynchronization)) &&
+            !IsSettingsSnapshotValue(find(SettingId::PresentationFrameRateLimitEnabled)) &&
+            !IsSettingsSnapshotValue(find(SettingId::PresentationFrameRateLimit)),
+        "snapshot membership must exclude only session presentation and actions");
+
     constexpr std::array<SettingsSnapshotSchemaVersionEntry, 1>
         ReservedVersionRegistry = {{
             { 1u, { 1u, 2u } }
@@ -165,26 +170,6 @@ int main()
             { 0xffffu, { 1u, 2u } }
         }};
 
-    static_assert(SettingsSnapshotVersion != 0u);
-    static_assert(SettingsSnapshotCodeLength == 32u);
-    static_assert(
-        ResolveSettingsSnapshotSchemaVersion(
-            CurrentSettingsSnapshotSchemaFingerprint) ==
-        SettingsSnapshotVersion);
-    static_assert(!(BaselineFingerprint == ChangedFingerprint));
-    static_assert(!(BaselineFingerprint == ChangedDefaultFingerprint));
-    static_assert(!(BaselineFingerprint == ChangedPersistenceFingerprint));
-    static_assert(!(BaselineFingerprint == ChangedPolicyFingerprint));
-    static_assert(!(SessionDefaultFingerprint ==
-        ChangedSessionDefaultFingerprint));
-    static_assert(ActionFingerprint == ChangedActionFingerprint);
-    static_assert(BaselineFingerprint ==
-        BaselineWithUnrelatedActionFingerprint);
-    static_assert(ReorderedFingerprint == CanonicallyOrderedFingerprint);
-    static_assert(CurrentSettingsSnapshotSchemaFingerprint ==
-        SettingsSnapshotSchemaFingerprint{
-            0x9c50b0f1515e89d8ull,
-            0x56c8ebb627b86984ull });
     static_assert(!ValidateSettingsSnapshotSchemaRegistry(
         ReservedVersionRegistry));
     static_assert(!ValidateSettingsSnapshotSchemaRegistry(
@@ -197,24 +182,6 @@ int main()
         GetNextAvailableSettingsSnapshotSchemaVersion(RegistryWithGap) == 5u);
     static_assert(
         GetNextAvailableSettingsSnapshotSchemaVersion(ExhaustedRegistry) == 0u);
-    static_assert(IsSettingsSnapshotValue(Value(
-        "example.enabled",
-        Kind::Boolean,
-        Section::General,
-        "on|off",
-        true,
-        false,
-        "on")));
-    static_assert(!IsSettingsSnapshotValue(Value(
-        "ui.settings-collapsed",
-        Kind::Boolean,
-        Section::Ui,
-        "on|off")));
-    static_assert(!IsSettingsSnapshotValue(Value(
-        "material-editor.visible",
-        Kind::Boolean,
-        Section::Ui,
-        "on|off")));
 
     const std::string version(
         SettingsSnapshotVersionText.data(),

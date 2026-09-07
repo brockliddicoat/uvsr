@@ -10,6 +10,8 @@ on:
       - "assets/**"
       - "cmake/**"
       - "donut"
+      - "docs/postmortem/**"
+      - "docs/recovery.md"
       - "launcher/**"
       - "legal/documentation/google-filament-fxaa.md"
       - "legal/documentation/third-party-notices.md"
@@ -28,6 +30,8 @@ on:
       - "assets/**"
       - "cmake/**"
       - "donut"
+      - "docs/postmortem/**"
+      - "docs/recovery.md"
       - "launcher/**"
       - "legal/documentation/google-filament-fxaa.md"
       - "legal/documentation/third-party-notices.md"
@@ -53,10 +57,11 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      - name: Use Pinned .NET SDK
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
-        with:
-          dotnet-version: 10.0.400
+      - name: Verify committed postmortems
+        shell: pwsh
+        run: |
+          cmake -DUVSR_REQUIRE_COMMITTED=ON -P cmake/VerifyPostmortems.cmake
+          if ($LASTEXITCODE -ne 0) { throw "Postmortem publication inventory failed." }
 
       - name: Require Python-Unavailable Toolchain
         shell: pwsh
@@ -134,43 +139,42 @@ jobs:
         run: |
           $validator = Join-Path $env:UVSR_DEV_BUILD "bin/uvsr_renderer_package_contract_validator.exe"
           $shaderInventory = Join-Path $env:GITHUB_WORKSPACE "cmake/runtime-shader-inventory.def"
-          $mediaInventory = Join-Path $env:GITHUB_WORKSPACE "cmake/runtime-media-inventory.def"
+          $assetMap = Join-Path $env:GITHUB_WORKSPACE "cmake/runtime-asset-map.def"
           $stage = Join-Path $env:UVSR_PRODUCTION_BUILD "package"
           $archive = Join-Path $env:UVSR_PRODUCTION_BUILD "artifacts/uvsr-renderer-windows-11-x64.zip"
-          & $validator --check $stage --shader-inventory $shaderInventory --media-inventory $mediaInventory
+          & $validator --check $stage --shader-inventory $shaderInventory --asset-map $assetMap
           if ($LASTEXITCODE -ne 0) { throw "Staged package validation failed." }
           $extracted = Join-Path $env:RUNNER_TEMP "uvsr-renderer-extracted"
           if (Test-Path -LiteralPath $extracted) {
             Remove-Item -LiteralPath $extracted -Recurse -Force
           }
           Expand-Archive -LiteralPath $archive -DestinationPath $extracted
-          & $validator --check $extracted --shader-inventory $shaderInventory --media-inventory $mediaInventory
+          & $validator --check $extracted --shader-inventory $shaderInventory --asset-map $assetMap
           if ($LASTEXITCODE -ne 0) { throw "Exact CMake archive validation failed." }
           "UVSR_RENDERER_ARCHIVE=$archive" >> $env:GITHUB_ENV
           "UVSR_EXTRACTED_RENDERER=$extracted" >> $env:GITHUB_ENV
 
-      - name: Verify Exact Archive Through Trusted Launcher Path
-        shell: pwsh
-        run: |
-          $obj = Join-Path $env:RUNNER_TEMP "uvsr-launcher-roundtrip/obj/"
-          $bin = Join-Path $env:RUNNER_TEMP "uvsr-launcher-roundtrip/bin/"
-          dotnet run --project launcher/tests/UVSR.Installer.Tests/UVSR.Installer.Tests.csproj -c Release --nologo "-p:BaseIntermediateOutputPath=$obj" "-p:OutputPath=$bin" -- --verify-renderer-archive $env:UVSR_RENDERER_ARCHIVE $env:GITHUB_SHA 7c6ee789fd2d2ad2de5fedaaa74f4220 31854.59273.64813.10962 16
-          if ($LASTEXITCODE -ne 0) { throw "Trusted launcher archive round trip failed." }
-
-      - name: Build Canonical Launcher
+      - name: Build Canonical Native Launcher
         shell: pwsh
         run: |
           $output = Join-Path $env:RUNNER_TEMP "uvsr-launcher"
-          ./launcher/build.ps1 -OutputDirectory $output -DotNetPath (Get-Command dotnet).Source -SourceCommit $env:GITHUB_SHA
+          ./launcher/build.ps1 -OutputDirectory $output -SourceCommit $env:GITHUB_SHA
           "UVSR_LAUNCHER=$output/uvsr-launcher.exe" >> $env:GITHUB_ENV
+          "UVSR_LAUNCHER_TESTS=$output/build/Release/uvsr_launcher_tests.exe" >> $env:GITHUB_ENV
+          "UVSR_LAUNCHER_RECORD=$output/build-record.json" >> $env:GITHUB_ENV
+
+      - name: Verify Exact Archive Through Trusted Launcher Path
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -LiteralPath "$env:UVSR_EXTRACTED_RENDERER/package-manifest.json" -Raw | ConvertFrom-Json
+          & $env:UVSR_LAUNCHER_TESTS --verify-renderer-archive $env:UVSR_RENDERER_ARCHIVE $env:GITHUB_SHA $manifest.settingsHash $manifest.engineVersion $manifest.releaseSequence
+          if ($LASTEXITCODE -ne 0) { throw "Trusted native launcher archive round trip failed." }
 
       - name: Verify Production Process And Shortcut Services
         shell: pwsh
         run: |
-          $obj = Join-Path $env:RUNNER_TEMP "uvsr-production-services/obj/"
-          $bin = Join-Path $env:RUNNER_TEMP "uvsr-production-services/bin/"
           $engine = Join-Path $env:UVSR_EXTRACTED_RENDERER "bin/uvsr-engine.exe"
-          dotnet run --project launcher/tests/UVSR.Installer.Tests/UVSR.Installer.Tests.csproj -c Release --nologo "-p:BaseIntermediateOutputPath=$obj" "-p:OutputPath=$bin" -- --verify-production-services $engine $env:UVSR_LAUNCHER
+          & $env:UVSR_LAUNCHER_TESTS --verify-production-services $engine $env:UVSR_LAUNCHER
           if ($LASTEXITCODE -ne 0) { throw "Production process and shortcut services failed." }
 
       - name: Validate Actual Signed Test Feeds
@@ -193,8 +197,9 @@ jobs:
           $rendererFeed = Join-Path $env:RUNNER_TEMP "renderer-update-feed-v1.json"
           $packageValidator = Join-Path $env:UVSR_DEV_BUILD "bin/uvsr_renderer_package_contract_validator.exe"
           $shaderInventory = Join-Path $env:GITHUB_WORKSPACE "cmake/runtime-shader-inventory.def"
-          $mediaInventory = Join-Path $env:GITHUB_WORKSPACE "cmake/runtime-media-inventory.def"
-          ./launcher/new-launcher-update-feed.ps1 -PrivateKeyPemPath $keyPath -ArtifactPath $env:UVSR_LAUNCHER -Version 1.2.0 -ReleaseSequence 16 -SourceCommit $env:GITHUB_SHA -OutputPath $launcherFeed -AllowTestKey -TestKeyId $keyId -TestPublicKeySpkiBase64 $publicKey
+          $assetMap = Join-Path $env:GITHUB_WORKSPACE "cmake/runtime-asset-map.def"
+          $launcherRecord = Get-Content -LiteralPath $env:UVSR_LAUNCHER_RECORD -Raw | ConvertFrom-Json
+          ./launcher/new-launcher-update-feed.ps1 -PrivateKeyPemPath $keyPath -ArtifactPath $env:UVSR_LAUNCHER -Version $launcherRecord.version -ReleaseSequence $launcherRecord.releaseSequence -SourceCommit $env:GITHUB_SHA -OutputPath $launcherFeed -AllowTestKey -TestKeyId $keyId -TestPublicKeySpkiBase64 $publicKey
           $tamperedDirectory = Join-Path $env:RUNNER_TEMP "tampered-renderer"
           New-Item -ItemType Directory -Path $tamperedDirectory | Out-Null
           $tamperedArchive = Join-Path $tamperedDirectory "uvsr-renderer-windows-11-x64.zip"
@@ -220,7 +225,7 @@ jobs:
           }
           $tamperRejected = $false
           try {
-            ./launcher/new-renderer-update-feed.ps1 -PrivateKeyPemPath $keyPath -ArtifactPath $tamperedArchive -EnginePath "$env:UVSR_PRODUCTION_BUILD/bin/uvsr-engine.exe" -RendererPackageValidatorPath $packageValidator -ShaderInventoryPath $shaderInventory -MediaInventoryPath $mediaInventory -ReleaseSequence 16 -OutputPath "$tamperedDirectory/rejected-feed.json" -AllowTestKey -TestKeyId $keyId -TestPublicKeySpkiBase64 $publicKey
+            ./launcher/new-renderer-update-feed.ps1 -PrivateKeyPemPath $keyPath -ArtifactPath $tamperedArchive -EnginePath "$env:UVSR_PRODUCTION_BUILD/bin/uvsr-engine.exe" -RendererPackageValidatorPath $packageValidator -ShaderInventoryPath $shaderInventory -AssetMapPath $assetMap -ReleaseSequence 16 -OutputPath "$tamperedDirectory/rejected-feed.json" -AllowTestKey -TestKeyId $keyId -TestPublicKeySpkiBase64 $publicKey
           }
           catch {
             $tamperRejected = $true
@@ -228,7 +233,7 @@ jobs:
           if (-not $tamperRejected) {
             throw "Renderer feed signer accepted a tampered non-engine asset."
           }
-          ./launcher/new-renderer-update-feed.ps1 -PrivateKeyPemPath $keyPath -ArtifactPath $env:UVSR_RENDERER_ARCHIVE -EnginePath "$env:UVSR_PRODUCTION_BUILD/bin/uvsr-engine.exe" -RendererPackageValidatorPath $packageValidator -ShaderInventoryPath $shaderInventory -MediaInventoryPath $mediaInventory -ReleaseSequence 16 -OutputPath $rendererFeed -AllowTestKey -TestKeyId $keyId -TestPublicKeySpkiBase64 $publicKey
+          ./launcher/new-renderer-update-feed.ps1 -PrivateKeyPemPath $keyPath -ArtifactPath $env:UVSR_RENDERER_ARCHIVE -EnginePath "$env:UVSR_PRODUCTION_BUILD/bin/uvsr-engine.exe" -RendererPackageValidatorPath $packageValidator -ShaderInventoryPath $shaderInventory -AssetMapPath $assetMap -ReleaseSequence 16 -OutputPath $rendererFeed -AllowTestKey -TestKeyId $keyId -TestPublicKeySpkiBase64 $publicKey
           ./launcher/verify-launcher-update-feed.ps1 -Path $launcherFeed -AllowTestKey -TestKeyId $keyId -TestPublicKeySpkiBase64 $publicKey | Out-Null
           ./launcher/verify-renderer-update-feed.ps1 -Path $rendererFeed -AllowTestKey -TestKeyId $keyId -TestPublicKeySpkiBase64 $publicKey | Out-Null
           $validator = Join-Path $env:UVSR_DEV_BUILD "bin/uvsr_launcher_feed_contract_validator.exe"

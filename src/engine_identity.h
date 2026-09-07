@@ -5,14 +5,14 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace uvsr
 {
     using SettingsNumberHash = SettingsSnapshotSchemaFingerprint;
 
-    inline constexpr SettingsNumberHash CanonicalSettingsNumberHash =
-        CurrentSettingsSnapshotSchemaFingerprint;
+    extern const SettingsNumberHash CanonicalSettingsNumberHash;
 
     struct EngineVersion
     {
@@ -40,8 +40,13 @@ namespace uvsr
         };
     }
 
-    inline constexpr EngineVersion CurrentEngineVersion =
-        DeriveEngineVersion(CanonicalSettingsNumberHash);
+    extern const EngineVersion CurrentEngineVersion;
+
+    [[nodiscard]] inline std::string FormatEngineVersion(EngineVersion version)
+    {
+        return std::to_string(version.major) + "." + std::to_string(version.minor) +
+            "." + std::to_string(version.patch) + "." + std::to_string(version.build);
+    }
 
     [[nodiscard]] constexpr char SettingsIdentityHexDigit(
         std::uint8_t value) noexcept
@@ -67,8 +72,7 @@ namespace uvsr
         return text;
     }
 
-    inline constexpr auto CanonicalSettingsNumberHashText =
-        BuildSettingsNumberHashText(CanonicalSettingsNumberHash);
+    extern const std::array<char, 33> CanonicalSettingsNumberHashText;
 
     [[nodiscard]] constexpr std::string_view GetSettingsNumberHashText()
         noexcept

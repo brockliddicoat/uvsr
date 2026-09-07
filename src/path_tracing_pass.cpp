@@ -23,10 +23,7 @@ using namespace donut::math;
 #include "path_tracing_bindings.h"
 
 static_assert(sizeof(PathTracingConstants) % 16u == 0u);
-static_assert(offsetof(PathTracingConstants, previousView) ==
-    sizeof(PlanarViewConstants));
 static_assert(sizeof(GeometryData) == 64u);
-static_assert(sizeof(InstanceData) == 112u);
 static_assert(sizeof(MaterialConstants) == 208u);
 static_assert(std::is_trivially_copyable_v<LightConstants>);
 
@@ -114,19 +111,23 @@ namespace uvsr
             hash = HashValue(hash, inputs.rayBias);
             hash = HashValue(hash, inputs.maximumRayDistance);
             hash = HashValue(hash, inputs.noiseSettings.pattern);
+            hash = HashValue(hash, inputs.settings.maximumBounces);
+            hash = HashValue(hash, inputs.settings.minimumBounces);
+            hash = HashValue(hash, inputs.settings.fireflyFilter);
+            hash = HashValue(hash, inputs.settings.fireflyThreshold);
             hash = HashValue(hash, inputs.flashlightProfile);
+            hash = HashValue(hash, inputs.rayScene.generation);
+            hash = HashValue(hash, inputs.rayScene.contentRevision);
             const uintptr_t pointers[] = {
-                reinterpret_cast<uintptr_t>(inputs.worldTlas),
+                reinterpret_cast<uintptr_t>(inputs.rayScene.tlas),
                 reinterpret_cast<uintptr_t>(inputs.environment),
                 reinterpret_cast<uintptr_t>(inputs.noiseTexture),
                 reinterpret_cast<uintptr_t>(
-                    inputs.materialVisibility.geometryBuffer),
+                    inputs.rayScene.geometryBuffer),
                 reinterpret_cast<uintptr_t>(
-                    inputs.materialVisibility.materialBuffer),
+                    inputs.rayScene.materialBuffer),
                 reinterpret_cast<uintptr_t>(
-                    inputs.materialVisibility.geometryIndexMap),
-                reinterpret_cast<uintptr_t>(
-                    inputs.materialVisibility.instanceBuffer),
+                    inputs.rayScene.geometryIndexMap),
                 reinterpret_cast<uintptr_t>(inputs.flashlight)
             };
             hash = HashBytes(hash, pointers, sizeof(pointers));
@@ -149,10 +150,6 @@ namespace uvsr
             nvrhi::FormatSupport::ShaderLoad |
             nvrhi::FormatSupport::ShaderUavLoad |
             nvrhi::FormatSupport::ShaderUavStore;
-        const nvrhi::FormatSupport outputSupport =
-            nvrhi::FormatSupport::Texture |
-            nvrhi::FormatSupport::ShaderLoad |
-            nvrhi::FormatSupport::ShaderUavStore;
         PathTracingCapabilities result;
         result.rayQuerySupported = device &&
             device->queryFeatureSupport(
@@ -165,15 +162,7 @@ namespace uvsr
             HasFormatSupport(
                 device,
                 nvrhi::Format::R32_UINT,
-                historySupport) &&
-            HasFormatSupport(
-                device,
-                nvrhi::Format::RGBA16_FLOAT,
-                outputSupport) &&
-            HasFormatSupport(
-                device,
-                nvrhi::Format::R32_FLOAT,
-                outputSupport);
+                historySupport);
         return result;
     }
 
@@ -226,17 +215,11 @@ namespace uvsr
             nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
             nvrhi::BindingLayoutItem::StructuredBuffer_SRV(
                 PathTracingLightsSlot),
-            nvrhi::BindingLayoutItem::StructuredBuffer_SRV(
-                PathTracingInstancesSlot),
             nvrhi::BindingLayoutItem::Sampler(0),
             nvrhi::BindingLayoutItem::Texture_UAV(
                 PathTracingRawMeanUavSlot),
             nvrhi::BindingLayoutItem::Texture_UAV(
                 PathTracingAcceptedCountUavSlot),
-            nvrhi::BindingLayoutItem::Texture_UAV(
-                PathTracingMotionUavSlot),
-            nvrhi::BindingLayoutItem::Texture_UAV(
-                PathTracingDepthUavSlot),
             nvrhi::BindingLayoutItem::Texture_UAV(
                 PathTracingRetryGenerationUavSlot)
         };
@@ -281,7 +264,7 @@ namespace uvsr
     {
         if (width == 0u || height == 0u)
             return false;
-        if (m_RawMean && m_SuccessfulSampleCount && m_Motion && m_Depth &&
+        if (m_RawMean && m_SuccessfulSampleCount &&
             m_RetryGeneration && m_Width == width && m_Height == height)
         {
             return true;
@@ -299,25 +282,13 @@ namespace uvsr
             height,
             nvrhi::Format::R32_UINT,
             "Path Tracing/Successful Sample Count");
-        nvrhi::TextureHandle motion = CreateTexture(
-            m_Device,
-            width,
-            height,
-            nvrhi::Format::RGBA16_FLOAT,
-            "Path Tracing/Motion");
-        nvrhi::TextureHandle depth = CreateTexture(
-            m_Device,
-            width,
-            height,
-            nvrhi::Format::R32_FLOAT,
-            "Path Tracing/Depth");
         nvrhi::TextureHandle retryGeneration = CreateTexture(
             m_Device,
             width,
             height,
             nvrhi::Format::R32_UINT,
             "Path Tracing/Retry Generation");
-        if (!rawMean || !count || !motion || !depth || !retryGeneration)
+        if (!rawMean || !count || !retryGeneration)
             return false;
 
         nvrhi::TextureDesc readbackDesc;
@@ -344,8 +315,6 @@ namespace uvsr
 
         m_RawMean = rawMean;
         m_SuccessfulSampleCount = count;
-        m_Motion = motion;
-        m_Depth = depth;
         m_RetryGeneration = retryGeneration;
         m_Width = width;
         m_Height = height;
@@ -385,20 +354,17 @@ namespace uvsr
 
     bool PathTracingPass::EnsureBindingSet(const PathTracingInputs& inputs)
     {
-        if (!inputs.worldTlas || !inputs.materialVisibility ||
-            !inputs.materialVisibility.instanceBuffer ||
+        if (!bool(inputs.rayScene) ||
             !inputs.environment || !inputs.noiseTexture || !m_LightBuffer)
         {
             return false;
         }
-        if (m_BoundTlas != inputs.worldTlas ||
-            m_BoundMaterialVisibility != inputs.materialVisibility ||
+        if (!m_BoundRayScene.HasSameBindings(inputs.rayScene) ||
             m_BoundEnvironment != inputs.environment ||
             m_BoundNoiseTexture != inputs.noiseTexture)
         {
             m_BindingSet = nullptr;
-            m_BoundTlas = inputs.worldTlas;
-            m_BoundMaterialVisibility = inputs.materialVisibility;
+            m_BoundRayScene = inputs.rayScene;
             m_BoundEnvironment = inputs.environment;
             m_BoundNoiseTexture = inputs.noiseTexture;
         }
@@ -410,32 +376,25 @@ namespace uvsr
             nvrhi::BindingSetItem::ConstantBuffer(
                 PathTracingConstantBufferSlot, m_ConstantBuffer),
             nvrhi::BindingSetItem::RayTracingAccelStruct(
-                PathTracingWorldTlasSlot, inputs.worldTlas),
+                PathTracingWorldTlasSlot, inputs.rayScene.tlas),
             nvrhi::BindingSetItem::Texture_SRV(
                 PathTracingEnvironmentSlot, inputs.environment),
             nvrhi::BindingSetItem::Texture_SRV(
                 PathTracingNoiseSlot, inputs.noiseTexture),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(
-                10, inputs.materialVisibility.geometryBuffer),
+                10, inputs.rayScene.geometryBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(
-                11, inputs.materialVisibility.materialBuffer),
+                11, inputs.rayScene.materialBuffer),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(
-                12, inputs.materialVisibility.geometryIndexMap),
+                12, inputs.rayScene.geometryIndexMap),
             nvrhi::BindingSetItem::StructuredBuffer_SRV(
                 PathTracingLightsSlot, m_LightBuffer),
-            nvrhi::BindingSetItem::StructuredBuffer_SRV(
-                PathTracingInstancesSlot,
-                inputs.materialVisibility.instanceBuffer),
             nvrhi::BindingSetItem::Sampler(0, m_Sampler),
             nvrhi::BindingSetItem::Texture_UAV(
                 PathTracingRawMeanUavSlot, m_RawMean),
             nvrhi::BindingSetItem::Texture_UAV(
                 PathTracingAcceptedCountUavSlot,
                 m_SuccessfulSampleCount),
-            nvrhi::BindingSetItem::Texture_UAV(
-                PathTracingMotionUavSlot, m_Motion),
-            nvrhi::BindingSetItem::Texture_UAV(
-                PathTracingDepthUavSlot, m_Depth),
             nvrhi::BindingSetItem::Texture_UAV(
                 PathTracingRetryGenerationUavSlot,
                 m_RetryGeneration)
@@ -460,9 +419,7 @@ namespace uvsr
             inputs.width = uint32_t(std::max(extent.width(), 0));
             inputs.height = uint32_t(std::max(extent.height(), 0));
         }
-        const bool valid = inputs.view && inputs.worldTlas &&
-            bool(inputs.materialVisibility) &&
-            inputs.materialVisibility.instanceBuffer &&
+        const bool valid = inputs.view && bool(inputs.rayScene) &&
             inputs.environment &&
             inputs.environment->getDesc().dimension ==
                 nvrhi::TextureDimension::TextureCube &&
@@ -470,6 +427,7 @@ namespace uvsr
             inputs.noiseTexture->getDesc().dimension ==
                 nvrhi::TextureDimension::Texture2DArray &&
             IsValidNoiseSettings(inputs.noiseSettings) &&
+            IsValidPathTracingSettings(inputs.settings) &&
             std::isfinite(inputs.environmentScale) &&
             inputs.environmentScale >= 0.f &&
             std::isfinite(inputs.rayBias) && inputs.rayBias > 0.f &&
@@ -488,35 +446,23 @@ namespace uvsr
 
         PathTracingConstants constants{};
         inputs.view->FillPlanarViewConstants(constants.view);
-        constants.previousView = constants.view;
-        if (inputs.previousView)
-        {
-            inputs.previousView->FillPlanarViewConstants(
-                constants.previousView);
-            constants.previousViewValid = 1u;
-        }
         uint32_t geometryMapCount = 0u;
         uint32_t geometryCount = 0u;
         uint32_t materialCount = 0u;
-        uint32_t instanceCount = 0u;
         const uint32_t descriptorCapacity =
-            inputs.materialVisibility.descriptorTable->getCapacity();
+            inputs.rayScene.descriptorTable->getCapacity();
         if (!TryGetStructuredBufferCount(
-                inputs.materialVisibility.geometryIndexMap,
+                inputs.rayScene.geometryIndexMap,
                 sizeof(uint32_t),
                 geometryMapCount) ||
             !TryGetStructuredBufferCount(
-                inputs.materialVisibility.geometryBuffer,
+                inputs.rayScene.geometryBuffer,
                 sizeof(GeometryData),
                 geometryCount) ||
             !TryGetStructuredBufferCount(
-                inputs.materialVisibility.materialBuffer,
+                inputs.rayScene.materialBuffer,
                 sizeof(MaterialConstants),
                 materialCount) ||
-            !TryGetStructuredBufferCount(
-                inputs.materialVisibility.instanceBuffer,
-                sizeof(InstanceData),
-                instanceCount) ||
             descriptorCapacity == 0u)
         {
             return failure;
@@ -526,27 +472,38 @@ namespace uvsr
             geometryCount,
             materialCount,
             descriptorCapacity };
-        constants.instanceCount = instanceCount;
 
-        if (inputs.lights.size() >
+        const size_t inputLightCount = inputs.lights
+            ? inputs.lights->size()
+            : 0u;
+        if (inputLightCount >
             size_t(std::numeric_limits<uint32_t>::max()))
         {
             return failure;
         }
         std::vector<LightConstants> submittedLights;
-        submittedLights.reserve(inputs.lights.size());
+        submittedLights.reserve(inputLightCount);
         constants.flashlight.lightIndex = -1;
-        for (const std::shared_ptr<Light>& light : inputs.lights)
+        if (inputs.lights)
         {
-            if (!light)
-                continue;
-            submittedLights.emplace_back();
-            LightConstants& lightConstants = submittedLights.back();
-            std::memset(&lightConstants, 0, sizeof(lightConstants));
-            light->FillLightConstants(lightConstants);
-            if (light.get() == inputs.flashlight)
-                constants.flashlight.lightIndex =
-                    int(submittedLights.size() - 1u);
+            for (const std::shared_ptr<Light>& light : *inputs.lights)
+            {
+                if (!light)
+                    continue;
+                submittedLights.emplace_back();
+                LightConstants& lightConstants = submittedLights.back();
+                std::memset(&lightConstants, 0, sizeof(lightConstants));
+                light->FillLightConstants(lightConstants);
+                if (inputs.hardShadows)
+                {
+                    lightConstants.radius = 0.f;
+                    if (lightConstants.lightType == LightType_Directional)
+                        lightConstants.angularSizeOrInvRange = 0.f;
+                }
+                if (light.get() == inputs.flashlight)
+                    constants.flashlight.lightIndex =
+                        int(submittedLights.size() - 1u);
+            }
         }
         constants.lightCount = uint32_t(submittedLights.size());
         if (!EnsureLightBuffer(constants.lightCount))
@@ -565,6 +522,10 @@ namespace uvsr
         constants.environmentScale = inputs.environmentScale;
         constants.rayBias = inputs.rayBias;
         constants.maximumRayDistance = inputs.maximumRayDistance;
+        constants.maximumBounces = uint32_t(inputs.settings.maximumBounces);
+        constants.minimumBounces = uint32_t(inputs.settings.minimumBounces);
+        constants.fireflyThreshold = inputs.settings.fireflyThreshold;
+        constants.fireflyFilter = inputs.settings.fireflyFilter ? 1u : 0u;
         constants.noisePattern =
             static_cast<uint32_t>(inputs.noiseSettings.pattern);
         constants.dispatchExtent = { inputs.width, inputs.height };
@@ -608,7 +569,7 @@ namespace uvsr
         state.pipeline = m_Pipeline;
         state.bindings = {
             m_BindingSet,
-            inputs.materialVisibility.descriptorTable
+            inputs.rayScene.descriptorTable
         };
         commandList->beginMarker("Standard Path Tracing");
         commandList->setComputeState(state);
@@ -647,8 +608,6 @@ namespace uvsr
         PathTracingResult result;
         result.sceneLinearDisplay = m_RawMean;
         result.rawMean = m_RawMean;
-        result.temporalDepth = m_Depth;
-        result.motionVectors = m_Motion;
         result.currentCenterPixelAcceptedSampleCount =
             m_CurrentCenterPixelAcceptedSampleCount;
         result.capabilities = m_Capabilities;
@@ -667,14 +626,6 @@ namespace uvsr
             m_SuccessfulSampleCount,
             nvrhi::AllSubresources,
             0u);
-        commandList->clearTextureFloat(
-            m_Motion,
-            nvrhi::AllSubresources,
-            nvrhi::Color(0.f));
-        commandList->clearTextureFloat(
-            m_Depth,
-            nvrhi::AllSubresources,
-            nvrhi::Color(0.f));
         commandList->clearTextureUInt(
             m_RetryGeneration,
             nvrhi::AllSubresources,
@@ -696,8 +647,7 @@ namespace uvsr
     void PathTracingPass::ResetBindingCache()
     {
         m_BindingSet = nullptr;
-        m_BoundTlas = nullptr;
-        m_BoundMaterialVisibility = {};
+        m_BoundRayScene = {};
         m_BoundEnvironment = nullptr;
         m_BoundNoiseTexture = nullptr;
         ResetHistory();

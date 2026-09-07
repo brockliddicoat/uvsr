@@ -38,6 +38,22 @@ Texture2D<float4> t_SceneColor : register(t0);
 Buffer<float> t_AutoExposure : register(t1);
 #endif
 
+
+#ifndef UVSR_USE_LUT
+#define UVSR_USE_LUT 0
+#endif
+#if UVSR_USE_LUT
+Texture3D<float4> t_ColorLut : register(t2);
+SamplerState s_LutSampler : register(s0);
+#endif
+cbuffer c_ToneMapping : register(b0)
+{
+    float4 g_ExposureContrastSaturationWarmth;
+    float4 g_TintSlopePowerLutSize;
+    float4 g_LutDomainMin;
+    float4 g_LutDomainMax;
+};
+
 static const float AGX_MIN_EV = -12.47393;
 static const float AGX_MAX_EV = 4.026069;
 
@@ -77,17 +93,38 @@ void main(
     in float2 uv : UV,
     out float4 outputColor : SV_Target)
 {
-    // UVSR keeps only the fixed neutral display transform while scene lighting
-    // is still developing: scene-linear HDR -> AgX inset -> AgX log -> default
-    // contrast tone scale -> output gamut. The final display-output pass owns
-    // transfer encoding and dithering after any presentation AA.
+    // grading stays before the output gamut transform. transfer and dither remain
+    // in display_output_ps.hlsl, after FXAA. neutral controls skip their math.
     float4 sceneSample = t_SceneColor.Load(int3(position.xy, 0));
-#if UVSR_UNITY_EXPOSURE
-    float3 color = saturate(AgxDefaultContrast(
-        AgxLogEncode(sceneSample.rgb)));
-#else
-    float3 color = saturate(AgxDefaultContrast(AgxLogEncode(
-        sceneSample.rgb * t_AutoExposure[1])));
+    float3 color = sceneSample.rgb;
+#if !UVSR_UNITY_EXPOSURE
+    color *= t_AutoExposure[1];
+#endif
+    float warmth = g_ExposureContrastSaturationWarmth.w;
+    float tint = g_TintSlopePowerLutSize.x;
+    if (warmth != 0.0 || tint != 0.0)
+        color = max(color * exp2(float3(warmth * 0.30 - tint * 0.05,
+            tint * 0.18, -warmth * 0.30 - tint * 0.05)), 0.0);
+    if (g_ExposureContrastSaturationWarmth.x != 0.0)
+        color *= exp2(g_ExposureContrastSaturationWarmth.x);
+    color = AgxDefaultContrast(AgxLogEncode(color));
+    if (g_ExposureContrastSaturationWarmth.y != 1.0)
+        color = (color - 0.5) * g_ExposureContrastSaturationWarmth.y + 0.5;
+    color = saturate(color);
+    if (g_TintSlopePowerLutSize.y != 1.0 || g_TintSlopePowerLutSize.z != 1.0)
+        color = pow(max(color * g_TintSlopePowerLutSize.y, 0.0), g_TintSlopePowerLutSize.z);
+    if (g_ExposureContrastSaturationWarmth.z != 1.0)
+    {
+        float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
+        color = lerp(luminance.xxx, color, g_ExposureContrastSaturationWarmth.z);
+    }
+    color = saturate(color);
+#if UVSR_USE_LUT
+    float size = g_TintSlopePowerLutSize.w;
+    float3 normalized = saturate((color - g_LutDomainMin.rgb) /
+        (g_LutDomainMax.rgb - g_LutDomainMin.rgb));
+    float3 uvw = (normalized * (size - 1.0) + 0.5) / size;
+    color = t_ColorLut.SampleLevel(s_LutSampler, uvw, 0).rgb;
 #endif
     color = saturate(mul(AGX_OUTSET, color));
     outputColor = float4(color, sceneSample.a);

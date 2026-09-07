@@ -226,18 +226,6 @@ nvrhi::ShaderHandle RendererShaderFactory::CreateShader(
         description, selected->data, selected->size);
 }
 
-nvrhi::ShaderLibraryHandle RendererShaderFactory::CreateShaderLibrary(
-    const char* fileName,
-    const std::vector<RendererShaderMacro>* defines)
-{
-    if (!m_Device)
-        return nullptr;
-    const auto selected = SelectBytecode(fileName, "main", defines);
-    if (!selected)
-        return nullptr;
-    return m_Device->createShaderLibrary(selected->data, selected->size);
-}
-
 void RendererShaderFactory::ReportError(const std::string& message) const
 {
     if (!m_Device)

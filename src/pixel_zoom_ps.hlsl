@@ -1,4 +1,5 @@
 #pragma pack_matrix(row_major)
+#include "pixel_zoom_mapping.h"
 
 struct PixelZoomConstants
 {
@@ -90,16 +91,11 @@ void main(
         return;
     }
 
-    const int factor = max(1, int(g_PixelZoom.zoomFactor));
-    const int2 groupOrigin =
-        (int2(g_PixelZoom.panelSize) - int2(factor, factor)) / 2;
-    const int2 groupDelta = panelPixel - groupOrigin;
-    const int2 sourceOffset = int2(floor(
-        float2(groupDelta) / float(factor)));
-    const int2 sourcePixel = clamp(
-        int2(g_PixelZoom.sourceSize / 2u) + sourceOffset,
-        int2(0, 0),
-        int2(g_PixelZoom.sourceSize) - 1);
+    const int2 sourcePixel = int2(
+        ResolvePixelZoomSourceCoordinate(int(g_PixelZoom.sourceSize.x), int(g_PixelZoom.panelSize.x),
+            int(g_PixelZoom.zoomFactor), panelPixel.x),
+        ResolvePixelZoomSourceCoordinate(int(g_PixelZoom.sourceSize.y), int(g_PixelZoom.panelSize.y),
+            int(g_PixelZoom.zoomFactor), panelPixel.y));
 
     float4 magnifiedPixel =
         t_Source.Load(int3(sourcePixel, 0));

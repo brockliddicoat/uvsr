@@ -42,23 +42,6 @@ namespace uvsr
             return m_State.load(std::memory_order_acquire);
         }
 
-        [[nodiscard]] bool IsRunning() const noexcept
-        {
-            return GetState() == RendererSceneLoadWorkerState::Running;
-        }
-
-        [[nodiscard]] bool IsFinished() const noexcept
-        {
-            const RendererSceneLoadWorkerState state = GetState();
-            return state == RendererSceneLoadWorkerState::Succeeded ||
-                state == RendererSceneLoadWorkerState::Failed;
-        }
-
-        [[nodiscard]] bool IsJoinable() const noexcept
-        {
-            return m_Thread.joinable();
-        }
-
         // Blocks until completion when needed. Returns the task result.
         [[nodiscard]] bool Join();
 

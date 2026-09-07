@@ -44,8 +44,6 @@ void buffer_loads(
 
     const float3 localPosition = asfloat(t_Vertices.Load3(
         g_Push.positionOffset + sourceVertex * c_SizeOfPosition));
-    const float3 localPreviousPosition = asfloat(t_Vertices.Load3(
-        g_Push.prevPositionOffset + sourceVertex * c_SizeOfPosition));
     vertex.texCoord = asfloat(t_Vertices.Load2(
         g_Push.texCoordOffset + sourceVertex * c_SizeOfTexcoord));
     const float3 localNormal = Unpack_RGB8_SNORM(t_Vertices.Load(
@@ -60,13 +58,7 @@ void buffer_loads(
     vertex.tangent.xyz = mul(
         instanceData.transform, float4(localTangent.xyz, 0.f));
     vertex.tangent.w = localTangent.w;
-#if MOTION_VECTORS
-    vertex.prevPos = mul(
-        instanceData.prevTransform,
-        float4(localPreviousPosition, 1.f));
-#else
     vertex.prevPos = vertex.pos;
-#endif
 
     position = mul(float4(vertex.pos, 1.f), c_GBuffer.view.matWorldToClip);
 }

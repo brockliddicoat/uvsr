@@ -15,7 +15,7 @@
 
 UVSR fetches and verifies the pinned archive directly. Its CMake shader catalog
 invokes `dxc.exe` per task, consumes compiler depfiles, and builds deterministic
-owned shader-family blobs for UVSR, Donut, and retained NRD shaders. No
+owned shader-family blobs for UVSR and Donut shaders. No
 transitive compiler wrapper owns the active build.
 
 DXC is a development tool. The production renderer package contains compiled

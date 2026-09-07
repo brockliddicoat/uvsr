@@ -1,5 +1,7 @@
 #pragma once
 
+#include "uvsr_settings_commands.h"
+
 #include <chrono>
 #include <array>
 #include <cstddef>
@@ -22,7 +24,8 @@ namespace uvsr
         ChangeMaterial,
         ChangeLight,
         ToggleFlashlight,
-        CycleLightingSolution
+        CycleLightingSolution,
+        CyclePrerequisite
     };
 
     struct RuntimeOutputEvidence
@@ -83,76 +86,60 @@ namespace uvsr
     struct RetainedRuntimeCase
     {
         std::string name;
-        std::vector<std::pair<std::string, std::string>> settings;
-        std::uint32_t expectedSampleCount = 0u;
+        struct Setting
+        {
+            SettingId id = SettingId::Invalid;
+            UiSettingsValue value;
+        };
+        std::vector<Setting> settings;
         std::uint64_t expectedPathHistoryCount = 0u;
-        bool expectScreenVisibility = false;
         bool expectDirectionalVisibility = false;
         bool expectSkyVisibility = false;
         bool expectFlashlightLightingSubmitted = false;
         bool assertFlashlightLightingState = false;
         bool expectFlashlightVisibility = false;
         bool assertFlashlightVisibilityState = false;
-        bool expectShadowDenoising = false;
-        bool expectSkyDenoising = false;
-        bool expectAmbientOcclusionDenoising = false;
-        bool expectGlobalIlluminationDenoising = false;
         bool expectLightingAccumulation = false;
         bool assertLightingAccumulationState = false;
         bool expectAutoExposure = false;
         bool assertAutoExposureState = false;
         bool snapshotRoundTrip = false;
+        bool expectSnapshotResetChange = true;
         bool exerciseRetainedStateChanges = false;
         RetainedRuntimeAction action = RetainedRuntimeAction::None;
         bool requireActionOutputDifference = false;
-        std::string actionSettingName;
-        std::string actionBaselineValue;
+        SettingId actionSettingId = SettingId::Invalid;
+        UiSettingsValue actionBaselineValue;
         std::string actionBaselineSceneToken;
-        std::string actionValue;
+        UiSettingsValue actionValue;
         bool requirePathHistoryRestart = false;
         int resizeWidth = 0;
         int resizeHeight = 0;
         std::string expectedSceneToken;
-        std::string semanticFamily;
-        std::string semanticDomain;
-        bool requireCrossCaseDistinctness = false;
-        bool requireCrossSampleDistinctness = true;
-        bool semanticTimingOnly = false;
     };
 
     struct RuntimeSemanticSignature
     {
         std::uint32_t width = 0u;
         std::uint32_t height = 0u;
-        std::uint32_t receiverSampleCount = 0u;
         double meanLinearLuminance = 0.0;
         double rmsLinearLuminance = 0.0;
         double meanLinearHorizontalGradient = 0.0;
         std::array<std::uint64_t, 16> linearLuminanceHistogram{};
         std::uint64_t linearLuminanceSampleCount = 0u;
-        double cpuFrameMilliseconds = 0.0;
-        double gpuFrameMilliseconds = 0.0;
     };
 
     struct RetainedRuntimeSemanticCapture
     {
         std::string caseName;
-        std::string family;
-        std::string domain;
         std::string sceneToken;
         RuntimeSemanticSignature signature;
     };
 
     [[nodiscard]] RuntimeSemanticSignature
         BuildRuntimeSemanticSignature(
-            const RuntimeOutputEvidence& output,
-            std::uint32_t receiverSampleCount,
-            double cpuFrameMilliseconds,
-            double gpuFrameMilliseconds) noexcept;
+            const RuntimeOutputEvidence& output) noexcept;
     [[nodiscard]] bool RuntimeSemanticSignaturesAreDistinct(
-        const RuntimeSemanticSignature& left,
-        const RuntimeSemanticSignature& right) noexcept;
-    [[nodiscard]] bool RuntimeSemanticTimingsAreDistinct(
         const RuntimeSemanticSignature& left,
         const RuntimeSemanticSignature& right) noexcept;
     [[nodiscard]] bool ValidateRetainedRuntimeSemanticCaptures(
@@ -165,25 +152,16 @@ namespace uvsr
             const std::string& bistroScene,
             const std::string& sanMiguelScene);
 
-    [[nodiscard]] std::string EscapeRuntimeDiagnosticJson(
-        std::string_view value);
-
     struct RetainedRuntimeTelemetry
     {
         bool sceneBusy = false;
         bool sceneLoaded = false;
         std::string currentScene;
-        std::uint32_t receiverSampleCount = 1u;
         std::uint64_t pathHistoryCount = 0u;
-        bool screenVisibilityDispatched = false;
         bool directionalVisibilityDispatched = false;
         bool skyVisibilityDispatched = false;
         bool flashlightLightingSubmitted = false;
         bool flashlightVisibilityDispatched = false;
-        bool shadowDenoisingDispatched = false;
-        bool skyDenoisingDispatched = false;
-        bool ambientOcclusionDenoisingDispatched = false;
-        bool globalIlluminationDenoisingDispatched = false;
         bool lightingAccumulationCommitted = false;
         bool autoExposureDispatched = false;
         std::string globalNoisePattern;
@@ -258,8 +236,8 @@ namespace uvsr
         std::size_t caseIndex = 0u;
         std::string payload;
         RetainedRuntimeAction action = RetainedRuntimeAction::None;
-        std::string actionSettingName;
-        std::string actionValue;
+        SettingId actionSettingId = SettingId::Invalid;
+        UiSettingsValue actionValue;
         int resizeWidth = 0;
         int resizeHeight = 0;
         bool hasStableFrameTiming = false;

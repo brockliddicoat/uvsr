@@ -12,14 +12,26 @@ namespace uvsr
         PathTracing
     };
 
-    // The production tracer has one conventional transport recipe. These are
-    // implementation constants, not settings or persistence fields.
-    inline constexpr uint32_t PathTracingBounceCount =
-        UVSR_PATH_TRACING_BOUNCE_COUNT;
     inline constexpr uint32_t PathTracingSamplesPerFrame =
         UVSR_PATH_TRACING_SAMPLES_PER_FRAME;
-    inline constexpr uint32_t PathTracingRussianRouletteStart =
-        UVSR_PATH_TRACING_RUSSIAN_ROULETTE_START;
+
+    struct PathTracingSettings
+    {
+        int maximumBounces = 30;
+        int minimumBounces = 2;
+        bool fireflyFilter = true;
+        float fireflyThreshold = 50.f;
+    };
+    inline constexpr PathTracingSettings DefaultPathTracingSettings;
+
+    [[nodiscard]] inline bool IsValidPathTracingSettings(
+        const PathTracingSettings& settings) noexcept
+    {
+        return settings.maximumBounces >= 1 && settings.maximumBounces <= 30 &&
+            settings.minimumBounces >= 1 && settings.minimumBounces <= settings.maximumBounces &&
+            ShaderIsFinite(settings.fireflyThreshold) &&
+            settings.fireflyThreshold >= 10.f && settings.fireflyThreshold <= 1.e6f;
+    }
 
     struct PathTracingPipelineResources
     {
@@ -122,13 +134,4 @@ namespace uvsr
         };
     }
 
-    [[nodiscard]] inline constexpr const char* GetLightingSolutionLabel(
-        LightingSolution solution) noexcept
-    {
-        return solution == LightingSolution::RayMarching
-            ? "Ray Marching"
-            : solution == LightingSolution::PathTracing
-                ? "Path Tracing"
-                : "";
-    }
 }

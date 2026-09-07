@@ -1,74 +1,62 @@
-# Third-Party Notices
+# third party notices
 
-UVSR contains, adapts, links, downloads, or packages third-party material under
-its own terms. The UVSR license does not replace those terms. In the source
-distribution, `legal/documentation/README.md` records revisions, relationships, and
-reuse boundaries; exact license texts are kept under `legal/licenses/` or
-beside the relevant dependency or asset.
-Renderer packages copy this complete record to
+UVSR contains, adapts, links, downloads, or packages third party material under
+its own terms. the UVSR license does not replace those terms. exact license
+bodies remain under `legal/licenses`, beside the dependency or asset, or in the
+verified fetched source. renderer packages copy this summary to
 `bin/licenses/third-party-notices.md`.
 
-## Incorporated and Adapted Code
+## renderer code and dependencies
 
-- NVIDIA Donut keeps its upstream notice. Direct pinned NVRHI, Dear ImGui,
-  cgltf, GLFW, JsonCpp, stb, and TinyEXR keep their own upstream terms.
-- UVSR's MiniEngine-derived TAA portions retain Microsoft's MIT notice.
-- UVSR's Fast Approximate shader follows Google Filament's Apache-licensed
-  adaptation lineage through G3D and NVIDIA FXAA; preserve the notices in
-  `legal/documentation/google-filament-fxaa.md` from the source distribution.
-- UVSR's AgX shader adapts Benjamin Wrensch's MIT-licensed Minimal AgX
-  Implementation; preserve the Missing Deadlines copyright and MIT terms.
-- The retained fast-acos expression preserves Intel XeGTAO's MIT notice as
-  `bin/licenses/Intel-XeGTAO-MIT.txt`.
-- The retained generated Sobol table preserves Andrew Helmer's MIT notice as
-  `bin/licenses/Andrew-Helmer-Stochastic-Generation-MIT.txt`.
+- NVIDIA Donut, pinned NVRHI, Dear ImGui, cgltf, GLFW, JsonCpp, stb, and TinyEXR
+  retain their upstream terms. the package carries each applicable notice.
+- Fast Approximate AA adapts Google Filament under Apache 2.0 and carries the
+  indirect G3D and NVIDIA FXAA notices in
+  `bin/licenses/Google-Filament-FXAA-Attribution.md`.
+- AgX adapts Benjamin Wrensch's Minimal AgX implementation. preserve the
+  missing Deadlines copyright and MIT notice. the earlier AgX data lineage is
+  still a commercial clearance question.
+- the retained fast acos expression carries Intel XeGTAO's MIT notice.
+- DirectX-Headers and the app local Direct3D 12 Agility SDK runtime retain the
+  exact Microsoft terms installed beside the engine.
 
-## NVIDIA NRD and MathLib
+## source and build tools
 
-UVSR incorporates NVIDIA Real Time Denoisers 4.17.3 from commit
-`792eff196afdd350fd9c3f862119017ccb438a0e`. The retained implementation uses
-REBLUR_DIFFUSE, RELAX_DIFFUSE, and SIGMA_SHADOW. It also incorporates NVIDIA
-MathLib v11 from commit `974e1387ba936740c7cdc494792d2641bc127e86`.
+the recursive source tree contains NVIDIA ShaderMake commit
+`5daebdbef45088fc2369d441391ecab0eba25e54` through Donut. UVSR's current build
+does not invoke or link ShaderMake, and no ShaderMake binary, source, or license
+is renderer package content. a source redistribution that includes the nested
+checkout must keep `donut/ShaderMake/LICENSE.txt`.
 
-This software contains source code provided by NVIDIA Corporation.
+the build fetches Microsoft DirectX Shader Compiler v1.9.2602 to produce DXIL.
+the compiler is not packaged. redistribution of DXC itself requires its
+University of Illinois license and upstream third party notices.
 
-NRD is licensed under the NVIDIA RTX SDK License Agreement. Its exact fetched
-license is installed as `bin/licenses/NRD-LICENSE.txt`. MathLib is MIT-licensed;
-its exact fetched license is installed as
-`bin/licenses/NVIDIA-MathLib-MIT.txt`. A
-distributor must independently satisfy all application, distribution,
-protective-term, notice, and attribution requirements. This notice does not
-replace them.
+## scenes and environments
 
-## DirectX Shader Compiler
+San Miguel 2.1 is limited to research and educational use with attribution.
+the exact Bistro Wine GLB is separate from the supporting CC BY 4.0 archive, so
+its chain of title remains unconfirmed. the adapted PBRT San Miguel camera also
+has unconfirmed terms. Poly Haven publishes all six retained HDR files under
+CC0. package copies preserve the scene licenses and the complete HDR source and
+hash inventory.
 
-UVSR's build fetches Microsoft DirectX Shader Compiler v1.9.2602 directly and
-uses it to produce DXIL. The production package does not include the compiler.
-Anyone redistributing DXC itself must include its University of Illinois Open
-Source License and upstream third-party notices.
+## fonts
 
-## Launcher Runtime
+the renderer reads Windows-installed Segoe UI Semibold and Bold and does not
+copy or package them. its Dear ImGui dependency retains embedded ProggyClean
+from commit `45acd5e0e82f4c954432533ae9985ff0e1aad6d5`, with the full MIT notice
+in `bin/licenses/ProggyClean-MIT.txt` (SHA-256
+`8B802D79F256D29B45AD253323D212FA14CA952A20DCD227CFBCDB3D140BFE7C`).
 
-The self-contained `uvsr-launcher.exe` incorporates Microsoft .NET and Windows
-Forms runtime `10.0.11`. It embeds and displays the complete license and
-third-party notices supplied by the pinned .NET SDK `10.0.400`; the renderer
-package does not duplicate those launcher-only resources.
+the separate native `uvsr-launcher.exe` embeds Noto Sans Regular and Bold with
+their OFL, and statically links zlib 1.3.2 with its complete license. its
+**Notices** window displays those texts and the UVSR license. Windows platform
+libraries are supplied by the operating system. the renderer package does not
+duplicate launcher-only resources.
 
-## Assets and Fonts
+## distribution
 
-Bundled scenes, HDR environments, and fonts retain their adjacent licenses and
-attribution. In particular, San Miguel's grant is limited to research and
-educational use, Bistro requires CC BY 4.0 attribution, and Poly Haven assets
-use CC0. The current renderer bundles unmodified Noto Sans under the SIL Open
-Font License 1.1 and installs the complete license as
-`bin/licenses/Noto-Sans-OFL-1.1.txt`. Current builds do not copy or package
-Windows-installed Segoe UI fonts. The `Ogg (ProggyClean)` option uses
-Tristan Grimmer's ProggyClean font already embedded by Dear ImGui under the MIT
-License; new packages install its complete separate notice as
-`bin/licenses/ProggyClean-MIT.txt` without staging a duplicate font binary.
-
-## Distribution Responsibility
-
-Before redistributing a binary or media bundle, audit the exact build output
-and include every applicable license and notice. The source distribution's
-`legal/documentation/commercial-licensing.md` records known clearance gaps.
+audit the exact package and include every applicable license and notice before
+redistribution. `legal/documentation/commercial-licensing.md` records known
+clearance gaps.

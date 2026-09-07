@@ -8,6 +8,30 @@
 #include <algorithm>
 #include <cmath>
 
+namespace
+{
+    void DrawFullscreen(
+        nvrhi::ICommandList* commandList,
+        nvrhi::IGraphicsPipeline* pipeline,
+        nvrhi::IFramebuffer* framebuffer,
+        nvrhi::IBindingSet* bindingSet,
+        std::uint32_t size)
+    {
+        nvrhi::GraphicsState state;
+        state.pipeline = pipeline;
+        state.framebuffer = framebuffer;
+        if (bindingSet)
+            state.bindings = { bindingSet };
+        state.viewport.addViewport(nvrhi::Viewport(float(size), float(size)));
+        state.viewport.addScissorRect(nvrhi::Rect(int(size), int(size)));
+        commandList->setGraphicsState(state);
+        nvrhi::DrawArguments arguments;
+        arguments.instanceCount = 1u;
+        arguments.vertexCount = 4u;
+        commandList->draw(arguments);
+    }
+}
+
 namespace uvsr
 {
     RendererLightProbeProcessing::RendererLightProbeProcessing(
@@ -17,13 +41,11 @@ namespace uvsr
         std::uint32_t intermediateTextureSize,
         nvrhi::Format intermediateTextureFormat)
         : m_Device(device)
+        , m_ShaderFactory(shaderFactory)
         , m_CommonPasses(commonPasses)
         , m_IntermediateTextureSize(intermediateTextureSize)
+        , m_IntermediateTextureFormat(intermediateTextureFormat)
     {
-        m_Initialization.device = device != nullptr;
-        m_Initialization.shaderFactory = shaderFactory != nullptr;
-        m_Initialization.commonPasses =
-            commonPasses && commonPasses->IsValid();
         if (!device || !shaderFactory || !commonPasses ||
             !commonPasses->IsValid() || intermediateTextureSize == 0u)
         {
@@ -40,22 +62,6 @@ namespace uvsr
             "mip_ps",
             nullptr,
             nvrhi::ShaderType::Pixel);
-        m_SpecularPixelShader = shaderFactory->CreateShader(
-            "uvsr/light_probe_processing.hlsl",
-            "specular_probe_ps",
-            nullptr,
-            nvrhi::ShaderType::Pixel);
-        m_EnvironmentBrdfPixelShader = shaderFactory->CreateShader(
-            "uvsr/light_probe_processing.hlsl",
-            "environment_brdf_ps",
-            nullptr,
-            nvrhi::ShaderType::Pixel);
-        m_Initialization.geometryShader = bool(m_GeometryShader);
-        m_Initialization.mipPixelShader = bool(m_MipPixelShader);
-        m_Initialization.specularPixelShader = bool(m_SpecularPixelShader);
-        m_Initialization.environmentBrdfPixelShader =
-            bool(m_EnvironmentBrdfPixelShader);
-
         nvrhi::BindingLayoutDesc bindingLayoutDescription;
         bindingLayoutDescription.visibility = nvrhi::ShaderType::Pixel;
         bindingLayoutDescription.bindings = {
@@ -65,7 +71,6 @@ namespace uvsr
         };
         m_BindingLayout =
             device->createBindingLayout(bindingLayoutDescription);
-        m_Initialization.bindingLayout = bool(m_BindingLayout);
 
         nvrhi::BufferDesc constantBufferDescription;
         constantBufferDescription.byteSize =
@@ -76,72 +81,6 @@ namespace uvsr
         constantBufferDescription.isVolatile = true;
         constantBufferDescription.maxVersions = 64u;
         m_ConstantBuffer = device->createBuffer(constantBufferDescription);
-        m_Initialization.constantBuffer = bool(m_ConstantBuffer);
-
-        nvrhi::TextureDesc intermediateDescription;
-        intermediateDescription.arraySize = 6u;
-        intermediateDescription.width = intermediateTextureSize;
-        intermediateDescription.height = intermediateTextureSize;
-        intermediateDescription.mipLevels = static_cast<std::uint32_t>(
-            std::floor(std::log2(float(intermediateTextureSize)))) + 1u;
-        intermediateDescription.dimension =
-            nvrhi::TextureDimension::TextureCube;
-        intermediateDescription.isRenderTarget = true;
-        intermediateDescription.format = intermediateTextureFormat;
-        intermediateDescription.initialState =
-            nvrhi::ResourceStates::RenderTarget;
-        intermediateDescription.keepInitialState = true;
-        intermediateDescription.clearValue = nvrhi::Color(0.f);
-        intermediateDescription.useClearValue = true;
-        intermediateDescription.debugName =
-            "RendererLightProbeIntermediate";
-        m_IntermediateTexture =
-            device->createTexture(intermediateDescription);
-        m_Initialization.intermediateTexture = bool(m_IntermediateTexture);
-
-        nvrhi::TextureDesc brdfDescription;
-        brdfDescription.width = m_EnvironmentBrdfTextureSize;
-        brdfDescription.height = m_EnvironmentBrdfTextureSize;
-        brdfDescription.format = nvrhi::Format::RG16_FLOAT;
-        brdfDescription.initialState = nvrhi::ResourceStates::ShaderResource;
-        brdfDescription.keepInitialState = true;
-        brdfDescription.isRenderTarget = true;
-        brdfDescription.clearValue = nvrhi::Color(0.f);
-        brdfDescription.useClearValue = true;
-        brdfDescription.debugName = "EnvironmentBrdf";
-        m_EnvironmentBrdfTexture = device->createTexture(brdfDescription);
-        m_Initialization.environmentBrdfTexture =
-            bool(m_EnvironmentBrdfTexture);
-
-        if (m_EnvironmentBrdfTexture)
-        {
-            m_EnvironmentBrdfFramebuffer = device->createFramebuffer(
-                nvrhi::FramebufferDesc().addColorAttachment(
-                    m_EnvironmentBrdfTexture));
-        }
-        m_Initialization.environmentBrdfFramebuffer =
-            bool(m_EnvironmentBrdfFramebuffer);
-
-        if (m_EnvironmentBrdfFramebuffer &&
-            commonPasses->FullscreenVertexShader() &&
-            m_EnvironmentBrdfPixelShader)
-        {
-            nvrhi::GraphicsPipelineDesc pipelineDescription;
-            pipelineDescription.VS = commonPasses->FullscreenVertexShader();
-            pipelineDescription.PS = m_EnvironmentBrdfPixelShader;
-            pipelineDescription.primType =
-                nvrhi::PrimitiveType::TriangleStrip;
-            pipelineDescription.renderState.rasterState.setCullNone();
-            pipelineDescription.renderState.depthStencilState.depthTestEnable =
-                false;
-            pipelineDescription.renderState.depthStencilState.stencilEnable =
-                false;
-            m_EnvironmentBrdfPipeline = device->createGraphicsPipeline(
-                pipelineDescription,
-                m_EnvironmentBrdfFramebuffer->getFramebufferInfo());
-        }
-        m_Initialization.environmentBrdfPipeline =
-            bool(m_EnvironmentBrdfPipeline);
 
         if (!IsValid())
             log::error("Renderer light-probe processing initialization failed");
@@ -166,7 +105,8 @@ namespace uvsr
             description.arraySize - baseArraySlice >= 6u;
     }
 
-    nvrhi::FramebufferHandle RendererLightProbeProcessing::GetFramebuffer(
+    RendererLightProbeProcessing::TextureSubresourcesEntry&
+        RendererLightProbeProcessing::GetTextureSubresources(
         nvrhi::ITexture* texture,
         nvrhi::TextureSubresourceSet subresources)
     {
@@ -178,40 +118,30 @@ namespace uvsr
                 return entry.texture.Get() == texture &&
                     entry.subresources == subresources;
             });
-        if (found != m_TextureSubresourceCache.end() && found->framebuffer)
-            return found->framebuffer;
-
-        nvrhi::FramebufferHandle framebuffer = m_Device->createFramebuffer(
-            nvrhi::FramebufferDesc().addColorAttachment(
-                texture, subresources));
-        if (!framebuffer)
-            return nullptr;
         if (found != m_TextureSubresourceCache.end())
-        {
-            found->framebuffer = framebuffer;
-        }
-        else
-        {
-            m_TextureSubresourceCache.push_back(
-                { texture, subresources, framebuffer, nullptr });
-        }
-        return framebuffer;
+            return *found;
+        m_TextureSubresourceCache.push_back({ texture, subresources, nullptr, nullptr });
+        return m_TextureSubresourceCache.back();
+    }
+
+    nvrhi::FramebufferHandle RendererLightProbeProcessing::GetFramebuffer(
+        nvrhi::ITexture* texture,
+        nvrhi::TextureSubresourceSet subresources)
+    {
+        auto& entry = GetTextureSubresources(texture, subresources);
+        if (!entry.framebuffer)
+            entry.framebuffer = m_Device->createFramebuffer(
+                nvrhi::FramebufferDesc().addColorAttachment(texture, subresources));
+        return entry.framebuffer;
     }
 
     nvrhi::BindingSetHandle RendererLightProbeProcessing::GetBindingSet(
         nvrhi::ITexture* texture,
         nvrhi::TextureSubresourceSet subresources)
     {
-        const auto found = std::find_if(
-            m_TextureSubresourceCache.begin(),
-            m_TextureSubresourceCache.end(),
-            [&](const TextureSubresourcesEntry& entry)
-            {
-                return entry.texture.Get() == texture &&
-                    entry.subresources == subresources;
-            });
-        if (found != m_TextureSubresourceCache.end() && found->bindingSet)
-            return found->bindingSet;
+        auto& entry = GetTextureSubresources(texture, subresources);
+        if (entry.bindingSet)
+            return entry.bindingSet;
 
         nvrhi::BindingSetDesc description;
         description.bindings = {
@@ -224,20 +154,8 @@ namespace uvsr
                 nvrhi::Format::UNKNOWN,
                 subresources)
         };
-        nvrhi::BindingSetHandle bindingSet =
-            m_Device->createBindingSet(description, m_BindingLayout);
-        if (!bindingSet)
-            return nullptr;
-        if (found != m_TextureSubresourceCache.end())
-        {
-            found->bindingSet = bindingSet;
-        }
-        else
-        {
-            m_TextureSubresourceCache.push_back(
-                { texture, subresources, nullptr, bindingSet });
-        }
-        return bindingSet;
+        entry.bindingSet = m_Device->createBindingSet(description, m_BindingLayout);
+        return entry.bindingSet;
     }
 
     nvrhi::GraphicsPipelineHandle RendererLightProbeProcessing::GetPipeline(
@@ -312,20 +230,7 @@ namespace uvsr
         const std::uint32_t outputSize = std::max(
             output->getDesc().width >> outputMipLevel, 1u);
 
-        nvrhi::GraphicsState state;
-        state.pipeline = pipeline;
-        state.framebuffer = framebuffer;
-        state.bindings = { bindingSet };
-        state.viewport.addViewport(nvrhi::Viewport(
-            float(outputSize), float(outputSize)));
-        state.viewport.addScissorRect(
-            nvrhi::Rect(int(outputSize), int(outputSize)));
-        commandList->setGraphicsState(state);
-
-        nvrhi::DrawArguments arguments;
-        arguments.instanceCount = 1u;
-        arguments.vertexCount = 4u;
-        commandList->draw(arguments);
+        DrawFullscreen(commandList, pipeline, framebuffer, bindingSet, outputSize);
         return true;
     }
 
@@ -400,6 +305,35 @@ namespace uvsr
             return false;
         }
 
+        if (!m_SpecularPixelShader)
+            m_SpecularPixelShader = m_ShaderFactory->CreateShader(
+                "uvsr/light_probe_processing.hlsl", "specular_probe_ps",
+                nullptr, nvrhi::ShaderType::Pixel);
+        if (!m_IntermediateTexture)
+        {
+            nvrhi::TextureDesc intermediateDescription;
+            intermediateDescription.arraySize = 6u;
+            intermediateDescription.width = m_IntermediateTextureSize;
+            intermediateDescription.height = m_IntermediateTextureSize;
+            intermediateDescription.mipLevels = static_cast<std::uint32_t>(
+                std::floor(std::log2(float(m_IntermediateTextureSize)))) + 1u;
+            intermediateDescription.dimension =
+                nvrhi::TextureDimension::TextureCube;
+            intermediateDescription.isRenderTarget = true;
+            intermediateDescription.format = m_IntermediateTextureFormat;
+            intermediateDescription.initialState =
+                nvrhi::ResourceStates::RenderTarget;
+            intermediateDescription.keepInitialState = true;
+            intermediateDescription.clearValue = nvrhi::Color(0.f);
+            intermediateDescription.useClearValue = true;
+            intermediateDescription.debugName =
+                "RendererLightProbeIntermediate";
+            m_IntermediateTexture =
+                m_Device->createTexture(intermediateDescription);
+        }
+        if (!m_SpecularPixelShader || !m_IntermediateTexture)
+            return false;
+
         const std::uint32_t inputSize = std::max(
             input->getDesc().width >> inputSubresources.baseMipLevel, 1u);
         const std::uint32_t outputSize = std::max(
@@ -440,19 +374,7 @@ namespace uvsr
             m_ConstantBuffer, &constants, sizeof(constants));
 
         commandList->beginMarker("Specular Light Probe");
-        nvrhi::GraphicsState state;
-        state.pipeline = pipeline;
-        state.framebuffer = framebuffer;
-        state.bindings = { bindingSet };
-        state.viewport.addViewport(nvrhi::Viewport(
-            float(intermediateSize), float(intermediateSize)));
-        state.viewport.addScissorRect(
-            nvrhi::Rect(int(intermediateSize), int(intermediateSize)));
-        commandList->setGraphicsState(state);
-        nvrhi::DrawArguments arguments;
-        arguments.instanceCount = 1u;
-        arguments.vertexCount = 4u;
-        commandList->draw(arguments);
+        DrawFullscreen(commandList, pipeline, framebuffer, bindingSet, intermediateSize);
 
         const bool succeeded =
             BlitCubemap(
@@ -481,28 +403,50 @@ namespace uvsr
         if (!IsValid() || !commandList)
             return false;
 
+        if (!m_EnvironmentBrdfPipeline)
+        {
+            const nvrhi::ShaderHandle pixelShader = m_ShaderFactory->CreateShader(
+                "uvsr/light_probe_processing.hlsl", "environment_brdf_ps",
+                nullptr, nvrhi::ShaderType::Pixel);
+            if (!pixelShader)
+                return false;
+            if (!m_EnvironmentBrdfTexture)
+            {
+                nvrhi::TextureDesc description;
+                description.width = description.height = m_EnvironmentBrdfTextureSize;
+                description.format = nvrhi::Format::RG16_FLOAT;
+                description.initialState = nvrhi::ResourceStates::ShaderResource;
+                description.keepInitialState = true;
+                description.isRenderTarget = true;
+                description.clearValue = nvrhi::Color(0.f);
+                description.useClearValue = true;
+                description.debugName = "EnvironmentBrdf";
+                m_EnvironmentBrdfTexture = m_Device->createTexture(description);
+            }
+            if (!m_EnvironmentBrdfTexture)
+                return false;
+            if (!m_EnvironmentBrdfFramebuffer)
+                m_EnvironmentBrdfFramebuffer = m_Device->createFramebuffer(
+                    nvrhi::FramebufferDesc().addColorAttachment(m_EnvironmentBrdfTexture));
+            if (!m_EnvironmentBrdfFramebuffer)
+                return false;
+            nvrhi::GraphicsPipelineDesc description;
+            description.VS = m_CommonPasses->FullscreenVertexShader();
+            description.PS = pixelShader;
+            description.primType = nvrhi::PrimitiveType::TriangleStrip;
+            description.renderState.rasterState.setCullNone();
+            description.renderState.depthStencilState.depthTestEnable = false;
+            description.renderState.depthStencilState.stencilEnable = false;
+            m_EnvironmentBrdfPipeline = m_Device->createGraphicsPipeline(
+                description, m_EnvironmentBrdfFramebuffer->getFramebufferInfo());
+            if (!m_EnvironmentBrdfPipeline)
+                return false;
+        }
+
         commandList->beginMarker("Environment BRDF");
-        nvrhi::GraphicsState state;
-        state.pipeline = m_EnvironmentBrdfPipeline;
-        state.framebuffer = m_EnvironmentBrdfFramebuffer;
-        state.viewport.addViewport(nvrhi::Viewport(
-            float(m_EnvironmentBrdfTextureSize),
-            float(m_EnvironmentBrdfTextureSize)));
-        state.viewport.addScissorRect(nvrhi::Rect(
-            int(m_EnvironmentBrdfTextureSize),
-            int(m_EnvironmentBrdfTextureSize)));
-        commandList->setGraphicsState(state);
-        nvrhi::DrawArguments arguments;
-        arguments.instanceCount = 1u;
-        arguments.vertexCount = 4u;
-        commandList->draw(arguments);
+        DrawFullscreen(commandList, m_EnvironmentBrdfPipeline, m_EnvironmentBrdfFramebuffer,
+            nullptr, m_EnvironmentBrdfTextureSize);
         commandList->endMarker();
         return true;
-    }
-
-    void RendererLightProbeProcessing::ResetCaches()
-    {
-        m_TextureSubresourceCache.clear();
-        m_PipelineCache.clear();
     }
 }

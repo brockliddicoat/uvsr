@@ -1,4 +1,3 @@
-docs/postmortem/archive/*.restore.patch -diff -text
 /overrides/*.patch -diff text eol=lf
 /overrides/nvrhi-d3d12-diagnostics.h text eol=lf
 /third_party/imgui/** text eol=lf
@@ -29,7 +28,7 @@ assets/noise/*.bin -diff -text
 /launcher/src/UVSR.Installer/** text eol=lf
 /launcher/verify-launcher-update-feed.ps1 text eol=lf
 /launcher/verify-renderer-update-feed.ps1 text eol=lf
-/cmake/runtime-media-inventory.def text eol=lf
+/cmake/runtime-asset-map.def text eol=lf
 /cmake/NRDConfig.hlsli.in text eol=lf
 /cmake/NRDRetainedShaders.cfg text eol=lf
 /assets/environments/README.md text eol=lf
@@ -37,3 +36,6 @@ assets/noise/*.bin -diff -text
 /legal/documentation/third-party-notices.md text eol=lf
 /legal/licenses/IOLITE-AgX-MIT.txt text eol=lf
 /legal/licenses/Microsoft-DirectX-Graphics-Samples-MIT.txt text eol=lf
+
+# historical records and their manifest use exact bytes on every checkout.
+/docs/postmortem/** -text

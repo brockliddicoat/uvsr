@@ -15,16 +15,8 @@ FetchContent_Declare(uvsr_d3d12_agility
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(uvsr_d3d12_agility)
 
-if (NOT EXISTS "${UVSR_D3D12_AGILITY_ARCHIVE}")
-    message(FATAL_ERROR "The pinned Direct3D Agility SDK archive was not retained")
-endif()
-file(SIZE "${UVSR_D3D12_AGILITY_ARCHIVE}" agility_archive_size)
-file(SHA256 "${UVSR_D3D12_AGILITY_ARCHIVE}" agility_archive_sha256)
-if (NOT agility_archive_size EQUAL 35271083 OR
-    NOT agility_archive_sha256 STREQUAL
-        "0e9bcf32aac9a79343ede9b21e4864950ee54577e3d8e19bfcdf002bb4e9bfd6")
-    message(FATAL_ERROR "The Direct3D Agility SDK archive identity changed")
-endif()
+uvsr_verify_dependency_file("${UVSR_D3D12_AGILITY_ARCHIVE}"
+    "0e9bcf32aac9a79343ede9b21e4864950ee54577e3d8e19bfcdf002bb4e9bfd6" 35271083)
 
 set(UVSR_D3D12_AGILITY_ROOT "${uvsr_d3d12_agility_SOURCE_DIR}")
 set(UVSR_D3D12_AGILITY_INCLUDE_DIR
@@ -49,40 +41,24 @@ if (NOT agility_version_match OR
     message(FATAL_ERROR "The Direct3D Agility SDK runtime version changed")
 endif()
 
-function(uvsr_require_agility_file relative_path expected_size expected_sha256)
-    set(path "${UVSR_D3D12_AGILITY_ROOT}/${relative_path}")
-    if (NOT EXISTS "${path}")
-        message(FATAL_ERROR "The Direct3D Agility SDK omits ${relative_path}")
-    endif()
-    file(SIZE "${path}" actual_size)
-    file(SHA256 "${path}" actual_sha256)
-    if (NOT actual_size EQUAL expected_size OR
-        NOT actual_sha256 STREQUAL expected_sha256)
-        message(FATAL_ERROR
-            "The Direct3D Agility SDK changed ${relative_path}")
-    endif()
-endfunction()
-
-uvsr_require_agility_file(
-    "build/native/bin/x64/D3D12Core.dll" 5027640
-    "eddf4cff4eda8162624b88694ad2adf4b09bc5aee6339191f39adf8ae48b41e7")
-uvsr_require_agility_file(
-    "build/native/bin/x64/d3d12SDKLayers.dll" 4965688
-    "a78bca22ebe6c8ccdd6efff630d798b27447f8922bb889de2f50e0dd1ab10f85")
-uvsr_require_agility_file(
-    "LICENSE.txt" 13147
-    "5239850894610071566f7ecee0b751fde43c862032d92b99d7d0f596b3433ebd")
-uvsr_require_agility_file(
-    "LICENSE-CODE.txt" 1093
-    "903df5512f7d02609fed0c780a9b704f5a3eeb6e4d84ebe42a29845c81899a3c")
-uvsr_require_agility_file(
-    "distributable files.txt" 93
-    "18be111795af241547e17596a010cb7606aa8670d9a26096425ba46a0f76ef9e")
+uvsr_verify_dependency_file(
+    "${UVSR_D3D12_AGILITY_ROOT}/build/native/bin/x64/D3D12Core.dll"
+    "eddf4cff4eda8162624b88694ad2adf4b09bc5aee6339191f39adf8ae48b41e7" 5027640)
+uvsr_verify_dependency_file(
+    "${UVSR_D3D12_AGILITY_ROOT}/build/native/bin/x64/d3d12SDKLayers.dll"
+    "a78bca22ebe6c8ccdd6efff630d798b27447f8922bb889de2f50e0dd1ab10f85" 4965688)
+uvsr_verify_dependency_file(
+    "${UVSR_D3D12_AGILITY_ROOT}/LICENSE.txt"
+    "5239850894610071566f7ecee0b751fde43c862032d92b99d7d0f596b3433ebd" 13147)
+uvsr_verify_dependency_file(
+    "${UVSR_D3D12_AGILITY_ROOT}/LICENSE-CODE.txt"
+    "903df5512f7d02609fed0c780a9b704f5a3eeb6e4d84ebe42a29845c81899a3c" 1093)
+uvsr_verify_dependency_file(
+    "${UVSR_D3D12_AGILITY_ROOT}/distributable files.txt"
+    "18be111795af241547e17596a010cb7606aa8670d9a26096425ba46a0f76ef9e" 93)
 set(UVSR_AGILITY_NOTICE_RECORDS
     "${UVSR_D3D12_AGILITY_ROOT}/LICENSE.txt|5239850894610071566f7ecee0b751fde43c862032d92b99d7d0f596b3433ebd"
     "${UVSR_D3D12_AGILITY_ROOT}/LICENSE-CODE.txt|903df5512f7d02609fed0c780a9b704f5a3eeb6e4d84ebe42a29845c81899a3c"
     "${UVSR_D3D12_AGILITY_ROOT}/distributable files.txt|18be111795af241547e17596a010cb7606aa8670d9a26096425ba46a0f76ef9e")
 
-message(STATUS
-    "Direct3D Agility SDK ${UVSR_D3D12_AGILITY_PACKAGE_VERSION}: "
-    "${agility_archive_size} bytes, ${agility_archive_sha256}")
+message(STATUS "Direct3D Agility SDK ${UVSR_D3D12_AGILITY_PACKAGE_VERSION}: exact")

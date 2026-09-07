@@ -1,4 +1,5 @@
-#include "uvsr_internal.h"
+#include "uvsr_ui_internal.h"
+#include "windows_executable_path.h"
 
 auto UIRenderer::FormatFrontEllipsisUtf8(
         std::string_view source,
@@ -27,11 +28,15 @@ auto UIRenderer::FormatFrontEllipsisUtf8(
     }
 
 auto UIRenderer::GetSceneLoadTimingDatabasePath() -> std::filesystem::path {
+#if defined(UVSR_BUILD_TESTING)
+        return GetExecutableDirectoryWide() / "state" / "scene-load-history-v1.txt";
+#else
         const wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA");
         if (!localAppData || localAppData[0] == L'\0')
             return {};
         return std::filesystem::path(localAppData) /
             L"UVSR" / L"scene-load-history-v1.txt";
+#endif
     }
 
 auto UIRenderer::LoadSceneLoadTimingDatabase() -> void {
@@ -44,16 +49,13 @@ auto UIRenderer::LoadSceneLoadTimingDatabase() -> void {
         if (!input.is_open())
             return;
 
-        SceneLoadTimingDatabase database;
-        if (!ReadSceneLoadTimingDatabase(input, database))
+        if (!ReadSceneLoadTimingDatabase(input, m_SceneLoadTiming))
         {
     uvsr::log::warning(
                 "Ignoring invalid scene loading history at %s",
                 path.generic_string().c_str());
             return;
         }
-        m_AllSceneLoadTiming = database.allScenes;
-        m_SceneLoadTimingByScene = std::move(database.byScene);
     }
 
 auto UIRenderer::SaveSceneLoadTimingDatabase() const -> void {
@@ -79,12 +81,8 @@ auto UIRenderer::SaveSceneLoadTimingDatabase() const -> void {
         std::ofstream output(
             temporaryPath,
             std::ios::binary | std::ios::trunc);
-        const SceneLoadTimingDatabase database = {
-            m_AllSceneLoadTiming,
-            m_SceneLoadTimingByScene
-        };
         const bool serialized = output.is_open() &&
-            WriteSceneLoadTimingDatabase(output, database);
+            WriteSceneLoadTimingDatabase(output, m_SceneLoadTiming);
         output.flush();
         const bool flushed = output.good();
         output.close();
@@ -107,37 +105,6 @@ auto UIRenderer::SaveSceneLoadTimingDatabase() const -> void {
         }
     }
 
-auto UIRenderer::ApplyWordSpacing(
-        ImGuiID& adjustedFontBakedId,
-        float& baseSpaceAdvance,
-        bool expanded) -> void {
-        ImFontBaked* baked = ImGui::GetFontBaked();
-        if (!baked)
-            return;
-
-        ImFontGlyph* spaceGlyph =
-            baked->FindGlyphNoFallback(ImWchar(' '));
-        if (!spaceGlyph)
-            return;
-
-        if (adjustedFontBakedId != baked->BakedId)
-        {
-            adjustedFontBakedId = baked->BakedId;
-            baseSpaceAdvance = spaceGlyph->AdvanceX;
-        }
-
-        constexpr float WordSpaceScale = 1.65f;
-        const float spaceAdvance = expanded
-            ? baseSpaceAdvance * WordSpaceScale
-            : baseSpaceAdvance;
-        spaceGlyph->AdvanceX = spaceAdvance;
-        if (baked->IndexAdvanceX.Size > int(ImWchar(' ')))
-        {
-            baked->IndexAdvanceX[int(ImWchar(' '))] =
-                spaceAdvance;
-        }
-    }
-
 auto UIRenderer::GetWindowsFontsDirectory() -> std::filesystem::path {
         std::vector<wchar_t> buffer(MAX_PATH);
         for (int attempt = 0; attempt < 2; ++attempt)
@@ -157,99 +124,6 @@ auto UIRenderer::GetWindowsFontsDirectory() -> std::filesystem::path {
         return {};
     }
 
-auto UIRenderer::GetUiFontFaces(UiFontFamily family) -> UiFontFaces& {
-        return m_UiFontFaces[static_cast<std::size_t>(
-            ResolveUiFontFamily(family))];
-    }
-
-auto UIRenderer::GetUiFontFaces(UiFontFamily family) const -> const UiFontFaces& {
-        return m_UiFontFaces[static_cast<std::size_t>(
-            ResolveUiFontFamily(family))];
-    }
-
-auto UIRenderer::IsUiFontFamilyAvailable(UiFontFamily family) const -> bool {
-        const UiFontFaces& faces = GetUiFontFaces(family);
-        return faces.regular && faces.regular->GetScaledFont() &&
-            faces.body && faces.body->GetScaledFont() &&
-            faces.header && faces.header->GetScaledFont();
-    }
-
-auto UIRenderer::GetUiFontFamilyUnavailableReason(
-        UiFontFamily family) -> std::string {
-        switch (ResolveUiFontFamily(family))
-        {
-        case UiFontFamily::Codex:
-            return
-                "Codex (Segoe UI) requires the installed Windows fonts "
-                "segoeui.ttf, seguisb.ttf, and segoeuib.ttf. Restore the "
-                "standard Segoe UI fonts in Windows, then restart UVSR; "
-                "Noto Sans remains available.";
-        case UiFontFamily::NotoSans:
-            return
-                "UVSR could not initialize its required Noto Sans UI fonts. "
-                "Reinstall UVSR with UVSR Launcher, then restart UVSR.";
-        case UiFontFamily::ProggyClean:
-            return
-                "UVSR could not initialize the embedded ProggyClean UI "
-                "fonts. Restart UVSR; if the problem continues, reinstall "
-                "UVSR with UVSR Launcher.";
-        case UiFontFamily::Count:
-            break;
-        }
-        return
-            "UVSR could not initialize the selected UI font family. "
-            "Select Noto Sans or reinstall UVSR with UVSR Launcher.";
-    }
-
-auto UIRenderer::RequireUiFontFamily(UiFontFamily family) const -> void {
-        if (!IsUiFontFamilyAvailable(family))
-        {
-            throw RequiredUiFontStartupError(
-                GetUiFontFamilyUnavailableReason(family));
-        }
-    }
-
-auto UIRenderer::GetActiveUiFont() -> ImFont* {
-        RequireUiFontFamily(m_ui.FontFamily);
-        UiFontFaces& faces = GetUiFontFaces(m_ui.FontFamily);
-        if (ImGui::IsUvsrStockWidgetRenderingEnabled())
-            return faces.regular->GetScaledFont();
-        return faces.body->GetScaledFont();
-    }
-
-auto UIRenderer::GetActiveUiHeaderFont() -> ImFont* {
-        RequireUiFontFamily(m_ui.FontFamily);
-        return GetUiFontFaces(m_ui.FontFamily).header->GetScaledFont();
-    }
-
-auto UIRenderer::ApplyActiveUiWordSpacing() -> void {
-        ApplyWordSpacing(
-            m_AdjustedSpaceFontBakedId,
-            m_BaseSpaceAdvance,
-            GetUiSkinBehavior(m_ComposedUiSkin).expandedWordSpacing);
-    }
-
-auto UIRenderer::RestoreActiveUiWordSpacing() -> void {
-        ApplyWordSpacing(
-            m_AdjustedSpaceFontBakedId,
-            m_BaseSpaceAdvance,
-            false);
-    }
-
-auto UIRenderer::ApplyActiveUiHeaderWordSpacing() -> void {
-        ApplyWordSpacing(
-            m_AdjustedHeaderSpaceFontBakedId,
-            m_BaseHeaderSpaceAdvance,
-            GetUiSkinBehavior(m_ComposedUiSkin).expandedWordSpacing);
-    }
-
-auto UIRenderer::RestoreActiveUiHeaderWordSpacing() -> void {
-        ApplyWordSpacing(
-            m_AdjustedHeaderSpaceFontBakedId,
-            m_BaseHeaderSpaceAdvance,
-            false);
-    }
-
 UIRenderer::UIRenderer(
         DeviceManager* deviceManager,
         std::shared_ptr<UvsrSceneViewer> app,
@@ -260,101 +134,32 @@ UIRenderer::UIRenderer(
         , m_StartupSettingsSnapshotCode(
             std::move(startupSettingsSnapshotCode))
         , m_ui(ui) {
-        const auto registerRequiredFont =
-            [&](const char* path, float size, const char* weight)
-            {
-                try
-                {
-                    std::shared_ptr<app::RegisteredFont> font =
-                        CreateFontFromFile(*(app->GetRootFs()), path, size);
-                    if (!font || !font->HasFontData())
-                    {
-                        throw RequiredUiFontStartupError(
-                            std::string("UVSR could not read the required Noto Sans ") +
-                            weight + " UI font at '" + path +
-                            "'. Reinstall UVSR.");
-                    }
-                    return font;
-                }
-                catch (const RequiredUiFontStartupError&)
-                {
-                    throw;
-                }
-                catch (const std::exception& error)
-                {
-                    throw RequiredUiFontStartupError(
-                        std::string("UVSR could not read the required Noto Sans ") +
-                        weight + " UI font at '" + path + "': " + error.what() +
-                        ". Reinstall UVSR.");
-                }
-            };
-        UiFontFaces& noto = GetUiFontFaces(UiFontFamily::NotoSans);
-        noto.regular = registerRequiredFont(
-            "/media/fonts/NotoSans/NotoSans-Regular.ttf", 13.f, "Regular");
-        noto.body = registerRequiredFont(
-            "/media/fonts/NotoSans/NotoSans-SemiBold.ttf", 16.f, "SemiBold");
-        noto.header = registerRequiredFont(
-            "/media/fonts/NotoSans/NotoSans-Bold.ttf", 16.f, "Bold");
-
-        UiFontFaces& proggy = GetUiFontFaces(UiFontFamily::ProggyClean);
-        proggy.regular = GetDefaultFont();
-        proggy.body = std::make_shared<app::RegisteredFont>(16.f);
-        m_fonts.push_back(proggy.body);
-        // ProggyClean has one regular embedded face. Keep authored Amp
-        // headings visibly emphasized with the required Noto Sans Bold face.
-        proggy.header = noto.header;
-
-        UiFontFaces& codex = GetUiFontFaces(UiFontFamily::Codex);
-        const std::filesystem::path windowsFontsDirectory =
-            GetWindowsFontsDirectory();
-        if (!windowsFontsDirectory.empty())
+        NativeFileSystem windowsFileSystem;
+        const auto directory = GetWindowsFontsDirectory();
+        try
         {
-            NativeFileSystem windowsFileSystem;
-            const auto registerOptionalWindowsFont =
-                [&](const std::filesystem::path& path, float size)
-                    -> std::shared_ptr<app::RegisteredFont>
-                {
-                    try
-                    {
-                        std::shared_ptr<app::RegisteredFont> font =
-                            CreateFontFromFile(windowsFileSystem, path, size);
-                        return font && font->HasFontData() ? font : nullptr;
-                    }
-                    catch (const std::exception& error)
-                    {
-                        uvsr::log::warning(
-                            "Codex (Segoe UI) font registration failed: %s",
-                            error.what());
-                        return nullptr;
-                    }
-                    catch (...)
-                    {
-                        uvsr::log::warning(
-                            "Codex (Segoe UI) font registration failed with "
-                            "an unknown error.");
-                        return nullptr;
-                    }
-                };
-            codex.regular = registerOptionalWindowsFont(
-                windowsFontsDirectory / L"segoeui.ttf", 13.f);
-            codex.body = registerOptionalWindowsFont(
-                windowsFontsDirectory / L"seguisb.ttf", 16.f);
-            codex.header = registerOptionalWindowsFont(
-                windowsFontsDirectory / L"segoeuib.ttf", 16.f);
+            m_UiBodyFont = CreateFontFromFile(windowsFileSystem, directory / L"seguisb.ttf", 16.f);
+            m_UiHeaderFont = CreateFontFromFile(windowsFileSystem, directory / L"segoeuib.ttf", 16.f);
+            if (!m_UiBodyFont || !m_UiHeaderFont ||
+                !m_UiBodyFont->HasFontData() || !m_UiHeaderFont->HasFontData())
+                throw std::runtime_error("font data is unavailable");
         }
-        if (!codex.regular || !codex.body || !codex.header)
+        catch (const std::exception& error)
         {
-            uvsr::log::warning(
-                "Codex (Segoe UI) is unavailable because one or more "
-                "required Windows Segoe UI font files could not be read. "
-                "Noto Sans remains available.");
+            throw RequiredUiFontStartupError(std::string("UVSR requires Windows Segoe UI Semibold and Bold. ") +
+                "Restore seguisb.ttf and segoeuib.ttf in Windows Fonts, then restart UVSR. " + error.what());
         }
 
         ImGui::GetIO().IniFilename = nullptr;
         LoadSceneLoadTimingDatabase();
+        m_PresentationWaitTimer = CreateWaitableTimerExW(nullptr, nullptr,
+            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE);
+        GetDeviceManager()->m_callbacks.beforePresent =
+            [this](donut::app::DeviceManager&, uint32_t) { PacePresentation(); };
     }
 
 auto UIRenderer::Animate(float elapsedTimeSeconds) -> void {
+        AdvanceDisplayPresentation(elapsedTimeSeconds);
         if (m_RequiredFontsReady)
         {
             ImGui_Renderer::Animate(elapsedTimeSeconds);
@@ -364,8 +169,8 @@ auto UIRenderer::Animate(float elapsedTimeSeconds) -> void {
         try
         {
             ImGui_Renderer::Animate(elapsedTimeSeconds);
-            RequireUiFontFamily(UiFontFamily::NotoSans);
-            RequireUiFontFamily(m_ui.FontFamily);
+            if (!m_UiBodyFont->GetScaledFont() || !m_UiHeaderFont->GetScaledFont())
+                throw RequiredUiFontStartupError("UVSR could not initialize its Segoe UI fonts.");
             m_RequiredFontsReady = true;
         }
         catch (const RequiredUiFontStartupError&)
@@ -381,18 +186,10 @@ auto UIRenderer::Animate(float elapsedTimeSeconds) -> void {
         }
     }
 
-auto UIRenderer::ShouldSuppressFullscreenShortcut() const -> bool {
-        return m_CommandOpen;
-    }
-
 auto UIRenderer::Init(std::shared_ptr<ShaderFactory> shaderFactory) -> bool {
         if (!ImGui_Renderer::Init(shaderFactory))
             return false;
 
-        m_BackdropBlurPass = std::make_unique<BackdropBlurPass>(
-            GetDevice(),
-            m_app->GetRendererShaderFactory(),
-            m_app->GetRendererCommonPasses());
         m_PixelZoomPass = std::make_unique<PixelZoomPass>(
             GetDevice(),
             m_app->GetRendererShaderFactory(),
@@ -401,6 +198,17 @@ auto UIRenderer::Init(std::shared_ptr<ShaderFactory> shaderFactory) -> bool {
     }
 
 #if defined(UVSR_BUILD_TESTING)
+bool UIRenderer::SelectRuntimeDiagnostic(SettingId id, const std::string& selector,
+    const char* emptyError, const char* failurePrefix, std::string& error)
+{
+    std::string selectionError;
+    if (!selector.empty() && (ApplySettingValue(id, UiSettingsValue::Selector(selector), selectionError) ||
+        selectionError.rfind("No change: ", 0u) == 0u))
+        return true;
+    error = selector.empty() ? emptyError : std::string(failurePrefix) + selectionError;
+    return false;
+}
+
 auto UIRenderer::ChangeRuntimeDiagnosticMaterial(
         std::string& error) -> bool {
         const std::shared_ptr<Scene> scene = m_app->GetScene();
@@ -415,6 +223,7 @@ auto UIRenderer::ChangeRuntimeDiagnosticMaterial(
             [](const std::shared_ptr<Material>& material)
             {
                 return bool(material) &&
+                    material->materialID >= 0 &&
                     std::isfinite(material->normalTextureScale);
             });
         if (selected == materials.end())
@@ -423,13 +232,17 @@ auto UIRenderer::ChangeRuntimeDiagnosticMaterial(
             return false;
         }
 
-        m_ui.SelectedMaterial = *selected;
+        const std::string selector = FormatSettingsSnapshotMaterialToken(
+            false,
+            static_cast<std::uint32_t>((*selected)->materialID));
+        if (!SelectRuntimeDiagnostic(SettingId::MaterialSelected, selector,
+            "the diagnostic material has no canonical selector", "could not select the diagnostic material: ", error))
+            return false;
         const float replacement =
             (*selected)->normalTextureScale >= 0.f ? -1.f : 1.f;
-        return ApplyRuntimeSetting(
-            "material.selected.normal-scale",
-            FormatCommandFloat(replacement),
-            error);
+        return ApplySettingValue(
+            SettingId::MaterialSelectedNormalScale,
+            UiSettingsValue::Float(replacement), error);
     }
 #endif
 
@@ -445,17 +258,28 @@ auto UIRenderer::ChangeRuntimeDiagnosticLight(
             return false;
         }
 
-        m_SelectedLight = light;
+        const auto& lights = m_app->GetEditableLights();
+        const auto selected = std::find(lights.begin(), lights.end(), light);
+        if (selected == lights.end())
+        {
+            error = "the diagnostic directional light is not editable";
+            return false;
+        }
+        const std::string selector = FormatSettingsSnapshotLightToken(
+            static_cast<std::size_t>(std::distance(lights.begin(), selected)),
+            light->GetName());
+        if (!SelectRuntimeDiagnostic(SettingId::LightSelected, selector,
+            "the diagnostic directional light has no canonical selector", "could not select the diagnostic directional light: ", error))
+            return false;
         const float replacement = light->angularSize < 10.f ? 20.f : 0.f;
-        return ApplyRuntimeSetting(
-            "light.selected.angular-size",
-            FormatCommandFloat(replacement),
-            error);
+        return ApplySettingValue(
+            SettingId::LightSelectedAngularSize,
+            UiSettingsValue::Float(replacement), error);
     }
 #endif
 
 #if defined(UVSR_BUILD_TESTING)
-auto UIRenderer::ToggleRuntimeDiagnosticFlashlight(
+auto UIRenderer::SelectRuntimeDiagnosticFlashlight(
         std::string& error) -> bool {
         const auto flashlight = std::find_if(
             m_app->GetEditableLights().begin(),
@@ -470,11 +294,21 @@ auto UIRenderer::ToggleRuntimeDiagnosticFlashlight(
             return false;
         }
 
-        m_SelectedLight = *flashlight;
-        return ApplyRuntimeSetting(
-            "light.selected.flashlight.enabled",
-            m_ui.FlashlightEnabled ? "off" : "on",
-            error);
+        const std::string selector = FormatSettingsSnapshotLightToken(
+            static_cast<std::size_t>(std::distance(
+                m_app->GetEditableLights().begin(), flashlight)),
+            (*flashlight)->GetName());
+        return SelectRuntimeDiagnostic(SettingId::LightSelected, selector,
+            "the retained flashlight has no canonical selector", "could not select the retained flashlight: ", error);
+    }
+
+auto UIRenderer::ToggleRuntimeDiagnosticFlashlight(
+        std::string& error) -> bool {
+        if (!SelectRuntimeDiagnosticFlashlight(error))
+            return false;
+        return ApplySettingValue(
+            SettingId::LightSelectedFlashlightEnabled,
+            UiSettingsValue::Boolean(!m_ui.FlashlightEnabled), error);
     }
 #endif
 
@@ -549,20 +383,32 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
                 return;
             }
 
-            for (const std::shared_ptr<Light>& light :
-                m_app->GetEditableLights())
-            {
-                if (m_app->IsFlashlight(light))
+            const auto& lights = m_app->GetEditableLights();
+            const auto flashlight = std::find_if(
+                lights.begin(), lights.end(),
+                [this](const std::shared_ptr<Light>& light)
                 {
-                    m_SelectedLight = light;
-                    break;
-                }
-            }
-            if (!m_SelectedLight || !m_app->IsFlashlight(m_SelectedLight))
+                    return m_app->IsFlashlight(light);
+                });
+            if (flashlight == lights.end())
             {
                 RetainedRuntimeDirective failure;
                 failure.kind = RetainedRuntimeDirectiveKind::FinishFail;
                 failure.payload = "retained flashlight is unavailable";
+                finish(failure);
+                return;
+            }
+            const std::string selector = FormatSettingsSnapshotLightToken(
+                static_cast<std::size_t>(
+                    std::distance(lights.begin(), flashlight)),
+                (*flashlight)->GetName());
+            std::string selectionError;
+            if (!SelectRuntimeDiagnostic(SettingId::LightSelected, selector,
+                "retained flashlight has no canonical selector", "could not select retained flashlight: ", selectionError))
+            {
+                RetainedRuntimeDirective failure;
+                failure.kind = RetainedRuntimeDirectiveKind::FinishFail;
+                failure.payload = std::move(selectionError);
                 finish(failure);
                 return;
             }
@@ -715,12 +561,8 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
             GetNoiseResolutionLabel(m_ui.Noise.resolution);
         telemetry.globalNoiseAnimateSamples = m_ui.Noise.animate;
         telemetry.globalNoiseAccumulateSamples = m_ui.AccumulateSamples;
-        telemetry.receiverSampleCount =
-            m_app->GetActiveRasterSampleCount();
         telemetry.pathHistoryCount =
             m_app->GetPathTracingCenterPixelAcceptedSampleCount();
-        telemetry.screenVisibilityDispatched =
-            m_app->DidDispatchScreenSpaceVisibilityThisFrame();
         telemetry.directionalVisibilityDispatched =
             m_app->DidDispatchDirectionalRayVisibilityThisFrame();
         telemetry.skyVisibilityDispatched =
@@ -729,16 +571,6 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
             m_app->DidSubmitFlashlightLightingThisFrame();
         telemetry.flashlightVisibilityDispatched =
             m_app->DidDispatchRayTracedFlashlightShadowThisFrame();
-        telemetry.shadowDenoisingDispatched =
-            m_app->DidDispatchShadowDenoisingThisFrame();
-        telemetry.skyDenoisingDispatched =
-            m_app->DidDispatchSkyDenoisingThisFrame();
-        telemetry.ambientOcclusionDenoisingDispatched =
-            m_app->IsRendererStageActiveThisFrame(
-                RendererTimingStage::AmbientOcclusionDenoise);
-        telemetry.globalIlluminationDenoisingDispatched =
-            m_app->IsRendererStageActiveThisFrame(
-                RendererTimingStage::DiffuseIlluminationDenoise);
         telemetry.lightingAccumulationCommitted =
             m_app->DidCommitLightingAccumulationThisFrame();
         telemetry.autoExposureDispatched =
@@ -763,17 +595,52 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
             telemetry.settingsSnapshot = m_SettingsSnapshots.Canonical();
         }
 
+        if (m_RetainedRuntimePrerequisiteRestore)
+        {
+            const SettingId id = m_RetainedRuntimePrerequisiteRestore->id;
+            bool inactive = false;
+            switch (id)
+            {
+            case SettingId::RepresentationAllowRayTraversal:
+                inactive = m_ui.Lighting == LightingSolution::PathTracing
+                    ? m_app->GetSelectedLightingTransportState() == SelectedLightingTransportState::PathTracingUnavailable
+                    : !telemetry.directionalVisibilityDispatched && !telemetry.skyVisibilityDispatched &&
+                        !telemetry.flashlightVisibilityDispatched;
+                break;
+            default: break;
+            }
+            if (!inactive)
+            {
+                finish(m_RetainedRuntimeDiagnostic->Abort(
+                    "dependent pass remained active without its prerequisite", now));
+                return;
+            }
+            if (--m_RetainedRuntimePrerequisiteFrames != 0)
+                return;
+            std::string error;
+            if (!ApplySettingValue(id, m_RetainedRuntimePrerequisiteRestore->value, error))
+            {
+                finish(m_RetainedRuntimeDiagnostic->Abort("prerequisite restore failed: " + error, now));
+                return;
+            }
+            std::fprintf(stdout, "{\"event\":\"prerequisite-cycle\",\"setting\":\"%s\",\"inactiveFrames\":3}\n",
+                std::string(SettingName(id)).c_str());
+            m_RetainedRuntimePrerequisiteRestore.reset();
+            m_LastRetainedRuntimeAction = RetainedRuntimeAction::CyclePrerequisite;
+            return;
+        }
+
         if (m_RetainedRuntimePathReselectionPending)
         {
             if (m_ui.Lighting != LightingSolution::RayMarching)
             {
                 finish(m_RetainedRuntimeDiagnostic->Abort(
-                    "lighting-solution cycle did not render its Ray Marching leg",
+                    "lighting-solution cycle did not render its Ray Tracing leg",
                     now));
                 return;
             }
             // This function runs after the frame was rendered. Returning to
-            // Path Tracing here therefore guarantees a real Ray Marching
+            // Path Tracing here therefore guarantees a real Ray Tracing
             // frame separated the two selections.
             ApplyLightingSolution(LightingSolution::PathTracing);
             m_LastRetainedRuntimeAction =
@@ -797,6 +664,13 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
             finish(m_RetainedRuntimeDiagnostic->Abort(
                 std::move(message), now));
         };
+        const auto restoreBaseline = [&]()
+        {
+            if (m_RetainedRuntimeBaselineWidth > 0 && m_RetainedRuntimeBaselineHeight > 0)
+                glfwSetWindowSize(GetDeviceManager()->GetWindow(), m_RetainedRuntimeBaselineWidth, m_RetainedRuntimeBaselineHeight);
+            if (m_RetainedRuntimeBaselineCamera)
+                m_app->RestoreRetainedRuntimeCameraPose(*m_RetainedRuntimeBaselineCamera);
+        };
         switch (directive.kind)
         {
         case RetainedRuntimeDirectiveKind::Wait:
@@ -813,45 +687,57 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
             // inherits state from the preceding matrix row.
             m_LastRetainedRuntimeAction = RetainedRuntimeAction::None;
             m_RetainedRuntimePathReselectionPending = false;
-            ResetAllSettingsToFactoryDefaults();
-            if (m_RetainedRuntimeBaselineWidth > 0 &&
-                m_RetainedRuntimeBaselineHeight > 0)
+            std::string resetError;
+            if (!ResetAllSettingsToFactoryDefaults(resetError))
             {
-                glfwSetWindowSize(
-                    GetDeviceManager()->GetWindow(),
-                    m_RetainedRuntimeBaselineWidth,
-                    m_RetainedRuntimeBaselineHeight);
+                abort("factory reset failed: " + resetError);
+                return;
             }
-            if (m_RetainedRuntimeBaselineCamera)
+            restoreBaseline();
+            if (!SelectRuntimeDiagnosticFlashlight(resetError))
             {
-                m_app->RestoreRetainedRuntimeCameraPose(
-                    *m_RetainedRuntimeBaselineCamera);
+                abort("baseline flashlight selection failed: " + resetError);
+                return;
             }
-            if (!directive.runtimeCase->actionSettingName.empty())
+            for (const RetainedRuntimeCase::Setting& setting :
+                directive.runtimeCase->settings)
             {
+                if (setting.id == directive.runtimeCase->actionSettingId ||
+                    setting.id == SettingId::SceneCurrent)
+                    continue;
                 std::string error;
-                if (!ApplyRuntimeSetting(
-                        directive.runtimeCase->actionSettingName,
-                        directive.runtimeCase->actionBaselineValue,
-                        error))
+                if (!ApplySettingValue(setting.id, setting.value, error))
                 {
-                    abort("baseline SET " +
-                        directive.runtimeCase->actionSettingName + "=" +
-                        directive.runtimeCase->actionBaselineValue +
+                    abort("SET " + std::string(SettingName(setting.id)) +
                         " failed: " + error);
                     return;
                 }
             }
-            for (const auto& [name, value] :
+            if (directive.runtimeCase->actionSettingId != SettingId::Invalid)
+            {
+                std::string error;
+                if (!ApplySettingValue(
+                        directive.runtimeCase->actionSettingId,
+                        directive.runtimeCase->actionBaselineValue,
+                        error))
+                {
+                    abort("baseline SET " + std::string(SettingName(
+                        directive.runtimeCase->actionSettingId)) +
+                        " failed: " + error);
+                    return;
+                }
+            }
+            // scene selection starts asynchronous loading and locks further edits.
+            for (const RetainedRuntimeCase::Setting& setting :
                 directive.runtimeCase->settings)
             {
-                if (name == directive.runtimeCase->actionSettingName)
+                if (setting.id != SettingId::SceneCurrent ||
+                    setting.id == directive.runtimeCase->actionSettingId)
                     continue;
                 std::string error;
-                if (!ApplyRuntimeSetting(name, value, error))
+                if (!ApplySettingValue(setting.id, setting.value, error))
                 {
-                    abort(
-                        "SET " + name + "=" + value + " failed: " + error);
+                    abort("SET scene.current failed: " + error);
                     return;
                 }
             }
@@ -903,32 +789,28 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
             {
                 if (directive.action ==
                         RetainedRuntimeAction::ChangeScene &&
-                    directive.runtimeCase->requireCrossCaseDistinctness)
+                    directive.runtimeCase->exerciseRetainedStateChanges)
                 {
-                    if (m_RetainedRuntimeBaselineWidth > 0 &&
-                        m_RetainedRuntimeBaselineHeight > 0)
-                    {
-                        glfwSetWindowSize(
-                            GetDeviceManager()->GetWindow(),
-                            m_RetainedRuntimeBaselineWidth,
-                            m_RetainedRuntimeBaselineHeight);
-                    }
-                    if (m_RetainedRuntimeBaselineCamera)
-                    {
-                        m_app->RestoreRetainedRuntimeCameraPose(
-                            *m_RetainedRuntimeBaselineCamera);
-                    }
+                    restoreBaseline();
                 }
                 std::string error;
-                if (directive.actionSettingName.empty() ||
-                    !ApplyRuntimeSetting(
-                        directive.actionSettingName,
+                const UiSettingsCommandDefinition* definition =
+                    FindSettingsCommandDefinition(directive.actionSettingId);
+                if (definition && definition->availability ==
+                        UiSettingsAvailability::SelectedFlashlight &&
+                    !SelectRuntimeDiagnosticFlashlight(error))
+                {
+                    abort("action flashlight selection failed: " + error);
+                    return;
+                }
+                if (directive.actionSettingId == SettingId::Invalid ||
+                    !ApplySettingValue(
+                        directive.actionSettingId,
                         directive.actionValue,
                         error))
                 {
-                    abort("action SET " + directive.actionSettingName +
-                        "=" + directive.actionValue + " failed: " +
-                        error);
+                    abort("action SET " + std::string(SettingName(
+                        directive.actionSettingId)) + " failed: " + error);
                     return;
                 }
                 break;
@@ -977,6 +859,20 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
                 m_RetainedRuntimePathReselectionPending = true;
                 return;
 
+            case RetainedRuntimeAction::CyclePrerequisite:
+            {
+                std::string error;
+                if (!ApplySettingValue(directive.actionSettingId, directive.actionValue, error))
+                {
+                    abort("prerequisite disable failed: " + error);
+                    return;
+                }
+                m_RetainedRuntimePrerequisiteRestore = RetainedRuntimeCase::Setting{
+                    directive.actionSettingId, directive.runtimeCase->actionBaselineValue };
+                m_RetainedRuntimePrerequisiteFrames = 3;
+                return;
+            }
+
             case RetainedRuntimeAction::None:
                 abort("state requested the none runtime action");
                 return;
@@ -986,18 +882,27 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
         }
 
         case RetainedRuntimeDirectiveKind::ResetSettings:
-            ResetAllSettingsToFactoryDefaults();
+        {
+            std::string error;
+            if (!ResetAllSettingsToFactoryDefaults(error))
+                abort("factory reset failed: " + error);
             return;
+        }
 
         case RetainedRuntimeDirectiveKind::RestoreSnapshot:
         {
-            std::string error;
-            std::size_t changedValueCount = 0u;
-            if (!ApplyCanonicalSettingsSnapshot(
+            const SettingsSnapshotTransactionStep step =
+                m_SettingsSnapshots.BeginApplyCanonicalStaged(
                     directive.payload,
-                    changedValueCount,
-                    error))
-                abort(error);
+                    MakeSettingsSnapshotRuntimeAccess());
+            if (step.progress !=
+                SettingsSnapshotTransactionProgress::Succeeded)
+            {
+                abort(step.result.error.empty()
+                    ? "runtime snapshot restore unexpectedly requires "
+                        "staged continuation"
+                    : step.result.error);
+            }
             return;
         }
 
@@ -1063,106 +968,13 @@ auto UIRenderer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
         if (g_StartupSettingsSnapshotFailed)
             return;
 
-        const float deltaTime = ImGui::GetIO().DeltaTime;
-        const bool uiMotionEnabled =
-            ResolveUiMotionEnabled(
-                m_ui.Skin,
-                m_ui.AnimationsEnabled);
-        const bool pixelZoomRequestedByUi =
-            IsPixelZoomEnabled(m_ui.PixelZoom);
-        const bool pixelZoomRequested = pixelZoomRequestedByUi;
-        if (!uiMotionEnabled)
-        {
-            m_PixelZoomVisibility = pixelZoomRequested ? 1.f : 0.f;
-            m_RenderedPixelZoom = pixelZoomRequested
-                ? m_ui.PixelZoom
-                : PixelZoomMode::Off;
-            m_PendingPixelZoom = m_RenderedPixelZoom;
-            m_PixelZoomLevelTransition = 1.f;
-        }
-        else
-        {
-            m_PixelZoomVisibility = AdvancePixelZoomVisibility(
-                m_PixelZoomVisibility,
-                pixelZoomRequested,
-                deltaTime);
-            if (pixelZoomRequested)
-            {
-                if (!IsPixelZoomEnabled(m_RenderedPixelZoom))
-                {
-                    m_RenderedPixelZoom = m_ui.PixelZoom;
-                    m_PendingPixelZoom = m_ui.PixelZoom;
-                    m_PixelZoomLevelTransition = 1.f;
-                }
-                else if (m_PixelZoomVisibility < 1.f)
-                {
-                    // Opening remains responsive to rapid level changes. The
-                    // dedicated level pulse begins only from the stable,
-                    // fully-visible endpoint.
-                    m_RenderedPixelZoom = m_ui.PixelZoom;
-                    m_PendingPixelZoom = m_ui.PixelZoom;
-                }
-                else
-                {
-                    if (m_PixelZoomLevelTransition >= 1.f &&
-                        m_ui.PixelZoom != m_RenderedPixelZoom)
-                    {
-                        m_PendingPixelZoom = m_ui.PixelZoom;
-                        m_PixelZoomLevelTransition = 0.f;
-                    }
-                    else if (m_PixelZoomLevelTransition < 1.f)
-                    {
-                        m_PendingPixelZoom = m_ui.PixelZoom;
-                        m_PixelZoomLevelTransition =
-                            AdvancePixelZoomLevelTransition(
-                                m_PixelZoomLevelTransition,
-                                deltaTime);
-                        if (ShouldSwitchPixelZoomLevel(
-                            m_PixelZoomLevelTransition))
-                        {
-                            m_RenderedPixelZoom = m_PendingPixelZoom;
-                        }
-                    }
-                }
-            }
-            else
-            {
-                m_PendingPixelZoom = m_RenderedPixelZoom;
-                m_PixelZoomLevelTransition = 1.f;
-            }
-            if (!pixelZoomRequested && m_PixelZoomVisibility <= 0.f)
-            {
-                m_RenderedPixelZoom = PixelZoomMode::Off;
-                m_PendingPixelZoom = PixelZoomMode::Off;
-            }
-        }
-        m_CommandAppearance = uiMotionEnabled
-            ? AdvancePixelZoomVisibility(
-                m_CommandAppearance,
-                m_CommandOpen,
-                deltaTime)
-            : m_CommandOpen ? 1.f : 0.f;
         buildUI();
-        DrawCommandInterface();
-        const float pixelZoomOpacity =
-            uiMotionEnabled
-                ? SmoothPixelZoomVisibility(m_PixelZoomVisibility)
-                : m_PixelZoomVisibility;
-        const float pixelZoomLevelTransitionScale =
-            uiMotionEnabled
-                ? ResolvePixelZoomLevelTransitionScale(
-                    m_PixelZoomLevelTransition)
-                : 1.f;
-        const bool pixelZoomPassActive = IsPixelZoomPassActive(
-            m_RenderedPixelZoom,
-            pixelZoomOpacity);
-        const float materialDrawerOpacity =
-            SmoothPixelZoomVisibility(m_MaterialDrawerAppearance) *
-            SmoothPixelZoomVisibility(m_SettingsAppearance);
-        const float crosshairOpacity = std::max(
-            pixelZoomRequested ? pixelZoomOpacity : 0.f,
-            materialDrawerOpacity);
-        if (crosshairOpacity > 0.f)
+        DrawDisplaySyncTest();
+        const bool pixelZoomEnabled = !m_ui.DisplaySyncTestActive && IsPixelZoomEnabled(m_ui.PixelZoom);
+        const bool materialDrawerVisible =
+            !m_ui.DisplaySyncTestActive && m_ui.ShowUI && !m_SettingsCollapsed && m_ui.ShowMaterialDrawer &&
+                !m_app->IsSceneBusy();
+        if (pixelZoomEnabled || materialDrawerVisible)
         {
             const ImGuiViewport* viewport = ImGui::GetMainViewport();
             const ImVec2 crosshairCenter(
@@ -1171,29 +983,19 @@ auto UIRenderer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
             ImGui::GetForegroundDrawList()->AddCircleFilled(
                 crosshairCenter,
                 2.f,
-                IM_COL32(
-                    255,
-                    255,
-                    255,
-                    int(std::round(128.f * crosshairOpacity))),
+                IM_COL32(255, 255, 255, 128),
                 12);
         }
-        if (pixelZoomPassActive)
+        if (pixelZoomEnabled)
         {
             const nvrhi::FramebufferInfoEx& framebufferInfo =
                 framebuffer->getFramebufferInfo();
-            const PixelZoomLayout zoomLabelLayout =
-                ResolveAnimatedPixelZoomLayout(
-                    ResolvePixelZoomLayout(
-                        framebufferInfo.width,
-                        framebufferInfo.height,
-                        m_SettingsPanelMarginPixels,
-                        m_RenderedPixelZoom),
-                    pixelZoomOpacity,
-                    pixelZoomLevelTransitionScale);
+            const PixelZoomLayout zoomLabelLayout = ResolvePixelZoomLayout(
+                framebufferInfo.width, framebufferInfo.height,
+                m_SettingsPanelMarginPixels, m_ui.PixelZoom);
             const char* zoomAreaLabel =
-                GetPixelZoomAreaLabel(m_RenderedPixelZoom);
-            ImFont* zoomLabelFont = GetActiveUiFont();
+                GetPixelZoomAreaLabel(m_ui.PixelZoom);
+            ImFont* zoomLabelFont = m_UiBodyFont->GetScaledFont();
             ImGui::PushFont(zoomLabelFont);
             const ImVec2 zoomAreaLabelSize =
                 ImGui::CalcTextSize(zoomAreaLabel);
@@ -1214,10 +1016,6 @@ auto UIRenderer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
                         zoomLabelLayout.panelHeight) -
                     labelInset -
                     zoomAreaLabelSize.y);
-            const int zoomLabelAlpha = int(std::round(
-                230.f * pixelZoomOpacity));
-            const int zoomLabelShadowAlpha = int(std::round(
-                150.f * pixelZoomOpacity));
             ImDrawList* foregroundDrawList =
                 ImGui::GetForegroundDrawList();
             const ImVec2 zoomAreaLabelShadowPosition(
@@ -1227,66 +1025,54 @@ auto UIRenderer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
                 zoomLabelFont,
                 zoomLabelFont->LegacySize,
                 zoomAreaLabelShadowPosition,
-                IM_COL32(0, 0, 0, zoomLabelShadowAlpha),
+                IM_COL32(0, 0, 0, 150),
                 zoomAreaLabel);
             foregroundDrawList->AddText(
                 zoomLabelFont,
                 zoomLabelFont->LegacySize,
                 zoomAreaLabelPosition,
-                IM_COL32(
-                    255,
-                    255,
-                    255,
-                    zoomLabelAlpha),
+                IM_COL32(255, 255, 255, 230),
                 zoomAreaLabel);
         }
         ImGui::Render();
-        if (m_PendingCommand &&
-            !HasDeferredDropdownUiActions())
-        {
-            // A slash command is the newest input. Let any older dropdown
-            // choice finish its roll-up, settle, and full idle presentation
-            // before applying the command so renderer mutation never interrupts
-            // either transaction. The command still wins by executing next.
-            UiCommand command = std::move(*m_PendingCommand);
-            m_PendingCommand.reset();
-            ExecuteUiCommand(command);
-        }
-        if (pixelZoomPassActive && m_PixelZoomPass)
+        if (pixelZoomEnabled && m_PixelZoomPass)
             m_PixelZoomPass->Capture(framebuffer);
-        if (m_BackdropBlurPass)
-        {
-            const bool backdropEnabled =
-                GetUiSkinBehavior(m_ComposedUiSkin).backdropEnabled;
-            if (!m_BackdropBlurPass->Render(
-                    framebuffer,
-                    backdropEnabled ? UiBackgroundBlurPixels : 0.f,
-                    m_ui.BackdropRects))
-            {
-                uvsr::log::error("Required UI backdrop blur pass failed");
-                GetDeviceManager()->ReportRenderDisposition(
-                    uvsr::RendererRenderDisposition::Failed);
-                m_imguiFrameOpened = false;
-                return;
-            }
-        }
-        if (pixelZoomPassActive && m_PixelZoomPass)
+        if (pixelZoomEnabled && m_PixelZoomPass)
         {
             m_PixelZoomPass->Composite(
                 framebuffer,
-                m_RenderedPixelZoom,
+                m_ui.PixelZoom,
                 m_SettingsPanelMarginPixels,
-                ImGui::GetStyle().WindowRounding,
-                pixelZoomOpacity,
-                pixelZoomLevelTransitionScale);
+                ImGui::GetStyle().WindowRounding);
         }
-        imgui_nvrhi->render(framebuffer);
+        nvrhi::IFramebuffer* uiFramebuffer = framebuffer;
+        if (framebuffer->getFramebufferInfo().colorFormats[0] ==
+                nvrhi::Format::SRGBA8_UNORM)
+        {
+            // stock ImGui colors are display-encoded; use an unorm view.
+            auto& uiView = m_UiFramebuffers[framebuffer];
+            if (!uiView)
+            {
+                auto desc = framebuffer->getDesc();
+                desc.colorAttachments[0].format = nvrhi::Format::RGBA8_UNORM;
+                uiView = GetDevice()->createFramebuffer(desc);
+            }
+            if (uiView)
+                uiFramebuffer = uiView;
+        }
+        const auto uiFormat = uiFramebuffer->getFramebufferInfo().colorFormats[0];
+        if (m_UiFramebufferFormat != uiFormat)
+        {
+            imgui_nvrhi->backbufferResizing();
+            m_UiFramebufferFormat = uiFormat;
+        }
+        imgui_nvrhi->render(uiFramebuffer);
         m_imguiFrameOpened = false;
     }
 
 auto UIRenderer::BackBufferResizing() -> void {
-        if (m_BackdropBlurPass)
-            m_BackdropBlurPass->BackBufferResizing();
+        m_UiFramebuffers.clear();
+        m_UiFramebufferFormat = nvrhi::Format::UNKNOWN;
         if (m_PixelZoomPass)
             m_PixelZoomPass->BackBufferResizing();
         ImGui_Renderer::BackBufferResizing();
@@ -1296,7 +1082,10 @@ auto UIRenderer::DisplayScaleChanged(
         float scaleX,
         float scaleY) -> void {
         ImGui_Renderer::DisplayScaleChanged(scaleX, scaleY);
-        m_UiDisplayScale = std::clamp(scaleX, 0.5f, 4.f);
+        m_UiDisplayScale = std::clamp(
+            scaleX,
+            UiMinimumDisplayScale,
+            UiMaximumDisplayScale);
     }
 
 auto UIRenderer::KeyboardUpdate(
@@ -1306,46 +1095,36 @@ auto UIRenderer::KeyboardUpdate(
         int mods) -> bool {
         const bool captured = ImGui_Renderer::KeyboardUpdate(
             key, scancode, action, mods);
+        if (key == GLFW_KEY_F8 && action == GLFW_PRESS && !ImGui::GetIO().WantTextInput)
+        {
+            SetDisplaySyncTestActive(!m_ui.DisplaySyncTestActive);
+            return true;
+        }
         const bool settingsShortcutOwnedByUi =
             ImGui::GetIO().WantTextInput ||
             ImGui::IsAnyItemActive() ||
             ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
-        const bool plainCommandShortcut =
-            (mods & (GLFW_MOD_CONTROL |
-                GLFW_MOD_ALT |
-                GLFW_MOD_SUPER |
-                GLFW_MOD_SHIFT)) == 0;
-        if (m_CommandOpen)
+        const auto applyShortcutSetting = [this](
+            SettingId id, UiSettingsValue value)
         {
-            if (key == GLFW_KEY_SLASH &&
-                action == GLFW_PRESS &&
-                plainCommandShortcut)
+            std::string error;
+            if (!ApplySettingValue(id, value, error) &&
+                error.rfind("No change: ", 0u) != 0u)
             {
-                m_CommandOpen = false;
-                m_CommandFocusRequested = false;
-                m_SuppressCommandShortcutSlashCharacter = true;
-                ImGui::ClearActiveID();
+                uvsr::log::warning(
+                    "Keyboard setting %s failed: %s",
+                    std::string(SettingName(id)).c_str(),
+                    error.c_str());
             }
-            return true;
-        }
-
-        if (key == GLFW_KEY_SLASH &&
-            action == GLFW_PRESS &&
-            plainCommandShortcut &&
-            !ImGui::GetIO().WantTextInput)
-        {
-            m_CommandOpen = true;
-            m_CommandFocusRequested = true;
-            m_SuppressCommandShortcutSlashCharacter = true;
-            return true;
-        }
-
+        };
         if ((key == GLFW_KEY_ESCAPE ||
                 key == GLFW_KEY_GRAVE_ACCENT) &&
             action == GLFW_PRESS &&
             !settingsShortcutOwnedByUi)
         {
-            m_ui.ShowUI = !m_ui.ShowUI;
+            applyShortcutSetting(
+                SettingId::UiVisible,
+                UiSettingsValue::Boolean(!m_ui.ShowUI));
             return true;
         }
         const bool plainFlashlightShortcut =
@@ -1366,8 +1145,31 @@ auto UIRenderer::KeyboardUpdate(
             plainZoomShortcut &&
             !ImGui::GetIO().WantTextInput)
         {
-            m_ui.PixelZoom =
-                AdvancePixelZoomMode(m_ui.PixelZoom);
+            const UiSettingsCommandDefinition* definition =
+                FindSettingsCommandDefinition(SettingId::UiZoom);
+            UiSettingsValue current;
+            std::string error;
+            if (!definition ||
+                !ReadSettingValue(SettingId::UiZoom, current, error) ||
+                current.kind != UiSettingsValueKind::Token)
+            {
+                uvsr::log::warning(
+                    "Keyboard setting %s could not read its typed value: %s",
+                    std::string(SettingName(SettingId::UiZoom)).c_str(),
+                    error.c_str());
+                return true;
+            }
+            const auto begin = definition->typedDomain.tokens.begin();
+            const auto end = begin + definition->typedDomain.tokenCount;
+            const auto found = std::find(begin, end, current.text);
+            const std::size_t nextIndex = found == end
+                ? 0u
+                : (static_cast<std::size_t>(std::distance(begin, found)) +
+                    1u) % definition->typedDomain.tokenCount;
+            applyShortcutSetting(
+                SettingId::UiZoom,
+                UiSettingsValue::Token(std::string(
+                    definition->typedDomain.tokens[nextIndex])));
             return true;
         }
         const bool plainMaterialEditorShortcut =
@@ -1377,26 +1179,10 @@ auto UIRenderer::KeyboardUpdate(
             plainMaterialEditorShortcut &&
             !ImGui::GetIO().WantTextInput)
         {
+            // selection refresh is an action even when the drawer is already open.
             RequestMaterialDrawerVisible(true);
             return true;
         }
 
         return captured;
-    }
-
-auto UIRenderer::KeyboardCharInput(
-        unsigned int unicode,
-        int mods) -> bool {
-        if (m_SuppressCommandShortcutSlashCharacter)
-        {
-            m_SuppressCommandShortcutSlashCharacter = false;
-            if (unicode == static_cast<unsigned int>('/'))
-                return true;
-        }
-        if (m_CommandOpen)
-        {
-            ImGui_Renderer::KeyboardCharInput(unicode, mods);
-            return true;
-        }
-        return ImGui_Renderer::KeyboardCharInput(unicode, mods);
     }

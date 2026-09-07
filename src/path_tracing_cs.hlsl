@@ -19,17 +19,11 @@ Texture2DArray<float> t_Noise :
     register(UVSR_PATH_TRACING_NOISE_REGISTER);
 StructuredBuffer<LightConstants> t_PathTracingLights :
     register(UVSR_PATH_TRACING_LIGHTS_REGISTER);
-StructuredBuffer<InstanceData> t_PathTracingInstances :
-    register(UVSR_PATH_TRACING_INSTANCES_REGISTER);
 
 RWTexture2D<float4> u_RawMean :
     register(UVSR_PATH_TRACING_RAW_MEAN_UAV_REGISTER);
 RWTexture2D<uint> u_SuccessfulSampleCount :
     register(UVSR_PATH_TRACING_ACCEPTED_COUNT_UAV_REGISTER);
-RWTexture2D<float4> u_Motion :
-    register(UVSR_PATH_TRACING_MOTION_UAV_REGISTER);
-RWTexture2D<float> u_Depth :
-    register(UVSR_PATH_TRACING_DEPTH_UAV_REGISTER);
 RWTexture2D<uint> u_RetryGeneration :
     register(UVSR_PATH_TRACING_RETRY_GENERATION_UAV_REGISTER);
 
@@ -83,6 +77,7 @@ void PathTracingGenerateCameraRay(
 float3 PathTracingFixedMisDirect(
     PathTracingSurface surface,
     float3 viewDirection,
+    float fireflyFactor,
     inout PathTracingRandomStream randomStream)
 {
     if (g_PathTracing.lightCount == 0u)
@@ -98,16 +93,13 @@ float3 PathTracingFixedMisDirect(
         viewDirection,
         lightIndex,
         randoms.sampleSeed,
-        selectionPdf);
+        selectionPdf,
+        fireflyFactor);
 }
 
 struct PathTracingSample
 {
     float3 radiance;
-    float3 primaryPosition;
-    float3 primaryPreviousPosition;
-    float3 primaryGeometricNormal;
-    uint primaryHit;
     uint valid;
 };
 
@@ -133,9 +125,12 @@ PathTracingSample PathTracingIntegrate(uint2 pixel, uint2 seed)
         rayDirection);
 
     float3 throughput = 1.0f;
+    float fireflyFactor = 1.f;
+    const float fireflyThreshold = g_PathTracing.fireflyFilter != 0u
+        ? g_PathTracing.fireflyThreshold : 0.f;
     [loop]
     for (uint bounce = 0u;
-        bounce < UVSR_PATH_TRACING_BOUNCE_COUNT;
+        bounce <= g_PathTracing.maximumBounces;
         ++bounce)
     {
         PathTracingSurface surface;
@@ -145,7 +140,6 @@ PathTracingSample PathTracingIntegrate(uint2 pixel, uint2 seed)
             rayDirection,
             g_PathTracing.rayBias,
             g_PathTracing.maximumRayDistance,
-            bounce == 0u && g_PathTracing.previousViewValid != 0u,
             surface);
         if (!hit)
         {
@@ -155,33 +149,26 @@ PathTracingSample PathTracingIntegrate(uint2 pixel, uint2 seed)
                     UVSR_PATH_TRACING_FLAG_SHOW_ENVIRONMENT_BACKGROUND)))
             {
                 result.radiance += throughput *
-                    PathTracingSampleEnvironment(rayDirection);
+                    PathTracingFilterFirefly(PathTracingSampleEnvironment(rayDirection),
+                        fireflyThreshold, fireflyFactor);
             }
             break;
         }
 
-        if (bounce == 0u)
-        {
-            result.primaryPosition = surface.position;
-            result.primaryPreviousPosition = surface.previousPosition;
-            result.primaryGeometricNormal = surface.geometricNormal;
-            result.primaryHit = 1u;
-        }
 
         result.radiance += throughput *
-            max(surface.material.emissiveColor, 0.0f);
+            PathTracingFilterFirefly(max(surface.emissiveRadiance, 0.0f),
+                fireflyThreshold, fireflyFactor);
         result.radiance += throughput * PathTracingFixedMisDirect(
             surface,
             -rayDirection,
+            fireflyFactor,
             pathStream);
 
         const uint nextBounce = bounce + 1u;
-        if (!PathTracingBounceSamplesBsdf(nextBounce))
+        if (!PathTracingBounceSamplesBsdf(nextBounce, g_PathTracing.maximumBounces))
             break;
 
-        // PathTracingSampleBsdf uses one fixed balance-heuristic mixture of
-        // diffuse and GGX proposals; no policy selector or alternate NEE path
-        // changes the estimator.
         const PathTracingBsdfRandomDraws bsdfRandoms =
             PathTracingDrawBsdfRandoms(pathStream);
         const float3 bsdfRandom = float3(
@@ -191,8 +178,7 @@ PathTracingSample PathTracingIntegrate(uint2 pixel, uint2 seed)
         const PathTracingBsdfSample bsdf = PathTracingSampleBsdf(
             surface,
             -rayDirection,
-            bsdfRandom,
-            false);
+            bsdfRandom);
         if (bsdf.valid == 0u)
             break;
         throughput *= bsdf.weight;
@@ -202,11 +188,15 @@ PathTracingSample PathTracingIntegrate(uint2 pixel, uint2 seed)
             break;
         }
         float rouletteRandom = 0.0f;
-        if (PathTracingRouletteRequiresRandom(nextBounce))
+        if (g_PathTracing.fireflyFilter != 0u)
+            fireflyFactor = PathTracingAdvanceFireflyFilter(
+                fireflyFactor, bsdf.pdf, bsdf.lobeProbability);
+        if (PathTracingRouletteRequiresRandom(nextBounce, g_PathTracing.minimumBounces))
             rouletteRandom = PathTracingDrawRouletteRandom(pathStream);
         const PathTracingRouletteContract roulette =
             ResolvePathTracingRoulette(
                 nextBounce,
+                g_PathTracing.minimumBounces,
                 throughput,
                 rouletteRandom);
         if (roulette.transportValid == 0u)
@@ -228,45 +218,6 @@ PathTracingSample PathTracingIntegrate(uint2 pixel, uint2 seed)
         all(isfinite(result.radiance)) &&
         all(result.radiance >= 0.0f) ? 1u : 0u;
     return result;
-}
-
-float PathTracingDeviceDepth(float3 worldPosition)
-{
-    const float4 clip = mul(
-        float4(worldPosition, 1.0f),
-        g_PathTracing.view.matWorldToClip);
-    return clip.w > 1.0e-6f && all(isfinite(clip))
-        ? saturate(clip.z / clip.w)
-        : 0.0f;
-}
-
-float4 PathTracingMotion(
-    uint2 pixel,
-    float deviceDepth,
-    float3 previousWorldPosition)
-{
-    if (g_PathTracing.previousViewValid == 0u ||
-        !all(isfinite(previousWorldPosition)))
-    {
-        return 0.0f;
-    }
-    const float4 previousClip = mul(
-        float4(previousWorldPosition, 1.0f),
-        g_PathTracing.previousView.matWorldToClip);
-    if (!all(isfinite(previousClip)) || !(previousClip.w > 1.0e-6f))
-        return 0.0f;
-    const float3 previousNdc = previousClip.xyz / previousClip.w;
-    if (previousNdc.z < 0.0f || previousNdc.z > 1.0f)
-        return 0.0f;
-    const float3 svPosition = float3(
-        g_PathTracing.view.viewportOrigin + float2(pixel) + 0.5f,
-        deviceDepth);
-    const float3 motion = GetMotionVector(
-        svPosition,
-        previousWorldPosition,
-        g_PathTracing.view,
-        g_PathTracing.previousView);
-    return all(isfinite(motion)) ? float4(motion, 1.0f) : 0.0f;
 }
 
 [numthreads(8, 8, 1)]
@@ -317,21 +268,6 @@ void main(uint2 pixel : SV_DispatchThreadID)
         accumulated.mean,
         1.0f);
     u_SuccessfulSampleCount[pixel] = accumulated.count;
-    if (accumulated.accepted == 0u)
-        return;
 
-    if (sample.primaryHit != 0u)
-    {
-        const float depth = PathTracingDeviceDepth(sample.primaryPosition);
-        u_Depth[pixel] = depth;
-        u_Motion[pixel] = PathTracingMotion(
-            pixel,
-            depth,
-            sample.primaryPreviousPosition);
-    }
-    else
-    {
-        u_Depth[pixel] = 0.0f;
-        u_Motion[pixel] = 0.0f;
-    }
+
 }

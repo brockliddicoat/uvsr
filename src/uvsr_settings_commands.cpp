@@ -3,6 +3,7 @@
 #include "renderer_log.h"
 #include "settings_snapshot.h"
 #include "settings_snapshot_decoder.h"
+#include "windows_executable_path.h"
 
 #include <Windows.h>
 #include <ShlObj.h>
@@ -11,20 +12,385 @@
 #include <cerrno>
 #include <charconv>
 #include <cmath>
-#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <fstream>
 #include <iterator>
 #include <limits>
-#include <sstream>
 #include <system_error>
 
 namespace uvsr
 {
     namespace
     {
-        thread_local bool g_PreciseFloatFormatting = false;
+        // Retired accents accepted canonical subnormals, including ERANGE conversions.
+        bool TryParseLegacyFloat(std::string_view value, float& parsed)
+        {
+            if (value.empty())
+                return false;
+            const std::string owned(value);
+            char* end = nullptr;
+            const float candidate = std::strtof(owned.c_str(), &end);
+            if (!end || end != owned.c_str() + owned.size() ||
+                !std::isfinite(candidate))
+            {
+                return false;
+            }
+            parsed = candidate;
+            return true;
+        }
+
+        enum class LegacySettingValidation
+        {
+            Enumeration,
+            BoundedFloat3,
+            BoundedFloat4,
+            SkinPalette,
+            HistoryFrames,
+            HistoryStrength,
+            BoundedNumber,
+            BoundedInteger
+        };
+
+        struct LegacySettingMigration
+        {
+            std::uint16_t firstVersion = 0u;
+            std::uint16_t lastVersion = 0u;
+            std::string_view name;
+            LegacySettingValidation validation =
+                LegacySettingValidation::Enumeration;
+            std::array<std::string_view, 6> tokens{};
+            std::size_t tokenCount = 0u;
+            float minimum = 0.f;
+            float maximum = 0.f;
+        };
+
+        inline constexpr std::array<LegacySettingMigration, 83>
+            LegacySettingMigrations = {{
+                { 0x0007u, 0x0015u, "ui.skin", LegacySettingValidation::Enumeration, { "amp", "ogg" }, 2u },
+                { 0x0016u, 0x0017u, "ui.skin", LegacySettingValidation::Enumeration, { "amp", "ogg", "cap" }, 3u },
+                { 0x0007u, 0x0017u, "ui.accent.primary", LegacySettingValidation::SkinPalette },
+                { 0x0007u, 0x0017u, "ui.accent.font", LegacySettingValidation::SkinPalette },
+                { 0x0007u, 0x0017u, "ui.accent.primary-background", LegacySettingValidation::SkinPalette },
+                { 0x0007u, 0x0017u, "ui.accent.secondary", LegacySettingValidation::BoundedFloat4 },
+                { 0x0007u, 0x0017u, "ui.accent.tertiary", LegacySettingValidation::BoundedFloat4 },
+                { 0x0007u, 0x0017u, "ui.font-family", LegacySettingValidation::Enumeration,
+                    { "codex", "noto-sans", "proggy-clean" }, 3u },
+                { 0x0007u, 0x0014u, "visibility.enabled", LegacySettingValidation::Enumeration,
+                    { "on", "off" }, 2u },
+                { 0x0007u, 0x0014u, "visibility.quality", LegacySettingValidation::Enumeration,
+                    { "low", "medium", "high", "ultra", "custom" }, 5u },
+                { 0x0007u, 0x0014u, "visibility.estimator", LegacySettingValidation::Enumeration,
+                    { "projected-angle", "solid-angle", "cosine-weighted" }, 3u },
+                { 0x0007u, 0x0014u, "visibility.resolution", LegacySettingValidation::Enumeration,
+                    { "full", "half", "quarter" }, 3u },
+                { 0x0007u, 0x0014u, "visibility.samples", LegacySettingValidation::BoundedInteger,
+                    {}, 0u, 1.0f, 64.0f },
+                { 0x0007u, 0x0014u, "visibility.radius", LegacySettingValidation::BoundedNumber,
+                    {}, 0u, 0.1f, 10.0f },
+                { 0x0007u, 0x0014u, "visibility.thickness", LegacySettingValidation::BoundedNumber,
+                    {}, 0u, 0.01f, 2.0f },
+                { 0x0007u, 0x0014u, "visibility.distribution", LegacySettingValidation::BoundedNumber,
+                    {}, 0u, 0.25f, 8.0f },
+                { 0x0007u, 0x0014u, "visibility.specify-noise", LegacySettingValidation::Enumeration,
+                    { "on", "off" }, 2u },
+                { 0x0007u, 0x0014u, "visibility.noise-pattern", LegacySettingValidation::Enumeration,
+                    { "spatial-white", "spatial-blue", "spatiotemporal-blue" }, 3u },
+                { 0x0007u, 0x0014u, "visibility.noise-resolution", LegacySettingValidation::Enumeration,
+                    { "64x64", "128x128", "256x256", "512x512" }, 4u },
+                { 0x0007u, 0x0014u, "visibility.animate-samples", LegacySettingValidation::Enumeration,
+                    { "on", "off" }, 2u },
+                { 0x0007u, 0x0014u, "visibility.ao.enabled", LegacySettingValidation::Enumeration,
+                    { "on", "off" }, 2u },
+                { 0x0007u, 0x0014u, "visibility.ao.strength", LegacySettingValidation::BoundedNumber,
+                    {}, 0u, 0.0f, 8.0f },
+                { 0x0007u, 0x0014u, "visibility.ao.precision", LegacySettingValidation::Enumeration,
+                    { "16-bit", "32-bit" }, 2u },
+                { 0x0007u, 0x0014u, "visibility.gi.enabled", LegacySettingValidation::Enumeration,
+                    { "on", "off" }, 2u },
+                { 0x0007u, 0x0014u, "visibility.gi.intensity", LegacySettingValidation::BoundedNumber,
+                    {}, 0u, 0.0f, 16.0f },
+                { 0x0007u, 0x0014u, "visibility.gi.precision", LegacySettingValidation::Enumeration,
+                    { "16-bit", "32-bit" }, 2u },
+                { 0x0007u, 0x0014u, "debug.visibility.view", LegacySettingValidation::Enumeration,
+                    { "final", "ambient-visibility", "traced-indirect", "applied-indirect" }, 4u },
+                { 7u, 15u, "visibility.ao.output-hit-distance", LegacySettingValidation::Enumeration,
+                    { "on", "off" }, 2u },
+                { 7u, 15u, "visibility.gi.output-hit-distance", LegacySettingValidation::Enumeration,
+                    { "on", "off" }, 2u },
+                { 7u, 15u, "denoising.ao.method", LegacySettingValidation::Enumeration,
+                    { "raw", "joint-bilateral", "gaussian-bilateral", "reblur" }, 4u },
+                { 7u, 15u, "denoising.ao.radius", LegacySettingValidation::BoundedNumber, {}, 0u, 1.0f, 8.0f },
+                { 7u, 15u, "denoising.ao.quality", LegacySettingValidation::Enumeration,
+                    { "performance", "balanced", "quality", "ultra" }, 4u },
+                { 7u, 15u, "denoising.ao.resolution", LegacySettingValidation::Enumeration,
+                    { "quarter", "half", "full" }, 3u },
+                { 7u, 15u, "denoising.ao.history", LegacySettingValidation::BoundedInteger, {}, 0u, 1, 32 },
+                { 7u, 15u, "denoising.ao.disocclusion", LegacySettingValidation::BoundedNumber, {}, 0u, 0.001f, 0.1f },
+                { 7u, 15u, "denoising.ao.anti-lag", LegacySettingValidation::BoundedNumber, {}, 0u, 0.0f, 1.0f },
+                { 7u, 15u, "denoising.gi.method", LegacySettingValidation::Enumeration,
+                    { "raw", "joint-bilateral", "gaussian-bilateral", "reblur", "relax" }, 5u },
+                { 7u, 15u, "denoising.gi.radius", LegacySettingValidation::BoundedNumber, {}, 0u, 1.0f, 8.0f },
+                { 7u, 15u, "denoising.gi.quality", LegacySettingValidation::Enumeration,
+                    { "performance", "balanced", "quality", "ultra" }, 4u },
+                { 7u, 15u, "denoising.gi.resolution", LegacySettingValidation::Enumeration,
+                    { "quarter", "half", "full" }, 3u },
+                { 7u, 15u, "denoising.gi.history", LegacySettingValidation::BoundedInteger, {}, 0u, 1, 32 },
+                { 7u, 15u, "denoising.gi.disocclusion", LegacySettingValidation::BoundedNumber, {}, 0u, 0.001f, 0.1f },
+                { 7u, 15u, "denoising.gi.anti-lag", LegacySettingValidation::BoundedNumber, {}, 0u, 0.0f, 1.0f },
+                { 7u, 15u, "denoising.shadows.method", LegacySettingValidation::Enumeration,
+                    { "raw", "joint-bilateral", "gaussian-bilateral", "sigma" }, 4u },
+                { 7u, 15u, "denoising.shadows.radius", LegacySettingValidation::BoundedNumber, {}, 0u, 1.0f, 8.0f },
+                { 7u, 15u, "denoising.shadows.quality", LegacySettingValidation::Enumeration,
+                    { "performance", "balanced", "quality", "ultra" }, 4u },
+                { 7u, 15u, "denoising.shadows.resolution", LegacySettingValidation::Enumeration,
+                    { "quarter", "half", "full" }, 3u },
+                { 7u, 15u, "denoising.shadows.disocclusion", LegacySettingValidation::BoundedNumber, {}, 0u, 0.001f, 0.1f },
+                { 7u, 15u, "denoising.sky.method", LegacySettingValidation::Enumeration,
+                    { "raw", "joint-bilateral", "gaussian-bilateral", "reblur", "relax" }, 5u },
+                { 7u, 15u, "denoising.sky.radius", LegacySettingValidation::BoundedNumber, {}, 0u, 1.0f, 8.0f },
+                { 7u, 15u, "denoising.sky.quality", LegacySettingValidation::Enumeration,
+                    { "performance", "balanced", "quality", "ultra" }, 4u },
+                { 7u, 15u, "denoising.sky.resolution", LegacySettingValidation::Enumeration,
+                    { "quarter", "half", "full" }, 3u },
+                { 7u, 15u, "denoising.sky.history", LegacySettingValidation::BoundedInteger, {}, 0u, 1, 32 },
+                { 7u, 15u, "denoising.sky.disocclusion", LegacySettingValidation::BoundedNumber, {}, 0u, 0.001f, 0.1f },
+                { 7u, 15u, "denoising.sky.anti-lag", LegacySettingValidation::BoundedNumber, {}, 0u, 0.0f, 1.0f },
+                { 7u, 15u, "sky.visibility.output-hit-distance", LegacySettingValidation::Enumeration,
+                    { "on", "off" }, 2u },
+                { 7u, 15u, "light.selected.flashlight.output-hit-distance", LegacySettingValidation::Enumeration,
+                    { "on", "off", "<unavailable>" }, 3u },
+                { 7u, 13u, "gpu.adaptive-sync", LegacySettingValidation::Enumeration,
+                    { "off", "vendor-agnostic", "nvidia-exclusive" }, 3u },
+                { 7u, 11u, "anti-aliasing.taa.enabled", LegacySettingValidation::Enumeration,
+                    { "on", "off" }, 2u },
+                { 7u, 11u, "anti-aliasing.taa.quality", LegacySettingValidation::Enumeration,
+                    { "low", "medium", "high", "ultra" }, 4u },
+                { 7u, 11u, "anti-aliasing.taa.jitter-sequence", LegacySettingValidation::Enumeration,
+                    { "rotated-grid-4", "uniform-helix-4", "halton-8", "halton-16", "halton-32", "sobol-32" }, 6u },
+                { 7u, 11u, "anti-aliasing.taa.previous-depth", LegacySettingValidation::Enumeration,
+                    { "nearest-texel", "four-texel-footprint" }, 2u },
+                { 7u, 11u, "anti-aliasing.taa.temporal-cost", LegacySettingValidation::Enumeration,
+                    { "full-quality", "reduced", "minimum" }, 3u },
+                { 7u, 11u, "anti-aliasing.taa.history.frames", LegacySettingValidation::HistoryFrames, {}, 0u },
+                { 7u, 11u, "anti-aliasing.taa.history.strength", LegacySettingValidation::HistoryStrength, {}, 0u },
+                { 7u, 11u, "anti-aliasing.taa.history.storage", LegacySettingValidation::Enumeration,
+                    { "temporal-cost", "robust", "compact" }, 3u },
+                { 7u, 11u, "anti-aliasing.taa.history.weight", LegacySettingValidation::Enumeration,
+                    { "temporal-cost", "confidence-recurrence", "immediate-horizon" }, 3u },
+                { 7u, 11u, "anti-aliasing.taa.motion-trust", LegacySettingValidation::Enumeration,
+                    { "temporal-cost", "linear-speed", "squared-speed" }, 3u },
+                { 7u, 11u, "anti-aliasing.taa.rectification-clip", LegacySettingValidation::Enumeration,
+                    { "temporal-cost", "velocity-dilated", "tight-component" }, 3u },
+                { 7u, 11u, "anti-aliasing.taa.blend-domain", LegacySettingValidation::Enumeration,
+                    { "temporal-cost", "luminance-compressed", "linear-rgb" }, 3u },
+                { 7u, 11u, "anti-aliasing.taa.preset-sharpening", LegacySettingValidation::Enumeration,
+                    { "auto", "off", "on" }, 3u },
+                { 7u, 11u, "anti-aliasing.sharpen.enabled", LegacySettingValidation::Enumeration,
+                    { "on", "off" }, 2u },
+                { 7u, 11u, "anti-aliasing.sharpen.strength", LegacySettingValidation::HistoryStrength, {}, 0u },
+                { 7u, 11u, "anti-aliasing.msaa.enabled", LegacySettingValidation::Enumeration,
+                    { "on", "off" }, 2u },
+                { 7u, 11u, "anti-aliasing.msaa.samples", LegacySettingValidation::Enumeration,
+                    { "2x", "4x", "8x", "16x" }, 4u },
+                { 7u, 10u, "ui.animations",
+                    LegacySettingValidation::Enumeration,
+                    { "on", "off", {}, {} }, 2u },
+                { 7u, 7u, "anti-aliasing.msaa.quality",
+                    LegacySettingValidation::Enumeration,
+                    { "low", "medium", "high", "ultra" }, 4u },
+                { 7u, 8u, "representation.bvh.build-preference",
+                    LegacySettingValidation::Enumeration,
+                    { "fast-trace", "balanced", "fast-build", {} }, 3u },
+                { 7u, 8u, "representation.blas.update-mode",
+                    LegacySettingValidation::Enumeration,
+                    { "rebuild", "refit", {}, {} }, 2u },
+                { 7u, 8u, "representation.tlas.update-mode",
+                    LegacySettingValidation::Enumeration,
+                    { "rebuild", "refit", {}, {} }, 2u },
+                { 7u, 9u, "ui.accent.main",
+                    LegacySettingValidation::BoundedFloat3, {}, 0u },
+                { 7u, 9u, "ui.accent.negative",
+                    LegacySettingValidation::BoundedFloat3, {}, 0u },
+                { 7u, 9u, "ui.accent.positive",
+                    LegacySettingValidation::BoundedFloat3, {}, 0u }
+            }};
+
+        [[nodiscard]] bool ValidateLegacyColor(
+            std::string_view value, std::size_t components)
+        {
+            std::size_t count = 0u;
+            std::size_t begin = 0u;
+            for (;;)
+            {
+                const std::size_t separator = value.find(' ', begin);
+                const std::string_view token = value.substr(
+                    begin,
+                    separator == std::string_view::npos
+                        ? std::string_view::npos
+                        : separator - begin);
+                float parsed = 0.f;
+                if (token.empty() || !TryParseLegacyFloat(token, parsed) ||
+                    parsed < 0.f || parsed > 1.f ||
+                    FormatUiSettingsMetadataFloat(parsed) != token)
+                {
+                    return false;
+                }
+                ++count;
+                if (separator == std::string_view::npos)
+                    break;
+                begin = separator + 1u;
+            }
+            return count == components;
+        }
+
+        [[nodiscard]] bool ApplyLegacySettingMigrations(
+            std::uint16_t version,
+            DecodedSettings& decoded,
+            std::string& error)
+        {
+            const auto skin = decoded.find("ui.skin");
+            const bool stockSkin = skin != decoded.end() && skin->second != "amp";
+            for (const LegacySettingMigration& migration :
+                LegacySettingMigrations)
+            {
+                if (version < migration.firstVersion ||
+                    version > migration.lastVersion)
+                {
+                    continue;
+                }
+                const auto setting = decoded.find(migration.name);
+                if (setting == decoded.end())
+                {
+                    error = "schema " + std::to_string(version) +
+                        " snapshot is missing retired setting '" +
+                        std::string(migration.name) + "'";
+                    return false;
+                }
+                bool valid = false;
+                if (migration.validation == LegacySettingValidation::BoundedFloat3 ||
+                    migration.validation == LegacySettingValidation::BoundedFloat4 ||
+                    migration.validation == LegacySettingValidation::SkinPalette)
+                {
+                    const bool unavailable = migration.validation == LegacySettingValidation::SkinPalette && stockSkin;
+                    valid = unavailable ? setting->second == "<unavailable>" :
+                        ValidateLegacyColor(setting->second, migration.validation == LegacySettingValidation::BoundedFloat3 ? 3u : 4u);
+                }
+                else if (migration.validation == LegacySettingValidation::BoundedNumber)
+                {
+                    float value = 0.f;
+                    valid = ParseCanonicalSettingsFloat(setting->second, value) &&
+                        value >= migration.minimum && value <= migration.maximum;
+                }
+                else if (migration.validation == LegacySettingValidation::BoundedInteger)
+                {
+                    int value = 0;
+                    const auto& token = setting->second;
+                    const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+                    valid = parsed.ec == std::errc{} && parsed.ptr == token.data() + token.size() &&
+                        std::to_string(value) == token && value >= migration.minimum && value <= migration.maximum;
+                }
+                else if (migration.validation == LegacySettingValidation::HistoryFrames)
+                {
+                    int value = 0;
+                    const auto& token = setting->second;
+                    const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+                    valid = parsed.ec == std::errc{} && parsed.ptr == token.data() + token.size() &&
+                        std::to_string(value) == token && (value == -1 || (value >= 1 && value <= 32));
+                }
+                else if (migration.validation == LegacySettingValidation::HistoryStrength)
+                {
+                    float value = 0.f;
+                    valid = ParseCanonicalSettingsFloat(setting->second, value) &&
+                        (value == -1.f || (value >= 0.f && value <= 2.f));
+                    if (migration.name == "anti-aliasing.sharpen.strength")
+                        valid = valid && value >= 0.f && value <= 1.f;
+                }
+                else
+                {
+                    for (std::size_t index = 0u;
+                        index < migration.tokenCount;
+                        ++index)
+                    {
+                        valid = valid ||
+                            setting->second == migration.tokens[index];
+                    }
+                }
+                if (!valid)
+                {
+                    error = "schema " + std::to_string(version) +
+                        " snapshot has invalid retired setting '" +
+                        std::string(migration.name) + "'";
+                    return false;
+                }
+                decoded.erase(setting);
+            }
+            if (version <= 0x0012u)
+            {
+                for (const auto& definition : UiSettingsCommandCatalog)
+                {
+                    if (definition.name.substr(0u, 11u) != "tonemapper." ||
+                        (version == 0x0012u && definition.id != SettingId::TonemapperEnabled))
+                        continue;
+                    UiSettingsValue value;
+                    std::string canonical;
+                    if (decoded.count(std::string(definition.name)) ||
+                        !GetDeclaredUiSettingsDefaultValue(definition, value) ||
+                        !FormatUiSettingsValue(definition, value, canonical, error))
+                    {
+                        error = "older snapshot contains unexpected tonemapper setting '" +
+                            std::string(definition.name) + "'";
+                        return false;
+                    }
+                    decoded.emplace(std::string(definition.name), std::move(canonical));
+                }
+            }
+            if (version <= 0x0013u)
+            {
+                for (const SettingId id : { SettingId::ShadowsRayTracedHard,
+                        SettingId::ShadowsRayTracedSamplesPerPixel })
+                {
+                    const auto& definition = *FindSettingsCommandDefinition(id);
+                    UiSettingsValue value;
+                    std::string canonical;
+                    if (decoded.count(std::string(definition.name)) ||
+                        !GetDeclaredUiSettingsDefaultValue(definition, value) ||
+                        !FormatUiSettingsValue(definition, value, canonical, error))
+                    {
+                        error = "older snapshot contains unexpected shadow setting '" +
+                            std::string(definition.name) + "'";
+                        return false;
+                    }
+                    decoded.emplace(std::string(definition.name), std::move(canonical));
+                }
+            }
+            if (version <= 0x0015u)
+            {
+                if (const auto skin = decoded.find("ui.skin");
+                    skin != decoded.end() && skin->second == "cap")
+                {
+                    error = "older snapshot contains unexpected skin 'cap'";
+                    return false;
+                }
+                for (const auto& definition : UiSettingsCommandCatalog)
+                {
+                    if (definition.section != UiSettingsCommandSection::Pathing)
+                        continue;
+                    if (decoded.count(std::string(definition.name)))
+                    {
+                        error = "older snapshot contains unexpected pathing setting '" +
+                            std::string(definition.name) + "'";
+                        return false;
+                    }
+                    // retain the old four hit depths and its roulette floor, with no filtering.
+                    decoded.emplace(std::string(definition.name),
+                        definition.id == SettingId::PathingMaximumBounces ? "3" :
+                        definition.id == SettingId::PathingMinimumBounces ? "1" :
+                        definition.id == SettingId::PathingFireflyFilter ? "off" : "5000");
+                }
+            }
+            return true;
+        }
 
         [[nodiscard]] bool TryParseUnsignedToken(
             std::string_view token,
@@ -44,6 +410,25 @@ namespace uvsr
             return true;
         }
 
+        [[nodiscard]] bool TryParseSchemaVersion(
+            std::string_view token,
+            std::uint16_t& value)
+        {
+            if (token.size() != 4u)
+                return false;
+            unsigned int parsed = 0u;
+            const auto result = std::from_chars(
+                token.data(), token.data() + token.size(), parsed, 16);
+            if (result.ec != std::errc{} ||
+                result.ptr != token.data() + token.size() ||
+                parsed > (std::numeric_limits<std::uint16_t>::max)())
+            {
+                return false;
+            }
+            value = static_cast<std::uint16_t>(parsed);
+            return true;
+        }
+
         [[nodiscard]] bool IsDecimalToken(std::string_view token)
         {
             return !token.empty() && std::all_of(
@@ -52,158 +437,6 @@ namespace uvsr
                     return character >= static_cast<unsigned char>('0') &&
                         character <= static_cast<unsigned char>('9');
                 });
-        }
-
-        [[nodiscard]] const char* TransactionStageName(
-            SettingsSnapshotTransactionFailureStage stage)
-        {
-            switch (stage)
-            {
-            case SettingsSnapshotTransactionFailureStage::None:
-                return "unknown";
-            case SettingsSnapshotTransactionFailureStage::Configuration:
-                return "configuration";
-            case SettingsSnapshotTransactionFailureStage::Preflight:
-                return "preflight";
-            case SettingsSnapshotTransactionFailureStage::Capture:
-                return "pre-state capture";
-            case SettingsSnapshotTransactionFailureStage::Selector:
-                return "selector transition";
-            case SettingsSnapshotTransactionFailureStage::Apply:
-                return "apply";
-            case SettingsSnapshotTransactionFailureStage::Readback:
-                return "readback";
-            case SettingsSnapshotTransactionFailureStage::Rollback:
-                return "rollback";
-            }
-            return "unknown";
-        }
-
-        [[nodiscard]] std::vector<SettingsSnapshotCatalogEntry>
-            BuildAuthoritativeSnapshotCatalog()
-        {
-            std::vector<SettingsSnapshotCatalogEntry> catalog;
-            catalog.reserve(UiSettingsCommandCatalog.size());
-            for (const UiSettingsCommandDefinition& definition :
-                UiSettingsCommandCatalog)
-            {
-                if (!IsSettingsSnapshotValue(definition))
-                    continue;
-                catalog.push_back({
-                    std::string(definition.name),
-                    ResolveSettingsSnapshotApplicationMode(definition)
-                });
-            }
-            return catalog;
-        }
-
-        constexpr std::array<std::uint8_t, 8> RestartHandoffMagic = {
-            'U', 'V', 'S', 'R', 'S', 'H', '0', '1'
-        };
-        constexpr std::uintmax_t MaximumRestartHandoffBytes = 4u * 1024u * 1024u;
-
-        void AppendU32(
-            std::vector<std::uint8_t>& bytes,
-            std::uint32_t value)
-        {
-            for (unsigned int shift = 0u; shift < 32u; shift += 8u)
-            {
-                bytes.push_back(static_cast<std::uint8_t>(value >> shift));
-            }
-        }
-
-        void AppendU64(
-            std::vector<std::uint8_t>& bytes,
-            std::uint64_t value)
-        {
-            for (unsigned int shift = 0u; shift < 64u; shift += 8u)
-            {
-                bytes.push_back(static_cast<std::uint8_t>(value >> shift));
-            }
-        }
-
-        [[nodiscard]] bool AppendString(
-            std::vector<std::uint8_t>& bytes,
-            std::string_view value)
-        {
-            if (value.size() >
-                static_cast<std::size_t>(
-                    (std::numeric_limits<std::uint32_t>::max)()))
-            {
-                return false;
-            }
-            AppendU32(bytes, static_cast<std::uint32_t>(value.size()));
-            bytes.insert(bytes.end(), value.begin(), value.end());
-            return true;
-        }
-
-        [[nodiscard]] bool ReadU32(
-            const std::vector<std::uint8_t>& bytes,
-            std::size_t limit,
-            std::size_t& cursor,
-            std::uint32_t& value)
-        {
-            if (cursor > limit || limit - cursor < 4u)
-                return false;
-            value = 0u;
-            for (unsigned int shift = 0u; shift < 32u; shift += 8u)
-            {
-                value |= static_cast<std::uint32_t>(bytes[cursor++]) << shift;
-            }
-            return true;
-        }
-
-        [[nodiscard]] bool ReadU64(
-            const std::vector<std::uint8_t>& bytes,
-            std::size_t limit,
-            std::size_t& cursor,
-            std::uint64_t& value)
-        {
-            if (cursor > limit || limit - cursor < 8u)
-                return false;
-            value = 0u;
-            for (unsigned int shift = 0u; shift < 64u; shift += 8u)
-            {
-                value |= static_cast<std::uint64_t>(bytes[cursor++]) << shift;
-            }
-            return true;
-        }
-
-        [[nodiscard]] bool ReadString(
-            const std::vector<std::uint8_t>& bytes,
-            std::size_t limit,
-            std::size_t& cursor,
-            std::string& value)
-        {
-            std::uint32_t length = 0u;
-            if (!ReadU32(bytes, limit, cursor, length) ||
-                cursor > limit || limit - cursor < length)
-            {
-                return false;
-            }
-            value.assign(
-                reinterpret_cast<const char*>(bytes.data() + cursor),
-                static_cast<std::size_t>(length));
-            cursor += length;
-            return true;
-        }
-
-        [[nodiscard]] std::uint32_t RestartHandoffCrc32(
-            const std::vector<std::uint8_t>& bytes,
-            std::size_t count)
-        {
-            std::uint32_t crc = 0xffffffffu;
-            for (std::size_t index = 0u; index < count; ++index)
-            {
-                crc ^= bytes[index];
-                for (unsigned int bit = 0u; bit < 8u; ++bit)
-                {
-                    const std::uint32_t mask =
-                        0u - static_cast<std::uint32_t>(crc & 1u);
-                    crc = (crc >> 1u) ^ (0xedb88320u & mask);
-                }
-            }
-            return ~crc;
         }
 
         [[nodiscard]] bool WriteBytesAtomically(
@@ -310,18 +543,6 @@ namespace uvsr
         }
     }
 
-    SettingsCommandFloatPrecisionScope::
-        SettingsCommandFloatPrecisionScope()
-        : m_Previous(g_PreciseFloatFormatting)
-    {
-        g_PreciseFloatFormatting = true;
-    }
-
-    SettingsCommandFloatPrecisionScope::~SettingsCommandFloatPrecisionScope()
-    {
-        g_PreciseFloatFormatting = m_Previous;
-    }
-
     std::string NormalizeCommandAscii(
         std::string_view value,
         bool collapseSeparators)
@@ -353,65 +574,6 @@ namespace uvsr
         return normalized;
     }
 
-    bool StartsWithCommandPrefix(
-        std::string_view value,
-        std::string_view prefix)
-    {
-        return value.size() >= prefix.size() &&
-            value.compare(0u, prefix.size(), prefix) == 0;
-    }
-
-    std::string JoinCommandArguments(
-        const std::vector<std::string>& arguments)
-    {
-        std::string result;
-        for (const std::string& argument : arguments)
-        {
-            if (!result.empty())
-                result.push_back(' ');
-            result += argument;
-        }
-        return result;
-    }
-
-    bool TryParseCommandBool(std::string_view value, bool& parsed)
-    {
-        const std::string normalized = NormalizeCommandAscii(value, true);
-        if (normalized == "on" || normalized == "true" ||
-            normalized == "yes" || normalized == "show" ||
-            normalized == "shown" || normalized == "enabled" ||
-            normalized == "1")
-        {
-            parsed = true;
-            return true;
-        }
-        if (normalized == "off" || normalized == "false" ||
-            normalized == "no" || normalized == "hide" ||
-            normalized == "hidden" || normalized == "disabled" ||
-            normalized == "0")
-        {
-            parsed = false;
-            return true;
-        }
-        return false;
-    }
-
-    bool TryParseCommandFloat(std::string_view value, float& parsed)
-    {
-        if (value.empty())
-            return false;
-        const std::string owned(value);
-        char* end = nullptr;
-        const float candidate = std::strtof(owned.c_str(), &end);
-        if (!end || end != owned.c_str() + owned.size() ||
-            !std::isfinite(candidate))
-        {
-            return false;
-        }
-        parsed = candidate;
-        return true;
-    }
-
     bool TryParseCommandInteger(
         std::string_view value,
         std::int64_t& parsed)
@@ -431,24 +593,6 @@ namespace uvsr
         return true;
     }
 
-    std::string FormatCommandFloat(float value)
-    {
-        char buffer[64];
-        if (g_PreciseFloatFormatting)
-        {
-            const auto result = std::to_chars(
-                buffer,
-                buffer + std::size(buffer),
-                value,
-                std::chars_format::general,
-                std::numeric_limits<float>::max_digits10);
-            if (result.ec == std::errc{})
-                return std::string(buffer, result.ptr);
-        }
-        std::snprintf(buffer, std::size(buffer), "%.3f", value);
-        return buffer;
-    }
-
     bool RejectUnchangedCommandMutation(
         std::string_view path,
         std::string& error)
@@ -458,346 +602,12 @@ namespace uvsr
         return false;
     }
 
-    std::string FormatCommandUiColorRgb(const UiRgbaColor& color)
-    {
-        return FormatCommandFloat(color.red) + " " +
-            FormatCommandFloat(color.green) + " " +
-            FormatCommandFloat(color.blue);
-    }
-
-    std::string FormatCommandUiColorRgba(const UiRgbaColor& color)
-    {
-        return FormatCommandUiColorRgb(color) + " " +
-            FormatCommandFloat(color.alpha);
-    }
-
-    bool ApplyCommandUiColorRgb(
-        CommandValueOperation operation,
-        const std::vector<std::string>& arguments,
-        std::string_view path,
-        UiRgbaColor& current,
-        const UiRgbaColor& defaultValue,
-        std::string& value,
-        std::string& error)
-    {
-        UiRgbaColor candidate = current;
-        if (operation == CommandValueOperation::Set)
-        {
-            if (arguments.size() != 3u ||
-                !TryParseCommandFloat(arguments[0], candidate.red) ||
-                !TryParseCommandFloat(arguments[1], candidate.green) ||
-                !TryParseCommandFloat(arguments[2], candidate.blue) ||
-                candidate.red < 0.f || candidate.red > 1.f ||
-                candidate.green < 0.f || candidate.green > 1.f ||
-                candidate.blue < 0.f || candidate.blue > 1.f)
-            {
-                error = std::string(path) +
-                    " expects three finite numbers from 0.000 through 1.000.";
-                return false;
-            }
-        }
-        else if (operation == CommandValueOperation::Reset)
-        {
-            candidate = defaultValue;
-        }
-        else if (operation == CommandValueOperation::Toggle)
-        {
-            error = std::string(path) + " is not boolean.";
-            return false;
-        }
-        if (operation != CommandValueOperation::Get &&
-            candidate == current)
-        {
-            return RejectUnchangedCommandMutation(path, error);
-        }
-        current = candidate;
-        value = FormatCommandUiColorRgb(current);
-        return true;
-    }
-
-    bool ApplyCommandUiColorRgba(
-        CommandValueOperation operation,
-        const std::vector<std::string>& arguments,
-        std::string_view path,
-        UiRgbaColor& current,
-        const UiRgbaColor& defaultValue,
-        std::string& value,
-        std::string& error)
-    {
-        UiRgbaColor candidate = current;
-        if (operation == CommandValueOperation::Set)
-        {
-            if (arguments.size() != 4u ||
-                !TryParseCommandFloat(arguments[0], candidate.red) ||
-                !TryParseCommandFloat(arguments[1], candidate.green) ||
-                !TryParseCommandFloat(arguments[2], candidate.blue) ||
-                !TryParseCommandFloat(arguments[3], candidate.alpha) ||
-                candidate.red < 0.f || candidate.red > 1.f ||
-                candidate.green < 0.f || candidate.green > 1.f ||
-                candidate.blue < 0.f || candidate.blue > 1.f ||
-                candidate.alpha < 0.f || candidate.alpha > 1.f)
-            {
-                error = std::string(path) +
-                    " expects four finite numbers from 0.000 through 1.000.";
-                return false;
-            }
-        }
-        else if (operation == CommandValueOperation::Reset)
-        {
-            candidate = defaultValue;
-        }
-        else if (operation == CommandValueOperation::Toggle)
-        {
-            error = std::string(path) + " is not boolean.";
-            return false;
-        }
-        if (operation != CommandValueOperation::Get &&
-            candidate == current)
-        {
-            return RejectUnchangedCommandMutation(path, error);
-        }
-        current = candidate;
-        value = FormatCommandUiColorRgba(current);
-        return true;
-    }
-
-    const UiSettingsCommandDefinition* FindSettingsCommandDefinition(
-        std::string_view rawName)
-    {
-        const std::string name = NormalizeCommandAscii(rawName);
-        const auto definition = std::find_if(
-            UiSettingsCommandCatalog.begin(),
-            UiSettingsCommandCatalog.end(),
-            [&name](const UiSettingsCommandDefinition& candidate)
-            {
-                return candidate.name == name;
-            });
-        return definition != UiSettingsCommandCatalog.end()
-            ? &*definition
-            : nullptr;
-    }
-
-    UiSettingsCommandVerb GetSettingsCommandVerb(
-        CommandValueOperation operation)
-    {
-        switch (operation)
-        {
-        case CommandValueOperation::Get:
-            return UiSettingsCommandVerb::Get;
-        case CommandValueOperation::Set:
-            return UiSettingsCommandVerb::Set;
-        case CommandValueOperation::Toggle:
-            return UiSettingsCommandVerb::Toggle;
-        case CommandValueOperation::Reset:
-            return UiSettingsCommandVerb::Reset;
-        }
-        return UiSettingsCommandVerb::Get;
-    }
-
-    std::string GetSettingsCommandVerbList(
-        const UiSettingsCommandDefinition& definition)
-    {
-        std::string result;
-        const auto append = [&]
-        (UiSettingsCommandVerb verb, std::string_view label)
-        {
-            if (!definition.Supports(verb))
-                return;
-            if (!result.empty())
-                result += "|";
-            result += label;
-        };
-        append(UiSettingsCommandVerb::Get, "get");
-        append(UiSettingsCommandVerb::Set, "set");
-        append(UiSettingsCommandVerb::Toggle, "toggle");
-        append(UiSettingsCommandVerb::Reset, "reset");
-        append(UiSettingsCommandVerb::Run, "run");
-        return result;
-    }
-
-    bool ApplyCommandBool(
-        CommandValueOperation operation,
-        const std::vector<std::string>& arguments,
-        std::string_view path,
-        bool& current,
-        bool defaultValue,
-        std::string& value,
-        std::string& error)
-    {
-        bool candidate = current;
-        switch (operation)
-        {
-        case CommandValueOperation::Get:
-            break;
-        case CommandValueOperation::Set:
-            if (arguments.size() != 1u ||
-                !TryParseCommandBool(arguments.front(), candidate))
-            {
-                error = std::string(path) + " expects on or off.";
-                return false;
-            }
-            break;
-        case CommandValueOperation::Toggle:
-            candidate = !candidate;
-            break;
-        case CommandValueOperation::Reset:
-            candidate = defaultValue;
-            break;
-        }
-        if (operation != CommandValueOperation::Get && candidate == current)
-            return RejectUnchangedCommandMutation(path, error);
-        current = candidate;
-        value = current ? "on" : "off";
-        return true;
-    }
-
-    bool ApplyCommandInteger(
-        CommandValueOperation operation,
-        const std::vector<std::string>& arguments,
-        std::string_view path,
-        int& current,
-        int defaultValue,
-        int minimum,
-        int maximum,
-        std::string& value,
-        std::string& error)
-    {
-        int candidate = current;
-        if (operation == CommandValueOperation::Set)
-        {
-            std::int64_t parsed = 0;
-            if (arguments.size() != 1u ||
-                !TryParseCommandInteger(arguments.front(), parsed) ||
-                parsed < minimum || parsed > maximum)
-            {
-                error = std::string(path) + " expects an integer from " +
-                    std::to_string(minimum) + " through " +
-                    std::to_string(maximum) + ".";
-                return false;
-            }
-            candidate = static_cast<int>(parsed);
-        }
-        else if (operation == CommandValueOperation::Reset)
-        {
-            candidate = defaultValue;
-        }
-        else if (operation == CommandValueOperation::Toggle)
-        {
-            error = std::string(path) + " is not boolean.";
-            return false;
-        }
-        if (operation != CommandValueOperation::Get && candidate == current)
-            return RejectUnchangedCommandMutation(path, error);
-        current = candidate;
-        value = std::to_string(current);
-        return true;
-    }
-
-    bool ApplyCommandUnsigned(
-        CommandValueOperation operation,
-        const std::vector<std::string>& arguments,
-        std::string_view path,
-        std::uint32_t& current,
-        std::uint32_t defaultValue,
-        std::uint32_t minimum,
-        std::uint32_t maximum,
-        std::string& value,
-        std::string& error)
-    {
-        std::uint32_t candidate = current;
-        if (operation == CommandValueOperation::Set)
-        {
-            std::int64_t parsed = 0;
-            if (arguments.size() != 1u ||
-                !TryParseCommandInteger(arguments.front(), parsed) ||
-                parsed < static_cast<std::int64_t>(minimum) ||
-                parsed > static_cast<std::int64_t>(maximum))
-            {
-                error = std::string(path) + " expects an integer from " +
-                    std::to_string(minimum) + " through " +
-                    std::to_string(maximum) + ".";
-                return false;
-            }
-            candidate = static_cast<std::uint32_t>(parsed);
-        }
-        else if (operation == CommandValueOperation::Reset)
-        {
-            candidate = defaultValue;
-        }
-        else if (operation == CommandValueOperation::Toggle)
-        {
-            error = std::string(path) + " is not boolean.";
-            return false;
-        }
-        if (operation != CommandValueOperation::Get && candidate == current)
-            return RejectUnchangedCommandMutation(path, error);
-        current = candidate;
-        value = std::to_string(current);
-        return true;
-    }
-
-    bool ApplyCommandFloat(
-        CommandValueOperation operation,
-        const std::vector<std::string>& arguments,
-        std::string_view path,
-        float& current,
-        float defaultValue,
-        float minimum,
-        float maximum,
-        std::string& value,
-        std::string& error)
-    {
-        float candidate = current;
-        if (operation == CommandValueOperation::Set)
-        {
-            if (arguments.size() != 1u ||
-                !TryParseCommandFloat(arguments.front(), candidate) ||
-                candidate < minimum || candidate > maximum)
-            {
-                error = std::string(path) +
-                    " expects a finite number from " +
-                    FormatCommandFloat(minimum) + " through " +
-                    FormatCommandFloat(maximum) + ".";
-                return false;
-            }
-        }
-        else if (operation == CommandValueOperation::Reset)
-        {
-            candidate = defaultValue;
-        }
-        else if (operation == CommandValueOperation::Toggle)
-        {
-            error = std::string(path) + " is not boolean.";
-            return false;
-        }
-        if (operation != CommandValueOperation::Get && candidate == current)
-            return RejectUnchangedCommandMutation(path, error);
-        current = candidate;
-        value = FormatCommandFloat(current);
-        return true;
-    }
-
-    std::vector<std::string> BuildSettingsSnapshotCommandArguments(
-        const UiSettingsCommandDefinition& definition,
-        std::string_view requestedValue)
-    {
-        std::vector<std::string> arguments;
-        if (definition.kind == UiSettingsCommandKind::Float3 ||
-            definition.kind == UiSettingsCommandKind::Float4)
-        {
-            std::istringstream values{ std::string(requestedValue) };
-            for (std::string token; values >> token; )
-                arguments.push_back(std::move(token));
-        }
-        else
-        {
-            arguments.emplace_back(requestedValue);
-        }
-        return arguments;
-    }
-
     std::filesystem::path GetSettingsSnapshotCatalogPath()
     {
+#if defined(UVSR_BUILD_TESTING)
+        return GetExecutableDirectoryWide() / "state" /
+            ("settings-snapshots-v" + std::string(SettingsSnapshotVersionText.data(), 4u) + ".txt");
+#else
         PWSTR localAppData = nullptr;
         const HRESULT result = SHGetKnownFolderPath(
             FOLDERID_LocalAppData,
@@ -816,298 +626,7 @@ namespace uvsr
             (L"settings-snapshots-v" + wideVersion + L".txt");
         CoTaskMemFree(localAppData);
         return path;
-    }
-
-    std::filesystem::path GetSettingsSnapshotRestartHandoffPath()
-    {
-        const std::filesystem::path catalog =
-            GetSettingsSnapshotCatalogPath();
-        return catalog.empty()
-            ? std::filesystem::path{}
-            : catalog.parent_path() / L"settings-snapshot-restart-v1.bin";
-    }
-
-    bool RemoveSettingsSnapshotRestartHandoff(
-        const std::filesystem::path& path,
-        std::string& error)
-    {
-        error.clear();
-        if (path.empty())
-        {
-            error = "restart handoff path is empty";
-            return false;
-        }
-        std::error_code fileError;
-        std::filesystem::remove(path, fileError);
-        if (fileError)
-        {
-            error = "could not remove restart handoff: " +
-                fileError.message();
-            return false;
-        }
-        std::filesystem::path temporary = path;
-        temporary += L".tmp";
-        std::filesystem::remove(temporary, fileError);
-        if (fileError)
-        {
-            error = "could not remove stale restart handoff temporary file: " +
-                fileError.message();
-            return false;
-        }
-        return true;
-    }
-
-    bool PersistSettingsSnapshotRestartHandoff(
-        const std::filesystem::path& path,
-        const SettingsSnapshotRestartHandoff& handoff,
-        std::string& error)
-    {
-        error.clear();
-        const std::uint32_t failureStage =
-            static_cast<std::uint32_t>(handoff.failureStage);
-        if (path.empty() || handoff.transaction.empty() ||
-            handoff.transaction.size() != handoff.sourceValues.size() ||
-            handoff.transaction.size() >
-                static_cast<std::size_t>(
-                    (std::numeric_limits<std::uint32_t>::max)()) ||
-            handoff.changedValueCount == 0u ||
-            handoff.changedValueCount > handoff.transaction.size() ||
-            (!handoff.rollingBack && handoff.changedValueCount != 1u) ||
-            failureStage > static_cast<std::uint32_t>(
-                SettingsSnapshotTransactionFailureStage::Rollback) ||
-            (handoff.rollingBack &&
-                (handoff.failureStage ==
-                    SettingsSnapshotTransactionFailureStage::None ||
-                 handoff.failure.empty())) ||
-            (!handoff.rollingBack &&
-                (handoff.failureStage !=
-                    SettingsSnapshotTransactionFailureStage::None ||
-                 !handoff.failure.empty())))
-        {
-            error = "restart handoff is incomplete or inconsistent";
-            return false;
-        }
-
-        std::vector<std::uint8_t> bytes(
-            RestartHandoffMagic.begin(), RestartHandoffMagic.end());
-        AppendU32(
-            bytes,
-            static_cast<std::uint32_t>(handoff.transaction.size()));
-        bool adapterTransition = false;
-        for (std::size_t index = 0u;
-             index < handoff.transaction.size();
-             ++index)
-        {
-            const SettingsSnapshotTransactionEntry& entry =
-                handoff.transaction[index];
-            const std::uint32_t mode = static_cast<std::uint32_t>(entry.mode);
-            if (mode > static_cast<std::uint32_t>(
-                    SettingsSnapshotApplicationMode::Selector) ||
-                !AppendString(bytes, entry.name) ||
-                !AppendString(bytes, entry.requestedValue) ||
-                !AppendString(bytes, handoff.sourceValues[index]))
-            {
-                error = "restart handoff contains an invalid entry";
-                return false;
-            }
-            AppendU32(bytes, mode);
-            if (entry.name == "gpu.adapter" &&
-                entry.requestedValue != handoff.sourceValues[index])
-            {
-                adapterTransition = true;
-            }
-        }
-        if (!adapterTransition)
-        {
-            error = "restart handoff contains no adapter transition";
-            return false;
-        }
-        bytes.push_back(handoff.rollingBack ? 1u : 0u);
-        AppendU64(
-            bytes,
-            static_cast<std::uint64_t>(handoff.changedValueCount));
-        AppendU32(bytes, failureStage);
-        if (!AppendString(bytes, handoff.failure) ||
-            bytes.size() + sizeof(std::uint32_t) >
-                MaximumRestartHandoffBytes)
-        {
-            error = "restart handoff exceeds its durable format limit";
-            return false;
-        }
-        AppendU32(bytes, RestartHandoffCrc32(bytes, bytes.size()));
-        if (WriteBytesAtomically(path, bytes, error))
-            return true;
-
-        std::string cleanupError;
-        if (!RemoveSettingsSnapshotRestartHandoff(path, cleanupError))
-            error += "; stale handoff cleanup failed: " + cleanupError;
-        return false;
-    }
-
-    bool LoadSettingsSnapshotRestartHandoff(
-        const std::filesystem::path& path,
-        SettingsSnapshotRestartHandoff& handoff,
-        bool& found,
-        std::string& error)
-    {
-        handoff = {};
-        found = false;
-        error.clear();
-        if (path.empty())
-        {
-            error = "restart handoff path is empty";
-            return false;
-        }
-
-        std::filesystem::path temporary = path;
-        temporary += L".tmp";
-        std::error_code fileError;
-        std::filesystem::remove(temporary, fileError);
-        if (fileError)
-        {
-            error = "could not remove stale restart handoff temporary file: " +
-                fileError.message();
-            return false;
-        }
-        if (!std::filesystem::exists(path, fileError))
-        {
-            if (fileError)
-            {
-                error = "could not inspect restart handoff: " +
-                    fileError.message();
-                return false;
-            }
-            return true;
-        }
-
-        const std::uintmax_t fileSize =
-            std::filesystem::file_size(path, fileError);
-        if (fileError || fileSize > MaximumRestartHandoffBytes ||
-            fileSize < RestartHandoffMagic.size() + 4u + 4u)
-        {
-            error = "restart handoff has an invalid size";
-            return false;
-        }
-        std::vector<std::uint8_t> bytes(static_cast<std::size_t>(fileSize));
-        std::ifstream input(path, std::ios::binary);
-        if (!input.is_open())
-        {
-            error = "could not open restart handoff";
-            return false;
-        }
-        input.read(
-            reinterpret_cast<char*>(bytes.data()),
-            static_cast<std::streamsize>(bytes.size()));
-        if (!input || input.gcount() !=
-                static_cast<std::streamsize>(bytes.size()))
-        {
-            error = "could not read complete restart handoff";
-            return false;
-        }
-
-        const std::size_t payloadSize = bytes.size() - 4u;
-        std::size_t checksumCursor = payloadSize;
-        std::uint32_t storedChecksum = 0u;
-        if (!ReadU32(
-                bytes,
-                bytes.size(),
-                checksumCursor,
-                storedChecksum) ||
-            checksumCursor != bytes.size() ||
-            storedChecksum != RestartHandoffCrc32(bytes, payloadSize) ||
-            !std::equal(
-                RestartHandoffMagic.begin(),
-                RestartHandoffMagic.end(),
-                bytes.begin()))
-        {
-            error = "restart handoff integrity check failed";
-            return false;
-        }
-
-        std::size_t cursor = RestartHandoffMagic.size();
-        std::uint32_t entryCount = 0u;
-        if (!ReadU32(bytes, payloadSize, cursor, entryCount) ||
-            entryCount == 0u ||
-            entryCount > UiSettingsCommandCatalog.size())
-        {
-            error = "restart handoff entry count is invalid";
-            return false;
-        }
-        handoff.transaction.reserve(entryCount);
-        handoff.sourceValues.reserve(entryCount);
-        bool adapterTransition = false;
-        for (std::uint32_t index = 0u; index < entryCount; ++index)
-        {
-            SettingsSnapshotTransactionEntry entry;
-            std::string source;
-            std::uint32_t mode = 0u;
-            if (!ReadString(bytes, payloadSize, cursor, entry.name) ||
-                !ReadString(
-                    bytes, payloadSize, cursor, entry.requestedValue) ||
-                !ReadString(bytes, payloadSize, cursor, source) ||
-                !ReadU32(bytes, payloadSize, cursor, mode) ||
-                mode > static_cast<std::uint32_t>(
-                    SettingsSnapshotApplicationMode::Selector))
-            {
-                error = "restart handoff entry is corrupt";
-                return false;
-            }
-            entry.mode = static_cast<SettingsSnapshotApplicationMode>(mode);
-            if (entry.name == "gpu.adapter" &&
-                entry.requestedValue != source)
-            {
-                adapterTransition = true;
-            }
-            handoff.transaction.push_back(std::move(entry));
-            handoff.sourceValues.push_back(std::move(source));
-        }
-
-        if (cursor >= payloadSize || bytes[cursor] > 1u)
-        {
-            error = "restart handoff rollback flag is corrupt";
-            return false;
-        }
-        handoff.rollingBack = bytes[cursor++] != 0u;
-        std::uint64_t changedValueCount = 0u;
-        std::uint32_t failureStage = 0u;
-        if (!ReadU64(
-                bytes,
-                payloadSize,
-                cursor,
-                changedValueCount) ||
-            changedValueCount >
-                static_cast<std::uint64_t>(
-                    (std::numeric_limits<std::size_t>::max)()) ||
-            !ReadU32(bytes, payloadSize, cursor, failureStage) ||
-            failureStage > static_cast<std::uint32_t>(
-                SettingsSnapshotTransactionFailureStage::Rollback) ||
-            !ReadString(bytes, payloadSize, cursor, handoff.failure) ||
-            cursor != payloadSize)
-        {
-            error = "restart handoff trailer is corrupt";
-            return false;
-        }
-        handoff.changedValueCount =
-            static_cast<std::size_t>(changedValueCount);
-        handoff.failureStage =
-            static_cast<SettingsSnapshotTransactionFailureStage>(failureStage);
-        if (!adapterTransition || handoff.changedValueCount == 0u ||
-            handoff.changedValueCount > handoff.transaction.size() ||
-            (handoff.rollingBack &&
-                (handoff.failureStage ==
-                    SettingsSnapshotTransactionFailureStage::None ||
-                 handoff.failure.empty())) ||
-            (!handoff.rollingBack &&
-                (handoff.changedValueCount != 1u ||
-                 handoff.failureStage !=
-                    SettingsSnapshotTransactionFailureStage::None ||
-                 !handoff.failure.empty())))
-        {
-            error = "restart handoff trailer is inconsistent";
-            return false;
-        }
-        found = true;
-        return true;
+#endif
     }
 
     std::string FormatSettingsSnapshotAdapterToken(std::int64_t index)
@@ -1123,7 +642,7 @@ namespace uvsr
     {
         std::string error;
         return ValidateSettingsSnapshotSelectorToken(
-                "scene.current", fileName, error)
+                SettingId::SceneCurrent, fileName, error)
             ? std::string(fileName)
             : std::string{};
     }
@@ -1136,7 +655,7 @@ namespace uvsr
             std::to_string(index) + ":" + std::string(identity);
         std::string error;
         return ValidateSettingsSnapshotSelectorToken(
-                "light.selected", token, error)
+                SettingId::LightSelected, token, error)
             ? token
             : std::string{};
     }
@@ -1391,7 +910,6 @@ namespace uvsr
         const SettingsSnapshotValueReader& readValue)
     {
         DecodedSettings settings;
-        SettingsCommandFloatPrecisionScope precision;
         for (const UiSettingsCommandDefinition& definition :
             UiSettingsCommandCatalog)
         {
@@ -1400,7 +918,7 @@ namespace uvsr
 
             std::string value;
             std::string error;
-            if (!readValue || !readValue(definition.name, value, error))
+            if (!readValue || !readValue(definition.id, value, error))
                 value = "<unavailable>";
             settings.emplace(std::string(definition.name), std::move(value));
         }
@@ -1506,7 +1024,6 @@ namespace uvsr
         std::string error;
         if (!BuildSettingsSnapshotTransaction(
                 decoded,
-                BuildAuthoritativeSnapshotCatalog(),
                 transaction,
                 error))
         {
@@ -1516,136 +1033,31 @@ namespace uvsr
                 "snapshot membership rejected: " + error;
             return rejected;
         }
-
-        SettingsCommandFloatPrecisionScope precision;
         SettingsSnapshotStagedRuntimeAccess stagedAccess{
             access.validateValue,
             access.readValue,
+            access.readRawValue,
             access.writeValue,
-            access.driveSelector,
-            access.persistRestartHandoff
+            access.driveSelector
         };
         return FinalizeStagedStep(
             m_TransactionCoordinator.Begin(transaction, stagedAccess),
             access);
     }
 
-    bool SettingsSnapshotController::ApplyDecodedImmediate(
-        const DecodedSettings& decoded,
-        const SettingsSnapshotRuntimeAccess& access,
-        std::size_t& changedValueCount,
-        std::string& error)
-    {
-        changedValueCount = 0u;
-        error.clear();
-        if (HasStagedApply())
-        {
-            error = "another staged settings transaction is active";
-            return false;
-        }
-        if (!access.sceneReady)
-        {
-            error = "settings.load requires a fully loaded scene";
-            return false;
-        }
-        std::vector<SettingsSnapshotTransactionEntry> transaction;
-        if (!BuildSettingsSnapshotTransaction(
-                decoded,
-                BuildAuthoritativeSnapshotCatalog(),
-                transaction,
-                error))
-        {
-            error = "snapshot membership rejected: " + error;
-            return false;
-        }
-        SettingsCommandFloatPrecisionScope precision;
-        const SettingsSnapshotTransactionResult result =
-            ApplySettingsSnapshotTransaction(
-                transaction,
-                access.validateValue,
-                access.readValue,
-                access.writeValue);
-        changedValueCount = result.changedValueCount;
-        if (!result.succeeded)
-        {
-            error = std::string("settings transaction ") +
-                TransactionStageName(result.failureStage) + " failed: " +
-                result.error;
-            return false;
-        }
-        Refresh(access.readValue);
-        return true;
-    }
-
     SettingsSnapshotTransactionStep
     SettingsSnapshotController::ContinueStagedApply(
         const SettingsSnapshotRuntimeAccess& access)
     {
-        SettingsCommandFloatPrecisionScope precision;
         SettingsSnapshotStagedRuntimeAccess stagedAccess{
             access.validateValue,
             access.readValue,
+            access.readRawValue,
             access.writeValue,
-            access.driveSelector,
-            access.persistRestartHandoff
+            access.driveSelector
         };
         return FinalizeStagedStep(
             m_TransactionCoordinator.Advance(stagedAccess),
-            access);
-    }
-
-    SettingsSnapshotTransactionStep
-    SettingsSnapshotController::ResumeStagedApply(
-        const SettingsSnapshotRestartHandoff& handoff,
-        const SettingsSnapshotRuntimeAccess& access)
-    {
-        if (HasStagedApply())
-        {
-            SettingsSnapshotTransactionStep rejected;
-            rejected.progress = SettingsSnapshotTransactionProgress::Failed;
-            rejected.result.failureStage =
-                SettingsSnapshotTransactionFailureStage::Configuration;
-            rejected.result.error =
-                "another staged settings transaction is active";
-            return rejected;
-        }
-        const std::vector<SettingsSnapshotCatalogEntry> catalog =
-            BuildAuthoritativeSnapshotCatalog();
-        if (handoff.transaction.size() != catalog.size())
-        {
-            SettingsSnapshotTransactionStep rejected;
-            rejected.progress = SettingsSnapshotTransactionProgress::Failed;
-            rejected.result.failureStage =
-                SettingsSnapshotTransactionFailureStage::Configuration;
-            rejected.result.error =
-                "restart handoff does not match the authoritative catalog";
-            return rejected;
-        }
-        for (std::size_t index = 0u; index < catalog.size(); ++index)
-        {
-            if (handoff.transaction[index].name != catalog[index].name ||
-                handoff.transaction[index].mode != catalog[index].mode)
-            {
-                SettingsSnapshotTransactionStep rejected;
-                rejected.progress =
-                    SettingsSnapshotTransactionProgress::Failed;
-                rejected.result.failureStage =
-                    SettingsSnapshotTransactionFailureStage::Configuration;
-                rejected.result.error =
-                    "restart handoff catalog order, name, or mode mismatch";
-                return rejected;
-            }
-        }
-        SettingsCommandFloatPrecisionScope precision;
-        SettingsSnapshotStagedRuntimeAccess stagedAccess{
-            access.validateValue,
-            access.readValue,
-            access.writeValue,
-            access.driveSelector,
-            access.persistRestartHandoff
-        };
-        return FinalizeStagedStep(
-            m_TransactionCoordinator.Resume(handoff, stagedAccess),
             access);
     }
 
@@ -1735,9 +1147,10 @@ namespace uvsr
             return rejected;
         }
 
+        const std::string_view version = code.substr(0u, 4u);
         const std::string canonical =
             FormatCanonicalSettingsSnapshot(decoded);
-        if (BuildSettingsSnapshotCode(canonical) != std::string(code))
+        if (BuildSettingsSnapshotCode(canonical, version) != std::string(code))
         {
             rejected.result.failureStage =
                 SettingsSnapshotTransactionFailureStage::Preflight;
@@ -1745,69 +1158,21 @@ namespace uvsr
                 "snapshot payload is not in canonical command-name order";
             return rejected;
         }
+        std::uint16_t numericVersion = 0u;
+        if (!TryParseSchemaVersion(version, numericVersion) ||
+            !ApplyLegacySettingMigrations(
+                numericVersion,
+                decoded,
+                error))
+        {
+            rejected.result.failureStage =
+                SettingsSnapshotTransactionFailureStage::Preflight;
+            rejected.result.error = error.empty()
+                ? "snapshot schema version is invalid"
+                : std::move(error);
+            return rejected;
+        }
         return BeginDecodedStaged(decoded, access);
     }
 
-    bool SettingsSnapshotController::ApplyCanonical(
-        std::string_view canonical,
-        const SettingsSnapshotRuntimeAccess& access,
-        std::size_t& changedValueCount,
-        std::string& error)
-    {
-        changedValueCount = 0u;
-        error.clear();
-        DecodedSettings decoded;
-        try
-        {
-            decoded = ParseSettingsSnapshot(canonical);
-        }
-        catch (const std::exception& exception)
-        {
-            error = "snapshot payload decode failed: " +
-                std::string(exception.what());
-            return false;
-        }
-        if (FormatCanonicalSettingsSnapshot(decoded) != canonical)
-        {
-            error = "snapshot payload is not complete canonical text";
-            return false;
-        }
-        return ApplyDecodedImmediate(
-            decoded, access, changedValueCount, error);
-    }
-
-    bool SettingsSnapshotController::LoadCode(
-        std::string_view code,
-        const SettingsSnapshotRuntimeAccess& access,
-        std::size_t& changedValueCount,
-        std::string& error)
-    {
-        changedValueCount = 0u;
-        error.clear();
-        if (!ValidateSettingsSnapshotLoadCode(code, error))
-            return false;
-        DecodedSettings decoded;
-        try
-        {
-            decoded = DecodeSettingsSnapshot(
-                code,
-                GetDefaultSettingsSnapshotCatalogPaths(
-                    code.substr(0u, 4u)));
-        }
-        catch (const std::exception& exception)
-        {
-            error = "snapshot decode failed: " +
-                std::string(exception.what());
-            return false;
-        }
-        const std::string canonical =
-            FormatCanonicalSettingsSnapshot(decoded);
-        if (BuildSettingsSnapshotCode(canonical) != std::string(code))
-        {
-            error = "snapshot payload is not in canonical command-name order";
-            return false;
-        }
-        return ApplyDecodedImmediate(
-            decoded, access, changedValueCount, error);
-    }
 }

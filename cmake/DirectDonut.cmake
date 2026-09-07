@@ -5,36 +5,12 @@ set(UVSR_NVRHI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvrhi")
 set(UVSR_NVRHI_EXPECTED_HEAD
     "8e8c36e37558acec333204619b95d9d2fcdc4a79")
 
+include("${CMAKE_CURRENT_LIST_DIR}/VerifyDirectDependencyState.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/DirectThirdParty.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/DirectImGui.cmake")
 
-function(uvsr_require_pinned_dependency name source_dir expected_commit)
-    if (NOT EXISTS "${source_dir}/.git")
-        message(FATAL_ERROR
-            "${name} is missing. Initialize the pinned ${source_dir} submodule.")
-    endif()
-    execute_process(
-        COMMAND "${GIT_EXECUTABLE}" -C "${source_dir}" rev-parse HEAD
-        RESULT_VARIABLE revision_result
-        OUTPUT_VARIABLE revision
-        ERROR_VARIABLE revision_error
-        OUTPUT_STRIP_TRAILING_WHITESPACE)
-    if (NOT revision_result EQUAL 0 OR
-        NOT revision STREQUAL expected_commit)
-        message(FATAL_ERROR
-            "${name} must be exactly ${expected_commit}; found '${revision}'. "
-            "${revision_error}")
-    endif()
-endfunction()
-
-uvsr_require_pinned_dependency(
-    "Donut"
-    "${UVSR_DONUT_SOURCE_DIR}"
-    "${UVSR_DONUT_EXPECTED_HEAD}")
-uvsr_require_pinned_dependency(
-    "NVRHI"
-    "${UVSR_NVRHI_SOURCE_DIR}"
-    "${UVSR_NVRHI_EXPECTED_HEAD}")
+uvsr_verify_dependency_git("${UVSR_DONUT_SOURCE_DIR}" "${UVSR_DONUT_EXPECTED_HEAD}")
+uvsr_verify_dependency_git("${UVSR_NVRHI_SOURCE_DIR}" "${UVSR_NVRHI_EXPECTED_HEAD}")
 
 add_library(imgui STATIC
     "${UVSR_IMGUI_SOURCE_DIR}/imconfig.h"
@@ -81,36 +57,7 @@ get_target_property(
 if (NOT EXISTS "${UVSR_DIRECTX_HEADERS_SOURCE_DIR}/LICENSE")
     message(FATAL_ERROR "The pinned DirectX-Headers license is unavailable")
 endif()
-if (NOT EXISTS "${UVSR_DIRECTX_HEADERS_SOURCE_DIR}/.git")
-    message(FATAL_ERROR
-        "The materialized DirectX-Headers source is not a Git worktree")
-endif()
-execute_process(
-    COMMAND "${GIT_EXECUTABLE}" -C "${UVSR_DIRECTX_HEADERS_SOURCE_DIR}"
-        rev-parse HEAD
-    RESULT_VARIABLE directx_headers_revision_result
-    OUTPUT_VARIABLE directx_headers_revision
-    ERROR_VARIABLE directx_headers_revision_error
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-if (NOT directx_headers_revision_result EQUAL 0 OR
-    NOT directx_headers_revision STREQUAL UVSR_DIRECTX_HEADERS_COMMIT)
-    message(FATAL_ERROR
-        "DirectX-Headers must materialize exact commit "
-        "${UVSR_DIRECTX_HEADERS_COMMIT}; found '${directx_headers_revision}'. "
-        "${directx_headers_revision_error}")
-endif()
-execute_process(
-    COMMAND "${GIT_EXECUTABLE}" -C "${UVSR_DIRECTX_HEADERS_SOURCE_DIR}"
-        status --porcelain=v1 --untracked-files=all
-    RESULT_VARIABLE directx_headers_status_result
-    OUTPUT_VARIABLE directx_headers_status
-    ERROR_VARIABLE directx_headers_status_error
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
-if (NOT directx_headers_status_result EQUAL 0 OR directx_headers_status)
-    message(FATAL_ERROR
-        "The materialized DirectX-Headers worktree must be clean: "
-        "${directx_headers_status}${directx_headers_status_error}")
-endif()
+uvsr_verify_dependency_git("${UVSR_DIRECTX_HEADERS_SOURCE_DIR}" "${UVSR_DIRECTX_HEADERS_COMMIT}")
 get_target_property(nvrhi_source_directory nvrhi SOURCE_DIR)
 cmake_path(NORMAL_PATH nvrhi_source_directory)
 cmake_path(NORMAL_PATH UVSR_NVRHI_SOURCE_DIR)

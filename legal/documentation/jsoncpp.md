@@ -1,6 +1,6 @@
 # `JsonCpp`
 
-## Record
+## record
 
 - Relationship: Dependency Integration
 - Status: Current
@@ -11,18 +11,18 @@
 - Governing Terms: Upstream public-domain/MIT choice; copyright Baptiste Lepilleur and the JsonCpp Authors where applicable
 - License SHA-256: `cec0db5f6d7ed6b3a72647bd50aed02e13c3377fd44382b96dc2915534c042ad`
 
-## UVSR Relationship
+## UVSR relationship
 
 UVSR fetches the immutable upstream `1.9.6` source archive directly and owns
 the narrow static target. Donut's remaining JSON callers consume that target;
 JsonCpp is not first-party code.
 
-## Evidence
+## evidence
 
 - [Direct Pin and Target](../../cmake/DirectThirdParty.cmake)
-- [Transitional Donut JSON Wrapper](../../donut/include/donut/core/json.h)
+- [Retained Donut JSON Wrapper](../../donut/include/donut/core/json.h)
 
-## Commercial Clearance
+## commercial clearance
 
 The complete upstream choice-of-terms file is installed as
 `bin/licenses/JsonCpp-Public-Domain-or-MIT.txt`.

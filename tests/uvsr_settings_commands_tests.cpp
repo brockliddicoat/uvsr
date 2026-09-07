@@ -32,62 +32,47 @@ namespace
             Fail(message);
     }
 
-    const uvsr::UiSettingsCommandDefinition& Definition(
-        std::string_view name)
-    {
-        const auto* definition =
-            uvsr::FindSettingsCommandDefinition(name);
-        if (!definition)
-            Fail("catalog fixture is missing " + std::string(name));
-        return *definition;
-    }
-
-    std::string FirstEnumValue(std::string_view domain)
-    {
-        domain = domain.substr(0u, domain.find('|'));
-        domain = domain.substr(0u, domain.find(';'));
-        while (!domain.empty() &&
-            (domain.front() == ' ' || domain.front() == '\t'))
-        {
-            domain.remove_prefix(1u);
-        }
-        while (!domain.empty() &&
-            (domain.back() == ' ' || domain.back() == '\t'))
-        {
-            domain.remove_suffix(1u);
-        }
-        return std::string(domain);
-    }
-
     std::string FixtureValue(
         const uvsr::UiSettingsCommandDefinition& definition)
     {
         using Kind = uvsr::UiSettingsCommandKind;
         if (definition.kind == Kind::DynamicSelection)
         {
-            if (definition.name == "gpu.adapter")
+            switch (definition.typedDomain.selector)
+            {
+            case uvsr::UiSettingsSelectorKind::Adapter:
                 return "0";
-            if (definition.name == "scene.current")
+            case uvsr::UiSettingsSelectorKind::Scene:
                 return "fixture/main.scene.json";
-            if (definition.name == "light.selected")
+            case uvsr::UiSettingsSelectorKind::Light:
                 return "0:fixture-light";
-            if (definition.name == "material.selected")
+            case uvsr::UiSettingsSelectorKind::Material:
                 return "none";
+            case uvsr::UiSettingsSelectorKind::None:
+                break;
+            }
             Fail("unowned dynamic selector fixture");
         }
         if (definition.dynamic)
             return "<unavailable>";
 
-        std::string value(definition.defaultValue);
         std::string error;
-        if (uvsr::ValidateSettingsSnapshotCatalogValue(
-                definition, value, error))
+        if (definition.typedDefault.HasValue())
         {
-            return value;
+            const std::string value =
+                uvsr::FormatUiSettingsDefaultAnchor(definition);
+            if (uvsr::ValidateSettingsSnapshotCatalogValue(
+                    definition, value, error))
+            {
+                return value;
+            }
         }
-        if (definition.kind == Kind::Enum)
+        if (definition.typedDomain.kind ==
+                uvsr::UiSettingsDomainKind::Enumeration &&
+            definition.typedDomain.tokenCount != 0u)
         {
-            value = FirstEnumValue(definition.domain);
+            const std::string value(
+                definition.typedDomain.tokens[0]);
             if (uvsr::ValidateSettingsSnapshotCatalogValue(
                     definition, value, error))
             {
@@ -102,30 +87,35 @@ namespace
 int main()
 {
     using namespace uvsr;
+    for (const auto& definition : UiSettingsCommandCatalog)
+    {
+        UiSettingsValue declared;
+        if (!GetDeclaredUiSettingsDefaultValue(definition, declared) ||
+            definition.kind == UiSettingsCommandKind::DynamicSelection)
+            continue;
+        UiSettingsValue parsed;
+        std::string error;
+        Require(ParseCanonicalUiSettingsValue(definition,
+                FormatUiSettingsDefaultAnchor(definition), parsed, error) && parsed == declared,
+            "declared typed default must equal its canonical round trip: " + std::string(definition.name));
+    }
+    Require(!(UiSettingsValue::Boolean(true) == UiSettingsValue::Boolean(false)) &&
+            !(UiSettingsValue::Integer(1) == UiSettingsValue::Integer(2)) &&
+            !(UiSettingsValue::Float(1.f) == UiSettingsValue::Float(2.f)) &&
+            !(UiSettingsValue::Token("amp") == UiSettingsValue::Token("ogg")) &&
+            !(UiSettingsValue::Token("none") == UiSettingsValue::Selector("none")),
+        "changed values and different kinds must request a mutation");
+    const auto vector = UiSettingsValue::Vector({ 1.f, 2.f, 3.f, 0.f }, 3u);
+    Require(vector == UiSettingsValue::Vector({ 1.f, 2.f, 3.f, 9.f }, 3u) &&
+            !(vector == UiSettingsValue::Vector({ 1.f, 2.f, 4.f, 0.f }, 3u)) &&
+            !(vector == UiSettingsValue::Vector({ 1.f, 2.f, 3.f, 0.f }, 4u)),
+        "vector equality must use its active components and shape");
 
-    bool boolean = false;
-    Require(TryParseCommandBool("Enabled", boolean) && boolean,
-        "boolean parsing must remain case/separator insensitive");
     std::int64_t integer = 0;
     Require(TryParseCommandInteger("-17", integer) && integer == -17,
         "integer parsing must consume the complete token");
     Require(!TryParseCommandInteger("17px", integer),
         "integer parsing must reject suffixes");
-    Require(FormatCommandFloat(0.123456789f) == "0.123",
-        "ordinary command output must retain concise float formatting");
-    {
-        SettingsCommandFloatPrecisionScope precise;
-        Require(FormatCommandFloat(0.123456789f) != "0.123",
-            "snapshot capture must use round-trip float precision");
-    }
-    Require(FormatCommandFloat(0.123456789f) == "0.123",
-        "snapshot precision scope must restore ordinary formatting");
-    Require(
-        BuildSettingsSnapshotCommandArguments(
-            Definition("ui.accent.primary"), "0.1 0.2 0.3 1") ==
-            std::vector<std::string>({ "0.1", "0.2", "0.3", "1" }),
-        "vector snapshot values must use ordinary command arguments");
-
     const std::vector<SettingsSnapshotAdapterOption> adapters = {
         { 0, "Duplicate GPU" }, { 1, "Duplicate GPU" }
     };
@@ -378,10 +368,11 @@ int main()
 
     std::size_t writes = 0u;
     const auto read = [&live](
-        std::string_view name,
+        SettingId id,
         std::string& value,
         std::string& error)
     {
+        const std::string_view name = SettingName(id);
         const auto found = live.find(name);
         if (found == live.end())
         {
@@ -392,20 +383,22 @@ int main()
         return true;
     };
     const auto validate = [](
-        std::string_view name,
+        SettingId id,
         std::string_view value,
+        std::string_view,
         std::string& error)
     {
         const UiSettingsCommandDefinition* definition =
-            FindSettingsCommandDefinition(name);
+            FindSettingsCommandDefinition(id);
         return definition && IsSettingsSnapshotValue(*definition) &&
             ValidateSettingsSnapshotCatalogValue(*definition, value, error);
     };
     const auto write = [&live, &writes](
-        std::string_view name,
+        SettingId id,
         std::string_view value,
         std::string& error)
     {
+        const std::string_view name = SettingName(id);
         const auto found = live.find(name);
         if (found == live.end())
         {
@@ -417,358 +410,186 @@ int main()
         return true;
     };
 
-    SettingsSnapshotController controller;
-    controller.Refresh(read);
-    const DecodedSettings captured =
-        ParseSettingsSnapshot(controller.Canonical());
-    Require(captured.size() == live.size() &&
-            IsSettingsSnapshotCode(controller.Code()),
-        "controller capture must include the complete authoritative catalog");
-
-    SettingsSnapshotRuntimeAccess access{
-        true,
-        validate,
-        read,
-        write
-    };
-    std::size_t changed = 0u;
-    std::string error;
-    Require(controller.ApplyCanonical(
-            controller.Canonical(), access, changed, error) &&
-            changed == 0u && writes == 0u,
-        "a complete idempotent snapshot must verify without setters: " +
-            error);
-
-    DecodedSettings changedPayload = captured;
-    const std::string previousAo = changedPayload.at(
-        "visibility.ao.enabled");
-    changedPayload["visibility.ao.enabled"] =
-        previousAo == "on" ? "off" : "on";
-    const std::string changedCanonical =
-        FormatCanonicalSettingsSnapshot(changedPayload);
-    Require(controller.ApplyCanonical(
-            changedCanonical, access, changed, error) &&
-            changed == 1u && writes == 1u &&
-            live.at("visibility.ao.enabled") != previousAo,
-        "one valid nondefault setting must apply through the transaction: " +
-            error);
-
-    DecodedSettings missing = changedPayload;
-    missing.erase("visibility.ao.enabled");
-    const std::size_t writesBeforeReject = writes;
-    Require(!controller.ApplyCanonical(
-            FormatCanonicalSettingsSnapshot(missing),
-            access,
-            changed,
-            error) &&
-            writes == writesBeforeReject &&
-            error.find("missing") != std::string::npos,
-        "missing membership must reject before mutation");
-
-    DecodedSettings unknown = changedPayload;
-    unknown.emplace("unknown.fixture.setting", "invalid-fixture-value");
-    Require(!controller.ApplyCanonical(
-            FormatCanonicalSettingsSnapshot(unknown),
-            access,
-            changed,
-            error) &&
-            writes == writesBeforeReject &&
-            error.find("unknown") != std::string::npos,
-        "a concrete retired setting must reject before mutation");
-
-    DecodedSettings selectorPayload = changedPayload;
-    selectorPayload["scene.current"] = "target/main.scene.json";
-    access.driveSelector = [&live](
-        std::string_view name,
+    const auto driveImmediate = [&live](
+        SettingId id,
         std::string_view value,
         bool begin,
         bool,
-        std::string& selectorFailure)
+        std::string& selectorError)
     {
-        if (name != "scene.current" || !begin)
+        const std::string_view name = SettingName(id);
+        if (name == "gpu.adapter" || !begin)
         {
-            selectorFailure = "unexpected selector transition";
+            selectorError = "unexpected selector transition";
             return SettingsSnapshotSelectorTransition::Failed;
         }
         live[std::string(name)] = std::string(value);
         return SettingsSnapshotSelectorTransition::Ready;
     };
-    SettingsSnapshotTransactionStep staged =
-        controller.BeginApplyCanonicalStaged(
-            FormatCanonicalSettingsSnapshot(selectorPayload), access);
+    SettingsSnapshotRuntimeAccess access{
+        true,
+        validate,
+        read,
+        read,
+        write,
+        driveImmediate
+    };
+    SettingsSnapshotController controller;
+    controller.Refresh(read);
+    const DecodedSettings captured =
+        ParseSettingsSnapshot(controller.Canonical());
     Require(
-        staged.progress == SettingsSnapshotTransactionProgress::Succeeded &&
-            live.at("scene.current") == "target/main.scene.json" &&
-            staged.result.changedValueCount == 1u,
-        "the production controller must drive a changed canonical selector "
-        "through the staged transaction path");
-    staged = controller.BeginApplyCanonicalStaged(
+        captured.size() == live.size() &&
+            IsSettingsSnapshotCode(controller.Code()),
+        "controller capture must include the authoritative snapshot catalog");
+
+    auto step = controller.BeginApplyCanonicalStaged(
+        controller.Canonical(), access);
+    Require(
+        step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
+            step.result.changedValueCount == 0u && writes == 0u,
+        "an idempotent snapshot must verify without setters");
+
+    DecodedSettings changedPayload = captured;
+    const std::string previousFill =
+        changedPayload.at("sky.ambient-fill.enabled");
+    changedPayload["sky.ambient-fill.enabled"] =
+        previousFill == "on" ? "off" : "on";
+    const std::string changedCanonical =
+        FormatCanonicalSettingsSnapshot(changedPayload);
+    step = controller.BeginApplyCanonicalStaged(changedCanonical, access);
+    Require(
+        step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
+            step.result.changedValueCount == 1u && writes == 1u &&
+            live.at("sky.ambient-fill.enabled") != previousFill,
+        "one mutable value must apply through the staged transaction");
+
+    DecodedSettings missing = changedPayload;
+    missing.erase("sky.ambient-fill.enabled");
+    const std::size_t writesBeforeReject = writes;
+    step = controller.BeginApplyCanonicalStaged(
+        FormatCanonicalSettingsSnapshot(missing), access);
+    Require(
+        step.progress == SettingsSnapshotTransactionProgress::Failed &&
+            writes == writesBeforeReject &&
+            step.result.error.find("missing") != std::string::npos,
+        "missing membership must reject before mutation");
+
+    DecodedSettings unknown = changedPayload;
+    unknown.emplace("unknown.fixture.setting", "invalid-fixture-value");
+    step = controller.BeginApplyCanonicalStaged(
+        FormatCanonicalSettingsSnapshot(unknown), access);
+    Require(
+        step.progress == SettingsSnapshotTransactionProgress::Failed &&
+            writes == writesBeforeReject &&
+            step.result.error.find("unknown") != std::string::npos,
+        "a retired setting must reject before mutation");
+
+    DecodedSettings selectorPayload = changedPayload;
+    selectorPayload["scene.current"] = "target/main.scene.json";
+    step = controller.BeginApplyCanonicalStaged(
         FormatCanonicalSettingsSnapshot(selectorPayload), access);
     Require(
-        staged.progress == SettingsSnapshotTransactionProgress::Succeeded &&
-            staged.result.changedValueCount == 0u,
-        "a resolved selector transaction must be idempotent");
+        step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
+            step.result.changedValueCount == 1u &&
+            live.at("scene.current") == "target/main.scene.json",
+        "the controller must drive selectors through its staged path");
 
     DecodedSettings pendingPayload = selectorPayload;
     pendingPayload["scene.current"] = "pending/main.scene.json";
     bool selectorReady = false;
     access.driveSelector = [&live, &selectorReady](
-        std::string_view name,
+        SettingId id,
         std::string_view value,
         bool begin,
         bool,
-        std::string& selectorFailure)
+        std::string& selectorError)
     {
+        const std::string_view name = SettingName(id);
         if (name != "scene.current")
         {
-            selectorFailure = "unexpected selector";
+            selectorError = "unexpected pending selector";
             return SettingsSnapshotSelectorTransition::Failed;
         }
-        if (begin)
-            return SettingsSnapshotSelectorTransition::Pending;
-        if (!selectorReady)
+        if (begin || !selectorReady)
             return SettingsSnapshotSelectorTransition::Pending;
         live[std::string(name)] = std::string(value);
         return SettingsSnapshotSelectorTransition::Ready;
     };
-    staged = controller.BeginApplyCanonicalStaged(
+    step = controller.BeginApplyCanonicalStaged(
         FormatCanonicalSettingsSnapshot(pendingPayload), access);
     Require(
-        staged.progress == SettingsSnapshotTransactionProgress::Pending &&
+        step.progress == SettingsSnapshotTransactionProgress::Pending &&
             controller.HasStagedApply(),
-        "controller concurrency fixture must hold one pending transaction");
+        "one asynchronous selector transaction must remain active");
     const SettingsSnapshotTransactionStep rejectedSecond =
-        controller.BeginApplyCanonicalStaged(
-            FormatCanonicalSettingsSnapshot(selectorPayload), access);
+        controller.BeginApplyCanonicalStaged(changedCanonical, access);
     const SettingsSnapshotTransactionStep rejectedLoad =
         controller.BeginLoadCodeStaged("not-a-code", access);
-    const SettingsSnapshotTransactionStep rejectedResume =
-        controller.ResumeStagedApply({}, access);
     Require(
-        rejectedSecond.progress == SettingsSnapshotTransactionProgress::Failed &&
-            rejectedLoad.progress == SettingsSnapshotTransactionProgress::Failed &&
-            rejectedResume.progress == SettingsSnapshotTransactionProgress::Failed &&
+        rejectedSecond.progress ==
+                SettingsSnapshotTransactionProgress::Failed &&
+            rejectedLoad.progress ==
+                SettingsSnapshotTransactionProgress::Failed &&
             rejectedSecond.result.failureStage ==
                 SettingsSnapshotTransactionFailureStage::Configuration &&
             controller.HasStagedApply(),
-        "second begin, load, and resume requests must reject without resetting "
-        "the active coordinator");
-    std::size_t legacyChanged = 0u;
-    Require(!controller.ApplyCanonical(
-            FormatCanonicalSettingsSnapshot(selectorPayload),
-            access,
-            legacyChanged,
-            error) &&
-            error.find("active") != std::string::npos &&
-            controller.HasStagedApply(),
-        "legacy immediate apply must never abandon active asynchronous work");
+        "a second transaction must not replace pending selector work");
     selectorReady = true;
-    staged = controller.ContinueStagedApply(access);
+    step = controller.ContinueStagedApply(access);
     Require(
-        staged.progress == SettingsSnapshotTransactionProgress::Succeeded &&
+        step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
             live.at("scene.current") == "pending/main.scene.json" &&
             !controller.HasStagedApply(),
-        "the original pending transaction must survive rejected concurrent "
-        "requests and complete unchanged");
-    const std::size_t writesBeforeLegacySelector = writes;
+        "the original selector transaction must complete after polling");
+    access.driveSelector = driveImmediate;
+
+    DecodedSettings adapterMismatch =
+        ParseSettingsSnapshot(controller.Canonical());
+    adapterMismatch["gpu.adapter"] = "1";
+    const auto stateBeforeAdapterMismatch = live;
+    const std::size_t writesBeforeAdapterMismatch = writes;
+    step = controller.BeginApplyCanonicalStaged(
+        FormatCanonicalSettingsSnapshot(adapterMismatch), access);
     Require(
-        !controller.ApplyCanonical(
-            FormatCanonicalSettingsSnapshot(selectorPayload),
-            access,
-            legacyChanged,
-            error) &&
-            !controller.HasStagedApply() &&
-            live.at("scene.current") == "pending/main.scene.json" &&
-            writes == writesBeforeLegacySelector &&
-            error.find("staged") != std::string::npos,
-        "legacy bool apply must reject unresolved selectors immediately "
-        "without leaving asynchronous work active");
-
-    SettingsSnapshotController journalController;
-    journalController.Refresh(read);
-    DecodedSettings restartPayload =
-        ParseSettingsSnapshot(journalController.Canonical());
-    restartPayload["gpu.adapter"] = "1";
-    std::optional<SettingsSnapshotRestartHandoff> restartHandoff;
-    access.driveSelector = [](
-        std::string_view name,
-        std::string_view,
-        bool begin,
-        bool,
-        std::string& selectorFailure)
-    {
-        if (name == "gpu.adapter" && begin)
-            return SettingsSnapshotSelectorTransition::RestartRequired;
-        selectorFailure = "unexpected journal selector transition";
-        return SettingsSnapshotSelectorTransition::Failed;
-    };
-    access.persistRestartHandoff = [&restartHandoff](
-        const SettingsSnapshotRestartHandoff& handoff,
-        std::string&)
-    {
-        restartHandoff = handoff;
-        return true;
-    };
-    staged = journalController.BeginApplyCanonicalStaged(
-        FormatCanonicalSettingsSnapshot(restartPayload), access);
-    Require(
-        staged.progress ==
-                SettingsSnapshotTransactionProgress::RestartRequired &&
-            restartHandoff.has_value(),
-        "adapter changes must expose a complete persisted controller handoff");
-
-    live["gpu.adapter"] = "1";
-    SettingsSnapshotController resumedController;
-    staged = resumedController.ResumeStagedApply(*restartHandoff, access);
-    Require(
-        staged.progress == SettingsSnapshotTransactionProgress::Succeeded &&
-            staged.result.succeeded &&
-            staged.result.changedValueCount == 1u,
-        "SettingsSnapshotController::ResumeStagedApply must accept the exact "
-        "authoritative journal after the adapter restart");
-    live["gpu.adapter"] = "0";
-
-    const auto requireControllerJournalRejected = [&access, &writes](
-        SettingsSnapshotRestartHandoff corrupt,
-        std::string_view reason)
-    {
-        const std::size_t writesBefore = writes;
-        SettingsSnapshotController rejectedController;
-        const SettingsSnapshotTransactionStep step =
-            rejectedController.ResumeStagedApply(corrupt, access);
-        Require(
-            step.progress == SettingsSnapshotTransactionProgress::Failed &&
-                step.result.failureStage ==
-                    SettingsSnapshotTransactionFailureStage::Configuration &&
-                writes == writesBefore,
-            "controller must reject a corrupt restart journal before "
-            "mutation: " + std::string(reason));
-    };
-    SettingsSnapshotRestartHandoff corruptJournal = *restartHandoff;
-    corruptJournal.transaction.pop_back();
-    corruptJournal.sourceValues.pop_back();
-    requireControllerJournalRejected(
-        std::move(corruptJournal), "missing catalog entry");
-    corruptJournal = *restartHandoff;
-    std::swap(
-        corruptJournal.transaction[0],
-        corruptJournal.transaction[1]);
-    std::swap(
-        corruptJournal.sourceValues[0],
-        corruptJournal.sourceValues[1]);
-    requireControllerJournalRejected(
-        std::move(corruptJournal), "catalog reordering");
-    corruptJournal = *restartHandoff;
-    for (SettingsSnapshotTransactionEntry& entry :
-         corruptJournal.transaction)
-    {
-        if (entry.name == "scene.current")
-        {
-            entry.mode = SettingsSnapshotApplicationMode::Mutable;
-            break;
-        }
-    }
-    requireControllerJournalRejected(
-        std::move(corruptJournal), "forged selector mode");
-
-    const std::filesystem::path journalPath =
-        std::filesystem::temp_directory_path() /
-        ("uvsr-settings-restart-handoff-" +
-            std::to_string(GetCurrentProcessId()) + ".bin");
-    std::error_code fileError;
-    std::filesystem::remove(journalPath, fileError);
-    std::filesystem::path journalTemporary = journalPath;
-    journalTemporary += L".tmp";
-    std::filesystem::remove(journalTemporary, fileError);
-    Require(PersistSettingsSnapshotRestartHandoff(
-            journalPath, *restartHandoff, error),
-        "restart handoff must be written atomically: " + error);
-    {
-        std::ofstream staleTemporary(
-            journalTemporary,
-            std::ios::binary | std::ios::trunc);
-        staleTemporary << "unpublished";
-    }
-    SettingsSnapshotRestartHandoff loadedHandoff;
-    bool handoffFound = false;
-    Require(LoadSettingsSnapshotRestartHandoff(
-            journalPath, loadedHandoff, handoffFound, error) &&
-            handoffFound &&
-            !std::filesystem::exists(journalTemporary) &&
-            loadedHandoff.transaction.size() ==
-                restartHandoff->transaction.size() &&
-            loadedHandoff.sourceValues == restartHandoff->sourceValues &&
-            loadedHandoff.changedValueCount ==
-                restartHandoff->changedValueCount &&
-            loadedHandoff.rollingBack == restartHandoff->rollingBack &&
-            loadedHandoff.failureStage == restartHandoff->failureStage &&
-            loadedHandoff.failure == restartHandoff->failure,
-        "restart handoff must survive an exact durable round trip: " +
-            error);
-    for (std::size_t index = 0u;
-         index < loadedHandoff.transaction.size();
-         ++index)
-    {
-        Require(
-            loadedHandoff.transaction[index].name ==
-                    restartHandoff->transaction[index].name &&
-                loadedHandoff.transaction[index].requestedValue ==
-                    restartHandoff->transaction[index].requestedValue &&
-                loadedHandoff.transaction[index].mode ==
-                    restartHandoff->transaction[index].mode,
-            "restart handoff entry order and modes must round trip exactly");
-    }
-    corruptJournal = *restartHandoff;
-    corruptJournal.transaction.front().mode =
-        static_cast<SettingsSnapshotApplicationMode>(999u);
-    Require(!PersistSettingsSnapshotRestartHandoff(
-            journalPath, corruptJournal, error) &&
-            error.find("invalid entry") != std::string::npos,
-        "restart handoff persistence must reject corrupt enum values");
-    {
-        std::fstream tamper(
-            journalPath,
-            std::ios::binary | std::ios::in | std::ios::out);
-        tamper.seekp(0, std::ios::beg);
-        tamper.put('X');
-        tamper.flush();
-    }
-    Require(!LoadSettingsSnapshotRestartHandoff(
-            journalPath, loadedHandoff, handoffFound, error) &&
-            !handoffFound &&
-            error.find("integrity") != std::string::npos,
-        "restart handoff loading must reject tampering before resume");
-    Require(RemoveSettingsSnapshotRestartHandoff(journalPath, error) &&
-            !std::filesystem::exists(journalPath) &&
-            !std::filesystem::exists(journalTemporary),
-        "restart handoff cleanup must remove published and temporary files");
+        step.progress == SettingsSnapshotTransactionProgress::Failed &&
+            step.result.failureStage ==
+                SettingsSnapshotTransactionFailureStage::Preflight &&
+            live == stateBeforeAdapterMismatch &&
+            writes == writesBeforeAdapterMismatch &&
+            step.result.error.find("-adapter") != std::string::npos,
+        "adapter identity must be a zero mutation startup precondition");
 
     access.sceneReady = false;
-    Require(!controller.ApplyCanonical(
-            changedCanonical, access, changed, error) &&
-            writes == writesBeforeReject &&
-            error.find("fully loaded scene") != std::string::npos,
-        "snapshot application must wait for ordinary scene readiness");
+    step = controller.BeginApplyCanonicalStaged(
+        controller.Canonical(), access);
+    Require(
+        step.progress == SettingsSnapshotTransactionProgress::Failed &&
+            writes == writesBeforeAdapterMismatch &&
+            step.result.error.find("fully loaded scene") != std::string::npos,
+        "snapshot application must wait for scene readiness");
     access.sceneReady = true;
 
+    std::error_code fileError;
     const std::filesystem::path catalogPath =
         std::filesystem::temp_directory_path() /
         ("uvsr-settings-command-owner-" +
             std::to_string(GetCurrentProcessId()) + ".txt");
     std::filesystem::remove(catalogPath, fileError);
-    Require(controller.Persist(catalogPath) &&
-            controller.Persist(catalogPath) &&
-            !std::filesystem::exists(
-                std::filesystem::path(catalogPath).concat(L".tmp")),
+    Require(
+        controller.Persist(catalogPath) &&
+            controller.Persist(catalogPath),
         "catalog persistence must be idempotent");
     std::ifstream input(catalogPath, std::ios::binary);
     const std::string persisted{
         std::istreambuf_iterator<char>(input),
         std::istreambuf_iterator<char>()
     };
-    Require(persisted.find(controller.BuildCatalogSection()) !=
-            std::string::npos &&
-            persisted.find(controller.BuildCatalogSection(),
+    Require(
+        persisted.find(controller.BuildCatalogSection()) !=
+                std::string::npos &&
+            persisted.find(
+                controller.BuildCatalogSection(),
                 persisted.find(controller.BuildCatalogSection()) + 1u) ==
                 std::string::npos,
         "catalog must contain one exact framed entry");
@@ -779,31 +600,309 @@ int main()
             std::to_string(GetCurrentProcessId()));
     std::filesystem::remove_all(loadRoot, fileError);
     std::filesystem::create_directories(loadRoot / "UVSR", fileError);
-    Require(!fileError, "load-code fixture directory must be writable");
+    Require(!fileError, "isolated snapshot catalog root must be writable");
     wchar_t previousLocalAppData[32768]{};
     const DWORD previousLength = GetEnvironmentVariableW(
         L"LOCALAPPDATA",
         previousLocalAppData,
         static_cast<DWORD>(std::size(previousLocalAppData)));
-    Require(SetEnvironmentVariableW(
-            L"LOCALAPPDATA",
-            loadRoot.c_str()) != FALSE,
-        "load-code fixture must set its isolated catalog root");
-    const std::string version(SettingsSnapshotVersionText.data(), 4u);
-    const std::filesystem::path loadCatalog =
+    Require(
+        SetEnvironmentVariableW(L"LOCALAPPDATA", loadRoot.c_str()) != FALSE,
+        "test must set its process local catalog root");
+
+    controller.Refresh(read);
+    const std::string currentVersion(SettingsSnapshotVersionText.data(), 4u);
+    const std::filesystem::path currentCatalog =
         loadRoot / "UVSR" /
-        ("settings-snapshots-v" + version + ".txt");
-    Require(controller.Persist(loadCatalog),
-        "load-code fixture must persist the exact controller payload");
-    const std::string loadCode = controller.Code();
-    Require(controller.LoadCode(loadCode, access, changed, error) &&
-            changed == 0u,
-        "SettingsSnapshotController::LoadCode must decode and apply the "
-        "real isolated catalog entry: " + error);
-    Require(SetEnvironmentVariableW(
+        ("settings-snapshots-v" + currentVersion + ".txt");
+    Require(controller.Persist(currentCatalog),
+        "current schema fixture must persist");
+    step = controller.BeginLoadCodeStaged(controller.Code(), access);
+    Require(
+        step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
+            step.result.changedValueCount == 0u,
+        "current schema load must use the staged controller path: " +
+            step.result.error);
+
+    const auto appendFixture = [&](std::string_view version,
+                                   const DecodedSettings& fixture)
+    {
+        const std::string canonical = FormatCanonicalSettingsSnapshot(fixture);
+        const std::string code = BuildSettingsSnapshotCode(canonical, version);
+        const std::filesystem::path path = loadRoot / "UVSR" /
+            ("settings-snapshots-v" + std::string(version) + ".txt");
+        std::ofstream output(path, std::ios::binary | std::ios::app);
+        output << '[' << code << "]\n" << canonical << "[/" << code << "]\n";
+        Require(bool(output), "migration fixture must be written completely");
+        return code;
+    };
+    const auto withRetiredInterface = [](DecodedSettings values, std::string_view skin = "amp")
+    {
+        values["ui.skin"] = skin;
+        values["ui.font-family"] = "codex";
+        for (const char* name : { "ui.accent.primary", "ui.accent.font", "ui.accent.primary-background" })
+            values[name] = skin == "amp" ? "0.25 0.5 0.75 1" : "<unavailable>";
+        values["ui.accent.secondary"] = "0 0.5 1 1";
+        values["ui.accent.tertiary"] = "0.5 1 0 1";
+        return values;
+    };
+    const auto buildLegacyFixture = [&](std::string_view version)
+    {
+        DecodedSettings fixture = withRetiredInterface(ParseSettingsSnapshot(controller.Canonical()));
+        for (const auto& definition : UiSettingsCommandCatalog)
+            if (definition.section == UiSettingsCommandSection::Pathing)
+                fixture.erase(std::string(definition.name));
+        if (version <= "0014")
+        {
+            fixture["visibility.enabled"] = "on";
+            fixture["visibility.quality"] = "high";
+            fixture["visibility.estimator"] = "solid-angle";
+            fixture["visibility.resolution"] = "full";
+            fixture["visibility.samples"] = "16";
+            fixture["visibility.radius"] = "3";
+            fixture["visibility.thickness"] = "0.5";
+            fixture["visibility.distribution"] = "2";
+            fixture["visibility.specify-noise"] = "off";
+            fixture["visibility.noise-pattern"] = "spatiotemporal-blue";
+            fixture["visibility.noise-resolution"] = "128x128";
+            fixture["visibility.animate-samples"] = "on";
+            fixture["visibility.ao.enabled"] = "on";
+            fixture["visibility.ao.strength"] = "1";
+            fixture["visibility.ao.precision"] = "16-bit";
+            fixture["visibility.gi.enabled"] = "on";
+            fixture["visibility.gi.intensity"] = "1";
+            fixture["visibility.gi.precision"] = "16-bit";
+            fixture["debug.visibility.view"] = "final";
+        }
+        if (version <= "0013")
+        {
+            fixture.erase("shadows.ray-traced.hard");
+            fixture.erase("shadows.ray-traced.samples-per-pixel");
+        }
+        if (version <= "0012")
+            fixture.erase("tonemapper.enabled");
+        if (version <= "0011")
+            for (const auto& definition : UiSettingsCommandCatalog)
+                if (definition.name.substr(0u, 11u) == "tonemapper.")
+                    fixture.erase(std::string(definition.name));
+        if (version <= "000f")
+        {
+            fixture["visibility.ao.output-hit-distance"] = "off";
+            fixture["visibility.gi.output-hit-distance"] = "off";
+            fixture["denoising.ao.method"] = "raw";
+            fixture["denoising.ao.radius"] = "4";
+            fixture["denoising.ao.quality"] = "balanced";
+            fixture["denoising.ao.resolution"] = "half";
+            fixture["denoising.ao.history"] = "16";
+            fixture["denoising.ao.disocclusion"] = "0.015625";
+            fixture["denoising.ao.anti-lag"] = "0.5";
+            fixture["denoising.gi.method"] = "raw";
+            fixture["denoising.gi.radius"] = "4";
+            fixture["denoising.gi.quality"] = "balanced";
+            fixture["denoising.gi.resolution"] = "half";
+            fixture["denoising.gi.history"] = "16";
+            fixture["denoising.gi.disocclusion"] = "0.015625";
+            fixture["denoising.gi.anti-lag"] = "0.5";
+            fixture["denoising.shadows.method"] = "raw";
+            fixture["denoising.shadows.radius"] = "4";
+            fixture["denoising.shadows.quality"] = "balanced";
+            fixture["denoising.shadows.resolution"] = "half";
+            fixture["denoising.shadows.disocclusion"] = "0.015625";
+            fixture["denoising.sky.method"] = "raw";
+            fixture["denoising.sky.radius"] = "4";
+            fixture["denoising.sky.quality"] = "balanced";
+            fixture["denoising.sky.resolution"] = "half";
+            fixture["denoising.sky.history"] = "16";
+            fixture["denoising.sky.disocclusion"] = "0.015625";
+            fixture["denoising.sky.anti-lag"] = "0.5";
+            fixture["sky.visibility.output-hit-distance"] = "off";
+            fixture["light.selected.flashlight.output-hit-distance"] = "<unavailable>";
+        }
+        if (version <= "000d")
+            fixture["gpu.adaptive-sync"] = "nvidia-exclusive";
+        if (version >= "000c")
+            return fixture;
+        fixture["anti-aliasing.taa.enabled"] = "on";
+        fixture["anti-aliasing.taa.quality"] = "low";
+        fixture["anti-aliasing.taa.jitter-sequence"] = "rotated-grid-4";
+        fixture["anti-aliasing.taa.previous-depth"] = "nearest-texel";
+        fixture["anti-aliasing.taa.temporal-cost"] = "full-quality";
+        fixture["anti-aliasing.taa.history.frames"] = "-1";
+        fixture["anti-aliasing.taa.history.strength"] = "-1";
+        fixture["anti-aliasing.taa.history.storage"] = "temporal-cost";
+        fixture["anti-aliasing.taa.history.weight"] = "temporal-cost";
+        fixture["anti-aliasing.taa.motion-trust"] = "temporal-cost";
+        fixture["anti-aliasing.taa.rectification-clip"] = "temporal-cost";
+        fixture["anti-aliasing.taa.blend-domain"] = "temporal-cost";
+        fixture["anti-aliasing.taa.preset-sharpening"] = "auto";
+        fixture["anti-aliasing.sharpen.enabled"] = "on";
+        fixture["anti-aliasing.sharpen.strength"] = "0.5";
+        fixture["anti-aliasing.msaa.enabled"] = "on";
+        fixture["anti-aliasing.msaa.samples"] = "2x";
+        if (version <= "000a")
+            fixture["ui.animations"] = "on";
+        if (version <= "0009")
+        {
+            fixture["ui.accent.main"] = "0 0.5 1";
+            fixture["ui.accent.negative"] = "1 0.5 0";
+            fixture["ui.accent.positive"] = "0.5 1 0";
+        }
+        if (version <= "0008")
+        {
+            fixture["representation.bvh.build-preference"] = "balanced";
+            fixture["representation.blas.update-mode"] = "rebuild";
+            fixture["representation.tlas.update-mode"] = "refit";
+        }
+        if (version == "0007")
+            fixture["anti-aliasing.msaa.quality"] = "ultra";
+        return fixture;
+    };
+    const auto requireRejected = [&](std::string_view version,
+                                     const DecodedSettings& fixture,
+                                     std::string_view field)
+    {
+        const auto before = live;
+        const std::size_t writesBefore = writes;
+        const auto rejected = controller.BeginLoadCodeStaged(
+            appendFixture(version, fixture), access);
+        Require(rejected.progress == SettingsSnapshotTransactionProgress::Failed &&
+                rejected.result.failureStage ==
+                    SettingsSnapshotTransactionFailureStage::Preflight &&
+                rejected.result.error.find(field) != std::string::npos &&
+                live == before && writes == writesBefore,
+            "schema " + std::string(version) + " must reject " +
+                std::string(field) + " before mutation: " + rejected.result.error);
+    };
+    for (const std::string_view version : SupportedLegacySettingsSnapshotVersions)
+    {
+        if (version >= "0016")
+        {
+            const auto before = live;
+            for (const char* skin : { "amp", "ogg", "cap" })
+            {
+                auto retained = before;
+                for (const char* threshold : { "5000", "50" })
+                {
+                    retained["pathing.firefly-threshold"] = threshold;
+                    const auto fixture = withRetiredInterface(retained, skin);
+                    step = controller.BeginLoadCodeStaged(appendFixture(version, fixture), access);
+                    Require(step.progress == SettingsSnapshotTransactionProgress::Succeeded && live == retained,
+                        "retired interface must preserve retained values: " + step.result.error);
+                    for (const auto& [name, value] : fixture)
+                    {
+                        if (retained.count(name)) continue;
+                        auto invalid = fixture;
+                        invalid[name] = "invalid";
+                        requireRejected(version, invalid, name);
+                        invalid.erase(name);
+                        requireRejected(version, invalid, name);
+                    }
+                    auto mismatched = fixture;
+                    mismatched["ui.accent.primary"] = std::string_view(skin) == "amp" ? "<unavailable>" : "0 0 0 1";
+                    requireRejected(version, mismatched, "ui.accent.primary");
+                }
+            }
+            step = controller.BeginLoadCodeStaged(appendFixture(version, withRetiredInterface(before)), access);
+            Require(step.progress == SettingsSnapshotTransactionProgress::Succeeded && live == before,
+                "retired interface migration must round-trip");
+            continue;
+        }
+        DecodedSettings valid = buildLegacyFixture(version);
+        for (const std::string_view adaptiveSync : { "off", "vendor-agnostic", "nvidia-exclusive" })
+        {
+            if (version <= "000d")
+                valid["gpu.adaptive-sync"] = adaptiveSync;
+            if (version <= "000a")
+                valid["ui.animations"] = adaptiveSync == "off" ? "off" : "on";
+            auto expected = live;
+            expected["pathing.maximum-bounces"] = "3";
+            expected["pathing.minimum-bounces"] = "1";
+            expected["pathing.firefly-filter"] = "off";
+            expected["pathing.firefly-threshold"] = "5000";
+            step = controller.BeginLoadCodeStaged(appendFixture(version, valid), access);
+            Require(step.progress == SettingsSnapshotTransactionProgress::Succeeded && live == expected,
+                "schema " + std::string(version) +
+                    " must preserve legacy transport and discard its retired fields: " + step.result.error);
+        }
+        for (const auto& [name, value] : valid)
+        {
+            if (live.count(name))
+                continue;
+            DecodedSettings missingRetired = valid;
+            missingRetired.erase(name);
+            requireRejected(version, missingRetired, name);
+            DecodedSettings invalid = valid;
+            invalid[name] = name.find("ui.accent.") == 0u ? "0 1.5 0" : "invalid";
+            requireRejected(version, invalid, name);
+        }
+        DecodedSettings retainedChange = valid;
+        const auto beforeRetainedChange = live;
+        const auto retainedExposure = live.at("sky.exposure");
+        retainedChange["sky.exposure"] = retainedExposure == "1" ? "2" : "1";
+        auto expectedRetainedChange = live;
+        expectedRetainedChange["sky.exposure"] = retainedChange.at("sky.exposure");
+        step = controller.BeginLoadCodeStaged(appendFixture(version, retainedChange), access);
+        Require(step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
+                live == expectedRetainedChange,
+            "legacy migration must apply the retained value and discard only retired fields");
+        step = controller.BeginLoadCodeStaged(appendFixture(version, valid), access);
+        Require(step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
+                live == beforeRetainedChange, "legacy retained value must round-trip");
+        DecodedSettings unexpectedPathing = valid;
+        unexpectedPathing["pathing.maximum-bounces"] = "3";
+        requireRejected(version, unexpectedPathing, "pathing.maximum-bounces");
+        DecodedSettings unexpectedSkin = valid;
+        unexpectedSkin["ui.skin"] = "cap";
+        for (const char* name : { "ui.accent.primary", "ui.accent.font", "ui.accent.primary-background" })
+            unexpectedSkin[name] = "<unavailable>";
+        requireRejected(version, unexpectedSkin, "ui.skin");
+        DecodedSettings unknownLegacy = valid;
+        unknownLegacy["ui.unknown"] = "on";
+        requireRejected(version, unknownLegacy, "ui.unknown");
+    }
+    for (const auto& [quality, samples] :
+         std::array<std::pair<std::string_view, std::string_view>, 4>{{
+            { "low", "16x" }, { "medium", "8x" },
+            { "high", "4x" }, { "ultra", "2x" } }})
+    {
+        DecodedSettings fixture = buildLegacyFixture("0007");
+        fixture["anti-aliasing.msaa.quality"] = quality;
+        fixture["anti-aliasing.msaa.samples"] = samples;
+        step = controller.BeginLoadCodeStaged(appendFixture("0007", fixture), access);
+        Require(step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
+                live.count("anti-aliasing.msaa.samples") == 0u,
+            "schema 0007 must discard both retired MSAA fields: " + step.result.error);
+    }
+    for (const std::string_view invalid : { "true", "false", "ON", "0", "<unavailable>" })
+    {
+        DecodedSettings fixture = buildLegacyFixture("000a");
+        fixture["ui.animations"] = invalid;
+        requireRejected("000a", fixture, "ui.animations");
+    }
+    DecodedSettings retiredAccent = buildLegacyFixture("000a");
+    retiredAccent["ui.accent.main"] = "0 0.5 1";
+    requireRejected("000a", retiredAccent, "ui.accent.main");
+    const DecodedSettings current = ParseSettingsSnapshot(controller.Canonical());
+    for (const auto& [name, value] : buildLegacyFixture("000b"))
+    {
+        if (current.count(name)) continue;
+        auto obsolete = current;
+        obsolete[name] = value;
+        requireRejected(currentVersion, obsolete, name);
+    }
+    DecodedSettings retiredAnimation = current;
+    retiredAnimation["ui.animations"] = "off";
+    requireRejected(currentVersion, retiredAnimation, "ui.animations");
+    DecodedSettings unknownCurrent = current;
+    unknownCurrent["ui.unknown"] = "on";
+    requireRejected(currentVersion, unknownCurrent, "ui.unknown");
+    requireRejected("ffff", current, "registered");
+
+    Require(
+        SetEnvironmentVariableW(
             L"LOCALAPPDATA",
             previousLength > 0u ? previousLocalAppData : nullptr) != FALSE,
-        "load-code fixture must restore LOCALAPPDATA");
+        "test must restore LOCALAPPDATA");
     std::filesystem::remove_all(loadRoot, fileError);
 
     {
@@ -813,7 +912,8 @@ int main()
         conflict << '[' << controller.Code() << "]\ncorrupt\n[/"
                  << controller.Code() << "]\n";
     }
-    Require(!controller.Persist(catalogPath),
+    Require(
+        !controller.Persist(catalogPath),
         "an existing code with a conflicting payload must fail closed");
     std::filesystem::remove(catalogPath, fileError);
 

@@ -15,7 +15,6 @@ namespace uvsr
         bool realisticLens = true;
         bool stationaryWhenIdle = true;
         bool castShadows = true;
-        bool outputHitDistance = false;
         float peakIntensityCandela = 600.f;
         float rangeMeters = 30.f;
         float cameraHorizontalOffsetMeters = 0.17888544f;
@@ -38,7 +37,6 @@ namespace uvsr
             return realisticLens == other.realisticLens &&
                 stationaryWhenIdle == other.stationaryWhenIdle &&
                 castShadows == other.castShadows &&
-                outputHitDistance == other.outputHitDistance &&
                 peakIntensityCandela == other.peakIntensityCandela &&
                 rangeMeters == other.rangeMeters &&
                 cameraHorizontalOffsetMeters ==
@@ -65,43 +63,10 @@ namespace uvsr
         }
     };
 
-    struct FlashlightMotionSettings
-    {
-        bool realisticLens = true;
-        bool stationaryWhenIdle = true;
-        float cameraHorizontalOffsetMeters = 0.f;
-        float cameraVerticalOffsetMeters = 0.f;
-        float angularSizeDegrees = 0.f;
-        float swayDegrees = 0.f;
-        float aimCorrectionSeconds = 0.f;
-
-        [[nodiscard]] constexpr bool operator==(
-            const FlashlightMotionSettings& other) const
-        {
-            return realisticLens == other.realisticLens &&
-                stationaryWhenIdle == other.stationaryWhenIdle &&
-                cameraHorizontalOffsetMeters ==
-                    other.cameraHorizontalOffsetMeters &&
-                cameraVerticalOffsetMeters ==
-                    other.cameraVerticalOffsetMeters &&
-                angularSizeDegrees == other.angularSizeDegrees &&
-                swayDegrees == other.swayDegrees &&
-                aimCorrectionSeconds == other.aimCorrectionSeconds;
-        }
-
-        [[nodiscard]] constexpr bool operator!=(
-            const FlashlightMotionSettings& other) const
-        {
-            return !(*this == other);
-        }
-    };
-
     struct FlashlightLobeSettings
     {
-        float spillIntensityCandela = 0.f;
         float spillInnerConeDegrees = 0.f;
         float spillOuterConeDegrees = 0.f;
-        float hotspotIntensityCandela = 0.f;
         float hotspotInnerConeDegrees = 0.f;
         float hotspotOuterConeDegrees = 0.f;
     };
@@ -146,7 +111,15 @@ namespace uvsr
     inline constexpr float FlashlightMinimumCollisionRadiusMeters = 0.1f;
     inline constexpr float FlashlightMinimumHotspotSize = 0.20f;
     inline constexpr float FlashlightMaximumHotspotSize = 0.75f;
+    inline constexpr float FlashlightMinimumHotspotStrength = 0.f;
     inline constexpr float FlashlightMaximumHotspotStrength = 0.90f;
+    inline constexpr float FlashlightMinimumBeamRoundness = 0.f;
+    inline constexpr float FlashlightMaximumBeamRoundness = 1.f;
+    inline constexpr float FlashlightMinimumEdgeSoftness = 0.f;
+    inline constexpr float FlashlightMaximumEdgeSoftness = 1.f;
+    inline constexpr float FlashlightMinimumLinearColor = 0.f;
+    inline constexpr float FlashlightMaximumLinearColor = 1.f;
+    inline constexpr float FlashlightMinimumSwayDegrees = 0.f;
     inline constexpr float FlashlightMaximumSwayDegrees = 2.f;
     inline constexpr float FlashlightMinimumAimCorrectionSeconds = 0.01f;
     inline constexpr float FlashlightMaximumAimCorrectionSeconds = 0.50f;
@@ -211,124 +184,60 @@ namespace uvsr
     [[nodiscard]] inline FlashlightSettings SanitizeFlashlightSettings(
         const FlashlightSettings& settings)
     {
-        const auto finiteOr =
-            [](float value, float fallback)
-            {
-                return std::isfinite(value) ? value : fallback;
-            };
         FlashlightSettings result = settings;
-        result.peakIntensityCandela = std::clamp(
-            finiteOr(
-                settings.peakIntensityCandela,
-                DefaultFlashlightSettings.peakIntensityCandela),
-            FlashlightMinimumIntensityCandela,
-            FlashlightMaximumIntensityCandela);
-        result.rangeMeters = std::clamp(
-            finiteOr(
-                settings.rangeMeters,
-                DefaultFlashlightSettings.rangeMeters),
-            FlashlightMinimumRangeMeters,
-            FlashlightMaximumRangeMeters);
-        result.cameraHorizontalOffsetMeters = std::clamp(
-            finiteOr(
-                settings.cameraHorizontalOffsetMeters,
-                DefaultFlashlightSettings.cameraHorizontalOffsetMeters),
-            FlashlightMinimumCameraHorizontalOffsetMeters,
-            FlashlightMaximumCameraHorizontalOffsetMeters);
-        result.cameraVerticalOffsetMeters = std::clamp(
-            finiteOr(
-                settings.cameraVerticalOffsetMeters,
-                DefaultFlashlightSettings.cameraVerticalOffsetMeters),
-            FlashlightMinimumCameraVerticalOffsetMeters,
-            FlashlightMaximumCameraVerticalOffsetMeters);
-        result.beamSizeDegrees = std::clamp(
-            finiteOr(
-                settings.beamSizeDegrees,
-                DefaultFlashlightSettings.beamSizeDegrees),
-            FlashlightMinimumBeamSizeDegrees,
-            FlashlightMaximumBeamSizeDegrees);
-        result.angularSizeDegrees = std::clamp(
-            finiteOr(
-                settings.angularSizeDegrees,
-                DefaultFlashlightSettings.angularSizeDegrees),
-            FlashlightMinimumAngularSizeDegrees,
-            FlashlightMaximumAngularSizeDegrees);
-        result.beamRoundness = std::clamp(
-            finiteOr(
-                settings.beamRoundness,
-                DefaultFlashlightSettings.beamRoundness),
-            0.f,
-            1.f);
-        result.edgeSoftness = std::clamp(
-            finiteOr(
-                settings.edgeSoftness,
-                DefaultFlashlightSettings.edgeSoftness),
-            0.f,
-            1.f);
-        result.colorLinearRed = std::clamp(
-            finiteOr(
-                settings.colorLinearRed,
-                DefaultFlashlightSettings.colorLinearRed),
-            0.f,
-            1.f);
-        result.colorLinearGreen = std::clamp(
-            finiteOr(
-                settings.colorLinearGreen,
-                DefaultFlashlightSettings.colorLinearGreen),
-            0.f,
-            1.f);
-        result.colorLinearBlue = std::clamp(
-            finiteOr(
-                settings.colorLinearBlue,
-                DefaultFlashlightSettings.colorLinearBlue),
-            0.f,
-            1.f);
-        result.hotspotSize = std::clamp(
-            finiteOr(
-                settings.hotspotSize,
-                DefaultFlashlightSettings.hotspotSize),
-            FlashlightMinimumHotspotSize,
-            FlashlightMaximumHotspotSize);
-        result.hotspotStrength = std::clamp(
-            finiteOr(
-                settings.hotspotStrength,
-                DefaultFlashlightSettings.hotspotStrength),
-            0.f,
-            FlashlightMaximumHotspotStrength);
-        result.swayDegrees = std::clamp(
-            finiteOr(
-                settings.swayDegrees,
-                DefaultFlashlightSettings.swayDegrees),
-            0.f,
-            FlashlightMaximumSwayDegrees);
-        result.aimCorrectionSeconds = std::clamp(
-            finiteOr(
-                settings.aimCorrectionSeconds,
-                DefaultFlashlightSettings.aimCorrectionSeconds),
-            FlashlightMinimumAimCorrectionSeconds,
-            FlashlightMaximumAimCorrectionSeconds);
+        const auto clamp = [&](float FlashlightSettings::* field, float minimum, float maximum)
+        {
+            const float value = settings.*field;
+            result.*field = std::clamp(std::isfinite(value)
+                ? value : DefaultFlashlightSettings.*field, minimum, maximum);
+        };
+        clamp(&FlashlightSettings::peakIntensityCandela,
+            FlashlightMinimumIntensityCandela, FlashlightMaximumIntensityCandela);
+        clamp(&FlashlightSettings::rangeMeters,
+            FlashlightMinimumRangeMeters, FlashlightMaximumRangeMeters);
+        clamp(&FlashlightSettings::cameraHorizontalOffsetMeters,
+            FlashlightMinimumCameraHorizontalOffsetMeters, FlashlightMaximumCameraHorizontalOffsetMeters);
+        clamp(&FlashlightSettings::cameraVerticalOffsetMeters,
+            FlashlightMinimumCameraVerticalOffsetMeters, FlashlightMaximumCameraVerticalOffsetMeters);
+        clamp(&FlashlightSettings::beamSizeDegrees,
+            FlashlightMinimumBeamSizeDegrees, FlashlightMaximumBeamSizeDegrees);
+        clamp(&FlashlightSettings::angularSizeDegrees,
+            FlashlightMinimumAngularSizeDegrees, FlashlightMaximumAngularSizeDegrees);
+        clamp(&FlashlightSettings::beamRoundness,
+            FlashlightMinimumBeamRoundness, FlashlightMaximumBeamRoundness);
+        clamp(&FlashlightSettings::edgeSoftness,
+            FlashlightMinimumEdgeSoftness, FlashlightMaximumEdgeSoftness);
+        clamp(&FlashlightSettings::colorLinearRed,
+            FlashlightMinimumLinearColor, FlashlightMaximumLinearColor);
+        clamp(&FlashlightSettings::colorLinearGreen,
+            FlashlightMinimumLinearColor, FlashlightMaximumLinearColor);
+        clamp(&FlashlightSettings::colorLinearBlue,
+            FlashlightMinimumLinearColor, FlashlightMaximumLinearColor);
+        clamp(&FlashlightSettings::hotspotSize,
+            FlashlightMinimumHotspotSize, FlashlightMaximumHotspotSize);
+        clamp(&FlashlightSettings::hotspotStrength,
+            FlashlightMinimumHotspotStrength, FlashlightMaximumHotspotStrength);
+        clamp(&FlashlightSettings::swayDegrees,
+            FlashlightMinimumSwayDegrees, FlashlightMaximumSwayDegrees);
+        clamp(&FlashlightSettings::aimCorrectionSeconds,
+            FlashlightMinimumAimCorrectionSeconds, FlashlightMaximumAimCorrectionSeconds);
         return result;
     }
 
-    [[nodiscard]] inline FlashlightMotionSettings
-        ResolveFlashlightMotionSettings(
-            const FlashlightSettings& untrustedSettings)
+    [[nodiscard]] inline constexpr bool SameFlashlightMotionSettings(
+        const FlashlightSettings& left, const FlashlightSettings& right)
     {
-        const FlashlightSettings settings =
-            SanitizeFlashlightSettings(untrustedSettings);
-        return {
-            settings.realisticLens,
-            settings.stationaryWhenIdle,
-            settings.cameraHorizontalOffsetMeters,
-            settings.cameraVerticalOffsetMeters,
-            settings.angularSizeDegrees,
-            settings.swayDegrees,
-            settings.aimCorrectionSeconds
-        };
+        return left.realisticLens == right.realisticLens &&
+            left.stationaryWhenIdle == right.stationaryWhenIdle &&
+            left.cameraHorizontalOffsetMeters == right.cameraHorizontalOffsetMeters &&
+            left.cameraVerticalOffsetMeters == right.cameraVerticalOffsetMeters &&
+            left.angularSizeDegrees == right.angularSizeDegrees &&
+            left.swayDegrees == right.swayDegrees &&
+            left.aimCorrectionSeconds == right.aimCorrectionSeconds;
     }
 
     [[nodiscard]] inline constexpr bool ShouldAdvanceFlashlightMotion(
-        const FlashlightMotionSettings& settings,
+        const FlashlightSettings& settings,
         bool poseValid,
         bool cameraPoseChanged,
         bool motionSettingsChanged)
@@ -353,18 +262,8 @@ namespace uvsr
         result.spillInnerConeDegrees =
             settings.beamSizeDegrees * spillInnerRatio;
         if (!settings.realisticLens)
-        {
-            result.spillIntensityCandela =
-                settings.peakIntensityCandela;
             return result;
-        }
 
-        result.spillIntensityCandela =
-            settings.peakIntensityCandela *
-            (1.f - settings.hotspotStrength);
-        result.hotspotIntensityCandela =
-            settings.peakIntensityCandela *
-            settings.hotspotStrength;
         result.hotspotOuterConeDegrees =
             settings.beamSizeDegrees * settings.hotspotSize;
         const float hotspotInnerRatio =
@@ -381,8 +280,8 @@ namespace uvsr
             std::isfinite(beamRoundness)
                 ? beamRoundness
                 : DefaultFlashlightSettings.beamRoundness,
-            0.f,
-            1.f);
+            FlashlightMinimumBeamRoundness,
+            FlashlightMaximumBeamRoundness);
         return std::exp2(1.f + 3.f * (1.f - beamRoundness));
     }
 
@@ -541,8 +440,8 @@ namespace uvsr
         amplitudeDegrees = std::clamp(
             std::isfinite(amplitudeDegrees)
                 ? amplitudeDegrees
-                : 0.f,
-            0.f,
+                : FlashlightMinimumSwayDegrees,
+            FlashlightMinimumSwayDegrees,
             FlashlightMaximumSwayDegrees);
         return {
             amplitudeDegrees * (

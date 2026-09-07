@@ -1,4 +1,70 @@
-#include "uvsr_internal.h"
+#include "uvsr_scene_viewer.h"
+#include "uvsr_renderer_scene.h"
+#include "uvsr_renderer_lighting.h"
+#include "uvsr_renderer_frame.h"
+#include "uvsr_runtime.h"
+#include "uvsr_application.h"
+#include "renderer_log.h"
+#include <donut/app/DeviceManager.h>
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <utility>
+#include "pbr_material.h"
+#include "scene_loading.h"
+#include "scene_light_names.h"
+#include <donut/engine/TextureCache.h>
+#include <donut/engine/ThreadPool.h>
+#include <donut/app/UserInterfaceUtils.h>
+#include <thread>
+#include <exception>
+
+using namespace donut;
+using namespace donut::math;
+using namespace donut::app;
+using namespace donut::vfs;
+using namespace donut::engine;
+using namespace donut::render;
+using namespace uvsr;
+
+namespace
+{
+constexpr float DefaultSunIrradiance = 8.f;
+constexpr float DefaultSunAngularSizeDegrees = 0.2f;
+void ApplyPbrMaterialParameters(Material& material, float ior = 1.5f)
+{
+    PbrMaterialParameters parameters;
+    parameters.baseColor = material.baseOrDiffuseColor;
+    parameters.metalness = material.metalness;
+    parameters.perceptualRoughness = material.roughness;
+    parameters.ior = ior;
+    parameters.emissive = material.emissiveColor * std::max(material.emissiveIntensity, 0.f);
+    parameters.opacity = material.opacity;
+    if (material.enableSubsurfaceScattering)
+    {
+        parameters.featureMask |= uint8_t(PbrMaterialFeature::Translucency);
+        parameters.featureMask |= uint8_t(PbrMaterialFeature::Scattering);
+    }
+    if (material.transmissionFactor > 0.f)
+        parameters.featureMask |= uint8_t(PbrMaterialFeature::Refraction);
+
+    ValidatePbrMaterialParameters(parameters);
+    material.baseOrDiffuseColor = parameters.baseColor;
+    material.metalness = parameters.metalness;
+    material.roughness = parameters.perceptualRoughness;
+    material.emissiveColor = parameters.emissive;
+    material.emissiveIntensity = 1.f;
+    material.opacity = parameters.opacity;
+
+    // Donut does not consume specularColor in its metallic-roughness workflow,
+    // so UVSR uses that existing uploaded field for the dielectric F0 scalar.
+    if (!material.useSpecularGlossModel)
+        material.specularColor = float3(PbrIorToF0(parameters.ior));
+
+    material.dirty = true;
+}
+
+}
 
 auto UvsrSceneViewer::ApplySceneInitialCamera(const SceneInitialCamera& preset) -> void {
         const float3 position(
@@ -24,50 +90,50 @@ auto UvsrSceneViewer::ApplySceneInitialCamera(const SceneInitialCamera& preset) 
     }
 
 auto UvsrSceneViewer::GetAvailableScenes() const -> const std::vector<SceneCatalogEntry>& {
-        return m_SceneCatalog;
+        return m_scene->sceneCatalog;
     }
 
 auto UvsrSceneViewer::GetSceneDir() const -> std::filesystem::path const& {
-        return m_SceneDir;
+        return m_scene->sceneDir;
     }
 
 auto UvsrSceneViewer::GetCurrentSceneName() const -> std::string {
-        return m_CurrentSceneName;
+        return m_scene->currentSceneName;
     }
 
 auto UvsrSceneViewer::GetCurrentSceneDisplayName() const -> std::string {
-        if (const SceneCatalogEntry* entry = FindSceneCatalogEntry(m_SceneCatalog, m_CurrentSceneName))
+        if (const SceneCatalogEntry* entry = FindSceneCatalogEntry(m_scene->sceneCatalog, m_scene->currentSceneName))
             return entry->DisplayName;
 
         // Explicit command-line paths are allowed even when they are not in
         // the picker. Preserve the old in-tree relative-path presentation for
         // those scenes and show an external path verbatim.
-        return MakeSceneDisplayName(m_SceneDir, m_CurrentSceneName);
+        return MakeSceneDisplayName(m_scene->sceneDir, m_scene->currentSceneName);
     }
 
 auto UvsrSceneViewer::IsSceneLoading() const -> bool {
-        return m_SceneRetirementPending ||
-            m_SceneLoadWorker.GetState() !=
+        return m_scene->sceneRetirementPending ||
+            m_scene->sceneLoadWorker.GetState() !=
                 RendererSceneLoadWorkerState::Idle;
     }
 
 auto UvsrSceneViewer::IsSceneLoaded() const -> bool {
-        return m_RendererSceneLoaded;
+        return m_scene->rendererSceneLoaded;
     }
 
 auto UvsrSceneViewer::StartPendingSceneLoad() -> void {
         std::shared_ptr<IFileSystem> fileSystem =
-            std::move(m_PendingSceneFileSystem);
+            std::move(m_scene->pendingSceneFileSystem);
         std::filesystem::path fileName =
-            std::move(m_PendingSceneFileName);
-        m_PendingSceneFileSystem.reset();
-        m_PendingSceneFileName.clear();
+            std::move(m_scene->pendingSceneFileName);
+        m_scene->pendingSceneFileSystem.reset();
+        m_scene->pendingSceneFileName.clear();
         if (!fileSystem || fileName.empty())
         {
             throw std::runtime_error(
                 "UVSR scene loader received an empty pending task");
         }
-        if (!m_SceneLoadWorker.Start(
+        if (!m_scene->sceneLoadWorker.Start(
                 [this,
                  fileSystem = std::move(fileSystem),
                  fileName = std::move(fileName)]() mutable
@@ -95,18 +161,18 @@ auto UvsrSceneViewer::BeginLoadingScene(
                 "UVSR cannot replace an active scene-load task");
         }
 
-        m_PendingSceneFileSystem = std::move(fileSystem);
-        m_PendingSceneFileName = sceneFileName;
-        m_RendererSceneLoaded = false;
-        m_SceneLoadFailure.clear();
-        if (m_HasRendererSceneResources)
+        m_scene->pendingSceneFileSystem = std::move(fileSystem);
+        m_scene->pendingSceneFileName = sceneFileName;
+        m_scene->rendererSceneLoaded = false;
+        m_scene->sceneLoadFailure.clear();
+        if (m_scene->hasRendererSceneResources)
         {
-            if (!m_SceneRetirement.Begin())
+            if (!m_scene->sceneRetirement.Begin())
             {
                 throw std::runtime_error(
                     "UVSR could not arm scene GPU retirement");
             }
-            m_SceneRetirementPending = true;
+            m_scene->sceneRetirementPending = true;
             return;
         }
 
@@ -117,87 +183,83 @@ auto UvsrSceneViewer::BeginLoadingScene(
     }
 
 auto UvsrSceneViewer::SetCurrentSceneName(const std::string& sceneName) -> void {
-        const SceneCatalogEntry* catalogEntry = FindSceneCatalogEntry(m_SceneCatalog, sceneName);
+        const SceneCatalogEntry* catalogEntry = FindSceneCatalogEntry(m_scene->sceneCatalog, sceneName);
         const std::string resolvedSceneName = catalogEntry ? catalogEntry->FileName : sceneName;
-        if (m_CurrentSceneName == resolvedSceneName)
+        if (m_scene->currentSceneName == resolvedSceneName)
             return;
 
-		m_CurrentSceneName = resolvedSceneName;
+		m_scene->currentSceneName = resolvedSceneName;
 
-		BeginLoadingScene(m_NativeFs, m_CurrentSceneName);
+		BeginLoadingScene(m_scene->nativeFs, m_scene->currentSceneName);
     }
 
 auto UvsrSceneViewer::RetryCurrentSceneLoad() -> void {
-        if (IsSceneBusy() || m_CurrentSceneName.empty())
+        if (IsSceneBusy() || m_scene->currentSceneName.empty())
             return;
-        BeginLoadingScene(m_NativeFs, m_CurrentSceneName);
+        BeginLoadingScene(m_scene->nativeFs, m_scene->currentSceneName);
     }
 
 auto UvsrSceneViewer::HasSceneLoadFailure() const noexcept -> bool {
-        return !m_SceneLoadFailure.empty();
+        return !m_scene->sceneLoadFailure.empty();
     }
 
 auto UvsrSceneViewer::GetSceneLoadFailure() const noexcept -> const std::string& {
-        return m_SceneLoadFailure;
+        return m_scene->sceneLoadFailure;
     }
 
 auto UvsrSceneViewer::SceneUnloading() -> void {
-        m_SceneFinishedLoading = false;
-        m_SceneGpuUploadPending = false;
-        m_ScenePreparationStage = ScenePreparationStage::Complete;
-        m_RenderPassPreparationStage =
+        m_scene->sceneFinishedLoading = false;
+        m_scene->sceneGpuUploadPending = false;
+        m_scene->scenePreparationStage = ScenePreparationStage::Complete;
+        m_frame->renderPassPreparationStage =
             RenderPassPreparationStage::Idle;
-        if (m_PbrDeferredLightingPass) m_PbrDeferredLightingPass->ResetBindingCache();
-        if (m_DirectionalRayVisibilityPass)
-            m_DirectionalRayVisibilityPass->ResetBindingCache();
-        if (m_RayTracedFlashlightShadowPass)
-            m_RayTracedFlashlightShadowPass->ResetBindingCache();
-        if (m_RayTracedSkyVisibilityPass)
-            m_RayTracedSkyVisibilityPass->ResetBindingCache();
-        if (m_WorldSpaceRepresentation)
-            m_WorldSpaceRepresentation->Reset();
-        if (m_PathTracingPass)
+        if (m_lighting->pbrDeferredLightingPass) m_lighting->pbrDeferredLightingPass->ResetBindingCache();
+        if (m_lighting->directionalRayVisibilityPass)
+            m_lighting->directionalRayVisibilityPass->ResetBindingCache();
+        if (m_lighting->rayTracedFlashlightShadowPass)
+            m_lighting->rayTracedFlashlightShadowPass->ResetBindingCache();
+        if (m_lighting->rayTracedSkyVisibilityPass)
+            m_lighting->rayTracedSkyVisibilityPass->ResetBindingCache();
+        if (m_scene->worldSpaceRepresentation)
+            m_scene->worldSpaceRepresentation->Reset();
+        if (m_lighting->pathTracingPass)
         {
-            m_PathTracingPass->ResetHistory();
-            m_PathTracingPass->ResetBindingCache();
+            m_lighting->pathTracingPass->ResetHistory();
+            m_lighting->pathTracingPass->ResetBindingCache();
         }
-        if (m_LightingAccumulationPass)
+        if (m_lighting->lightingAccumulationPass)
         {
-            m_LightingAccumulationPass->ResetHistory();
-            m_LightingAccumulationPass->ResetBindingCache();
+            m_lighting->lightingAccumulationPass->ResetHistory();
+            m_lighting->lightingAccumulationPass->ResetBindingCache();
         }
-        if (m_ScreenSpaceVisibilityPass)
-            m_ScreenSpaceVisibilityPass->ResetBindingCache();
-        if (m_AutoExposurePass)
-            m_AutoExposurePass->Reset();
-        ResetAntiAliasingState();
-        if (m_GBufferGeometryPass)
-            m_GBufferGeometryPass->ResetBindingCache();
-        if (m_MaterialIdGeometryPass)
-            m_MaterialIdGeometryPass->ResetBindingCache();
-        m_BindingCache.Clear();
-        m_Flashlight.reset();
-        m_FlashlightNode.reset();
-        m_SceneLightsWithoutFlashlight.clear();
-        m_EditableLights.clear();
+        if (m_frame->autoExposurePass)
+            m_frame->autoExposurePass->Reset();
+        if (m_frame->gBufferGeometryPass)
+            m_frame->gBufferGeometryPass->ResetBindingCache();
+        if (m_frame->materialIdGeometryPass)
+            m_frame->materialIdGeometryPass->ResetBindingCache();
+        m_frame->bindingCache.Clear();
+        m_lighting->flashlight.reset();
+        m_lighting->flashlightNode.reset();
+        m_lighting->sceneLightsWithoutFlashlight.clear();
+        m_lighting->editableLights.clear();
         ResetFlashlightMotion();
-        m_SunLight.reset();
+        m_lighting->sunLight.reset();
         m_ui.SelectedMaterial = nullptr;
         m_ui.SelectedNode = nullptr;
         m_ui.ShowMaterialDrawer = false;
-        m_MaterialPickPurpose = MaterialPickPurpose::None;
-        m_MaterialPickScene = nullptr;
-        m_OriginalMaterials.clear();
-        m_PreviousView.reset();
+        m_frame->materialPickPurpose = MaterialPickPurpose::None;
+        m_frame->materialPickScene = nullptr;
+        m_scene->originalMaterials.clear();
         // Move the large vectors without freeing them here. The next loader
         // worker releases this retired world before allocating its replacement,
         // keeping hundreds of megabytes of allocator work off the render thread.
-        m_RetiredCameraCollisionWorld.emplace(
-            std::move(m_CameraCollisionWorld));
-        m_CameraCollisionWorld = CameraCollisionWorld{};
-        m_PendingSceneCpuState.reset();
-        m_SubmittedMainViewTriangles = 0u;
-        m_Scene.reset();
+        m_scene->retiredCameraCollisionWorld.emplace(
+            std::move(m_scene->cameraCollisionWorld));
+        m_scene->cameraCollisionWorld = CameraCollisionWorld{};
+        m_scene->pendingSceneCpuState.reset();
+        m_frame->submittedMainViewTriangles = 0u;
+        m_scene->world.reset();
 
     }
 
@@ -207,11 +269,11 @@ auto UvsrSceneViewer::LoadScene(std::shared_ptr<IFileSystem> fs, const std::file
         // SceneUnloading transfers the previous BVH here so its large vector
         // allocations are released by the loader rather than by a present
         // frame. This also lowers the peak before the replacement is built.
-        m_RetiredCameraCollisionWorld.reset();
-        m_PendingSceneCpuState.reset();
+        m_scene->retiredCameraCollisionWorld.reset();
+        m_scene->pendingSceneCpuState.reset();
 
         std::unique_ptr<engine::Scene> scene = std::make_unique<engine::Scene>(GetDevice(),
-            *m_ShaderFactory, fs, m_TextureCache, m_DescriptorTable, nullptr);
+            *m_frame->shaderFactory, fs, m_TextureCache, m_scene->descriptorTable, nullptr);
 
         const auto startTime = high_resolution_clock::now();
         const uint32_t workerCount = ResolveSceneLoadWorkerCount(
@@ -243,11 +305,11 @@ auto UvsrSceneViewer::LoadScene(std::shared_ptr<IFileSystem> fs, const std::file
                 *scene,
                 prepared.collisionRadius);
 
-            if (m_ImageBasedLightingEnvironment &&
-                !m_ImageBasedLightingEnvironment->GetRadianceTexture())
+            if (m_lighting->imageBasedLightingEnvironment &&
+                !m_lighting->imageBasedLightingEnvironment->GetRadianceTexture())
             {
                 prepared.environmentRadiance =
-                    m_ImageBasedLightingEnvironment->PrepareRadiance(
+                    m_lighting->imageBasedLightingEnvironment->PrepareRadiance(
                         m_ui.EnvironmentSource,
                         m_ui.WhiteWorld != WhiteWorldMode::Off);
             }
@@ -255,8 +317,8 @@ auto UvsrSceneViewer::LoadScene(std::shared_ptr<IFileSystem> fs, const std::file
             // ApplicationBase publishes the LoadScene return value through an
             // atomic completion flag. Write the complete handoff before that
             // release so SceneLoaded never observes a partial scene state.
-            m_PendingSceneCpuState.emplace(std::move(prepared));
-            m_Scene = std::move(scene);
+            m_scene->pendingSceneCpuState.emplace(std::move(prepared));
+            m_scene->world = std::move(scene);
 
             const auto endTime = high_resolution_clock::now();
             const auto importDuration = duration_cast<milliseconds>(
@@ -271,12 +333,12 @@ auto UvsrSceneViewer::LoadScene(std::shared_ptr<IFileSystem> fs, const std::file
             return true;
         }
 
-        m_PendingSceneCpuState.reset();
+        m_scene->pendingSceneCpuState.reset();
         return false;
     }
 
 auto UvsrSceneViewer::SceneLoaded() -> void {
-        if (!m_PendingSceneCpuState || !m_Scene)
+        if (!m_scene->pendingSceneCpuState || !m_scene->world)
         {
             throw std::runtime_error(
                 "Scene worker completed without a prepared CPU handoff");
@@ -291,104 +353,103 @@ auto UvsrSceneViewer::SceneLoaded() -> void {
                 *m_CommonPasses, 0.f);
             m_TextureCache->LoadingFinished();
         }
-        m_RendererSceneLoaded = true;
-        m_HasRendererSceneResources = true;
-        m_SceneLoadFailure.clear();
+        m_scene->rendererSceneLoaded = true;
+        m_scene->hasRendererSceneResources = true;
+        m_scene->sceneLoadFailure.clear();
 
-        m_CameraCollisionWorld = std::move(
-            m_PendingSceneCpuState->collisionWorld);
+        m_scene->cameraCollisionWorld = std::move(
+            m_scene->pendingSceneCpuState->collisionWorld);
         ResetFlashlightMotion();
-        m_SceneDiagonal = m_PendingSceneCpuState->sceneDiagonal;
-        m_CameraCollisionRadius =
-            m_PendingSceneCpuState->collisionRadius;
-        if (m_ImageBasedLightingEnvironment &&
-            m_PendingSceneCpuState->environmentRadiance)
+        m_scene->sceneDiagonal = m_scene->pendingSceneCpuState->sceneDiagonal;
+        m_scene->cameraCollisionRadius =
+            m_scene->pendingSceneCpuState->collisionRadius;
+        if (m_lighting->imageBasedLightingEnvironment &&
+            m_scene->pendingSceneCpuState->environmentRadiance)
         {
-            m_ImageBasedLightingEnvironment->StagePreparedRadiance(
+            m_lighting->imageBasedLightingEnvironment->StagePreparedRadiance(
                 std::move(
-                    *m_PendingSceneCpuState->environmentRadiance));
+                    *m_scene->pendingSceneCpuState->environmentRadiance));
         }
-        m_PendingSceneCpuState.reset();
+        m_scene->pendingSceneCpuState.reset();
 
-        m_Scene->BeginLoadingBuffers();
-        m_SceneGpuUploadPending = true;
-        m_ScenePreparationStage = ScenePreparationStage::MeshUpload;
-        m_SceneGpuUploadStart =
+        m_scene->world->BeginLoadingBuffers();
+        m_scene->sceneGpuUploadPending = true;
+        m_scene->scenePreparationStage = ScenePreparationStage::MeshUpload;
+        m_scene->sceneGpuUploadStart =
             std::chrono::high_resolution_clock::now();
     }
 
 auto UvsrSceneViewer::CompleteSceneActivation() -> void {
 
         InvalidateLightingAccumulationHistory();
-        m_HasLightingHistorySignatures = false;
-        m_LightingHistoryChangedByViewOnly = false;
-        if (m_PathTracingPass)
-            m_PathTracingPass->ResetHistory();
-        if (m_LightingAccumulationPass)
-            m_LightingAccumulationPass->ResetHistory();
+        m_lighting->hasLightingHistorySignatures = false;
+        if (m_lighting->pathTracingPass)
+            m_lighting->pathTracingPass->ResetHistory();
+        if (m_lighting->lightingAccumulationPass)
+            m_lighting->lightingAccumulationPass->ResetHistory();
 
-        m_OriginalMaterials.clear();
-        for (const auto& material : m_Scene->GetSceneGraph()->GetMaterials())
-            m_OriginalMaterials.emplace_back(material, *material);
+        m_scene->originalMaterials.clear();
+        for (const auto& material : m_scene->world->GetSceneGraph()->GetMaterials())
+            m_scene->originalMaterials.emplace_back(material, *material);
         SetWhiteWorldMode(m_ui.WhiteWorld);
 
-        for (auto light : m_Scene->GetSceneGraph()->GetLights())
+        for (auto light : m_scene->world->GetSceneGraph()->GetLights())
         {
             const std::string normalizedLightName =
                 NormalizeSceneLightName(light->GetName());
             if (normalizedLightName != light->GetName())
                 light->SetName(normalizedLightName);
 
-            if (!m_SunLight &&
+            if (!m_lighting->sunLight &&
                 light->GetLightType() == UVSR_LIGHT_TYPE_DIRECTIONAL)
             {
-                m_SunLight = std::static_pointer_cast<DirectionalLight>(light);
-                m_SunLight->irradiance = DefaultSunIrradiance;
-                m_SunLight->angularSize = DefaultSunAngularSizeDegrees;
+                m_lighting->sunLight = std::static_pointer_cast<DirectionalLight>(light);
+                m_lighting->sunLight->irradiance = DefaultSunIrradiance;
+                m_lighting->sunLight->angularSize = DefaultSunAngularSizeDegrees;
             }
         }
 
-        if (!m_SunLight)
+        if (!m_lighting->sunLight)
         {
-            m_SunLight = std::make_shared<DirectionalLight>();
-            m_SunLight->angularSize = DefaultSunAngularSizeDegrees;
-            m_SunLight->irradiance = DefaultSunIrradiance;
+            m_lighting->sunLight = std::make_shared<DirectionalLight>();
+            m_lighting->sunLight->angularSize = DefaultSunAngularSizeDegrees;
+            m_lighting->sunLight->irradiance = DefaultSunIrradiance;
 
             auto node = std::make_shared<SceneGraphNode>();
-            node->SetLeaf(m_SunLight);
-            m_SunLight->SetDirection(dm::double3(0.1, -0.9, 0.1));
-            m_SunLight->SetName("sun_1");
-            m_Scene->GetSceneGraph()->Attach(m_Scene->GetSceneGraph()->GetRootNode(), node);
+            node->SetLeaf(m_lighting->sunLight);
+            m_lighting->sunLight->SetDirection(dm::double3(0.1, -0.9, 0.1));
+            m_lighting->sunLight->SetName("sun_1");
+            m_scene->world->GetSceneGraph()->Attach(m_scene->world->GetSceneGraph()->GetRootNode(), node);
         }
 
         AttachFlashlightToScene();
-        m_Scene->RefreshSceneGraph(GetFrameIndex());
-        m_SceneLightsWithoutFlashlight.clear();
-        m_EditableLights.clear();
-        if (m_Flashlight)
-            m_EditableLights.push_back(m_Flashlight);
+        m_scene->world->RefreshSceneGraph(GetFrameIndex());
+        m_lighting->sceneLightsWithoutFlashlight.clear();
+        m_lighting->editableLights.clear();
+        if (m_lighting->flashlight)
+            m_lighting->editableLights.push_back(m_lighting->flashlight);
         for (const auto& light :
-            m_Scene->GetSceneGraph()->GetLights())
+            m_scene->world->GetSceneGraph()->GetLights())
         {
-            if (light && light != m_Flashlight)
+            if (light && light != m_lighting->flashlight)
             {
-                m_SceneLightsWithoutFlashlight.push_back(light);
-                m_EditableLights.push_back(light);
+                m_lighting->sceneLightsWithoutFlashlight.push_back(light);
+                m_lighting->editableLights.push_back(light);
             }
         }
 
         const SceneCatalogEntry* currentCatalogEntry =
-            FindSceneCatalogEntry(m_SceneCatalog, m_CurrentSceneName);
+            FindSceneCatalogEntry(m_scene->sceneCatalog, m_scene->currentSceneName);
         const SceneInitialCamera* sceneInitialCamera =
             currentCatalogEntry && currentCatalogEntry->InitialCamera
             ? &*currentCatalogEntry->InitialCamera
             : nullptr;
         if (sceneInitialCamera)
-            m_CameraVerticalFov = sceneInitialCamera->VerticalFovDegrees;
+            m_scene->cameraVerticalFov = sceneInitialCamera->VerticalFovDegrees;
         else
-            m_CameraVerticalFov = 60.f;
+            m_scene->cameraVerticalFov = 60.f;
 
-        std::shared_ptr<SceneGraphNode> cameraTarget = m_Scene->GetSceneGraph()->GetRootNode();
+        std::shared_ptr<SceneGraphNode> cameraTarget = m_scene->world->GetSceneGraph()->GetRootNode();
         // Prefer the compact asteroid core when present so the initial view
         // includes the full rocky platform instead of tightly framing only the
         // temple. Older Jungle Ruins exports retain the pyramid marker fallback.
@@ -407,7 +468,7 @@ auto UvsrSceneViewer::CompleteSceneActivation() -> void {
             ApplySceneInitialCamera(*sceneInitialCamera);
             uvsr::log::info(
                 "Applied descriptor initial camera to '%s' at %.3f, %.3f, %.3f and %.1f degrees vertical FOV",
-                m_CurrentSceneName.c_str(),
+                m_scene->currentSceneName.c_str(),
                 sceneInitialCamera->Position[0],
                 sceneInitialCamera->Position[1],
                 sceneInitialCamera->Position[2],
@@ -418,35 +479,31 @@ auto UvsrSceneViewer::CompleteSceneActivation() -> void {
 
         if (!sceneInitialCamera)
         {
-            const float3 initialPosition = m_ThirdPersonCamera.GetPosition();
-            const float3 initialDirection = m_ThirdPersonCamera.GetDir();
-            const float3 initialUp = m_ThirdPersonCamera.GetUp();
-            m_FirstPersonCamera.LookTo(initialPosition, initialDirection, initialUp);
-            m_PivotCamera.LookTo(initialPosition, initialDirection, initialUp);
-            m_StaticCamera.LookTo(initialPosition, initialDirection, initialUp);
+            const float3 initialPosition = m_scene->thirdPersonCamera.GetPosition();
+            const float3 initialDirection = m_scene->thirdPersonCamera.GetDir();
+            const float3 initialUp = m_scene->thirdPersonCamera.GetUp();
+            m_scene->firstPersonCamera.LookTo(initialPosition, initialDirection, initialUp);
+            m_scene->pivotCamera.LookTo(initialPosition, initialDirection, initialUp);
+            m_scene->staticCamera.LookTo(initialPosition, initialDirection, initialUp);
         }
 
-        m_SceneFinishedLoading = true;
+        m_scene->sceneFinishedLoading = true;
 
     }
 
 auto UvsrSceneViewer::SetWhiteWorldMode(WhiteWorldMode mode) -> void {
-        const bool modeChanged = m_ui.WhiteWorld != mode;
         const bool shaderModeChanged = (m_ui.WhiteWorld == WhiteWorldMode::Off) !=
             (mode == WhiteWorldMode::Off);
         m_ui.WhiteWorld = mode;
-
-        if (modeChanged)
-            ResetImageBasedLightingHistory();
 
         const bool enabled = mode != WhiteWorldMode::Off;
         const bool preserveDetailMaps = mode == WhiteWorldMode::PreserveDetail;
         const bool preserveLighting = mode == WhiteWorldMode::PreserveLighting;
 
-        if (!m_Scene)
+        if (!m_scene->world)
             return;
 
-        for (auto& [material, original] : m_OriginalMaterials)
+        for (auto& [material, original] : m_scene->originalMaterials)
         {
             *material = original;
 
@@ -500,7 +557,7 @@ auto UvsrSceneViewer::SetWhiteWorldMode(WhiteWorldMode mode) -> void {
             ApplyPbrMaterialParameters(*material);
         }
 
-        m_Scene->GetSceneGraph()->GetRootNode()->InvalidateContent();
+        m_scene->world->GetSceneGraph()->GetRootNode()->InvalidateContent();
         if (shaderModeChanged)
             m_ui.ShaderReloadRequested = true;
     }
@@ -538,7 +595,7 @@ auto UvsrSceneViewer::PointThirdPersonCameraAt(
             return;
 
         float radius = length(bounds.diagonal()) * 0.5f;
-        float distance = radius * distanceScale / sinf(dm::radians(m_CameraVerticalFov * 0.5f));
+        float distance = radius * distanceScale / sinf(dm::radians(m_scene->cameraVerticalFov * 0.5f));
         if (!std::isfinite(distance) || distance <= 0.f)
             return;
 
@@ -552,21 +609,21 @@ auto UvsrSceneViewer::PointThirdPersonCameraAt(
             framingCamera.SetTargetPosition(bounds.center());
             framingCamera.SetDistance(distance);
             framingCamera.Animate(0.f);
-            m_ThirdPersonCamera.LookTo(
+            m_scene->thirdPersonCamera.LookTo(
                 framingCamera.GetPosition(),
                 framingCamera.GetDir(),
                 framingCamera.GetUp());
         }
         else
         {
-            const float3 direction = m_ThirdPersonCamera.GetDir();
-            const float3 up = m_ThirdPersonCamera.GetUp();
-            m_ThirdPersonCamera.LookTo(
+            const float3 direction = m_scene->thirdPersonCamera.GetDir();
+            const float3 up = m_scene->thirdPersonCamera.GetUp();
+            m_scene->thirdPersonCamera.LookTo(
                 bounds.center() - direction * distance,
                 direction,
                 up);
         }
-        m_ThirdPersonCamera.ResetZoomReferenceDistance(distance);
+        m_scene->thirdPersonCamera.ResetZoomReferenceDistance(distance);
         // Framing a picked node is another camera teleport. Start the mounted
         // emitter at this new pose instead of sweeping it across the scene.
         ResetFlashlightMotion();
@@ -577,56 +634,56 @@ auto UvsrSceneViewer::GetTextureCache() -> std::shared_ptr<TextureCache> {
     }
 
 auto UvsrSceneViewer::IsSceneBusy() const -> bool {
-        return IsSceneLoading() || m_SceneGpuUploadPending;
+        return IsSceneLoading() || m_scene->sceneGpuUploadPending;
     }
 
 auto UvsrSceneViewer::IsSceneGpuUploadPending() const -> bool {
-        return m_SceneGpuUploadPending;
+        return m_scene->sceneGpuUploadPending;
     }
 
 auto UvsrSceneViewer::GetScene() -> std::shared_ptr<Scene> {
-        return m_Scene;
+        return m_scene->world;
     }
 
 auto UvsrSceneViewer::SetMaterialDrawerVisible(bool visible) -> void {
         const bool centerPickPending =
-            m_MaterialPickPurpose ==
+            m_frame->materialPickPurpose ==
                 MaterialPickPurpose::RefreshMaterialDrawerSelection;
         if (!visible)
         {
             m_ui.ShowMaterialDrawer = false;
             if (centerPickPending)
             {
-                m_MaterialPickPurpose = MaterialPickPurpose::None;
-                m_MaterialPickScene = nullptr;
+                m_frame->materialPickPurpose = MaterialPickPurpose::None;
+                m_frame->materialPickScene = nullptr;
             }
             return;
         }
 
         m_ui.ShowUI = true;
         m_ui.ShowMaterialDrawer = true;
-        if (!m_Scene || IsSceneBusy())
+        if (!m_scene->world || IsSceneBusy())
             return;
 
         // Never reveal the previous click selection while a fresh center sample
         // is pending. A miss leaves the drawer open with its aiming guidance.
         m_ui.SelectedMaterial = nullptr;
         m_ui.SelectedNode = nullptr;
-        m_MaterialPickPurpose =
+        m_frame->materialPickPurpose =
             MaterialPickPurpose::RefreshMaterialDrawerSelection;
-        m_MaterialPickScene = m_Scene.get();
+        m_frame->materialPickScene = m_scene->world.get();
     }
 
 auto UvsrSceneViewer::GetOriginalMaterial(
         const std::shared_ptr<Material>& material) const -> const Material* {
         const auto original = std::find_if(
-            m_OriginalMaterials.begin(),
-            m_OriginalMaterials.end(),
+            m_scene->originalMaterials.begin(),
+            m_scene->originalMaterials.end(),
             [&material](const auto& entry)
             {
                 return entry.first == material;
             });
-        return original != m_OriginalMaterials.end()
+        return original != m_scene->originalMaterials.end()
             ? &original->second
             : nullptr;
     }
@@ -636,10 +693,10 @@ auto UvsrSceneViewer::NotifyMaterialCommandChanged(
         if (!material)
             return;
         material->dirty = true;
-        if (m_Scene && m_Scene->GetSceneGraph() &&
-            m_Scene->GetSceneGraph()->GetRootNode())
+        if (m_scene->world && m_scene->world->GetSceneGraph() &&
+            m_scene->world->GetSceneGraph()->GetRootNode())
         {
-            m_Scene->GetSceneGraph()->GetRootNode()->
+            m_scene->world->GetSceneGraph()->GetRootNode()->
                 InvalidateContent();
         }
         ResetImageBasedLightingHistory();
@@ -647,26 +704,26 @@ auto UvsrSceneViewer::NotifyMaterialCommandChanged(
 
 auto UvsrSceneViewer::RecordLoadingPresentationFrame() -> void {
         const auto now = std::chrono::steady_clock::now();
-        if (m_LoadingPresentationFrameCount > 0u)
+        if (m_scene->loadingPresentationFrameCount > 0u)
         {
             const double gapMilliseconds =
                 std::chrono::duration<double, std::milli>(
-                    now - m_LastLoadingPresentationFrame).count();
-            m_MaximumLoadingPresentationGapMs = std::max(
-                m_MaximumLoadingPresentationGapMs,
+                    now - m_scene->lastLoadingPresentationFrame).count();
+            m_scene->maximumLoadingPresentationGapMs = std::max(
+                m_scene->maximumLoadingPresentationGapMs,
                 gapMilliseconds);
         }
-        m_LastLoadingPresentationFrame = now;
-        ++m_LoadingPresentationFrameCount;
+        m_scene->lastLoadingPresentationFrame = now;
+        ++m_scene->loadingPresentationFrameCount;
     }
 
 auto UvsrSceneViewer::RenderSplashScreen(nvrhi::IFramebuffer* framebuffer) -> void {
         RecordLoadingPresentationFrame();
         nvrhi::ITexture* framebufferTexture = framebuffer->getDesc().colorAttachments[0].texture;
-        m_CommandList->open();
-        m_CommandList->clearTextureFloat(framebufferTexture, nvrhi::AllSubresources, nvrhi::Color(0.f));
-        m_CommandList->close();
-        GetDevice()->executeCommandList(m_CommandList);
+        m_frame->commandList->open();
+        m_frame->commandList->clearTextureFloat(framebufferTexture, nvrhi::AllSubresources, nvrhi::Color(0.f));
+        m_frame->commandList->close();
+        GetDevice()->executeCommandList(m_frame->commandList);
     }
 
 auto UvsrSceneViewer::PrepareLoadingRenderTargets(nvrhi::IFramebuffer* framebuffer) -> bool {
@@ -678,88 +735,46 @@ auto UvsrSceneViewer::PrepareLoadingRenderTargets(nvrhi::IFramebuffer* framebuff
         const DirectX::XMUINT2 presentationSize(
             framebufferInfo.width,
             framebufferInfo.height);
-        const MsaaRasterTopology msaaTopology = ResolveSupportedMsaaTopology(
-            GetDevice(),
-            m_ui.GetResolvedAntiAliasingSettings().rasterSampleCount);
-        const MsaaRenderExtent renderExtent = ScaleMsaaRenderExtent(
-            presentationSize.x,
-            presentationSize.y,
-            msaaTopology.linearResolutionScale);
-        if (!msaaTopology || !renderExtent)
-            return false;
-        const DirectX::XMUINT2 renderSize(
-            renderExtent.width,
-            renderExtent.height);
-        const uint32_t sampleCount = msaaTopology.rasterSampleCount;
-        const bool screenSpaceVisibilityResourcesRequired =
-            m_ui.HasActiveScreenSpaceVisibilityConsumer();
-        const bool msaaClosestSurfaceResolveResourcesRequired =
-            sampleCount > 1u;
-        const bool visibilityResourcesRequired =
-            screenSpaceVisibilityResourcesRequired ||
-            msaaClosestSurfaceResolveResourcesRequired;
-        const bool submittedLightingAvailable =
-            !m_SceneLightsWithoutFlashlight.empty() ||
-            (ShouldSubmitFlashlight(m_FlashlightTransition) &&
-                bool(m_Flashlight));
-        const bool visibilitySourceRadianceRequired =
-            screenSpaceVisibilityResourcesRequired &&
-            m_ui.ScreenSpaceVisibility.HasActiveIndirectDiffuse() &&
-            (submittedLightingAvailable ||
-                IsAmbientFillLobeActive(
-                    m_ui.EnableAmbientFill,
-                    m_ui.EnableDiffuseIbl,
-                    m_ui.DiffuseIblStrength));
-        const bool motionVectorsRequired =
-            m_ui.UsesLongTermTemporalAA() ||
-            (visibilityResourcesRequired && sampleCount > 1u);
-
+        const DirectX::XMUINT2 renderSize = presentationSize;
         bool needNewPasses = false;
-        if (!m_RenderTargets || m_RenderTargets->IsUpdateRequired(
+        if (!m_frame->renderTargets || m_frame->renderTargets->IsUpdateRequired(
                 renderSize,
-                sampleCount,
+
                 presentationSize,
-                msaaTopology.presentationSampleCount,
-                visibilityResourcesRequired,
-                visibilitySourceRadianceRequired,
-                motionVectorsRequired))
+                m_ui.Lighting == LightingSolution::RayMarching))
         {
-            m_RenderTargets.reset();
-            m_BindingCache.Clear();
-            m_RenderTargets = std::make_unique<RenderTargets>();
-            if (!m_RenderTargets->Init(
+            m_frame->renderTargets.reset();
+            m_frame->bindingCache.Clear();
+            m_frame->renderTargets = std::make_unique<RenderTargets>();
+            if (!m_frame->renderTargets->Init(
                     GetDevice(),
                     renderSize,
-                    sampleCount,
+
                     presentationSize,
-                    msaaTopology.presentationSampleCount,
-                    motionVectorsRequired,
+
                     true,
-                    visibilityResourcesRequired,
-                    visibilitySourceRadianceRequired))
+                    m_ui.Lighting == LightingSolution::RayMarching))
             {
                 throw std::runtime_error(
                     "UVSR loading render targets failed to initialize");
             }
-            m_PreviousView.reset();
             needNewPasses = true;
         }
 
         if (SetupView())
         {
             needNewPasses = true;
-            m_PreviousView.reset();
         }
 
-        if (needNewPasses || !m_GBufferGeometryPass ||
-            !m_MaterialIdGeometryPass || !m_AutoExposurePass ||
-            !m_AgxToneMappingPass)
+        if (needNewPasses ||
+            (m_ui.Lighting == LightingSolution::RayMarching && !m_frame->gBufferGeometryPass) || !m_frame->autoExposurePass ||
+            !m_frame->agxToneMappingPass)
         {
             BeginRenderPassPreparation(true);
         }
         else
         {
-            m_RenderPassPreparationStage =
+            m_frame->renderPassPreparationStage =
                 RenderPassPreparationStage::Complete;
         }
         return true;
@@ -767,37 +782,37 @@ auto UvsrSceneViewer::PrepareLoadingRenderTargets(nvrhi::IFramebuffer* framebuff
 
 auto UvsrSceneViewer::RenderSceneGpuUploadFrame(nvrhi::IFramebuffer* framebuffer) -> void {
         RecordLoadingPresentationFrame();
-        if (m_ScenePreparationStage == ScenePreparationStage::RenderPasses &&
+        if (m_scene->scenePreparationStage == ScenePreparationStage::RenderPasses &&
             ProcessRenderPassPreparationStep())
         {
-            m_ScenePreparationStage = ScenePreparationStage::Complete;
+            m_scene->scenePreparationStage = ScenePreparationStage::Complete;
         }
 
         nvrhi::ITexture* framebufferTexture =
             framebuffer->getDesc().colorAttachments[0].texture;
-        m_CommandList->open();
-        m_CommandList->clearTextureFloat(
+        m_frame->commandList->open();
+        m_frame->commandList->clearTextureFloat(
             framebufferTexture,
             nvrhi::AllSubresources,
             nvrhi::Color(0.f));
-        switch (m_ScenePreparationStage)
+        switch (m_scene->scenePreparationStage)
         {
         case ScenePreparationStage::MeshUpload:
-            if (m_Scene->ProcessLoadingBuffers(
-                    m_CommandList,
-                    c_SceneUploadBytesPerFrame,
+            if (m_scene->world->ProcessLoadingBuffers(
+                    m_frame->commandList,
+                    RendererSceneState::UploadBytesPerFrame,
                     GetFrameIndex()))
             {
                 // Activation has its own loading frame so its material, light,
                 // and camera setup cannot stack on the final mesh-buffer work.
-                m_ScenePreparationStage =
+                m_scene->scenePreparationStage =
                     ScenePreparationStage::SceneActivation;
             }
             break;
 
         case ScenePreparationStage::SceneActivation:
             CompleteSceneActivation();
-            m_ScenePreparationStage =
+            m_scene->scenePreparationStage =
                 ScenePreparationStage::MaterialBuffers;
             break;
 
@@ -807,8 +822,8 @@ auto UvsrSceneViewer::RenderSceneGpuUploadFrame(nvrhi::IFramebuffer* framebuffer
             // buffers after the importer's final refresh. Consume those
             // writes on their own loading frame so the first visible scene
             // frame does not inherit the whole update.
-            m_Scene->RefreshBuffers(m_CommandList, GetFrameIndex());
-            m_ScenePreparationStage =
+            m_scene->world->RefreshBuffers(m_frame->commandList, GetFrameIndex());
+            m_scene->scenePreparationStage =
                 ScenePreparationStage::WorldRepresentation;
             break;
 
@@ -816,7 +831,7 @@ auto UvsrSceneViewer::RenderSceneGpuUploadFrame(nvrhi::IFramebuffer* framebuffer
         {
             const bool worldRepresentationRequested =
                 m_ui.Representation.allowRayTraversal &&
-                m_BindlessLayout &&
+                m_scene->bindlessLayout &&
                 ((m_ui.Lighting == LightingSolution::PathTracing &&
                     GetPathTracingSceneDomainStatus() !=
                         PathTracingSceneDomainStatus::Unsupported) ||
@@ -824,10 +839,10 @@ auto UvsrSceneViewer::RenderSceneGpuUploadFrame(nvrhi::IFramebuffer* framebuffer
                     SupportsDirectionalRayVisibility()) ||
                 (m_ui.FlashlightEnabled &&
                     m_ui.Flashlight.castShadows &&
-                    m_Flashlight &&
-                    m_BindlessLayout &&
-                    RayTracedFlashlightShadowPass::IsDeviceSupported(
-                        GetDevice())) ||
+                    m_lighting->flashlight &&
+                    m_scene->bindlessLayout &&
+                    RayVisibilityPass::IsDeviceSupported(
+                        GetDevice(), RayVisibilityPass::Kind::Flashlight)) ||
                 (m_ui.RayTracedSkyVisibility.enabled &&
                     (HasRayTracedSkyVisibilityConsumer(
                             m_ui.RayTracedSkyVisibility) ||
@@ -837,18 +852,18 @@ auto UvsrSceneViewer::RenderSceneGpuUploadFrame(nvrhi::IFramebuffer* framebuffer
                                 PbrLightingDebugView::SkyVisibility)) &&
                     SupportsRayTracedSkyVisibility()));
             if (!worldRepresentationRequested ||
-                !m_WorldSpaceRepresentation ||
-                !m_WorldSpaceRepresentation->IsSupported() ||
-                m_WorldSpaceRepresentation->GetStatus().state ==
+                !m_scene->worldSpaceRepresentation ||
+                !m_scene->worldSpaceRepresentation->IsSupported() ||
+                m_scene->worldSpaceRepresentation->GetStatus().state ==
                     WorldSpaceRepresentationState::Failed ||
-                m_WorldSpaceRepresentation->Update(
-                    m_CommandList,
-                    m_Scene.get(),
+                m_scene->worldSpaceRepresentation->Update(
+                    m_frame->commandList,
+                    m_scene->world.get(),
                     m_ui.Representation,
                     uint32_t(GetFrameIndex()),
                     true))
             {
-                m_ScenePreparationStage =
+                m_scene->scenePreparationStage =
                     ScenePreparationStage::RenderTargets;
             }
             break;
@@ -857,7 +872,7 @@ auto UvsrSceneViewer::RenderSceneGpuUploadFrame(nvrhi::IFramebuffer* framebuffer
         case ScenePreparationStage::RenderTargets:
             if (PrepareLoadingRenderTargets(framebuffer))
             {
-                m_ScenePreparationStage =
+                m_scene->scenePreparationStage =
                     ScenePreparationStage::RenderPasses;
             }
             break;
@@ -871,12 +886,12 @@ auto UvsrSceneViewer::RenderSceneGpuUploadFrame(nvrhi::IFramebuffer* framebuffer
 
         // Consume worker-prepared HDR data one GPU unit per loading frame.
         // Partially generated environment maps are not exposed to rendering.
-        UpdateImageBasedLighting(m_CommandList);
-        m_CommandList->close();
-        GetDevice()->executeCommandList(m_CommandList);
+        UpdateImageBasedLighting(m_frame->commandList);
+        m_frame->commandList->close();
+        GetDevice()->executeCommandList(m_frame->commandList);
 
-        if (m_ImageBasedLightingEnvironment &&
-            m_ImageBasedLightingEnvironment->HasPreparedRadianceFailed())
+        if (m_lighting->imageBasedLightingEnvironment &&
+            m_lighting->imageBasedLightingEnvironment->HasPreparedRadianceFailed())
         {
             uvsr::log::error(
                 "Required image-based lighting preparation failed");
@@ -886,33 +901,33 @@ auto UvsrSceneViewer::RenderSceneGpuUploadFrame(nvrhi::IFramebuffer* framebuffer
         }
 
         const bool environmentReady =
-            !m_ImageBasedLightingEnvironment ||
-            m_ImageBasedLightingEnvironment->IsPreparedRadianceReady();
-        if (m_ScenePreparationStage == ScenePreparationStage::Complete &&
+            !m_lighting->imageBasedLightingEnvironment ||
+            m_lighting->imageBasedLightingEnvironment->IsPreparedRadianceReady();
+        if (m_scene->scenePreparationStage == ScenePreparationStage::Complete &&
             environmentReady)
         {
-            m_SceneGpuUploadPending = false;
+            m_scene->sceneGpuUploadPending = false;
             const auto duration =
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::high_resolution_clock::now() -
-                    m_SceneGpuUploadStart).count();
+                    m_scene->sceneGpuUploadStart).count();
             uvsr::log::info(
                 "Staged scene upload and renderer preparation completed in %lld ms across %llu loading frames (maximum presentation gap %.2f ms)",
                 static_cast<long long>(duration),
                 static_cast<unsigned long long>(
-                    m_LoadingPresentationFrameCount),
-                m_MaximumLoadingPresentationGapMs);
-            m_LastLoadingPresentationFrame = {};
-            m_MaximumLoadingPresentationGapMs = 0.0;
-            m_LoadingPresentationFrameCount = 0u;
+                    m_scene->loadingPresentationFrameCount),
+                m_scene->maximumLoadingPresentationGapMs);
+            m_scene->lastLoadingPresentationFrame = {};
+            m_scene->maximumLoadingPresentationGapMs = 0.0;
+            m_scene->loadingPresentationFrameCount = 0u;
         }
     }
 
 auto UvsrSceneViewer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
-        if (m_SceneRetirementPending)
+        if (m_scene->sceneRetirementPending)
         {
             const RendererSceneRetirementStatus status =
-                m_SceneRetirement.Poll();
+                m_scene->sceneRetirement.Poll();
             if (status == RendererSceneRetirementStatus::Pending)
             {
                 RenderSplashScreen(framebuffer);
@@ -928,20 +943,20 @@ auto UvsrSceneViewer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
             if (m_TextureCache)
                 m_TextureCache->Reset();
             GetDevice()->runGarbageCollection();
-            m_HasRendererSceneResources = false;
-            if (!m_SceneRetirement.Consume())
+            m_scene->hasRendererSceneResources = false;
+            if (!m_scene->sceneRetirement.Consume())
             {
                 throw std::runtime_error(
                     "UVSR scene retirement could not be consumed");
             }
-            m_SceneRetirementPending = false;
+            m_scene->sceneRetirementPending = false;
             StartPendingSceneLoad();
             RenderSplashScreen(framebuffer);
             return;
         }
 
         RendererSceneLoadWorkerState workerState =
-            m_SceneLoadWorker.GetState();
+            m_scene->sceneLoadWorker.GetState();
         bool processedTexture = false;
         if (workerState == RendererSceneLoadWorkerState::Running ||
             workerState == RendererSceneLoadWorkerState::Succeeded)
@@ -955,15 +970,15 @@ auto UvsrSceneViewer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
                     m_TextureCache->ProcessRenderingThreadCommands(
                         *m_CommonPasses, 4.f);
             }
-            workerState = m_SceneLoadWorker.GetState();
+            workerState = m_scene->sceneLoadWorker.GetState();
         }
 
         if (workerState == RendererSceneLoadWorkerState::Failed)
         {
             const std::exception_ptr failure =
-                m_SceneLoadWorker.GetException();
-            (void)m_SceneLoadWorker.Join();
-            m_SceneLoadFailure =
+                m_scene->sceneLoadWorker.GetException();
+            (void)m_scene->sceneLoadWorker.Join();
+            m_scene->sceneLoadFailure =
                 "The scene importer returned a failure result.";
             if (failure)
             {
@@ -973,13 +988,13 @@ auto UvsrSceneViewer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
                 }
                 catch (const std::exception& error)
                 {
-                    m_SceneLoadFailure = error.what();
+                    m_scene->sceneLoadFailure = error.what();
                     uvsr::log::error(
                         "Scene worker failed: %s", error.what());
                 }
                 catch (...)
                 {
-                    m_SceneLoadFailure =
+                    m_scene->sceneLoadFailure =
                         "The scene importer threw an unknown exception.";
                     uvsr::log::error(
                         "Scene worker failed with an unknown exception");
@@ -990,9 +1005,9 @@ auto UvsrSceneViewer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
                 uvsr::log::error(
                     "Scene worker rejected the scene descriptor");
             }
-            m_SceneLoadWorker.Reset();
-            m_PendingSceneCpuState.reset();
-            m_RendererSceneLoaded = false;
+            m_scene->sceneLoadWorker.Reset();
+            m_scene->pendingSceneCpuState.reset();
+            m_scene->rendererSceneLoaded = false;
             if (m_TextureCache)
                 m_TextureCache->Reset();
             GetDevice()->runGarbageCollection();
@@ -1010,16 +1025,16 @@ auto UvsrSceneViewer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
 
         if (workerState == RendererSceneLoadWorkerState::Succeeded)
         {
-            if (!m_SceneLoadWorker.Join())
+            if (!m_scene->sceneLoadWorker.Join())
             {
                 throw std::runtime_error(
                     "UVSR successful scene worker failed while joining");
             }
-            m_SceneLoadWorker.Reset();
+            m_scene->sceneLoadWorker.Reset();
             SceneLoaded();
         }
 
-        if (!m_RendererSceneLoaded)
+        if (!m_scene->rendererSceneLoaded)
         {
             RenderSplashScreen(framebuffer);
             return;

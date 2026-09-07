@@ -1,890 +1,230 @@
 #include "direct_light_visibility.h"
-#include "diffuse_environment_math.h"
 #include "pbr_lighting_debug_contract.h"
 #include "pbr_material.h"
 #include "pbr_surface_light_contract.h"
-#include "screen_space_indirect_composite_shared.h"
-#include "screen_space_visibility_defaults.h"
+#include "ray_material_visibility_contract.h"
+#include "ray_origin_contract.h"
+#include "ray_visibility_trace_contract.h"
 
-#include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
-#include <vector>
 
 #include "image_based_lighting_shared.h"
+#include "directional_shadow_settings.h"
 
 namespace
 {
-    constexpr float Pi = 3.14159265358979323846f;
-    constexpr float MinAlpha = 0.002f;
-
-    using Color = std::array<float, 3>;
-
     void Require(bool condition, const char* message)
     {
         if (!condition)
         {
-            std::cerr << "PBR validation failed: " << message << '\n';
+            std::cerr << message << '\n';
             std::exit(EXIT_FAILURE);
         }
     }
+    bool Near(float a, float b, float tolerance = 1e-5f) { return std::abs(a - b) <= tolerance; }
 
-    bool Near(float actual, float expected, float tolerance = 1e-4f)
+    void CheckDirectVisibility()
     {
-        return std::abs(actual - expected) <= tolerance;
+        using namespace uvsr;
+        int textureToken = 0, lightToken = 0, unrelatedToken = 0;
+        auto* texture = reinterpret_cast<nvrhi::ITexture*>(&textureToken);
+        auto* light = reinterpret_cast<const donut::engine::Light*>(&lightToken);
+        auto* unrelated = reinterpret_cast<const donut::engine::Light*>(&unrelatedToken);
+        const DirectLightVisibility factor{ texture, light };
+        Require(TargetsDirectLight(factor, light) && !TargetsDirectLight(factor, unrelated) &&
+            !TargetsDirectLight({ texture, nullptr }, light) && !DirectLightVisibility{}.IsComplete(),
+            "direct visibility escaped its exact light identity");
+        const DirectLightVisibilityTextureProperties properties{
+            1920, 1080, 1, 1, 1, 1, true, true, true };
+        Require(IsDirectLightVisibilityTextureCompatible(properties, 1920, 1080) &&
+            !IsDirectLightVisibilityTextureCompatible(properties, 1919, 1080),
+            "direct visibility lost its receiver extent");
+        Require(ComposeDirectLightVisibility(.6f, .4f, true) == .4f &&
+            ComposeDirectLightVisibility(.6f, .8f, true) == .6f &&
+            ComposeDirectLightVisibility(.25f, 0, false) == .25f &&
+            ComposeDirectLightVisibility(4, -1, true) == 0,
+            "direct visibility did not compose as a bounded matching minimum");
     }
 
-    bool Near(const Color& actual, const Color& expected, float tolerance = 1e-4f)
+    void CheckLighting()
     {
-        return Near(actual[0], expected[0], tolerance) &&
-            Near(actual[1], expected[1], tolerance) &&
-            Near(actual[2], expected[2], tolerance);
-    }
-
-    bool Near(
-        PbrContractFloat3 actual,
-        PbrContractFloat3 expected,
-        float tolerance = 1e-4f)
-    {
-        return Near(actual.x, expected.x, tolerance) &&
-            Near(actual.y, expected.y, tolerance) &&
-            Near(actual.z, expected.z, tolerance);
-    }
-
-    bool Near(
-        PbrDebugFloat3 actual,
-        PbrDebugFloat3 expected,
-        float tolerance = 1e-4f)
-    {
-        return Near(actual.x, expected.x, tolerance) &&
-            Near(actual.y, expected.y, tolerance) &&
-            Near(actual.z, expected.z, tolerance);
-    }
-
-    float Alpha(float perceptualRoughness)
-    {
-        const float roughness = std::clamp(perceptualRoughness, 0.f, 1.f);
-        return std::max(roughness * roughness, MinAlpha);
-    }
-
-    float Fresnel(float cosine, float f0)
-    {
-        const float oneMinusCosine = 1.f - std::clamp(cosine, 0.f, 1.f);
-        const float factor = std::pow(oneMinusCosine, 5.f);
-        return f0 + (1.f - f0) * factor;
-    }
-
-    float DistributionGgx(float normalDotHalf, float alpha)
-    {
-        const float alphaSquared = alpha * alpha;
-        const float denominator = normalDotHalf * normalDotHalf * (alphaSquared - 1.f) + 1.f;
-        return alphaSquared / (Pi * denominator * denominator);
-    }
-
-    float SmithVisibility(float normalDotView, float normalDotLight, float alpha)
-    {
-        const float alphaSquared = alpha * alpha;
-        const float lambdaView = normalDotLight * std::sqrt(
-            normalDotView * normalDotView * (1.f - alphaSquared) + alphaSquared);
-        const float lambdaLight = normalDotView * std::sqrt(
-            normalDotLight * normalDotLight * (1.f - alphaSquared) + alphaSquared);
-        return 0.5f / std::max(lambdaView + lambdaLight, 1e-6f);
-    }
-
-    float DiffuseBrdf(float baseColor, float metalness, float fresnel)
-    {
-        return baseColor * (1.f - metalness) * (1.f - fresnel) / Pi;
-    }
-
-    float DirectLight(float incidentRadiance, float bsdf, float cosine, float visibility)
-    {
-        return incidentRadiance * bsdf * std::max(cosine, 0.f) *
-            std::clamp(visibility, 0.f, 1.f);
-    }
-
-    float IndirectComposite(
-        float directAndEmissive,
-        float fallbackIndirect,
-        float ambientVisibility,
-        float screenSpaceGi)
-    {
-        return ComposeScreenSpaceIndirectLighting(
-            directAndEmissive,
-            fallbackIndirect,
-            std::clamp(ambientVisibility, 0.f, 1.f),
-            screenSpaceGi);
-    }
-
-    bool Near(
-        dm::float3 actual,
-        dm::float3 expected,
-        float tolerance = 1e-4f)
-    {
-        return Near(actual.x, expected.x, tolerance) &&
-            Near(actual.y, expected.y, tolerance) &&
-            Near(actual.z, expected.z, tolerance);
-    }
-
-    bool FiniteNonnegative(dm::float3 value)
-    {
-        return std::isfinite(value.x) && std::isfinite(value.y) &&
-            std::isfinite(value.z) &&
-            value.x >= 0.f && value.y >= 0.f && value.z >= 0.f;
-    }
-
-    struct MsaaVisibilityGuide
-    {
-        float depth;
-        bool validNormal;
-    };
-
-    template<std::size_t SampleCount>
-    int ResolveClosestReverseZOwner(
-        const std::array<MsaaVisibilityGuide, SampleCount>& guides)
-    {
-        int owner = -1;
-        float closestDepth = 0.f;
-        for (std::size_t sampleIndex = 0u;
-            sampleIndex < SampleCount;
-            ++sampleIndex)
+        using namespace uvsr;
+        const auto scales = ResolveImageBasedLightingScales(2, 2, true, .5f, true, 2);
+        const auto disabled = ResolveImageBasedLightingScales(2, 2, false, .5f, false, 2);
+        Require(scales.radiance == 8 && scales.diffuse == 4 && scales.specular == 16 &&
+            disabled.radiance == 8 && disabled.diffuse == 0 && disabled.specular == 0,
+            "IBL exposure and lobe controls became coupled");
+        for (float roughness : { 0.f, .25f, .5f, 1.f })
         {
-            const MsaaVisibilityGuide& guide =
-                guides[sampleIndex];
-            const bool valid =
-                std::isfinite(guide.depth) &&
-                guide.depth > 0.f &&
-                guide.validNormal;
-            if (valid &&
-                (owner < 0 || guide.depth > closestDepth))
+            const float mip = ImageBasedLightingReceiverMip(roughness, 9);
+            Require(Near(ImageBasedLightingGenerationRoughness(mip / 8), roughness),
+                "IBL receiver mip disagrees with prefilter roughness");
+            Require(ImageBasedLightingSpecularOcclusion(.35f, 0, roughness) == 0 &&
+                ImageBasedLightingSpecularOcclusion(.35f, 1, roughness) == 1,
+                "IBL occlusion lost blocked or open endpoints");
+        }
+        Require(ResolveAnalyticalPositionalLightIntensity(12, 0, .5f, 4) == 3 &&
+            Near(ResolveAnalyticalPositionalLightIntensity(12, .1f, .01f, 10000), .0012f, 1e-7f),
+            "analytical emitter lost point or far-field energy");
+        const float near = ResolveAnalyticalPositionalLightIntensity(12, .1f, 100, .0001f);
+        Require(std::isfinite(near) && near > 0 && near < 120000 &&
+            ResolvePbrAnalyticalRangeWeight(4, 0) == 1 &&
+            Near(ResolvePbrAnalyticalRangeWeight(4, .25f), .5625f) &&
+            ResolvePbrAnalyticalRangeWeight(16, .25f) == 0,
+            "analytical emitter lost bounded near-field or finite range");
+        const float inner = std::cos(.25f), outer = std::cos(.5f);
+        Require(ResolvePbrOrdinarySpotWeight(inner, .5f, 1) == 1 &&
+            ResolvePbrOrdinarySpotWeight(outer, .5f, 1) == 0 &&
+            Near(ResolvePbrOrdinarySpotWeight((inner + outer) * .5f, .5f, 1), .5f),
+            "spotlight inner, outer or midpoint weight changed");
+    }
+
+    void CheckShadowEmitters()
+    {
+        uvsr::DirectionalShadowSettings settings;
+        settings.samplesPerPixel = 64;
+        settings.hardShadows = true;
+        Require(uvsr::ResolveRayShadowSampleCount(settings) == 1 &&
+                uvsr::ResolveShadowEmitterSize(.53f, true) == 0 && settings.samplesPerPixel == 64,
+            "hard shadows must override effective samples and emitter size without erasing them");
+        settings.hardShadows = false;
+        Require(uvsr::ResolveRayShadowSampleCount(settings) == 64 &&
+                uvsr::ResolveShadowEmitterSize(.53f, false) == .53f,
+            "disabling hard shadows must recover the stored sampling and emitter size");
+        for (const ShaderFloat3 center : { ShaderFloat3{ 0, 0, 1 }, ShaderFloat3{ 0, 1, 0 } })
+        {
+            const auto hard = SamplePbrDirectionalEmitter(center, 0, { .1f, .9f });
+            Require(hard.x == center.x && hard.y == center.y && hard.z == center.z,
+                "a zero-angle emitter must use its exact center direction");
+            for (float diameter : { .00925f, .5f, 1.5707963f })
             {
-                owner = static_cast<int>(sampleIndex);
-                closestDepth = guide.depth;
+                double meanCosine = 0;
+                for (int index = 0; index < 4096; ++index)
+                {
+                    const auto direction = SamplePbrDirectionalEmitter(center, diameter,
+                        { (index + .5f) / 4096.f, float(index % 64) / 64.f });
+                    const float cosine = ShaderDot(direction, center);
+                    Require(Near(ShaderDot(direction, direction), 1.f, 2e-6f) &&
+                            cosine >= std::cos(diameter * .5f) - 1e-6f,
+                        "sampled shadow direction must be unit length and inside the emitter cone");
+                    meanCosine += cosine;
+                }
+                Require(std::abs(meanCosine / 4096 - (1 + std::cos(diameter * .5)) * .5) < 2e-7,
+                    "shadow samples must cover uniform solid angle with the correct mean cosine");
             }
         }
-        return owner;
     }
+
+    void CheckMaterialsAndDebug()
+    {
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        PbrMaterialParameters material;
+        material.baseColor.x = nan; material.metalness = 2; material.perceptualRoughness = -1;
+        material.ior = 0; material.emissive.x = -2; material.opacity = nan;
+        ValidatePbrMaterialParameters(material);
+        Require(material.baseColor.x == 1 && material.metalness == 1 && material.perceptualRoughness == 0 &&
+            material.ior == 1 && material.emissive.x == 0 && material.opacity == 1 &&
+            PbrIorToF0(1) == 0 && Near(PbrIorToF0(1.5f), .04f),
+            "material import validation changed");
+        const ShaderFloat3 view{ 0, 0, 1 };
+        Require(!ShouldFlipPbrSurfaceNormals(true, false, view, view) &&
+            ShouldFlipPbrSurfaceNormals(true, true, { 0, 0, -1 }, view) &&
+            ShouldFlipPbrSurfaceNormals(false, false, view, view),
+            "surface orientation lost winding or two-sided behavior");
+        const auto oriented = ResolvePbrTriangleSurfaceNormals(
+            { 0, 3, 0 }, { 2, 0, 0 }, { 0, 1, 0 }, { .6f, 0, -.8f }, view);
+        Require(Near(oriented.geometricNormal.z, 1) && Near(oriented.shadingNormal.x, -.6f) &&
+            Near(oriented.shadingNormal.z, .8f), "triangle shading and geometry disagree on hemisphere");
+        const auto fallback = ResolvePbrTrianglePlaneNormal({}, {}, { 0, 1, 0 });
+        Require(fallback.y == 1, "degenerate triangle lost its material normal");
+
+        const auto debug = ResolvePbrSkyVisibilityDebugColor(.25f);
+        const auto invalid = ResolvePbrSkyVisibilityDebugColor(nan);
+        Require(debug.x == .25f && debug.y == .25f && debug.z == .25f &&
+            invalid.x == 1 && invalid.y == 1 && invalid.z == 1,
+            "sky visibility debug lost grayscale or invalid-sample behavior");
+        Require(PbrNeedsSkyVisibilitySample(UVSR_PBR_LIGHTING_DEBUG_SKY_VISIBILITY, false, false) &&
+            !PbrNeedsSkyVisibilitySample(UVSR_PBR_LIGHTING_DEBUG_NONE, false, false),
+            "sky visibility debug routing changed");
+    }
+
+    void CheckRayVisibility()
+    {
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        const auto normal = RayOriginOrientGeometricNormal({ 0, 0, -2 }, { 0, 0, 1 });
+        Require(normal.x == 0 && normal.y == 0 && normal.z == 1, "ray origin normal lost its view hemisphere");
+        Require(RayOriginStepDepthTowardCamera(.5f, true, true, 0) == std::nextafter(.5f, 1.f) &&
+            RayOriginStepDepthTowardCamera(.5f, true, false, 0) == std::nextafter(.5f, 0.f) &&
+            RayOriginStepDepthTowardCamera(1, true, true, 0) == 1 &&
+            RayOriginStepDepthTowardCamera(0, true, false, 0) == 0, "float depth lost its camera-directed ULP step");
+        Require(Near(RayOriginStepDepthTowardCamera(.5f, false, true, 1.f / 1024), .5f + 1.f / 1024, 1e-6f) &&
+            Near(RayOriginStepDepthTowardCamera(.5f, false, false, 1.f / 1024), .5f - 1.f / 1024, 1e-6f),
+            "integer depth ignored its configured forward/reverse step");
+        Require(RayOriginOffsetFloatComponent(1, 1) > 1 && RayOriginOffsetFloatComponent(1, -1) < 1 &&
+            RayOriginOffsetFloatComponent(-1, 1) > -1 && RayOriginOffsetFloatComponent(-1, -1) < -1 &&
+            Near(RayOriginOffsetFloatComponent(0, 1), 1.f / 65536, 1e-6f), "signed ray origin offset changed");
+        Require(Near(ResolveRayOriginClearance(.01f, .02f), .02f, 1e-6f) &&
+            Near(ResolveRayOriginClearance(.03f, .02f), .03f, 1e-6f) &&
+            ResolveRayOriginClearance(-1, nan) == 0, "ray clearance lost its user/depth bias boundary");
+        const auto position = ResolveRayOriginPosition({ 1, -1, 0 }, { 0, 0, 1 }, .01f);
+        Require(position.x == 1 && position.y == -1 && position.z > .01f,
+            "ray origin failed to combine clearance with representable offset");
+
+        const auto opaque = ResolveRayMaterialCoveragePlan(true, false, false, false, true, false, true, true);
+        Require(opaque.mode == UVSR_RAY_MATERIAL_COVERAGE_OPAQUE &&
+            ResolveRayMaterialCandidateCoverage(opaque, 0, 0, 1, false) &&
+            ResolveRayMaterialCoveragePlan(false, false, false, false, true, false, false, false).mode ==
+                UVSR_RAY_MATERIAL_COVERAGE_REJECT &&
+            ResolveRayMaterialCoveragePlan(false, true, false, false, true, false, false, false).mode ==
+                UVSR_RAY_MATERIAL_COVERAGE_OPAQUE, "opaque/backface/double-sided ray acceptance changed");
+        Require(ResolveRayMaterialCoveragePlan(true, false, true, true, true, false, false, false).mode ==
+                UVSR_RAY_MATERIAL_COVERAGE_REJECT &&
+            ResolveRayMaterialCoveragePlan(true, false, false, false, false, false, false, false).mode ==
+                UVSR_RAY_MATERIAL_COVERAGE_REJECT, "unsupported or transparent material became a blocker");
+        const auto opacity = ResolveRayMaterialCoveragePlan(true, false, false, false, false, true, true, true);
+        const auto base = ResolveRayMaterialCoveragePlan(true, false, false, false, false, true, false, true);
+        const auto scalar = ResolveRayMaterialCoveragePlan(true, false, false, false, false, true, false, false);
+        Require(opacity.alphaSource == UVSR_RAY_MATERIAL_ALPHA_OPACITY_TEXTURE &&
+            base.alphaSource == UVSR_RAY_MATERIAL_ALPHA_BASE_TEXTURE && scalar.alphaSource == UVSR_RAY_MATERIAL_ALPHA_NONE &&
+            !ResolveRayMaterialCandidateCoverage(opacity, 1, .2f, .5f, true) &&
+            ResolveRayMaterialCandidateCoverage(base, 1, .9f, .5f, true) &&
+            !ResolveRayMaterialCandidateCoverage(opacity, 1, 1, .5f, false),
+            "ray alpha source precedence or descriptor rejection changed");
+        Require(ResolveRayMaterialCandidateCoverage(scalar, .5f, 0, .5f, true) &&
+            !ResolveRayMaterialCandidateCoverage(scalar, .499f, 1, .5f, true) &&
+            ResolveRayMaterialCandidateCoverage(scalar, 2, 1, 1, true) &&
+            !ResolveRayMaterialCandidateCoverage(scalar, nan, 1, .5f, true),
+            "ray alpha lost exact cutoff, saturation or finite rejection");
+
+        const auto miss = ResolveRayVisibilityTraceSample(false);
+        const auto hit = ResolveRayVisibilityTraceSample(true);
+        Require(miss.queryCount == 1 && !miss.occluded && miss.visibility == 1 &&
+            hit.queryCount == 1 && hit.occluded && hit.visibility == 0,
+            "ray hit/miss encoding lost its binary one-query contract");
+        for (const auto samples : { std::array{ miss, hit, hit }, std::array{ hit, miss, hit } })
+        {
+            auto aggregate = BeginRayVisibilityTraceAggregate();
+            for (const auto sample : samples)
+                aggregate = AccumulateRayVisibilityTraceSample(aggregate, sample);
+            Require(aggregate.queryCount == 3 && aggregate.sampleCount == 3 && aggregate.visibleSampleCount == 1 &&
+                Near(ResolveRayVisibilityTraceAverage(aggregate), 1.f / 3, 1e-6f) &&
+                RayVisibilityTraceAggregateIsComplete(aggregate, 3) && !RayVisibilityTraceAggregateIsComplete(aggregate, 4),
+                "ray reduction lost order independence or one query per sample");
+        }
+    }
+
 }
 
 int main()
 {
-    Require(
-        UVSR_PBR_LIGHTING_DEBUG_NONE == 0u &&
-            UVSR_PBR_LIGHTING_DEBUG_SKY_VISIBILITY == 12u &&
-            UVSR_VISIBILITY_DEBUG_FINAL_IMAGE == 0u &&
-            UVSR_VISIBILITY_DEBUG_APPLIED_INDIRECT == 3u,
-        "shared PBR and Visibility debug ordinals match the GPU contract");
-    Require(
-        PbrNeedsSkyVisibilitySample(
-            UVSR_PBR_LIGHTING_DEBUG_SKY_VISIBILITY,
-            false,
-            false) &&
-        PbrNeedsSkyVisibilitySample(
-            UVSR_PBR_LIGHTING_DEBUG_NONE,
-            true,
-            false) &&
-        PbrNeedsSkyVisibilitySample(
-            UVSR_PBR_LIGHTING_DEBUG_NONE,
-            false,
-            true) &&
-        !PbrNeedsSkyVisibilitySample(
-            UVSR_PBR_LIGHTING_DEBUG_NONE,
-            false,
-            false),
-        "sky debug requests the scalar without a probe or IBL application");
-    Require(Near(
-        ResolvePbrSkyVisibilityDebugColor(0.25f),
-        PbrDebugFloat3{ 0.25f, 0.25f, 0.25f }) && Near(
-        ResolvePbrSkyVisibilityDebugColor(
-            std::numeric_limits<float>::quiet_NaN()),
-        PbrDebugFloat3{ 1.f, 1.f, 1.f }),
-        "sky debug is grayscale and non-finite samples fail open to white");
-    Require(
-        ResolvePbrDebugPresentation(
-            UVSR_PBR_LIGHTING_DEBUG_NONE,
-            UVSR_VISIBILITY_DEBUG_FINAL_IMAGE) ==
-                UVSR_PBR_DEBUG_PRESENT_FINAL &&
-        ResolvePbrDebugPresentation(
-            UVSR_PBR_LIGHTING_DEBUG_SKY_VISIBILITY,
-            UVSR_VISIBILITY_DEBUG_FINAL_IMAGE) ==
-                UVSR_PBR_DEBUG_PRESENT_LIGHTING &&
-        ResolvePbrDebugPresentation(
-            UVSR_PBR_LIGHTING_DEBUG_SKY_VISIBILITY,
-            UVSR_VISIBILITY_DEBUG_AMBIENT_VISIBILITY) ==
-                UVSR_PBR_DEBUG_PRESENT_VISIBILITY,
-        "Visibility information filters take precedence over PBR filters");
-    Require(
-        !PbrDebugUsesBlackBackground(
-            UVSR_PBR_LIGHTING_DEBUG_NONE,
-            UVSR_VISIBILITY_DEBUG_FINAL_IMAGE) &&
-        PbrDebugUsesBlackBackground(
-            UVSR_PBR_LIGHTING_DEBUG_SKY_VISIBILITY,
-            UVSR_VISIBILITY_DEBUG_FINAL_IMAGE) &&
-        PbrDebugUsesBlackBackground(
-            UVSR_PBR_LIGHTING_DEBUG_NONE,
-            UVSR_VISIBILITY_DEBUG_TRACED_INDIRECT),
-        "information filters use a neutral black no-surface background");
-    for (uint32_t mip = 0u; mip < 9u; ++mip)
-    {
-        const float normalizedMip = float(mip) / 8.f;
-        Require(Near(
-            uvsr::ImageBasedLightingGenerationRoughness(normalizedMip),
-            normalizedMip * normalizedMip),
-            "IBL prefilter mip generation follows Donut's squared schedule");
-    }
-    constexpr std::array<float, 6> IblRoughnessSweep = {
-        0.f, 0.01f, 0.25f, 0.5f, 0.75f, 1.f
-    };
-    for (float perceptualRoughness : IblRoughnessSweep)
-    {
-        Require(Near(
-            uvsr::ImageBasedLightingReceiverMip(
-                perceptualRoughness, 9.f),
-            std::sqrt(perceptualRoughness) * 8.f),
-            "IBL receiver selects the matching fractional specular mip");
-    }
-    Require(
-        uvsr::ImageBasedLightingReceiverMip(-1.f, 9.f) == 0.f &&
-            uvsr::ImageBasedLightingReceiverMip(2.f, 9.f) == 8.f &&
-            uvsr::ImageBasedLightingReceiverMip(0.5f, 0.f) == 0.f,
-        "IBL receiver mip selection clamps roughness and empty mip ranges");
-    for (float perceptualRoughness : IblRoughnessSweep)
-    {
-        float previousOcclusion = 0.f;
-        for (uint32_t aoStep = 0u; aoStep <= 8u; ++aoStep)
-        {
-            const float ambientOcclusion = float(aoStep) / 8.f;
-            const float occlusion =
-                uvsr::ImageBasedLightingSpecularOcclusion(
-                    0.35f,
-                    ambientOcclusion,
-                    perceptualRoughness);
-            Require(
-                std::isfinite(occlusion) &&
-                    occlusion >= 0.f &&
-                    occlusion <= 1.f,
-                "IBL specular occlusion stays finite and normalized");
-            Require(
-                occlusion + 1e-6f >= previousOcclusion,
-                "IBL specular occlusion is monotonic in ambient visibility");
-            previousOcclusion = occlusion;
-        }
-        Require(
-            uvsr::ImageBasedLightingSpecularOcclusion(
-                0.35f, 0.f, perceptualRoughness) == 0.f &&
-                uvsr::ImageBasedLightingSpecularOcclusion(
-                    0.35f, 1.f, perceptualRoughness) == 1.f,
-            "IBL specular occlusion preserves fully blocked and open endpoints");
-    }
-
-    Require(uvsr::ScreenSpaceIndirectDiffuseReferenceIntensity == 1.f,
-        "screen-space GI defaults to reference energy");
-
-    const uvsr::ImageBasedLightingScales referenceIblScales =
-        uvsr::ResolveImageBasedLightingScales(
-            1.f, 0.f, true, 1.f, true, 1.f);
-    Require(
-        Near(referenceIblScales.radiance, 1.f) &&
-            Near(referenceIblScales.diffuse, 1.f) &&
-            Near(referenceIblScales.specular, 1.f),
-        "reference IBL settings preserve unit radiance and lobe energy");
-
-    const uvsr::ImageBasedLightingScales adjustedIblScales =
-        uvsr::ResolveImageBasedLightingScales(
-            2.f, 2.f, true, 0.5f, true, 2.f);
-    Require(
-        Near(adjustedIblScales.radiance, 8.f) &&
-            Near(adjustedIblScales.diffuse, 4.f) &&
-            Near(adjustedIblScales.specular, 16.f),
-        "IBL base scale and exposure precede independent lobe gains");
-
-    const uvsr::ImageBasedLightingScales disabledIblScales =
-        uvsr::ResolveImageBasedLightingScales(
-            2.f, 2.f, false, 0.5f, false, 2.f);
-    Require(
-        Near(disabledIblScales.radiance, adjustedIblScales.radiance) &&
-            disabledIblScales.diffuse == 0.f &&
-            disabledIblScales.specular == 0.f,
-        "disabled IBL lobes are zero without changing common radiance");
-
-    const uvsr::ImageBasedLightingScales invalidStrengthIblScales =
-        uvsr::ResolveImageBasedLightingScales(
-            1.f,
-            0.f,
-            true,
-            std::numeric_limits<float>::quiet_NaN(),
-            true,
-            -1.f);
-    Require(
-        invalidStrengthIblScales.radiance == 1.f &&
-            invalidStrengthIblScales.diffuse == 0.f &&
-            invalidStrengthIblScales.specular == 0.f,
-        "invalid IBL strengths resolve to zero lobe energy");
-    const uvsr::ImageBasedLightingScales invalidBaseIblScales =
-        uvsr::ResolveImageBasedLightingScales(
-            std::numeric_limits<float>::quiet_NaN(),
-            std::numeric_limits<float>::quiet_NaN(),
-            true,
-            1.f,
-            true,
-            1.f);
-    Require(
-        invalidBaseIblScales.radiance == 1.f &&
-            invalidBaseIblScales.diffuse == 1.f &&
-            invalidBaseIblScales.specular == 1.f,
-        "nonfinite IBL base and exposure fall back to reference settings");
-    Require(
-        uvsr::ResolveImageBasedLightingScales(
-            -1.f, 12.f, true, 1.f, true, 1.f).radiance == 0.f,
-        "negative IBL base scale cannot produce negative radiance");
-
-    Require(
-        uvsr::IsImageBasedLightingLobeActive(true, 1.f) &&
-            uvsr::IsImageBasedLightingLobeActive(true, 0.001f),
-        "enabled finite positive IBL lobes are active");
-    Require(
-        !uvsr::IsImageBasedLightingLobeActive(false, 1.f) &&
-            !uvsr::IsImageBasedLightingLobeActive(true, 0.f) &&
-            !uvsr::IsImageBasedLightingLobeActive(true, -1.f) &&
-            !uvsr::IsImageBasedLightingLobeActive(
-                true, std::numeric_limits<float>::quiet_NaN()) &&
-            !uvsr::IsImageBasedLightingLobeActive(
-                true, std::numeric_limits<float>::infinity()),
-        "disabled, nonpositive, and nonfinite IBL lobes are inactive");
-    Require(
-        uvsr::IsAmbientFillLobeActive(true, true, 1.f) &&
-            !uvsr::IsAmbientFillLobeActive(false, true, 1.f) &&
-            !uvsr::IsAmbientFillLobeActive(true, false, 1.f) &&
-            !uvsr::IsAmbientFillLobeActive(true, true, 0.f),
-        "ambient fill master-gates IBL lobes without changing lobe settings");
-
-    // The diffuse environment stores unit-albedo outgoing diffuse response.
-    // Projecting a constant scene-linear lat-long source must therefore
-    // reproduce the same constant without a second pi factor at the receiver.
-    constexpr uint32_t ConstantEnvironmentWidth = 64u;
-    constexpr uint32_t ConstantEnvironmentHeight = 32u;
-    const dm::float3 constantRadiance(0.2f, 0.4f, 0.8f);
-    std::vector<float> constantPixels(
-        std::size_t(ConstantEnvironmentWidth) *
-            std::size_t(ConstantEnvironmentHeight) * 3u);
-    for (std::size_t pixel = 0u;
-        pixel < constantPixels.size();
-        pixel += 3u)
-    {
-        constantPixels[pixel + 0u] = constantRadiance.x;
-        constantPixels[pixel + 1u] = constantRadiance.y;
-        constantPixels[pixel + 2u] = constantRadiance.z;
-    }
-
-    const auto constantProjection =
-        uvsr::ProjectDiffuseEnvironmentLatLongRgb(
-            constantPixels.data(),
-            ConstantEnvironmentWidth,
-            ConstantEnvironmentHeight);
-    Require(
-        constantProjection.has_value(),
-        "constant lat-long radiance projects to diffuse SH");
-    const std::array<dm::float3, 7> referenceDirections = {
-        dm::float3(1.f, 0.f, 0.f),
-        dm::float3(-1.f, 0.f, 0.f),
-        dm::float3(0.f, 1.f, 0.f),
-        dm::float3(0.f, -1.f, 0.f),
-        dm::float3(0.f, 0.f, 1.f),
-        dm::float3(0.f, 0.f, -1.f),
-        dm::float3(1.f, 1.f, 1.f)
-    };
-    for (dm::float3 direction : referenceDirections)
-    {
-        Require(Near(
-            uvsr::EvaluateDiffuseEnvironmentSh(
-                constantProjection->sh,
-                direction),
-            constantRadiance,
-            2e-3f),
-            "constant lat-long projects to a constant diffuse response");
-    }
-    Require(Near(
-        uvsr::EvaluateDiffuseEnvironmentSh(
-            constantProjection->sh,
-            dm::float3(0.f)),
-        uvsr::EvaluateDiffuseEnvironmentSh(
-            constantProjection->sh,
-            dm::float3(0.f, 1.f, 0.f)),
-        1e-6f),
-        "zero diffuse direction uses the stable up fallback");
-    Require(Near(
-        uvsr::EvaluateDiffuseEnvironmentSh(
-            constantProjection->sh,
-            dm::float3(
-                std::numeric_limits<float>::quiet_NaN(),
-                0.f,
-                0.f)),
-        uvsr::EvaluateDiffuseEnvironmentSh(
-            constantProjection->sh,
-            dm::float3(0.f, 1.f, 0.f)),
-        1e-6f),
-        "nonfinite diffuse direction uses the stable up fallback");
-
-    // Cubemap face order must match Donut/NVRHI's TextureCubeArray contract.
-    const std::array<dm::float3, 6> expectedFaceAxes = {
-        dm::float3(1.f, 0.f, 0.f),
-        dm::float3(-1.f, 0.f, 0.f),
-        dm::float3(0.f, 1.f, 0.f),
-        dm::float3(0.f, -1.f, 0.f),
-        dm::float3(0.f, 0.f, 1.f),
-        dm::float3(0.f, 0.f, -1.f)
-    };
-    for (uint32_t face = 0u; face < expectedFaceAxes.size(); ++face)
-    {
-        Require(Near(
-            uvsr::DiffuseEnvironmentCubeDirection(
-                face, 0u, 0u, 1u),
-            expectedFaceAxes[face]),
-            "diffuse environment cubemap face axis");
-    }
-
-    std::vector<float> nonfinitePixels = constantPixels;
-    nonfinitePixels[0] = std::numeric_limits<float>::quiet_NaN();
-    nonfinitePixels[1] = std::numeric_limits<float>::infinity();
-    nonfinitePixels[2] = -std::numeric_limits<float>::infinity();
-    const auto sanitizedProjection =
-        uvsr::ProjectDiffuseEnvironmentLatLongRgb(
-            nonfinitePixels.data(),
-            ConstantEnvironmentWidth,
-            ConstantEnvironmentHeight);
-    Require(
-        sanitizedProjection.has_value(),
-        "isolated nonfinite source texels are sanitized during projection");
-    for (dm::float3 direction : referenceDirections)
-    {
-        Require(FiniteNonnegative(
-            uvsr::EvaluateDiffuseEnvironmentSh(
-                sanitizedProjection->sh,
-                direction)),
-            "sanitized imported diffuse response is finite and nonnegative");
-    }
-
-    const dm::float3 halfClamped =
-        uvsr::ClampDiffuseEnvironmentForHalf(dm::float3(
-            std::numeric_limits<float>::max(),
-            uvsr::DiffuseEnvironmentHalfMaximum * 2.f,
-            -1.f));
-    Require(Near(
-        halfClamped,
-        dm::float3(
-            uvsr::DiffuseEnvironmentHalfMaximum,
-            uvsr::DiffuseEnvironmentHalfMaximum,
-            0.f),
-        1.f),
-        "finite diffuse radiance clamps to the nonnegative half range");
-    Require(all(
-        uvsr::ClampDiffuseEnvironmentForHalf(dm::float3(
-            std::numeric_limits<float>::quiet_NaN(),
-            std::numeric_limits<float>::infinity(),
-            -std::numeric_limits<float>::infinity())) ==
-            dm::float3(0.f)),
-        "nonfinite diffuse radiance sanitizes before half packing");
-
-    std::vector<float> blackPixels(8u * 4u * 3u, 0.f);
-    Require(
-        !uvsr::ProjectDiffuseEnvironmentLatLongRgb(
-            nullptr, 4u, 2u).has_value() &&
-            !uvsr::ProjectDiffuseEnvironmentLatLongRgb(
-                constantPixels.data(), 2u, 2u).has_value() &&
-            !uvsr::ProjectDiffuseEnvironmentLatLongRgb(
-                constantPixels.data(), 4u, 1u).has_value() &&
-            !uvsr::ProjectDiffuseEnvironmentLatLongRgb(
-                constantPixels.data(), 8u, 2u).has_value(),
-        "null, undersized, and non-lat-long projection inputs are rejected");
-    Require(
-        !uvsr::ProjectDiffuseEnvironmentLatLongRgb(
-            blackPixels.data(), 8u, 4u).has_value(),
-        "zero-energy lat-long input is rejected");
-
-    // Each direct visibility input applies only when its exact light
-    // identity matches. Missing or unrelated visibility is white.
-    Require(!uvsr::DirectLightVisibility{}.IsComplete(),
-        "an empty visibility input is incomplete");
-    int textureToken0 = 0;
-    int lightToken0 = 0;
-    int lightToken1 = 0;
-    auto* texture0 = reinterpret_cast<nvrhi::ITexture*>(
-        &textureToken0);
-    auto* light0 = reinterpret_cast<const donut::engine::Light*>(
-        &lightToken0);
-    auto* light1 = reinterpret_cast<const donut::engine::Light*>(
-        &lightToken1);
-    const uvsr::DirectLightVisibility factor0{
-        texture0, light0
-    };
-    const uvsr::DirectLightVisibilities factors{
-        factor0,
-        { texture0, light0, 4u }
-    };
-    Require(factors.flashlight.IsComplete() &&
-        factors.sun.IsComplete(),
-        "flashlight and sun slots are independently complete");
-    Require(uvsr::TargetsDirectLight(factor0, light0),
-        "pointer-identical light accepts its factor");
-    Require(!uvsr::TargetsDirectLight(factor0, light1),
-        "distinct light pointer rejects the factor");
-    Require(!uvsr::TargetsDirectLight(
-        uvsr::DirectLightVisibility{ texture0, nullptr },
-        light0),
-        "incomplete factor remains neutral");
-    Require(uvsr::ComposeDirectLightVisibility(
-        0.5f, 0.25f, true) == 0.25f,
-        "matching visibility inputs select the strongest occlusion");
-    Require(uvsr::ComposeDirectLightVisibility(
-        0.25f, 0.f, false) == 0.25f,
-        "unmatched visibility remains neutral");
-    Require(uvsr::ComposeDirectLightVisibility(
-        4.f, -1.f, true) == 0.f,
-        "visibility factors clamp before composition");
-    const Color combinedVisibility = {
-        uvsr::ComposeDirectLightVisibility(0.6f, 0.8f, true),
-        uvsr::ComposeDirectLightVisibility(0.6f, 0.4f, true),
-        uvsr::ComposeDirectLightVisibility(0.6f, 0.7f, true)
-    };
-    Require(Near(combinedVisibility, Color{ 0.6f, 0.4f, 0.6f }),
-        "both-on composition uses componentwise minimum, not multiplication");
-
-    for (const unsigned receiverSamples : { 2u, 4u, 8u, 16u })
-    {
-        (void)receiverSamples;
-        const float below = uvsr::ApplyClosestVisibilityCorrection(
-            0.2f, 0.4f, 0.7f);
-        const float pivot = uvsr::ApplyClosestVisibilityCorrection(
-            0.4f, 0.4f, 0.7f);
-        const float above = uvsr::ApplyClosestVisibilityCorrection(
-            0.8f, 0.4f, 0.7f);
-        Require(
-            uvsr::ApplyClosestVisibilityCorrection(
-                0.f, 0.4f, 0.7f) == 0.f &&
-            uvsr::ApplyClosestVisibilityCorrection(
-                1.f, 0.4f, 0.7f) == 1.f &&
-            pivot == 0.7f && below < pivot && pivot < above,
-            "MSAA denoising correction preserves endpoints, pivot, and "
-            "per-sample ordering");
-    }
-
-    const uvsr::DirectLightVisibilityTextureProperties
-        compatibleVisibilityTexture{
-            1920u, 1080u, 1u, 1u, 1u, 1u,
-            true, true, false, true
-        };
-    Require(uvsr::IsDirectLightVisibilityTextureCompatible(
-        compatibleVisibilityTexture, 1920u, 1080u),
-        "full-resolution R8 visibility texture is accepted");
-    auto incompatibleVisibilityTexture = compatibleVisibilityTexture;
-    incompatibleVisibilityTexture.width = 1919u;
-    Require(!uvsr::IsDirectLightVisibilityTextureCompatible(
-        incompatibleVisibilityTexture, 1920u, 1080u),
-        "stale-sized visibility texture fails white");
-    incompatibleVisibilityTexture = compatibleVisibilityTexture;
-    incompatibleVisibilityTexture.r8Unorm = false;
-    Require(!uvsr::IsDirectLightVisibilityTextureCompatible(
-        incompatibleVisibilityTexture, 1920u, 1080u),
-        "wrong-format visibility texture fails white");
-    auto compatibleMsaaVisibilityTexture = compatibleVisibilityTexture;
-    compatibleMsaaVisibilityTexture.arraySize = 16u;
-    compatibleMsaaVisibilityTexture.texture2D = false;
-    compatibleMsaaVisibilityTexture.texture2DArray = true;
-    Require(uvsr::IsDirectLightVisibilityTextureCompatible(
-        compatibleMsaaVisibilityTexture,
-        1920u,
-        1080u,
-        16u),
-        "16-slice R8 visibility is accepted for 16x MSAA");
-    Require(!uvsr::IsDirectLightVisibilityTextureCompatible(
-        compatibleMsaaVisibilityTexture,
-        1920u,
-        1080u,
-        8u),
-        "per-sample visibility cannot masquerade as another MSAA count");
-    incompatibleVisibilityTexture = compatibleVisibilityTexture;
-    incompatibleVisibilityTexture.sampleCount = 2u;
-    Require(!uvsr::IsDirectLightVisibilityTextureCompatible(
-        incompatibleVisibilityTexture, 1920u, 1080u),
-        "multisampled visibility texture fails white");
-    incompatibleVisibilityTexture = compatibleVisibilityTexture;
-    incompatibleVisibilityTexture.shaderResource = false;
-    Require(!uvsr::IsDirectLightVisibilityTextureCompatible(
-        incompatibleVisibilityTexture, 1920u, 1080u),
-        "non-SRV visibility texture fails white");
-
-    // CPU-side import/upload validation and defaults.
-    PbrMaterialParameters defaults;
-    Require(defaults.baseColor.x == 1.f && defaults.baseColor.y == 1.f &&
-        defaults.baseColor.z == 1.f, "default base color");
-    Require(defaults.metalness == 0.f, "default metalness");
-    Require(defaults.perceptualRoughness == 0.5f, "default roughness");
-    Require(defaults.ior == 1.5f, "default IOR");
-    Require(defaults.emissive.x == 0.f && defaults.emissive.y == 0.f &&
-        defaults.emissive.z == 0.f, "default emission");
-    Require(defaults.opacity == 1.f, "default opacity");
-    Require(Near(Alpha(0.f), MinAlpha),
-        "GGX alpha retains the deterministic minimum roughness floor");
-
-    PbrMaterialParameters invalid;
-    invalid.baseColor.x = std::numeric_limits<float>::quiet_NaN();
-    invalid.metalness = 2.f;
-    invalid.perceptualRoughness = -1.f;
-    invalid.ior = 0.f;
-    invalid.emissive.x = -2.f;
-    invalid.opacity = std::numeric_limits<float>::infinity();
-    ValidatePbrMaterialParameters(invalid);
-    Require(std::isfinite(invalid.baseColor.x), "invalid base color repaired");
-    Require(invalid.metalness == 1.f, "metalness clamped");
-    Require(invalid.perceptualRoughness == 0.f, "roughness clamped");
-    Require(invalid.ior == 1.f, "IOR clamped");
-    Require(invalid.emissive.x == 0.f, "negative emission clamped");
-    Require(invalid.opacity == 1.f, "invalid opacity repaired");
-
-    // IOR coverage: vacuum/air, water, common glass, and high-index dielectric.
-    Require(Near(PbrIorToF0(1.f), 0.f), "IOR 1.0 F0");
-    Require(Near(PbrIorToF0(1.33f), 0.02006f, 2e-4f), "IOR 1.33 F0");
-    Require(Near(PbrIorToF0(1.5f), 0.04f), "IOR 1.5 F0");
-    Require(Near(PbrIorToF0(2.f), 1.f / 9.f), "IOR 2.0 F0");
-
-    // Dielectric and metallic roughness sweeps remain finite; peak GGX falls
-    // as the lobe broadens.
-    const float smoothPeak = DistributionGgx(1.f, Alpha(0.01f));
-    const float roughPeak = DistributionGgx(1.f, Alpha(1.f));
-    Require(std::isfinite(smoothPeak) && std::isfinite(roughPeak), "finite GGX peaks");
-    Require(smoothPeak > roughPeak, "roughness broadens and lowers GGX peak");
-    Require(std::isfinite(SmithVisibility(0.01f, 0.01f, Alpha(0.5f))),
-        "finite grazing Smith visibility");
-
-    const float normalFresnel = Fresnel(1.f, 0.04f);
-    const float grazingFresnel = Fresnel(0.05f, 0.04f);
-    Require(grazingFresnel > normalFresnel, "grazing Fresnel increases");
-    Require(DiffuseBrdf(0.8f, 1.f, normalFresnel) == 0.f,
-        "metals have no ordinary diffuse lobe");
-    Require(DiffuseBrdf(0.8f, 0.f, normalFresnel) > DiffuseBrdf(0.1f, 0.f, normalFresnel),
-        "bright base color increases dielectric diffuse");
-
-    // Directional radiance is distance-independent; point radiance follows
-    // inverse-square attenuation at several distances.
-    const float directionalNear = 3.f;
-    const float directionalFar = 3.f;
-    Require(directionalNear == directionalFar, "directional light has no distance falloff");
-    const float pointAtOne = 12.f / (1.f * 1.f);
-    const float pointAtTwo = 12.f / (2.f * 2.f);
-    const float pointAtFour = 12.f / (4.f * 4.f);
-    Require(Near(pointAtOne / pointAtTwo, 4.f), "point light inverse-square at 2x");
-    Require(Near(pointAtOne / pointAtFour, 16.f), "point light inverse-square at 4x");
-
-    const float exactPointEmitter =
-        ResolveAnalyticalPositionalLightIntensity(
-            12.f, 0.f, 0.5f, 4.f);
-    Require(
-        exactPointEmitter == pointAtTwo,
-        "zero-radius analytical emitter preserves the exact point-light branch");
-    Require(
-        ResolveAnalyticalPositionalLightIntensity(
-            12.f,
-            std::numeric_limits<float>::quiet_NaN(),
-            0.5f,
-            4.f) == pointAtTwo,
-        "invalid emitter radius fails over to the exact point-light branch");
-    const float nearFiniteEmitter =
-        ResolveAnalyticalPositionalLightIntensity(
-            12.f, 0.1f, 100.f, 0.0001f);
-    Require(
-        std::isfinite(nearFiniteEmitter) && nearFiniteEmitter > 0.f &&
-            nearFiniteEmitter < 12.f / (0.01f * 0.01f),
-        "positive-radius analytical emitter bounds near-field energy");
-    const float farFiniteEmitter =
-        ResolveAnalyticalPositionalLightIntensity(
-            12.f, 0.1f, 0.01f, 10000.f);
-    const float farPointEmitter = 12.f / (100.f * 100.f);
-    Require(
-        Near(farFiniteEmitter, farPointEmitter, 1e-7f),
-        "finite analytical emitter converges to inverse square in the far field");
-
-    const float unboundedRange = ResolvePbrAnalyticalRangeWeight(
-        4.f, 0.f);
-    const float finiteRange = ResolvePbrAnalyticalRangeWeight(
-        4.f, 0.25f);
-    const float exhaustedRange = ResolvePbrAnalyticalRangeWeight(
-        16.f, 0.25f);
-    Require(
-        unboundedRange == 1.f && Near(finiteRange, 0.5625f) &&
-            exhaustedRange == 0.f,
-        "analytical range profile retains squared finite-range attenuation");
-
-    const float innerAngle = 0.5f;
-    const float outerAngle = 1.f;
-    const float innerCosine = std::cos(innerAngle * 0.5f);
-    const float outerCosine = std::cos(outerAngle * 0.5f);
-    Require(
-        ResolvePbrOrdinarySpotWeight(
-            innerCosine, innerAngle, outerAngle) == 1.f &&
-        ResolvePbrOrdinarySpotWeight(
-            outerCosine, innerAngle, outerAngle) == 0.f &&
-        Near(ResolvePbrOrdinarySpotWeight(
-            0.5f * (innerCosine + outerCosine),
-            innerAngle,
-            outerAngle), 0.5f),
-        "ordinary spotlight profile retains inner, outer, and smooth midpoint weights");
-    Require(
-        Near(ApplyPbrAnalyticalLightProfile(
-            nearFiniteEmitter,
-            finiteRange,
-            0.5f), nearFiniteEmitter * 0.28125f),
-        "finite-emitter energy is weighted once by range and spotlight profiles");
-
-    // Visibility is linear and independent from ambient occlusion.
-    const float bsdf = DiffuseBrdf(0.5f, 0.f, normalFresnel);
-    const float visible = DirectLight(5.f, bsdf, 0.75f, 1.f);
-    Require(DirectLight(5.f, bsdf, 0.75f, 0.f) == 0.f, "zero visibility blocks direct light");
-    Require(Near(DirectLight(5.f, bsdf, 0.75f, 0.5f), visible * 0.5f),
-        "half visibility halves direct light");
-    const float directAndEmissive = visible + 2.f;
-    const float fallbackIndirect = 0.75f;
-    const float screenSpaceGi = 0.5f;
-    const float compositeOccluded = IndirectComposite(
-        directAndEmissive, fallbackIndirect, 0.f, screenSpaceGi);
-    const float compositeVisible = IndirectComposite(
-        directAndEmissive, fallbackIndirect, 1.f, screenSpaceGi);
-    Require(Near(compositeVisible - compositeOccluded, fallbackIndirect),
-        "ambient visibility changes only fallback indirect");
-    Require(Near(compositeOccluded - directAndEmissive, screenSpaceGi),
-        "ambient visibility does not multiply screen-space GI");
-    Require(Near(compositeVisible - fallbackIndirect - screenSpaceGi, directAndEmissive),
-        "ambient visibility does not alter direct light or emission");
-    Require(Near(
-        IndirectComposite(directAndEmissive, fallbackIndirect, 1.f, 0.f),
-        directAndEmissive + fallbackIndirect),
-        "separated neutral indirect composite adds no hidden specular term");
-
-    // The Deferred MSAA visibility bridge must select one complete reverse-Z
-    // owner instead of averaging guides across sparse silhouette coverage.
-    const float nan =
-        std::numeric_limits<float>::quiet_NaN();
-    const std::array<MsaaVisibilityGuide, 8>
-        sparseVisibilityGuides = {{
-            { 0.f, false },
-            { 0.25f, true },
-            { nan, true },
-            { 0.8f, false },
-            { 0.75f, true },
-            { 0.75f, true },
-            { -0.1f, true },
-            { std::numeric_limits<float>::infinity(), true }
-        }};
-    Require(
-        ResolveClosestReverseZOwner(
-            sparseVisibilityGuides) == 4,
-        "closest reverse-Z MSAA visibility owner rejects background, invalid normals, and non-finite depth while preserving the lower-index tie");
-    const std::array<MsaaVisibilityGuide, 2>
-        backgroundVisibilityGuides = {{
-            { 0.f, false },
-            { 0.f, false }
-        }};
-    Require(
-        ResolveClosestReverseZOwner(
-            backgroundVisibilityGuides) == -1,
-        "all-background MSAA visibility has no fabricated surface owner");
-    const float visibilityCorrection = -2.f;
-    Require(
-        Near(
-            visibilityCorrection * (1.f / 4.f),
-            -0.5f) &&
-            Near(
-                visibilityCorrection * (4.f / 4.f),
-                -2.f),
-        "MSAA visibility correction scales continuously from sparse coverage to full coverage");
-
-    const float backFacingSourceCosine = std::max(-0.25f, 0.f);
-    Require(backFacingSourceCosine == 0.f,
-        "back-facing source contributes no diffuse GI radiance");
-
-    // Geometric-normal validity, no-light, and emission-only behavior.
-    const float geometricNormalDotLight = -0.2f;
-    Require(geometricNormalDotLight <= 0.f, "back-side light rejected");
-    const PbrContractFloat3 viewForward{ 0.f, 0.f, 1.f };
-    Require(!ShouldFlipPbrSurfaceNormals(
-        true, false, viewForward, viewForward),
-        "a reflected double-sided instance keeps its view-facing normal despite raster winding");
-    Require(ShouldFlipPbrSurfaceNormals(
-        true,
-        true,
-        PbrContractFloat3{ 0.f, 0.f, -1.f },
-        viewForward),
-        "a double-sided back face is oriented into the view hemisphere");
-    Require(ShouldFlipPbrSurfaceNormals(
-        false, false, viewForward, viewForward) &&
-        !ShouldFlipPbrSurfaceNormals(
-            false,
-            true,
-            PbrContractFloat3{ 0.f, 0.f, -1.f },
-            viewForward),
-        "single-sided normal orientation retains the raster-facing contract");
-
-    const PbrContractFloat3 derivativeX{ 2.f, 0.f, 0.f };
-    const PbrContractFloat3 derivativeY{ 0.f, 3.f, 0.f };
-    const PbrContractFloat3 fallbackNormal{ 0.f, 1.f, 0.f };
-    Require(Near(
-        ResolvePbrTrianglePlaneNormal(
-            derivativeX,
-            derivativeY,
-            fallbackNormal),
-        PbrContractFloat3{ 0.f, 0.f, 1.f }),
-        "triangle plane normal preserves x-derivative cross y-derivative ordering");
-    Require(Near(
-        ResolvePbrTrianglePlaneNormal(
-            derivativeY,
-            derivativeX,
-            fallbackNormal),
-        PbrContractFloat3{ 0.f, 0.f, -1.f }),
-        "swapping triangle derivatives reverses the unoriented plane normal");
-    Require(Near(
-        ResolvePbrTrianglePlaneNormal(
-            PbrContractFloat3{},
-            PbrContractFloat3{},
-            fallbackNormal),
-        fallbackNormal),
-        "degenerate triangle derivatives retain the material-normal fallback");
-
-    const PbrContractSurfaceNormals orientedTriangle =
-        ResolvePbrTriangleSurfaceNormals(
-            derivativeY,
-            derivativeX,
-            fallbackNormal,
-            PbrContractFloat3{ 0.6f, 0.f, -0.8f },
-            viewForward);
-    Require(Near(
-        orientedTriangle.geometricNormal,
-        PbrContractFloat3{ 0.f, 0.f, 1.f }) && Near(
-        orientedTriangle.shadingNormal,
-        PbrContractFloat3{ -0.6f, 0.f, 0.8f }),
-        "view-facing triangle orientation also keeps shading and geometry normals in one hemisphere");
-    const float emission = 7.f;
-    const float noLightFinal = 0.f + emission;
-    Require(noLightFinal == emission, "emission remains additive without lights");
-    Require(std::isfinite(noLightFinal) && noLightFinal >= 0.f, "final radiance is finite and nonnegative");
-
-    Require(uvsr::HasActiveScreenSpaceLightingConsumer(
-            true, false, true, false, false),
-        "active diffuse GI is an independent visibility consumer");
-    Require(uvsr::HasActiveScreenSpaceLightingConsumer(
-            true, true, false, true, false),
-        "AO remains active for diffuse environment lighting");
-    Require(uvsr::HasActiveScreenSpaceLightingConsumer(
-            true, true, false, false, true),
-        "AO remains active for specular environment lighting");
-    Require(!uvsr::HasActiveScreenSpaceLightingConsumer(
-            true, true, false, false, false),
-        "AO without GI or an environment lobe is a no-op");
-    Require(!uvsr::HasActiveScreenSpaceLightingConsumer(
-            false, true, true, true, true),
-        "the visibility master toggle disables every consumer");
-
-    std::cout << "UVSR PBR reference validation passed\n";
+    CheckDirectVisibility();
+    CheckLighting();
+    CheckShadowEmitters();
+    CheckMaterialsAndDebug();
+    CheckRayVisibility();
     return EXIT_SUCCESS;
 }

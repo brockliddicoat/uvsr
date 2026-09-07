@@ -10,7 +10,6 @@
 struct PathTracingConstants
 {
     PlanarViewConstants view;
-    PlanarViewConstants previousView;
     FlashlightBeamProfileBinding flashlight;
 
     float environmentScale;
@@ -22,12 +21,12 @@ struct PathTracingConstants
     UVSR_GPU_UINT lightCount;
     UVSR_GPU_UINT flags;
 
-    UVSR_GPU_UINT previousViewValid;
-    UVSR_GPU_UINT instanceCount;
-    UVSR_GPU_UINT padding0;
-    UVSR_GPU_UINT padding1;
-
     UVSR_GPU_UINT4 rayMaterialLimits;
+
+    UVSR_GPU_UINT maximumBounces;
+    UVSR_GPU_UINT minimumBounces;
+    float fireflyThreshold;
+    UVSR_GPU_UINT fireflyFilter;
 };
 
 #endif

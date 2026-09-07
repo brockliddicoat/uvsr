@@ -1,6 +1,6 @@
 # `stb`
 
-## Record
+## record
 
 - Relationship: Dependency Integration
 - Status: Current
@@ -11,18 +11,18 @@
 - Governing Terms: Upstream choice of MIT or public-domain dedication; copyright Sean Barrett
 - License SHA-256: `bebfe904b14301657e4e5d655c811d51fd31b97c455b9cc2d8600d6bac6cff63`
 
-## UVSR Relationship
+## UVSR relationship
 
 UVSR fetches the immutable upstream archive directly and owns the `stb`
-interface target. First-party environment loading and Donut's transitional
+interface target. First-party environment loading and Donut's retained
 texture pipeline consume the same unmodified target.
 
-## Evidence
+## evidence
 
 - [Direct Pin and Target](../../cmake/DirectThirdParty.cmake)
 - [First-Party Environment Loader](../../src/image_based_lighting_environment.cpp)
 
-## Commercial Clearance
+## commercial clearance
 
 The complete choice-of-terms file is installed as
 `bin/licenses/stb-MIT-or-Public-Domain.txt`.

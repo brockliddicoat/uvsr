@@ -2,16 +2,15 @@
 
 #include "direct_light_visibility.h"
 #include "flashlight_shared.h"
+#include "lighting_surface.h"
 #include "pbr_deferred_dispatch_contract.h"
 
-#include <donut/core/math/math.h>
 #include <donut/engine/BindingCache.h>
-#include <donut/render/DeferredLightingPass.h>
 #include <nvrhi/nvrhi.h>
 
-#include <array>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace donut::engine
 {
@@ -25,11 +24,25 @@ namespace uvsr
     class RendererCommonPasses;
     class RendererShaderFactory;
 
+    struct PbrDeferredLightingInputs
+    {
+        const donut::engine::ICompositeView* view = nullptr;
+        LightingSurfaceView surface;
+        const std::vector<std::shared_ptr<donut::engine::Light>>* lights =
+            nullptr;
+        bool hardShadows = false;
+        nvrhi::ITexture* output = nullptr;
+        DirectLightVisibilities directLightVisibilities;
+        const donut::engine::Light* flashlight = nullptr;
+        FlashlightBeamProfile flashlightBeamProfile;
+        const ImageBasedLightingProbe* environment = nullptr;
+        nvrhi::ITexture* skyVisibility = nullptr;
+        bool applySkyVisibilityToDiffuseIbl = false;
+        bool applySkyVisibilityToSpecularIbl = false;
+        uint32_t lightingDebugView = 0u;
+    };
 }
 
-// UVSR-owned deferred lighting pass. In addition to the regular HDR target,
-// it emits material-weighted direct diffuse and diffuse-environment radiance
-// for screen-space indirect-light sampling.
 class PbrDeferredLightingPass final
 {
 private:
@@ -41,18 +54,11 @@ private:
     };
 
     nvrhi::DeviceHandle m_Device;
-    nvrhi::SamplerHandle m_ShadowSamplerComparison;
     nvrhi::BufferHandle m_DeferredLightingCB;
-    // No source UAV and the one-bounce diffuse source used by visibility.
-    std::array<Pipeline, 2> m_Pipelines;
-    // Static 2x, 4x, 8x, and 16x per-sample deferred pipelines, each compiled
-    // without and with the single-surface visibility correction.
-    std::array<std::array<Pipeline, 4>, 2> m_MsaaPipelines;
-    std::array<nvrhi::TextureHandle, 4> m_NeutralMsaaVisibility;
+    Pipeline m_Pipeline;
     donut::engine::BindingCache m_BindingSets;
     std::shared_ptr<uvsr::RendererCommonPasses> m_CommonPasses;
     std::shared_ptr<uvsr::RendererShaderFactory> m_ShaderFactory;
-    uint32_t m_PipelinePreparationStep = 0u;
     bool m_PipelinesReady = false;
     bool m_PipelinePreparationFailed = false;
     bool m_ResourcesValid = false;
@@ -80,28 +86,7 @@ public:
 
     [[nodiscard]] uvsr::PbrDeferredLightingRenderResult Render(
         nvrhi::ICommandList* commandList,
-        const donut::engine::ICompositeView& compositeView,
-        const donut::render::DeferredLightingPass::Inputs& inputs,
-        const uvsr::DirectLightVisibilities& directLightVisibilities,
-        const donut::engine::Light* flashlight,
-        const FlashlightBeamProfile& flashlightBeamProfile,
-        const uvsr::ImageBasedLightingProbe* environment,
-        nvrhi::ITexture* skyVisibility,
-        nvrhi::ITexture* rawClosestSkyVisibility,
-        nvrhi::ITexture* denoisedClosestSkyVisibility,
-        uint32_t skyVisibilityReceiverSampleCount,
-        bool applySkyVisibilityToDiffuseIbl,
-        bool applySkyVisibilityToSpecularIbl,
-        nvrhi::ITexture* sourceRadianceOutput,
-        bool separateIndirect,
-        bool writeSourceRadiance,
-        uint32_t lightingDebugView,
-        uint32_t visibilityDebugView,
-        donut::math::float2 randomOffset = donut::math::float2::zero(),
-        nvrhi::ITexture* resolvedBackground = nullptr,
-        uint32_t msaaSampleCount = 1u,
-        nvrhi::ITexture* visibilityBaseLighting = nullptr,
-        nvrhi::ITexture* visibilityComposite = nullptr);
+        const uvsr::PbrDeferredLightingInputs& inputs);
 
     void ResetBindingCache();
 };

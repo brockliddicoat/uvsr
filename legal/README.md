@@ -1,55 +1,52 @@
-# UVSR Legal Guide
+# legal guide
 
-This directory explains what may be used, what must be credited, and which
-rights UVSR can and cannot grant. It is a practical guide, not a substitute for
-the controlling license texts or legal advice.
+this directory separates UVSR controlled material from third party code,
+tools, data, and assets. it is a practical inventory, not legal advice or a
+replacement for the controlling terms.
 
-## Community Use
+## UVSR terms
 
-First-party UVSR material is source-available under the
-[Polyform Noncommercial License 1.0.0](../LICENSE.md). You may use, study, change,
-and share it for permitted noncommercial purposes. Keep the license and this
-Required Notice with every copy you share or redistribute:
+first party UVSR material is available under the
+[PolyForm Noncommercial License 1.0.0](../LICENSE.md). keep that license and
+this exact notice with every permitted copy or redistribution:
 
 > Required Notice: UVSR | https://github.com/brockliddicoat/uvsr
 
-Please also credit UVSR when its architecture or research materially informs a
-new project, even where copyright law would not require that courtesy. This is
-a community norm, not an attempt to claim ownership of ideas, methods, or
-independently written implementations.
+the public license does not permit commercial use. a separate UVSR agreement
+can cover only rights controlled by the UVSR Project Steward and covered
+contributors. it cannot sublicense third party material. see
+[commercial licensing](documentation/commercial-licensing.md) for the current
+clearance limits.
 
-## Commercial Use
+## third party terms
 
-Commercial use and sublicensing are not granted by the public license. A
-separate written agreement protects UVSR from being commercially exploited
-without the project's participation while leaving noncommercial learning,
-experimentation, and contribution broadly available. [Contact the UVSR
-project](mailto:brockliddicoat@gmail.com) to discuss a commercial license.
+third party code, dependencies, fonts, tools, scenes, HDR files, and adapted or
+generated material remain under their own terms. follow the exact source and
+package being distributed:
 
-UVSR is not yet represented as a commercially clear, one-license package.
-Several dependencies and assets need replacement, separate permission, or
-license confirmation before some distributions are viable. See
-[Commercial Licensing](documentation/commercial-licensing.md).
+- [license inventory](licenses/README.md) identifies retained license bodies
+- [source registry](documentation/README.md) records current revisions,
+  relationships, evidence, and unresolved provenance
+- [third party notices](documentation/third-party-notices.md) is the summary
+  copied into renderer packages
+- adjacent asset records preserve the exact
+  [scene](../assets/scenes/README.md),
+  [environment](../assets/environments/README.md), and
+  [noise](../assets/noise/README.md) identities
 
-## License Scope
+license bodies, quoted notices, upstream source text, and generated provenance
+records must remain byte for byte unless the controlling source changes.
+summaries must match the current source and package rather than old plans or
+historical builds.
 
-The UVSR public license applies only to original material controlled by the
-UVSR Project Steward and contribution rights validly granted to UVSR, unless
-marked otherwise.
-Incorporated code, dependencies, fonts, tools, scenes, environment maps, and
-other third-party material are not relicensed by UVSR and remain available only
-under their original terms. A commercial UVSR agreement can grant only
-UVSR-controlled rights; it cannot sublicense someone else's work.
+## known clearance limits
 
-## Directory Guide
+San Miguel permits research and educational use with attribution, not general
+commercial distribution. the exact Bistro Wine GLB has an unconfirmed chain of
+title, and the terms for the adapted PBRT San Miguel camera remain unconfirmed.
+the Direct3D 12 Agility SDK imposes separate conditions. the AgX
+lineage also needs further confirmation. these records do not weaken any
+upstream term.
 
-- [Licenses](licenses/README.md) contains the first-party license, contributor
-  agreement, and verbatim third-party license texts kept in this repository.
-- [Documentation](documentation/README.md) combines the substantial-source
-  registry, commercial-clearance notes, third-party notices, privacy notice,
-  and contributor-agreement automation.
-
-## Questions
-
-For commercial licensing, permissions, correction requests, or provenance
-questions, [contact the UVSR project](mailto:brockliddicoat@gmail.com).
+for licensing, permissions, corrections, or provenance questions, contact the
+[UVSR project](mailto:brockliddicoat@gmail.com).

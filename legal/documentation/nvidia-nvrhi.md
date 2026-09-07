@@ -16,7 +16,7 @@ resources, pipelines, command lists, synchronization, and ray tracing. The
 immutable Git submodule at `third_party/nvrhi` supplies the active `nvrhi` and
 `nvrhi_d3d12` targets. UVSR stages reviewed D3D12 overrides outside that
 submodule; it does not edit or fork NVRHI. This completed direct-ownership slice
-does not imply complete Donut detachment.
+does not change the retained Donut boundary.
 
 ## Evidence
 

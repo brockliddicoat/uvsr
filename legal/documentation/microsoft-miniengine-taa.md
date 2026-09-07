@@ -3,7 +3,7 @@
 ## Record
 
 - Relationship: Adapted Implementation
-- Status: Current
+- Status: Retired adaptation, notice retained for recovery
 - Confidence: Confirmed
 - Upstream: [Microsoft DirectX Graphics Samples](https://github.com/microsoft/DirectX-Graphics-Samples)
 - Revision: `357ade6ec6ff0d9dcadc48f35c7a28e37c0cdf7a`
@@ -13,15 +13,14 @@
 
 UVSR adapted MiniEngine's temporal blend, resolve, and sharpening approach to
 its own resource layouts, motion contract, UI, history rules, and shader build.
-The current HLSL files retain Microsoft's copyright and license notice; the
-surrounding renderer integration is first-party.
+the removed HLSL files retain Microsoft's copyright and license notice in
+historical source. the surrounding renderer integration was first-party.
 
 ## Evidence
 
-- [Temporal Anti-Aliasing Host](../../src/temporal_aa.cpp)
-- [Blend Shader](../../src/temporal_aa_blend_cs.hlsl)
-- [Resolve Shader](../../src/temporal_aa_resolve_cs.hlsl)
-- [Sharpen Shader](../../src/temporal_aa_sharpen_cs.hlsl)
+- former owners: `src/temporal_aa.cpp`, `temporal_aa_blend_cs.hlsl`,
+  `temporal_aa_resolve_cs.hlsl`, and `temporal_aa_sharpen_cs.hlsl`.
+- [removal and dirty-state recovery](../../docs/postmortem/taa.md)
 - Commit `d27517538c1693b134157b93dbb612fbac493368`
 
 ## Commercial Clearance

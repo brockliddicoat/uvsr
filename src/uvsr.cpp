@@ -1,4 +1,18 @@
-#include "uvsr_internal.h"
+#include "uvsr_ui_internal.h"
+#include "build_identity.h"
+#include "engine_diagnostics.h"
+#include "engine_startup.h"
+#include "gpu_capabilities.h"
+#include "renderer_nvrhi_message_callback.h"
+#include "uvsr_command_line.h"
+#include "windows_executable_path.h"
+#include <donut/app/DeviceManager.h>
+#include <nvrhi/utils.h>
+#include <dwmapi.h>
+#include <directx/d3d12.h>
+
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
 
 static void ShowGraphicsStartupError(const wchar_t* message)
 {
@@ -573,7 +587,6 @@ int WINAPI WinMain(
         deviceManager->GetGraphicsAPI());
     const std::string windowTitle =
         "UVSR Engine " + std::string(apiName) +
-        " " + std::string(GetBuiltEngineVersion()) +
         " (" + std::string(GetBuiltSourceCommit()).substr(0u, 7u) + ")";
     if (!deviceManager->CreateWindowDeviceAndSwapChain(
             deviceParams,
@@ -609,25 +622,6 @@ int WINAPI WinMain(
         UIData uiData;
         uiData.GpuAdapterChoices = std::move(adapterChoices);
         uiData.ActiveGpuAdapterIndex = deviceParams.adapterIndex;
-        const auto activeAdapter = std::find_if(
-            uiData.GpuAdapterChoices.begin(),
-            uiData.GpuAdapterChoices.end(),
-            [&uiData](const GpuAdapterChoice& adapter)
-            {
-                return adapter.adapterIndex ==
-                    uiData.ActiveGpuAdapterIndex;
-            });
-        const uint32_t activeVendorId =
-            activeAdapter != uiData.GpuAdapterChoices.end()
-                ? activeAdapter->vendorId
-                : 0u;
-        uiData.AdaptiveSync = DefaultAdaptiveSyncMode(
-            activeVendorId,
-            deviceManager->IsPresentAllowTearingSupported());
-        deviceManager->SetPresentAllowTearing(
-            AdaptiveSyncRequestsPresentTearing(
-                uiData.AdaptiveSync));
-
         std::shared_ptr<UvsrSceneViewer> demo;
         std::shared_ptr<UIRenderer> gui;
         const auto releaseUiState = [&]()
@@ -672,10 +666,8 @@ int WINAPI WinMain(
                 "Cannot initialize required UVSR UI fonts: %s",
                 error.what());
             ShowGraphicsStartupError(
-                L"UVSR could not initialize the selected UI fonts. If Codex "
-                L"was selected, restore the standard Windows Segoe UI fonts. "
-                L"Otherwise, reinstall UVSR with UVSR Launcher, then try "
-                L"again.");
+                L"UVSR requires the Windows Segoe UI Semibold and Bold fonts. "
+                L"Restore these standard Windows fonts, then try again.");
             releaseUiState();
             deviceManager->Shutdown();
             delete deviceManager;

@@ -85,10 +85,7 @@ namespace uvsr
     struct RendererGeometryPassDescription
     {
         RendererGeometryOutput output = RendererGeometryOutput::Pbr;
-        bool enableMotionVectors = false;
         bool whiteWorld = false;
-        bool enableDepthWrite = true;
-        bool trackBindingLiveness = true;
     };
 
     struct RendererGeometryMaterial
@@ -222,7 +219,6 @@ namespace uvsr
         [[nodiscard]] bool Flush();
 
         nvrhi::DeviceHandle m_Device;
-        RendererGeometryPassDescription m_Description;
         nvrhi::TextureHandle m_FallbackTexture;
         nvrhi::ShaderHandle m_VertexShader;
         nvrhi::ShaderHandle m_PixelShader;

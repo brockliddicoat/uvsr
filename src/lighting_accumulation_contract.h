@@ -3,40 +3,11 @@
 
 #define UVSR_LIGHTING_ACCUMULATION_TERMINAL_COUNT 0xffffffffu
 
+#include "shader_math.h"
+
 #ifdef __cplusplus
-
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-
-using LightingAccumulationUint = std::uint32_t;
-
-struct LightingAccumulationFloat4
-{
-    float x;
-    float y;
-    float z;
-    float w;
-};
-
-inline LightingAccumulationFloat4 LightingAccumulationMakeFloat4(
-    float x,
-    float y,
-    float z,
-    float w) noexcept
-{
-    return { x, y, z, w };
-}
-
-inline bool LightingAccumulationIsFinite4(
-    LightingAccumulationFloat4 value) noexcept
-{
-    return std::isfinite(value.x) && std::isfinite(value.y) &&
-        std::isfinite(value.z) && std::isfinite(value.w);
-}
-
-inline LightingAccumulationFloat4 LightingAccumulationSanitizeSample(
-    LightingAccumulationFloat4 value) noexcept
+inline ShaderFloat4 LightingAccumulationSanitizeSample(
+    ShaderFloat4 value) noexcept
 {
     return {
         std::max(value.x, 0.f),
@@ -45,75 +16,30 @@ inline LightingAccumulationFloat4 LightingAccumulationSanitizeSample(
         1.f
     };
 }
-
-inline LightingAccumulationFloat4 LightingAccumulationLerp(
-    LightingAccumulationFloat4 left,
-    LightingAccumulationFloat4 right,
-    float weight) noexcept
-{
-    return {
-        left.x + (right.x - left.x) * weight,
-        left.y + (right.y - left.y) * weight,
-        left.z + (right.z - left.z) * weight,
-        left.w + (right.w - left.w) * weight
-    };
-}
-
-#define UVSR_LIGHTING_ACCUMULATION_INLINE inline
-
 #else
-
-#define LightingAccumulationUint uint
-#define LightingAccumulationFloat4 float4
-
-float4 LightingAccumulationMakeFloat4(
-    float x,
-    float y,
-    float z,
-    float w)
-{
-    return float4(x, y, z, w);
-}
-
-bool LightingAccumulationIsFinite4(float4 value)
-{
-    return all(isfinite(value));
-}
-
 float4 LightingAccumulationSanitizeSample(float4 value)
 {
     value.rgb = max(value.rgb, 0.0f);
     value.a = 1.0f;
     return value;
 }
-
-float4 LightingAccumulationLerp(
-    float4 left,
-    float4 right,
-    float weight)
-{
-    return lerp(left, right, weight);
-}
-
-#define UVSR_LIGHTING_ACCUMULATION_INLINE
-
 #endif
 
 struct LightingAccumulationState
 {
-    LightingAccumulationFloat4 mean;
-    LightingAccumulationUint count;
-    LightingAccumulationUint attempted;
-    LightingAccumulationUint accepted;
-    LightingAccumulationUint publish;
+    ShaderFloat4 mean;
+    ShaderUint count;
+    ShaderUint attempted;
+    ShaderUint accepted;
+    ShaderUint publish;
 };
 
-UVSR_LIGHTING_ACCUMULATION_INLINE LightingAccumulationUint
+UVSR_SHADER_INLINE ShaderUint
     ResolveLightingAccumulationAttemptToken(
-        LightingAccumulationUint previousCount,
+        ShaderUint previousCount,
         bool resetHistory)
 {
-    const LightingAccumulationUint count = resetHistory
+    const ShaderUint count = resetHistory
         ? 0u
         : previousCount;
     return (count < UVSR_LIGHTING_ACCUMULATION_TERMINAL_COUNT
@@ -121,10 +47,10 @@ UVSR_LIGHTING_ACCUMULATION_INLINE LightingAccumulationUint
             : UVSR_LIGHTING_ACCUMULATION_TERMINAL_COUNT - 1u) + 1u;
 }
 
-UVSR_LIGHTING_ACCUMULATION_INLINE LightingAccumulationState
+UVSR_SHADER_INLINE LightingAccumulationState
     RepairLightingAccumulation(
-        LightingAccumulationFloat4 previousMean,
-        LightingAccumulationUint previousCount,
+        ShaderFloat4 previousMean,
+        ShaderUint previousCount,
         bool resetHistory)
 {
     LightingAccumulationState result;
@@ -134,36 +60,36 @@ UVSR_LIGHTING_ACCUMULATION_INLINE LightingAccumulationState
     result.accepted = 0u;
     result.publish = 1u;
     if (resetHistory || previousCount == 0u ||
-        !LightingAccumulationIsFinite4(previousMean))
+        !ShaderIsFinite4(previousMean))
     {
-        result.mean = LightingAccumulationMakeFloat4(
+        result.mean = ShaderMakeFloat4(
             0.0f, 0.0f, 0.0f, 0.0f);
         result.count = 0u;
     }
     return result;
 }
 
-UVSR_LIGHTING_ACCUMULATION_INLINE LightingAccumulationState
+UVSR_SHADER_INLINE LightingAccumulationState
     ResolveLightingAccumulationCandidate(
         LightingAccumulationState previous,
-        LightingAccumulationUint attemptToken,
-        LightingAccumulationFloat4 candidate)
+        ShaderUint attemptToken,
+        ShaderFloat4 candidate)
 {
     previous.attempted = attemptToken != 0u ? 1u : 0u;
     previous.accepted = 0u;
     previous.publish = 1u;
     if (attemptToken == 0u ||
-        !LightingAccumulationIsFinite4(candidate) ||
+        !ShaderIsFinite4(candidate) ||
         previous.count == UVSR_LIGHTING_ACCUMULATION_TERMINAL_COUNT)
     {
         return previous;
     }
 
     candidate = LightingAccumulationSanitizeSample(candidate);
-    const LightingAccumulationUint newCount = previous.count + 1u;
+    const ShaderUint newCount = previous.count + 1u;
     previous.mean = previous.count == 0u
         ? candidate
-        : LightingAccumulationLerp(
+        : ShaderLerp4(
             previous.mean,
             candidate,
             1.0f / float(newCount));
@@ -172,10 +98,5 @@ UVSR_LIGHTING_ACCUMULATION_INLINE LightingAccumulationState
     return previous;
 }
 
-#ifndef __cplusplus
-#undef LightingAccumulationUint
-#undef LightingAccumulationFloat4
-#endif
-#undef UVSR_LIGHTING_ACCUMULATION_INLINE
 
 #endif // UVSR_LIGHTING_ACCUMULATION_CONTRACT_H

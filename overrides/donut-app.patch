@@ -47,12 +47,10 @@ index 67fc1f608014be6f41b919b420e899e6ff7b35b2..050f7398babf22e9ab78d6f2cafe0bc7
  
          // returns the size of the window in screen coordinates
          void GetWindowDimensions(int& width, int& height);
-@@ -300,12 +308,16 @@ namespace donut::app
+@@ -300,12 +308,14 @@ namespace donut::app
          float m_PrevDPIScaleFactorX = 0.f;
          float m_PrevDPIScaleFactorY = 0.f;
          bool m_RequestedVSync = false;
-+        bool m_RequestedPresentAllowTearing = true;
-+        bool m_PresentAllowTearingSupported = false;
          bool m_InstanceCreated = false;
          int m_PrevWindowX = 0;
          int m_PrevWindowY = 0;
@@ -64,7 +62,7 @@ index 67fc1f608014be6f41b919b420e899e6ff7b35b2..050f7398babf22e9ab78d6f2cafe0bc7
  
          double m_AverageFrameTime = 0.0;
          double m_AverageTimeUpdateInterval = 0.5;
-@@ -330,7 +342,7 @@ namespace donut::app
+@@ -330,7 +340,7 @@ namespace donut::app
          void CreateDepthBuffer();
  
          void Animate(double elapsedTime, bool windowIsFocused);
@@ -73,16 +71,7 @@ index 67fc1f608014be6f41b919b420e899e6ff7b35b2..050f7398babf22e9ab78d6f2cafe0bc7
          void UpdateAverageFrameTime(double elapsedTime);
          bool AnimateRenderPresent();
          // device-specific methods
-@@ -353,6 +365,8 @@ namespace donut::app
-         [[nodiscard]] double GetPreviousFrameTimestamp() const { return m_PreviousFrameTimestamp; }
-         void SetFrameTimeUpdateInterval(double seconds) { m_AverageTimeUpdateInterval = seconds; }
-         [[nodiscard]] bool IsVsyncEnabled() const { return m_DeviceParams.vsyncEnabled; }
-+        [[nodiscard]] bool IsPresentAllowTearingSupported() const { return m_PresentAllowTearingSupported; }
-+        void SetPresentAllowTearing(bool enabled) { m_RequestedPresentAllowTearing = enabled; }
-         virtual void SetVsyncEnabled(bool enabled) { m_RequestedVSync = enabled; /* will be processed later */ }
-         virtual void ReportLiveObjects() {}
-         void SetEnableRenderDuringWindowMovement(bool val) {m_EnableRenderDuringWindowMovement = val;} 
-@@ -380,6 +394,10 @@ namespace donut::app
+@@ -380,6 +390,10 @@ namespace donut::app
  
          [[nodiscard]] GLFWwindow* GetWindow() const { return m_Window; }
          [[nodiscard]] uint32_t GetFrameIndex() const { return m_FrameIndex; }
@@ -93,7 +82,7 @@ index 67fc1f608014be6f41b919b420e899e6ff7b35b2..050f7398babf22e9ab78d6f2cafe0bc7
  
          virtual nvrhi::ITexture* GetCurrentBackBuffer() = 0;
          virtual nvrhi::ITexture* GetBackBuffer(uint32_t index) = 0;
-@@ -463,6 +481,7 @@ namespace donut::app
+@@ -463,6 +477,7 @@ namespace donut::app
          // all of these pass in GLFW constants as arguments
          // see http://www.glfw.org/docs/latest/input.html
          // return value is true if the event was consumed by this render pass, false if it should be passed on
@@ -405,22 +394,15 @@ index c92cd3991415b90f0337914a1055723d25b201e8..4153fad0c320bf5f07473eea498c9c59
  #include <vector>
  
  #include <donut/app/DeviceManager.h>
-@@ -57,6 +58,7 @@ freely, subject to the following restrictions:
+@@ -57,6 +58,8 @@ freely, subject to the following restrictions:
  
  
  #include <sstream>
 +#include "uvsr-d3d12-diagnostics.h"
++#include "display_presentation.h"
  
  #if DONUT_WITH_STREAMLINE
  #include <StreamlineIntegration.h>
-@@ -393,6 +395,7 @@ bool DeviceManager_DX12::CreateSwapChain()
-         if (SUCCEEDED(pDxgiFactory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &supported, sizeof(supported))))
-             m_TearingSupported = (supported != 0);
-     }
-+    m_PresentAllowTearingSupported = m_TearingSupported;
- 
-     if (m_TearingSupported)
-     {
 @@ -424,6 +427,7 @@ bool DeviceManager_DX12::CreateSwapChain()
      for(UINT bufferIndex = 0; bufferIndex < m_SwapChainDesc.BufferCount; bufferIndex++)
      {
@@ -625,15 +607,13 @@ index c92cd3991415b90f0337914a1055723d25b201e8..4153fad0c320bf5f07473eea498c9c59
      return true;
  }
  
-@@ -576,15 +694,88 @@ bool DeviceManager_DX12::Present()
+@@ -576,15 +694,86 @@ bool DeviceManager_DX12::Present()
      auto bufferIndex = m_SwapChain->GetCurrentBackBufferIndex();
  
      UINT presentFlags = 0;
 -    if (!m_DeviceParams.vsyncEnabled && m_FullScreenDesc.Windowed && m_TearingSupported)
-+    if (!m_DeviceParams.vsyncEnabled &&
-+        m_FullScreenDesc.Windowed &&
-+        m_TearingSupported &&
-+        m_RequestedPresentAllowTearing)
++    if (uvsr::CanPresentWithoutSynchronization(
++        m_DeviceParams.vsyncEnabled, m_FullScreenDesc.Windowed, m_TearingSupported))
          presentFlags |= DXGI_PRESENT_ALLOW_TEARING;
  
 -    HRESULT result = m_SwapChain->Present(m_DeviceParams.vsyncEnabled ? 1 : 0, presentFlags);
@@ -720,4 +700,3 @@ index c92cd3991415b90f0337914a1055723d25b201e8..4153fad0c320bf5f07473eea498c9c59
  }
  
  void DeviceManager_DX12::Shutdown()
-

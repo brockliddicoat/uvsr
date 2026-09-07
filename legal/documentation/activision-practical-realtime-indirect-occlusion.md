@@ -1,26 +1,28 @@
-# Activision Practical Real-Time Indirect Occlusion
+# activision practical real time indirect occlusion
 
-## Record
+## record
 
-- Relationship: Design Influence and Implementation Study
-- Status: Current Reference; Historical Adaptation Retired
-- Confidence: Confirmed
-- Upstream: [Practical Real-Time Strategies for Accurate Indirect Occlusion](https://research.activision.com/publications/2020-03/practical-real-time-strategies-for-accurate-indirect-occlusion)
-- Revision: Published technical report and associated SIGGRAPH course material
-- Governing Terms: Publication rights; no current incorporated code is established
+- relationship: publication influence and implementation study
+- status: current reference; historical approximation retired
+- confidence: confirmed
+- upstream: [Practical Real-Time Strategies for Accurate Indirect Occlusion](https://research.activision.com/publications/2020-03/practical-real-time-strategies-for-accurate-indirect-occlusion)
+- revision: published technical report and associated SIGGRAPH course material
+- terms: publication rights; no incorporated upstream code identified
 
-## UVSR Relationship
+## UVSR relationship
 
-The publication informs UVSR's traversal and reconstruction reasoning. A
-historical PS4-style approximation pipeline was built for comparison and later
-removed. GTAO does not define UVSR's current finite-interval estimator.
+the publication informed traversal and reconstruction comparisons. UVSR's
+current finite interval estimators are first party implementations and are not
+represented as GTAO or copied publication source. a historical PS4 style
+approximation was removed in commit
+`16d8fc88901ad2aab7ca5f8e99d617294d3ba6f1`.
 
-## Evidence
+## evidence
 
-- [Estimator Validation](../../docs/visibility-estimator-validation.md)
-- Historical implementation removed by commit `16d8fc88901ad2aab7ca5f8e99d617294d3ba6f1`
+- [user guide](../../docs/user-guide.md)
+- [validation contract](../../docs/validation.md)
+- [estimator implementation](../../src/visibility_estimator_shared.h)
+- [screen space trace](../../src/screen_space_visibility_cs.hlsl)
 
-## Commercial Clearance
-
-Keep this classified as publication-derived design work unless exact licensed
-sample code is later identified.
+preserve the publication citation. review any later sample code separately
+before incorporating it.

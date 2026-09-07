@@ -15,16 +15,6 @@ Filament at commit `47c86eec22e56d75897e16651eb4d2abd64fc29a`:
 
 `filament/src/materials/antiAliasing/fxaa/fxaa.fs`
 
-UVSR's five Filament-compatible Temporal Reconstructive camera-jitter choices
-adapt the public pattern definitions and table construction from the same
-revision:
-
-`filament/include/filament/Options.h`
-
-`filament/src/PostProcessManager.cpp`
-
-`filament/src/PostProcessManager.h`
-
 ## UVSR Modifications
 
 - Translated the relevant PC-console sampling and filter math from GLSL to
@@ -35,24 +25,6 @@ revision:
 - Kept display transfer and dithering in UVSR's downstream presentation pass.
 - Exposed Filament's edge sharpness, relative edge threshold, and minimum edge
   threshold as bounded runtime settings.
-- Reproduced Rotated Grid 4, Uniform Helix 4, and the 8-, 16-, and 32-sample
-  Halton (2,3) choices, including Filament's 409-entry Halton skip.
-- Centered the jitter in pixel units for UVSR's DirectX 12 planar-view contract
-  and reset temporal history when the selected pattern changes.
-
-## Sobol 32 Generation
-
-UVSR's additional fixed Sobol 32 table was generated from Helmer,
-Christensen, and Kensler's stochastic Sobol (0,2) author code at commit
-`f90b115806675035c8c727bab4575ca5ba1760b6`. For exact reproduction, replace
-the generator's RNG declaration with `RNG rng(43);`, run
-`./generate_samples --seq=ssobol --n=32 --nd=2 --bn2d`, subtract 0.5 from each
-coordinate, and store the results as floats. The seed produces the initial
-point directly. For each subsequent point, the `--bn2d` path tests 100
-candidates in the required Sobol stratum and selects the candidate with the
-greatest minimum toroidal distance to the points already chosen. UVSR stores
-only the generated coordinate table; it does not bundle the generator code.
-
 Google Filament is licensed under the Apache License, Version 2.0. The complete
 license is available at [Apache-2.0.txt](../licenses/Apache-2.0.txt) and is
 distributed as `bin/licenses/Apache-2.0.txt` in UVSR binary packages.
@@ -89,16 +61,13 @@ DAMAGES.
 
 ## UVSR Relationship
 
-The Filament FXAA path was translated and modified, while Filament's temporal
-jitter definitions were adapted to UVSR's DirectX 12 camera contract. The G3D
-and NVIDIA material below is indirect lineage carried by Filament rather than
-evidence that UVSR independently fetched those implementations. The Sobol table
-is generated data and does not include its generator source.
+the Filament FXAA path was translated and modified. G3D and NVIDIA material
+is indirect lineage carried by Filament. the retired temporal jitter and Sobol
+table are recorded in [historical generation provenance](stochastic-sobol-generation.md).
 
 ## Evidence
 
 - Fast Approximate anti-aliasing shader: `src/fast_approximate_aa_ps.hlsl`
-- Temporal anti-aliasing reference data: `src/temporal_aa_reference.h`
 - Commit `a9a3dd10d7c8cf21e23c6642f1f93f4a7142192f`
 
 ## Commercial Clearance

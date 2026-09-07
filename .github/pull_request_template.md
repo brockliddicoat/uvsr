@@ -1,20 +1,36 @@
-## Summary
+## outcome
 
-Describe the user-visible or engineering outcome and the reason for the change.
+describe the user or engineering result, reason, affected owners, and any
+visible, settings, compatibility, performance, legal, or package change.
 
-## Verification
+## scope
 
-List the exact checks, build, runtime scene/settings, and results.
+- [ ] current and released consumers were traced for every deletion.
+- [ ] protected features and deliberate sunsets remain intact, or the approved
+  product change is identified.
+- [ ] obsolete code, settings, UI, tests, build rules, documents, and legal
+  records were removed together where applicable.
 
-## Source and License Disclosure
+## evidence
 
-- [ ] I identified every outside source, exact revision, license, and affected
-  file, or this contribution contains no third-party material.
-- [ ] I distinguished incorporated/adapted expression or data from independent
-  implementation, architectural influence, and research reference.
-- [ ] I preserved required copyright, license, and attribution notices.
+list exact commands and results. identify source revision, configuration,
+settings identity, executable and SHA-256, adapter, scene, camera, resolution,
+and package when they affect the claim.
 
-## Contributor Agreement
+- [ ] focused checks cover the changed failure.
+- [ ] the applicable full developer gate passed.
+- [ ] visible or package changes passed fresh exact package smoke, or this is
+  marked not applicable with a reason.
 
-- [ ] Every commit author will be covered by the individual CLA, a separately
-  reviewed owner agreement, or an explicit recorded bot approval before merge.
+## source and license disclosure
+
+- [ ] every outside source, exact revision, license, notice, and affected file
+  is identified, or this contribution contains no third party material.
+- [ ] incorporated expression or data is distinguished from ideas and research
+  references.
+- [ ] required copyright, license, attribution, and provenance records remain.
+
+## contributor agreement
+
+- [ ] every commit author is covered by the individual CLA, a reviewed owner
+  agreement, or an explicit recorded bot approval.

@@ -1,0 +1,572 @@
+#ifndef UVSR_FIELD
+#define UVSR_FIELD(symbol, name, metadata, ...) UVSR_SETTING(symbol, name, metadata)
+#define UVSR_DEFAULT_FIELD
+#endif
+UVSR_FIELD(UiOverrideVisualMaxes, "ui.override-visual-maxes",
+    Value(id, Section::Ui, BooleanDomain("on|off"),
+        LiteralBooleanDefault(false)),
+    UIData, OverrideVisualMaxes)
+UVSR_FIELD(UiVisible, "ui.visible",
+    Value(id, Section::Ui, BooleanDomain("on|off"),
+        LiteralBooleanDefault(false))
+        .Preserve(),
+    UIData, ShowUI)
+UVSR_SETTING(UiSettingsCollapsed, "ui.settings-collapsed",
+    Value(id, Section::Ui, BooleanDomain("on|off"),
+        LiteralBooleanDefault(false), true, false, UiSettingsPersistence::SessionOnly)
+        .Preserve())
+UVSR_FIELD(UiZoom, "ui.zoom",
+    Value(id, Section::Ui, EnumerationDomain("off|2x|3x|4x|5x"),
+        LiteralTokenDefault("off")),
+    UIData, PixelZoom,
+        std::array{ PixelZoomMode::Off, PixelZoomMode::Zoom2x,
+        PixelZoomMode::Zoom3x, PixelZoomMode::Zoom4x,
+        PixelZoomMode::Zoom5x })
+UVSR_SETTING(MaterialEditorVisible, "material-editor.visible",
+    Value(id, Section::Ui, BooleanDomain("on|off"),
+        LiteralBooleanDefault(false), true, false, UiSettingsPersistence::SessionOnly)
+        .Preserve())
+UVSR_SETTING(LightingSolution, "lighting.solution",
+    Value(id, Section::General, EnumerationDomain("ray-marching|path-tracing"),
+        LiteralTokenDefault("ray-marching"))
+        .Label("ray-marching", "Ray Tracing"))
+UVSR_SETTING(GpuAdapter, "gpu.adapter",
+    Value(id, Section::General, SelectorDomain(UiSettingsSelectorKind::Adapter, "runtime adapter index or unique display name"),
+        ContextDefault(UiSettingsDefaultPolicy::HighestMemoryAdapter), false, true))
+UVSR_FIELD(PathingMaximumBounces, "pathing.maximum-bounces",
+    Value(id, Section::Pathing, IntegerDomain(1, 30, "1..30 scattering bounces"),
+        LiteralIntegerDefault(DefaultPathTracingSettings.maximumBounces)),
+    PathTracingSettings, maximumBounces)
+UVSR_FIELD(PathingMinimumBounces, "pathing.minimum-bounces",
+    Value(id, Section::Pathing, IntegerDomain(1, 30, "1..maximum bounces before roulette"),
+        LiteralIntegerDefault(DefaultPathTracingSettings.minimumBounces)),
+    PathTracingSettings, minimumBounces)
+UVSR_FIELD(PathingFireflyFilter, "pathing.firefly-filter",
+    Value(id, Section::Pathing, BooleanDomain("on|off"),
+        LiteralBooleanDefault(DefaultPathTracingSettings.fireflyFilter)),
+    PathTracingSettings, fireflyFilter)
+UVSR_FIELD(PathingFireflyThreshold, "pathing.firefly-threshold",
+    Value(id, Section::Pathing, FloatDomain(10.f, 1.e6f, "10..1000000 radiance units"),
+        LiteralFloatDefault(DefaultPathTracingSettings.fireflyThreshold)),
+    PathTracingSettings, fireflyThreshold)
+UVSR_FIELD(PresentationVerticalSynchronization, "presentation.vertical-synchronization",
+    Value(id, Section::Developer, BooleanDomain("on|off"),
+        LiteralBooleanDefault(DefaultDisplayPresentationSettings.verticalSynchronization),
+        true, false, UiSettingsPersistence::SessionOnly).NoEffects(),
+    UIData, Presentation.verticalSynchronization)
+UVSR_FIELD(PresentationFrameRateLimitEnabled, "presentation.frame-rate-limit-enabled",
+    Value(id, Section::Developer, BooleanDomain("on|off"),
+        LiteralBooleanDefault(DefaultDisplayPresentationSettings.frameRateLimitEnabled),
+        true, false, UiSettingsPersistence::SessionOnly).NoEffects(),
+    UIData, Presentation.frameRateLimitEnabled)
+UVSR_FIELD(PresentationFrameRateLimit, "presentation.frame-rate-limit",
+    Value(id, Section::Developer, IntegerDomain(1, MaximumFrameRateLimit, "1..960 FPS"),
+        LiteralIntegerDefault(DefaultDisplayPresentationSettings.frameRateLimit),
+        true, false, UiSettingsPersistence::SessionOnly).NoEffects(),
+    UIData, Presentation.frameRateLimit)
+UVSR_SETTING(CameraMode, "camera.mode",
+    Value(id, Section::General, EnumerationDomain("freelook|locked"),
+        LiteralTokenDefault("freelook"))
+        .Preserve())
+UVSR_SETTING(SceneCurrent, "scene.current",
+    Value(id, Section::General, SelectorDomain(UiSettingsSelectorKind::Scene, "runtime scene filename or unique display name"),
+        ContextSelectorDefault(UiSettingsDefaultPolicy::RetainedBistro,
+            "bistro-interior"), false, true))
+UVSR_FIELD(RepresentationAllowRayTraversal, "representation.allow-ray-traversal",
+    Value(id, Section::Developer, BooleanDomain("on|off"),
+        LiteralBooleanDefault(true)),
+    UIData, Representation.allowRayTraversal)
+UVSR_FIELD(NoisePattern, "noise.pattern",
+    Value(id, Section::Noise, EnumerationDomain("spatial-white|spatial-blue|spatiotemporal-blue"),
+        LiteralTokenDefault("spatiotemporal-blue")),
+    UIData, Noise.pattern,
+        std::array{ NoisePattern::SpatialWhite,
+        NoisePattern::SpatialBlue,
+        NoisePattern::SpatiotemporalBlue })
+UVSR_FIELD(NoiseResolution, "noise.resolution",
+    Value(id, Section::Noise, EnumerationDomain("64x64|128x128|256x256|512x512"),
+        LiteralTokenDefault("128x128")),
+    UIData, Noise.resolution,
+        std::array{ NoiseResolution::Size64, NoiseResolution::Size128,
+        NoiseResolution::Size256, NoiseResolution::Size512 })
+UVSR_FIELD(NoiseAnimateSamples, "noise.animate-samples",
+    Value(id, Section::Noise, BooleanDomain("on|off"),
+        LiteralBooleanDefault(true)),
+    UIData, Noise.animate)
+UVSR_FIELD(NoiseAccumulateSamples, "noise.accumulate-samples",
+    Value(id, Section::Noise, BooleanDomain("on|off"),
+        LiteralBooleanDefault(false)),
+    UIData, AccumulateSamples)
+UVSR_FIELD(AntiAliasingFxaaEnabled, "anti-aliasing.fxaa.enabled",
+    Value(id, Section::Postprocess, BooleanDomain("on|off"),
+        LiteralBooleanDefault(false)),
+    FastApproximateAaSettings, enabled)
+UVSR_SETTING(AntiAliasingFxaaQuality, "anti-aliasing.fxaa.quality",
+    Value(id, Section::Postprocess, EnumerationDomain("low|medium|high|ultra"),
+        LiteralTokenDefault("ultra")))
+UVSR_FIELD(AntiAliasingFxaaEdgeSharpness, "anti-aliasing.fxaa.edge-sharpness",
+    Value(id, Section::Postprocess, FloatDomain(2.0f, 8.0f, "float 2..8"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FxaaQualityProfile, 8.0f)),
+    FastApproximateAaSettings, edgeSharpness)
+UVSR_FIELD(AntiAliasingFxaaEdgeThreshold, "anti-aliasing.fxaa.edge-threshold",
+    Value(id, Section::Postprocess, FloatDomain(0.08f, 0.25f, "float 0.08..0.25"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FxaaQualityProfile, 0.08f)),
+    FastApproximateAaSettings, edgeThreshold)
+UVSR_FIELD(AntiAliasingFxaaMinimumEdgeThreshold, "anti-aliasing.fxaa.minimum-edge-threshold",
+    Value(id, Section::Postprocess, FloatDomain(0.04f, 0.06f, "float 0.04..0.06"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FxaaQualityProfile, 0.04f)),
+    FastApproximateAaSettings, darkEdgeThreshold)
+UVSR_SETTING(DebugWorldMaterials, "debug.world.materials",
+    Value(id, Section::Debug, EnumerationDomain("scene|white|white-detail|white-lighting"),
+        LiteralTokenDefault("scene"))
+        .Label("scene", "Default"))
+UVSR_SETTING(DebugPbrFilter, "debug.pbr.filter",
+    Value(id, Section::Debug, EnumerationDomain("final|surface-normals|geometry-normals|normal-difference|diffuse-environment|environment-direction|reflected-environment|brdf-response|specular-environment|all-environment-light|specular-visibility|environment-level|sky-visibility"),
+        LiteralTokenDefault("final"))
+        .RawSnapshot()
+        .Label("final", "Default")
+        .Label("brdf-response", "Reflectance Response"))
+UVSR_FIELD(TonemapperEnabled, "tonemapper.enabled",
+    Value(id, Section::Postprocess, BooleanDomain("on|off"),
+        LiteralBooleanDefault(DefaultToneMappingSettings.enabled)).NoEffects(),
+    UIData, ToneMapping.enabled)
+UVSR_FIELD(TonemapperExposure, "tonemapper.exposure",
+    Value(id, Section::Postprocess, FloatDomain(-10.0f, 10.0f, "float -10..10"),
+        LiteralFloatDefault(DefaultToneMappingSettings.exposure)).NoEffects(),
+    UIData, ToneMapping.exposure)
+UVSR_FIELD(TonemapperContrast, "tonemapper.contrast",
+    Value(id, Section::Postprocess, FloatDomain(0.5f, 2.0f, "float 0.5..2"),
+        LiteralFloatDefault(DefaultToneMappingSettings.contrast)).NoEffects(),
+    UIData, ToneMapping.contrast)
+UVSR_FIELD(TonemapperSaturation, "tonemapper.saturation",
+    Value(id, Section::Postprocess, FloatDomain(0.0f, 2.0f, "float 0..2"),
+        LiteralFloatDefault(DefaultToneMappingSettings.saturation)).NoEffects(),
+    UIData, ToneMapping.saturation)
+UVSR_FIELD(TonemapperWarmth, "tonemapper.warmth",
+    Value(id, Section::Postprocess, FloatDomain(-1.0f, 1.0f, "float -1..1"),
+        LiteralFloatDefault(DefaultToneMappingSettings.warmth)).NoEffects(),
+    UIData, ToneMapping.warmth)
+UVSR_FIELD(TonemapperTint, "tonemapper.tint",
+    Value(id, Section::Postprocess, FloatDomain(-1.0f, 1.0f, "float -1..1"),
+        LiteralFloatDefault(DefaultToneMappingSettings.tint)).NoEffects(),
+    UIData, ToneMapping.tint)
+UVSR_FIELD(TonemapperSlope, "tonemapper.slope",
+    Value(id, Section::Postprocess, FloatDomain(0.0f, 2.0f, "float 0..2"),
+        LiteralFloatDefault(DefaultToneMappingSettings.slope)).NoEffects(),
+    UIData, ToneMapping.slope)
+UVSR_FIELD(TonemapperPower, "tonemapper.power",
+    Value(id, Section::Postprocess, FloatDomain(0.01f, 2.0f, "float 0.01..2"),
+        LiteralFloatDefault(DefaultToneMappingSettings.power)).NoEffects(),
+    UIData, ToneMapping.power)
+UVSR_SETTING(TonemapperLut, "tonemapper.lut",
+    Value(id, Section::Postprocess, EnumerationDomain("none|2383-print|portra-400|ektar-100"),
+        LiteralTokenDefault("none")).NoEffects()
+        .Label("none", "None")
+        .Label("2383-print", "2383 Print")
+        .Label("portra-400", "Portra 400")
+        .Label("ektar-100", "Ektar 100"))
+UVSR_SETTING(SkyEnvironment, "sky.environment",
+    Value(id, Section::Sky, EnumerationDomain("day|bright-overcast|soft-day|night|starry-night|cloudy"),
+        LiteralTokenDefault(GetImageBasedLightingSourceInfo(
+            ImageBasedLightingSource::Kloppenheim03Day).
+            canonicalToken)))
+UVSR_FIELD(SkyExposure, "sky.exposure",
+    Value(id, Section::Sky, FloatDomain(-8.0f, 8.0f, "float -8..8 ev"),
+        ContextFloatDefault(
+            UiSettingsDefaultPolicy::EnvironmentExposure,
+            GetImageBasedLightingSourceInfo(
+                ImageBasedLightingSource::Kloppenheim03Day).
+                defaultExposureStops))
+        .After(SettingId::SkyEnvironment),
+    UIData, EnvironmentExposureStops)
+UVSR_FIELD(SkyAutoExposureEnabled, "sky.auto-exposure.enabled",
+    Value(id, Section::Sky, BooleanDomain("on|off"),
+        LiteralBooleanDefault(AutoExposureSettings{}.enabled)),
+    UIData, AutoExposure.enabled)
+UVSR_FIELD(SkyAutoExposureExposureCompensation, "sky.auto-exposure.exposure-compensation",
+    Value(id, Section::Sky, FloatDomain(
+            AutoExposureMinimumCompensationEV,
+            AutoExposureMaximumCompensationEV,
+            "float -18..8 ev"),
+        LiteralFloatDefault(
+            AutoExposureSettings{}.exposureCompensationEV))
+        .Track(-8.0, 8.0),
+    UIData, AutoExposure.exposureCompensationEV)
+UVSR_FIELD(SkyAutoExposureMaximumBrightening, "sky.auto-exposure.maximum-brightening",
+    Value(id, Section::Sky, FloatDomain(
+            AutoExposureMinimumMovementEV,
+            AutoExposureMaximumMovementEV,
+            "float 0..16 ev"),
+        LiteralFloatDefault(
+            AutoExposureSettings{}.maximumBrighteningEV))
+        .Track(0.0, 8.0),
+    UIData, AutoExposure.maximumBrighteningEV)
+UVSR_FIELD(SkyAutoExposureMaximumDarkening, "sky.auto-exposure.maximum-darkening",
+    Value(id, Section::Sky, FloatDomain(
+            AutoExposureMinimumMovementEV,
+            AutoExposureMaximumMovementEV,
+            "float 0..16 ev"),
+        LiteralFloatDefault(
+            AutoExposureSettings{}.maximumDarkeningEV))
+        .Track(0.0, 8.0),
+    UIData, AutoExposure.maximumDarkeningEV)
+UVSR_FIELD(SkyAutoExposureAdjustmentPeriod, "sky.auto-exposure.adjustment-period",
+    Value(id, Section::Sky, FloatDomain(
+            AutoExposureMinimumAdjustmentPeriodSeconds,
+            AutoExposureMaximumAdjustmentPeriodSeconds,
+            "float 0.05..5 seconds"),
+        LiteralFloatDefault(
+            AutoExposureSettings{}.adjustmentPeriodSeconds)),
+    UIData, AutoExposure.adjustmentPeriodSeconds)
+UVSR_FIELD(SkyDiffuseIbl, "sky.diffuse-ibl",
+    Value(id, Section::Sky, BooleanDomain("on|off"),
+        LiteralBooleanDefault(true)),
+    UIData, EnableDiffuseIbl)
+UVSR_FIELD(SkyDiffuseIblStrength, "sky.diffuse-ibl-strength",
+    Value(id, Section::Sky, FloatDomain(0.0f, 4.0f, "float 0..4"),
+        LiteralFloatDefault(1.0f))
+        .Track(0.0, 2.0),
+    UIData, DiffuseIblStrength)
+UVSR_FIELD(SkySpecularIbl, "sky.specular-ibl",
+    Value(id, Section::Sky, BooleanDomain("on|off"),
+        LiteralBooleanDefault(true)),
+    UIData, EnableSpecularIbl)
+UVSR_FIELD(SkySpecularIblStrength, "sky.specular-ibl-strength",
+    Value(id, Section::Sky, FloatDomain(0.0f, 4.0f, "float 0..4"),
+        LiteralFloatDefault(1.0f))
+        .Track(0.0, 2.0),
+    UIData, SpecularIblStrength)
+UVSR_FIELD(SkyEnvironmentBackground, "sky.environment-background",
+    Value(id, Section::Sky, BooleanDomain("on|off"),
+        LiteralBooleanDefault(true)),
+    UIData, ShowEnvironmentBackground)
+UVSR_FIELD(SkyAmbientFillEnabled, "sky.ambient-fill.enabled",
+    Value(id, Section::Sky, BooleanDomain("on|off"),
+        LiteralBooleanDefault(true)),
+    UIData, EnableAmbientFill)
+UVSR_SETTING(SkyVisibilityEnabled, "sky.visibility.enabled",
+    Value(id, Section::Sky, BooleanDomain("on|off"),
+        LiteralBooleanDefault(true)))
+UVSR_SETTING(SkyVisibilityDiffuseIbl, "sky.visibility.diffuse-ibl",
+    Value(id, Section::Sky, BooleanDomain("on|off"),
+        LiteralBooleanDefault(true)))
+UVSR_SETTING(SkyVisibilitySpecularIbl, "sky.visibility.specular-ibl",
+    Value(id, Section::Sky, BooleanDomain("on|off"),
+        LiteralBooleanDefault(true)))
+UVSR_SETTING(SkyVisibilitySamplesPerPixel, "sky.visibility.samples-per-pixel",
+    Value(id, Section::Sky, EnumerationDomain("1|2|4|8|16|32|64"),
+        LiteralTokenDefault("2")))
+UVSR_SETTING(SkyVisibilitySpecifyNoise, "sky.visibility.specify-noise",
+    Value(id, Section::Sky, BooleanDomain("on|off"),
+        LiteralBooleanDefault(false))
+        .NoEffects())
+UVSR_SETTING(SkyVisibilityNoisePattern, "sky.visibility.noise-pattern",
+    Value(id, Section::Sky, EnumerationDomain("spatial-white|spatial-blue|spatiotemporal-blue"),
+        LiteralTokenDefault("spatiotemporal-blue"))
+        .NoEffects())
+UVSR_SETTING(SkyVisibilityNoiseResolution, "sky.visibility.noise-resolution",
+    Value(id, Section::Sky, EnumerationDomain("64x64|128x128|256x256|512x512"),
+        LiteralTokenDefault("128x128"))
+        .NoEffects())
+UVSR_SETTING(SkyVisibilityAnimateSamples, "sky.visibility.animate-samples",
+    Value(id, Section::Sky, BooleanDomain("on|off"),
+        LiteralBooleanDefault(true))
+        .NoEffects())
+UVSR_SETTING(SkyVisibilityMaxDistance, "sky.visibility.max-distance",
+    Value(id, Section::Sky, EnumerationDomain("max|32m|16m|8m|4m|2m"),
+        LiteralTokenDefault("max")))
+UVSR_SETTING(SkyVisibilityRayBias, "sky.visibility.ray-bias",
+    Value(id, Section::Sky, FloatDomain(0.0f, 0.1f, "world units 0..0.1"),
+        LiteralFloatDefault(0.002f)))
+UVSR_SETTING(LightSelected, "light.selected",
+    Value(id, Section::Lights, SelectorDomain(UiSettingsSelectorKind::Light, "runtime editable-light index or unique name"),
+        ContextDefault(UiSettingsDefaultPolicy::SceneDefaultLight), true, true))
+UVSR_SETTING(LightSelectedAzimuth, "light.selected.azimuth",
+    Value(id, Section::Lights, FloatDomain(-1.8e2f, 1.8e2f, "degrees -180..180; directional or spot"),
+        ContextDefault(UiSettingsDefaultPolicy::SceneAuthored), true, true)
+        .Available(UiSettingsAvailability::DirectionalOrSpotLight))
+UVSR_SETTING(LightSelectedElevation, "light.selected.elevation",
+    Value(id, Section::Lights, FloatDomain(-9e1f, 9e1f, "degrees -90..90; directional or spot"),
+        ContextDefault(UiSettingsDefaultPolicy::SceneAuthored), true, true)
+        .Available(UiSettingsAvailability::DirectionalOrSpotLight))
+UVSR_SETTING(LightSelectedColor, "light.selected.color",
+    Value(id, Section::Lights, Float3Domain(0.0f, 1.0f, "linear rgb float3"),
+        ContextFloat3Default(
+            UiSettingsDefaultPolicy::SelectedLightColor,
+            DefaultFlashlightSettings.colorLinearRed,
+            DefaultFlashlightSettings.colorLinearGreen,
+            DefaultFlashlightSettings.colorLinearBlue), true, true))
+UVSR_SETTING(LightSelectedIrradiance, "light.selected.irradiance",
+    Value(id, Section::Lights, FloatDomain(0.0f, 1e2f, "float 0..100; directional"),
+        ContextDefault(UiSettingsDefaultPolicy::SceneAuthored), true, true)
+        .Available(UiSettingsAvailability::DirectionalLight))
+UVSR_SETTING(LightSelectedAngularSize, "light.selected.angular-size",
+    Value(id, Section::Lights, FloatDomain(0.0f, 2e1f, "float 0..20; directional"),
+        ContextDefault(UiSettingsDefaultPolicy::SceneAuthored), true, true)
+        .Available(UiSettingsAvailability::DirectionalLight)
+        .Track(0.0, 10.0))
+UVSR_SETTING(LightSelectedRadius, "light.selected.radius",
+    Value(id, Section::Lights, FloatDomain(0.01f, 1.0f, "float 0.01..1; point or spot"),
+        ContextDefault(UiSettingsDefaultPolicy::SceneAuthored), true, true)
+        .Available(UiSettingsAvailability::PointOrSpotLight))
+UVSR_SETTING(LightSelectedIntensity, "light.selected.intensity",
+    Value(id, Section::Lights, FloatDomain(0.0f, 1e2f, "float 0..100; point or spot"),
+        ContextDefault(UiSettingsDefaultPolicy::SceneAuthored), true, true)
+        .Available(UiSettingsAvailability::PointOrSpotLight))
+UVSR_SETTING(LightSelectedInnerAngle, "light.selected.inner-angle",
+    Value(id, Section::Lights, FloatDomain(0.0f, 1.8e2f, "degrees 0..180; spot"),
+        ContextDefault(UiSettingsDefaultPolicy::SceneAuthored), true, true)
+        .Available(UiSettingsAvailability::SpotLight)
+        .Track(0.0, 90.0))
+UVSR_SETTING(LightSelectedOuterAngle, "light.selected.outer-angle",
+    Value(id, Section::Lights, FloatDomain(0.0f, 1.8e2f, "degrees 0..180; spot"),
+        ContextDefault(UiSettingsDefaultPolicy::SceneAuthored), true, true)
+        .Available(UiSettingsAvailability::SpotLight)
+        .Track(0.0, 90.0))
+UVSR_SETTING(LightSelectedFlashlightEnabled, "light.selected.flashlight.enabled",
+    Value(id, Section::Lights, BooleanDomain("on|off; flashlight_1"),
+        ContextBooleanDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightEnabled), true, true)
+        .NoEffects())
+UVSR_FIELD(LightSelectedFlashlightCastShadows, "light.selected.flashlight.cast-shadows",
+    Value(id, Section::Lights, BooleanDomain("on|off; flashlight_1"),
+        ContextBooleanDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.castShadows), true, true),
+    FlashlightSettings, castShadows)
+UVSR_FIELD(LightSelectedFlashlightRealistic, "light.selected.flashlight.realistic",
+    Value(id, Section::Lights, BooleanDomain("on|off; flashlight_1"),
+        ContextBooleanDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.realisticLens), true, true),
+    FlashlightSettings, realisticLens)
+UVSR_FIELD(LightSelectedFlashlightStationaryWhenIdle, "light.selected.flashlight.stationary-when-idle",
+    Value(id, Section::Lights, BooleanDomain("on|off; flashlight_1"),
+        ContextBooleanDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.stationaryWhenIdle), true, true),
+    FlashlightSettings, stationaryWhenIdle)
+UVSR_FIELD(LightSelectedFlashlightHotspotSize, "light.selected.flashlight.hotspot-size",
+    Value(id, Section::Lights, FloatDomain(
+        FlashlightMinimumHotspotSize,
+        FlashlightMaximumHotspotSize,
+        "float 0.2..0.75; flashlight_1"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.hotspotSize), true, true),
+    FlashlightSettings, hotspotSize)
+UVSR_FIELD(LightSelectedFlashlightHotspotStrength, "light.selected.flashlight.hotspot-strength",
+    Value(id, Section::Lights, FloatDomain(
+        FlashlightMinimumHotspotStrength,
+        FlashlightMaximumHotspotStrength,
+        "float 0..0.9; flashlight_1"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.hotspotStrength), true, true),
+    FlashlightSettings, hotspotStrength)
+UVSR_FIELD(LightSelectedFlashlightSway, "light.selected.flashlight.sway",
+    Value(id, Section::Lights, FloatDomain(
+        FlashlightMinimumSwayDegrees,
+        FlashlightMaximumSwayDegrees,
+        "degrees 0..2; flashlight_1"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.swayDegrees), true, true)
+        .Track(0.0, 1.0),
+    FlashlightSettings, swayDegrees)
+UVSR_FIELD(LightSelectedFlashlightAimCorrection, "light.selected.flashlight.aim-correction",
+    Value(id, Section::Lights, FloatDomain(
+        FlashlightMinimumAimCorrectionSeconds,
+        FlashlightMaximumAimCorrectionSeconds,
+        "seconds 0.01..0.5; flashlight_1"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.aimCorrectionSeconds), true, true),
+    FlashlightSettings, aimCorrectionSeconds)
+UVSR_FIELD(LightSelectedFlashlightBrightness, "light.selected.flashlight.brightness",
+    Value(id, Section::Lights, FloatDomain(
+        FlashlightMinimumIntensityCandela,
+        FlashlightMaximumIntensityCandela,
+        "candela 25..4000; flashlight_1"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.peakIntensityCandela), true, true),
+    FlashlightSettings, peakIntensityCandela)
+UVSR_FIELD(LightSelectedFlashlightBeamSize, "light.selected.flashlight.beam-size",
+    Value(id, Section::Lights, FloatDomain(
+        FlashlightMinimumBeamSizeDegrees,
+        FlashlightMaximumBeamSizeDegrees,
+        "degrees 8..100; flashlight_1"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.beamSizeDegrees), true, true)
+        .Track(8.0, 60.0),
+    FlashlightSettings, beamSizeDegrees)
+UVSR_FIELD(LightSelectedFlashlightAngularSize, "light.selected.flashlight.angular-size",
+    Value(id, Section::Lights, FloatDomain(
+        FlashlightMinimumAngularSizeDegrees,
+        FlashlightMaximumAngularSizeDegrees,
+        "degrees 0..20 at 1 meter; flashlight_1"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.angularSizeDegrees), true, true)
+        .Track(0.0, 10.0),
+    FlashlightSettings, angularSizeDegrees)
+UVSR_FIELD(LightSelectedFlashlightBeamRoundness, "light.selected.flashlight.beam-roundness",
+    Value(id, Section::Lights, FloatDomain(
+        FlashlightMinimumBeamRoundness,
+        FlashlightMaximumBeamRoundness,
+        "float 0..1; flashlight_1"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.beamRoundness), true, true),
+    FlashlightSettings, beamRoundness)
+UVSR_FIELD(LightSelectedFlashlightEdgeSoftness, "light.selected.flashlight.edge-softness",
+    Value(id, Section::Lights, FloatDomain(
+        FlashlightMinimumEdgeSoftness,
+        FlashlightMaximumEdgeSoftness,
+        "float 0..1; flashlight_1"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.edgeSoftness), true, true),
+    FlashlightSettings, edgeSoftness)
+UVSR_FIELD(LightSelectedFlashlightRange, "light.selected.flashlight.range",
+    Value(id, Section::Lights, FloatDomain(
+        FlashlightMinimumRangeMeters,
+        FlashlightMaximumRangeMeters,
+        "meters 2..100; flashlight_1"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.rangeMeters), true, true),
+    FlashlightSettings, rangeMeters)
+UVSR_FIELD(LightSelectedFlashlightHorizontalOffset, "light.selected.flashlight.horizontal-offset",
+    Value(id, Section::Lights, FloatDomain(
+        FlashlightMinimumCameraHorizontalOffsetMeters,
+        FlashlightMaximumCameraHorizontalOffsetMeters,
+        "meters -0.4..0.4; flashlight_1"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.cameraHorizontalOffsetMeters), true, true)
+        .Display(100.f, UiSettingsDisplayUnit::Centimeters),
+    FlashlightSettings, cameraHorizontalOffsetMeters)
+UVSR_FIELD(LightSelectedFlashlightVerticalOffset, "light.selected.flashlight.vertical-offset",
+    Value(id, Section::Lights, FloatDomain(
+        FlashlightMinimumCameraVerticalOffsetMeters,
+        FlashlightMaximumCameraVerticalOffsetMeters,
+        "meters -0.4..0.4; flashlight_1"),
+        ContextFloatDefault(UiSettingsDefaultPolicy::FlashlightDefault, DefaultFlashlightSettings.cameraVerticalOffsetMeters), true, true)
+        .Display(100.f, UiSettingsDisplayUnit::Centimeters),
+    FlashlightSettings, cameraVerticalOffsetMeters)
+UVSR_SETTING(ShadowsRayTracedEnabled, "shadows.ray-traced.enabled",
+    Value(id, Section::DirectionalShadows, BooleanDomain("on|off"),
+        LiteralBooleanDefault(true)))
+UVSR_FIELD(ShadowsRayTracedHard, "shadows.ray-traced.hard",
+    Value(id, Section::DirectionalShadows, BooleanDomain("on|off"),
+        LiteralBooleanDefault(false)),
+    UIData, DirectionalShadows.hardShadows)
+UVSR_FIELD(ShadowsRayTracedSamplesPerPixel, "shadows.ray-traced.samples-per-pixel",
+    Value(id, Section::DirectionalShadows, EnumerationDomain("1|2|4|8|16|32|64"),
+        LiteralTokenDefault("4")),
+    UIData, DirectionalShadows.samplesPerPixel,
+        std::array<std::uint32_t, 7>{ 1, 2, 4, 8, 16, 32, 64 })
+UVSR_SETTING(ShadowsRayTracedMaxDistance, "shadows.ray-traced.max-distance",
+    Value(id, Section::DirectionalShadows, EnumerationDomain("max|32m|16m|8m|4m|2m"),
+        LiteralTokenDefault("max"))
+        .Label("max", "Maximum")
+        .Label("32m", "32 m")
+        .Label("16m", "16 m")
+        .Label("8m", "8 m")
+        .Label("4m", "4 m")
+        .Label("2m", "2 m"))
+UVSR_SETTING(ShadowsRayTracedRayBias, "shadows.ray-traced.ray-bias",
+    Value(id, Section::DirectionalShadows, FloatDomain(0.0f, 0.1f, "world units 0..0.1"),
+        LiteralFloatDefault(0.002f))
+        .Track(0.0, static_cast<double>(0.02f)))
+UVSR_SETTING(MaterialSelected, "material.selected",
+    Value(id, Section::Materials, SelectorDomain(UiSettingsSelectorKind::Material, "runtime material id or unique name"),
+        ContextSelectorDefault(UiSettingsDefaultPolicy::NoMaterial,
+            "none"), false, true))
+UVSR_FIELD(MaterialSelectedDomain, "material.selected.domain",
+    Value(id, Section::Materials, EnumerationDomain("opaque|alpha-tested|alpha-blended|transmissive|transmissive-alpha-tested|transmissive-alpha-blended"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Label("alpha-tested", "Alpha-tested")
+        .Label("alpha-blended", "Alpha-blended")
+        .Label("transmissive-alpha-tested", "Transmissive alpha-tested")
+        .Label("transmissive-alpha-blended", "Transmissive alpha-blended"),
+    Material, domain,
+        std::array{ MaterialDomain::Opaque,
+        MaterialDomain::AlphaTested,
+        MaterialDomain::AlphaBlended,
+        MaterialDomain::Transmissive,
+        MaterialDomain::TransmissiveAlphaTested,
+        MaterialDomain::TransmissiveAlphaBlended })
+UVSR_FIELD(MaterialSelectedDoubleSided, "material.selected.double-sided",
+    Value(id, Section::Materials, BooleanDomain("on|off"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true),
+    Material, doubleSided)
+UVSR_FIELD(MaterialSelectedBaseTextureEnabled, "material.selected.base-texture-enabled",
+    Value(id, Section::Materials, BooleanDomain("on|off; requires a base or diffuse texture"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Available(UiSettingsAvailability::BaseTexture),
+    Material, enableBaseOrDiffuseTexture)
+UVSR_FIELD(MaterialSelectedBaseColor, "material.selected.base-color",
+    Value(id, Section::Materials, Float3Domain(0.0f, 1.0f, "linear rgb float3"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true),
+    Material, baseOrDiffuseColor)
+UVSR_FIELD(MaterialSelectedMetalSpecularTextureEnabled, "material.selected.metal-specular-texture-enabled",
+    Value(id, Section::Materials, BooleanDomain("on|off; requires a metal-rough or specular texture"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Available(UiSettingsAvailability::MetalSpecularTexture),
+    Material, enableMetalRoughOrSpecularTexture)
+UVSR_FIELD(MaterialSelectedSpecularColor, "material.selected.specular-color",
+    Value(id, Section::Materials, Float3Domain(0.0f, 1.0f, "linear rgb float3; specular-gloss model"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Available(UiSettingsAvailability::SpecularGlossMaterial),
+    Material, specularColor)
+UVSR_FIELD(MaterialSelectedMetalness, "material.selected.metalness",
+    Value(id, Section::Materials, FloatDomain(0.0f, 1.0f, "float 0..1; metal-rough model"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Available(UiSettingsAvailability::MetalRoughMaterial),
+    Material, metalness)
+UVSR_FIELD(MaterialSelectedRoughness, "material.selected.roughness",
+    Value(id, Section::Materials, FloatDomain(0.0f, 1.0f, "float 0..1; glossiness alias is one minus roughness"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true),
+    Material, roughness)
+UVSR_FIELD(MaterialSelectedOpacity, "material.selected.opacity",
+    Value(id, Section::Materials, FloatDomainWithContextMaximum(0.0f, 1.0f, 2.0f, "float 0..1 or 0..2 with a base texture"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Available(UiSettingsAvailability::AlphaBlendedMaterial)
+        .ValueAfter(SettingId::MaterialSelectedDomain),
+    Material, opacity)
+UVSR_FIELD(MaterialSelectedAlphaCutoff, "material.selected.alpha-cutoff",
+    Value(id, Section::Materials, FloatDomain(0.0f, 1.0f, "float 0..1; alpha-tested with base texture"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Available(UiSettingsAvailability::AlphaTestedMaterial)
+        .ValueAfter(SettingId::MaterialSelectedDomain),
+    Material, alphaCutoff)
+UVSR_FIELD(MaterialSelectedNormalTextureEnabled, "material.selected.normal-texture-enabled",
+    Value(id, Section::Materials, BooleanDomain("on|off; requires a normal texture"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Available(UiSettingsAvailability::NormalTexture),
+    Material, enableNormalTexture)
+UVSR_FIELD(MaterialSelectedNormalScale, "material.selected.normal-scale",
+    Value(id, Section::Materials, FloatDomain(-2.0f, 2.0f, "float -2..2"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), true, true)
+        .Available(UiSettingsAvailability::NormalTexture),
+    Material, normalTextureScale)
+UVSR_FIELD(MaterialSelectedOcclusionTextureEnabled, "material.selected.occlusion-texture-enabled",
+    Value(id, Section::Materials, BooleanDomain("on|off; requires an occlusion texture"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Available(UiSettingsAvailability::OcclusionTexture),
+    Material, enableOcclusionTexture)
+UVSR_FIELD(MaterialSelectedOcclusionStrength, "material.selected.occlusion-strength",
+    Value(id, Section::Materials, FloatDomain(0.0f, 1.0f, "float 0..1; enabled occlusion texture"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Available(UiSettingsAvailability::OcclusionTexture)
+        .ValueAfter(SettingId::MaterialSelectedOcclusionTextureEnabled),
+    Material, occlusionStrength)
+UVSR_FIELD(MaterialSelectedEmissiveTextureEnabled, "material.selected.emissive-texture-enabled",
+    Value(id, Section::Materials, BooleanDomain("on|off; requires an emissive texture"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Available(UiSettingsAvailability::EmissiveTexture),
+    Material, enableEmissiveTexture)
+UVSR_FIELD(MaterialSelectedEmissiveColor, "material.selected.emissive-color",
+    Value(id, Section::Materials, Float3Domain(0.0f, 1.0f, "linear rgb float3"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true),
+    Material, emissiveColor)
+UVSR_FIELD(MaterialSelectedEmissiveIntensity, "material.selected.emissive-intensity",
+    Value(id, Section::Materials, FloatDomain(0.0f, 1e3f, "float 0..1000"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true),
+    Material, emissiveIntensity)
+UVSR_FIELD(MaterialSelectedTransmissionTextureEnabled, "material.selected.transmission-texture-enabled",
+    Value(id, Section::Materials, BooleanDomain("on|off; transmissive material with transmission texture"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Available(UiSettingsAvailability::TransmissionTexture)
+        .ValueAfter(SettingId::MaterialSelectedDomain),
+    Material, enableTransmissionTexture)
+UVSR_FIELD(MaterialSelectedTransmissionFactor, "material.selected.transmission-factor",
+    Value(id, Section::Materials, FloatDomain(0.0f, 1.0f, "float 0..1; transmissive material"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Available(UiSettingsAvailability::TransmissiveMaterial)
+        .ValueAfter(SettingId::MaterialSelectedDomain),
+    Material, transmissionFactor)
+UVSR_FIELD(MaterialSelectedAlphaMaskTextureEnabled, "material.selected.alpha-mask-texture-enabled",
+    Value(id, Section::Materials, BooleanDomain("on|off; requires an opacity texture"),
+        ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
+        .Available(UiSettingsAvailability::OpacityTexture),
+    Material, enableOpacityTexture)
+#ifdef UVSR_DEFAULT_FIELD
+#undef UVSR_DEFAULT_FIELD
+#undef UVSR_FIELD
+#endif

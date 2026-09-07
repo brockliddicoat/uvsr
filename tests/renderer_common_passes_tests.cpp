@@ -8,11 +8,12 @@
 #include <wrl/client.h>
 
 #include <cstdlib>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <memory>
-#include <string>
 #include <vector>
 
 extern "C"
@@ -28,30 +29,20 @@ namespace
     class RecordingCallback final : public nvrhi::IMessageCallback
     {
     public:
-        void message(
-            nvrhi::MessageSeverity severity,
-            const char* messageText) override
+        void message(nvrhi::MessageSeverity severity, const char* text) override
         {
-            if (severity == nvrhi::MessageSeverity::Error ||
-                severity == nvrhi::MessageSeverity::Fatal)
+            if (severity == nvrhi::MessageSeverity::Error || severity == nvrhi::MessageSeverity::Fatal)
             {
-                errors.emplace_back(messageText ? messageText : "");
+                failed = true;
+                std::cerr << "NVRHI: " << (text ? text : "") << '\n';
             }
         }
-
-        std::vector<std::string> errors;
+        bool failed = false;
     };
 
-    [[noreturn]] void Fail(
-        const char* message,
-        const RecordingCallback* callback = nullptr)
+    [[noreturn]] void Fail(const char* message)
     {
         std::cerr << "Renderer common passes test failed: " << message << '\n';
-        if (callback)
-        {
-            for (const std::string& error : callback->errors)
-                std::cerr << "NVRHI: " << error << '\n';
-        }
         std::exit(EXIT_FAILURE);
     }
 
@@ -90,59 +81,6 @@ namespace
         }
     }
 
-    nvrhi::d3d12::DeviceHandle CreateDevice(
-        RecordingCallback& callback,
-        ComPtr<ID3D12Device>& nativeDevice,
-        ComPtr<ID3D12CommandQueue>& nativeQueue)
-    {
-        ComPtr<ID3D12Debug> debug;
-        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))))
-            debug->EnableDebugLayer();
-        RequireSucceeded(
-            D3D12CreateDevice(
-                nullptr,
-                D3D_FEATURE_LEVEL_11_0,
-                IID_PPV_ARGS(&nativeDevice)),
-            "D3D12CreateDevice");
-
-        D3D12_COMMAND_QUEUE_DESC queueDescription{};
-        queueDescription.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-        RequireSucceeded(
-            nativeDevice->CreateCommandQueue(
-                &queueDescription,
-                IID_PPV_ARGS(&nativeQueue)),
-            "CreateCommandQueue");
-
-        nvrhi::d3d12::DeviceDesc description;
-        description.errorCB = &callback;
-        description.pDevice = nativeDevice.Get();
-        description.pGraphicsCommandQueue = nativeQueue.Get();
-        return nvrhi::d3d12::createDevice(description);
-    }
-
-    void WaitForNativeQueue(
-        ID3D12Device* device,
-        ID3D12CommandQueue* queue)
-    {
-        ComPtr<ID3D12Fence> fence;
-        RequireSucceeded(device->CreateFence(
-            0u,
-            D3D12_FENCE_FLAG_NONE,
-            IID_PPV_ARGS(&fence)),
-            "CreateFence");
-        HANDLE eventHandle = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!eventHandle)
-            Fail("CreateEventW failed");
-        RequireSucceeded(queue->Signal(fence.Get(), 1u), "Queue::Signal");
-        RequireSucceeded(
-            fence->SetEventOnCompletion(1u, eventHandle),
-            "SetEventOnCompletion");
-        const DWORD waitResult = WaitForSingleObject(eventHandle, 30000u);
-        CloseHandle(eventHandle);
-        if (waitResult != WAIT_OBJECT_0)
-            Fail("native D3D12 queue did not reach the test fence");
-    }
-
     void TestFailureLatch()
     {
         uvsr::RendererBlitPipelineFailureLatch latch;
@@ -159,177 +97,115 @@ namespace
             Fail("later success cleared a terminal pipeline failure");
     }
 
-    void TestProductionBlitPipeline(
-        const std::filesystem::path& packagedShaderDirectory)
+    void TestProductionBlitPipeline(const std::filesystem::path& packagedShaderDirectory)
     {
         RecordingCallback callback;
+        ComPtr<ID3D12Debug> debug;
+        if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))))
+            debug->EnableDebugLayer();
         ComPtr<ID3D12Device> nativeDevice;
+        RequireSucceeded(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&nativeDevice)),
+            "D3D12CreateDevice");
         ComPtr<ID3D12CommandQueue> nativeQueue;
-        nvrhi::d3d12::DeviceHandle device = CreateDevice(
-            callback, nativeDevice, nativeQueue);
+        D3D12_COMMAND_QUEUE_DESC queueDescription{};
+        queueDescription.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+        RequireSucceeded(nativeDevice->CreateCommandQueue(&queueDescription, IID_PPV_ARGS(&nativeQueue)),
+            "CreateCommandQueue");
+        nvrhi::d3d12::DeviceDesc description;
+        description.errorCB = &callback;
+        description.pDevice = nativeDevice.Get();
+        description.pGraphicsCommandQueue = nativeQueue.Get();
+        auto device = nvrhi::d3d12::createDevice(description);
         if (!device)
-            Fail("NVRHI D3D12 device creation failed", &callback);
+            Fail("NVRHI D3D12 device creation failed");
+        auto factory = std::make_shared<uvsr::RendererShaderFactory>(device, packagedShaderDirectory);
+        uvsr::RendererCommonPasses commonPasses(device, factory);
+        if (!commonPasses.IsValid())
+            Fail("common resources did not initialize");
 
-        auto shaderFactory = std::make_shared<uvsr::RendererShaderFactory>(
-            device, packagedShaderDirectory);
-        auto commonPasses = std::make_shared<uvsr::RendererCommonPasses>(
-            device, shaderFactory);
-        if (!commonPasses->IsValid())
-            Fail("common resources did not initialize", &callback);
-
-        nvrhi::TextureDesc sourceDescription;
-        sourceDescription.width = 16u;
-        sourceDescription.height = 16u;
-        sourceDescription.format = nvrhi::Format::RGBA8_UNORM;
-        sourceDescription.initialState = nvrhi::ResourceStates::ShaderResource;
-        sourceDescription.keepInitialState = true;
-        sourceDescription.debugName = "Common passes test source";
-        nvrhi::TextureHandle source = device->createTexture(sourceDescription);
-
-        nvrhi::TextureDesc targetDescription;
-        targetDescription.width = 16u;
-        targetDescription.height = 16u;
-        targetDescription.format = nvrhi::Format::SRGBA8_UNORM;
-        targetDescription.isRenderTarget = true;
-        targetDescription.initialState = nvrhi::ResourceStates::RenderTarget;
-        targetDescription.keepInitialState = true;
-        targetDescription.debugName = "Common passes test target";
-        nvrhi::TextureHandle target = device->createTexture(targetDescription);
-        nvrhi::FramebufferHandle framebuffer = device->createFramebuffer(
-            nvrhi::FramebufferDesc().addColorAttachment(target));
-        nvrhi::StagingTextureHandle readback = device->createStagingTexture(
-            targetDescription, nvrhi::CpuAccessMode::Read);
-        nvrhi::CommandListHandle commandList = device->createCommandList();
-        if (!source || !target || !framebuffer || !readback || !commandList)
-            Fail("test render resources did not initialize", &callback);
-
-        std::vector<std::uint32_t> redPixels(
-            sourceDescription.width * sourceDescription.height,
-            0xff0000ffu);
-        commandList->open();
-        commandList->writeTexture(
-            source,
-            0u,
-            0u,
-            redPixels.data(),
-            sourceDescription.width * sizeof(std::uint32_t));
-        if (!commonPasses->BlitTexture(
-                commandList, framebuffer, source))
+        ComPtr<ID3D12Fence> fence;
+        RequireSucceeded(nativeDevice->CreateFence(0u, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)), "CreateFence");
+        HANDLE completed = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (!completed)
+            Fail("CreateEventW failed");
+        UINT64 sequence = 0;
+        struct Case
         {
-            commandList->close();
-            PrintD3d12Messages(nativeDevice.Get());
-            Fail("production SRGBA8 blit pipeline did not dispatch", &callback);
-        }
-        commandList->copyTexture(
-            readback,
-            nvrhi::TextureSlice(),
-            target,
-            nvrhi::TextureSlice());
-        commandList->close();
-        device->executeCommandList(commandList);
-        WaitForNativeQueue(nativeDevice.Get(), nativeQueue.Get());
-        if (!callback.errors.empty())
-            Fail("production blit emitted an error", &callback);
-
-        std::size_t rowPitch = 0u;
-        const void* mapped = device->mapStagingTexture(
-            readback,
-            nvrhi::TextureSlice(),
-            nvrhi::CpuAccessMode::Read,
-            &rowPitch);
-        if (!mapped || rowPitch < sizeof(std::uint32_t))
-            Fail("blit output could not be read back", &callback);
-        const std::uint32_t pixel =
-            *static_cast<const std::uint32_t*>(mapped);
-        device->unmapStagingTexture(readback);
-        if (pixel != 0xff0000ffu)
-            Fail("blit changed the endpoint red sample", &callback);
-
-        nvrhi::TextureDesc resolveSourceDescription;
-        resolveSourceDescription.width = 2u;
-        resolveSourceDescription.height = 2u;
-        resolveSourceDescription.format = nvrhi::Format::RGBA8_UNORM;
-        resolveSourceDescription.initialState =
-            nvrhi::ResourceStates::ShaderResource;
-        resolveSourceDescription.keepInitialState = true;
-        resolveSourceDescription.debugName =
-            "Common passes exact 2x2 resolve source";
-        nvrhi::TextureHandle resolveSource =
-            device->createTexture(resolveSourceDescription);
-
-        nvrhi::TextureDesc resolveTargetDescription;
-        resolveTargetDescription.width = 1u;
-        resolveTargetDescription.height = 1u;
-        resolveTargetDescription.format = nvrhi::Format::RGBA8_UNORM;
-        resolveTargetDescription.isRenderTarget = true;
-        resolveTargetDescription.initialState =
-            nvrhi::ResourceStates::RenderTarget;
-        resolveTargetDescription.keepInitialState = true;
-        resolveTargetDescription.debugName =
-            "Common passes exact 2x2 resolve target";
-        nvrhi::TextureHandle resolveTarget =
-            device->createTexture(resolveTargetDescription);
-        nvrhi::FramebufferHandle resolveFramebuffer =
-            device->createFramebuffer(
-                nvrhi::FramebufferDesc().addColorAttachment(resolveTarget));
-        nvrhi::StagingTextureHandle resolveReadback =
-            device->createStagingTexture(
-                resolveTargetDescription,
-                nvrhi::CpuAccessMode::Read);
-        nvrhi::CommandListHandle resolveCommandList =
-            device->createCommandList();
-        if (!resolveSource || !resolveTarget || !resolveFramebuffer ||
-            !resolveReadback || !resolveCommandList)
-        {
-            Fail("2x2 resolve resources did not initialize", &callback);
-        }
-
-        constexpr std::uint32_t ResolvePixels[] = {
-            0xff000000u,
-            0xffffffffu,
-            0xff000000u,
-            0xffffffffu
+            const char* name;
+            uint32_t sourceSize, targetSize;
+            nvrhi::Format targetFormat;
+            std::vector<uint32_t> pixels;
+            uint32_t expected;
         };
-        resolveCommandList->open();
-        resolveCommandList->writeTexture(
-            resolveSource,
-            0u,
-            0u,
-            ResolvePixels,
-            2u * sizeof(std::uint32_t));
-        if (!commonPasses->BlitTexture(
-                resolveCommandList,
-                resolveFramebuffer,
-                resolveSource))
+        const Case cases[] = {
+            {"SRGBA8 endpoint red", 16, 16, nvrhi::Format::SRGBA8_UNORM,
+                std::vector<uint32_t>(256, 0xff0000ffu), 0xff0000ffu},
+            {"2x2 scene-linear average", 2, 1, nvrhi::Format::RGBA8_UNORM,
+                {0xff000000u, 0xffffffffu, 0xff000000u, 0xffffffffu}, 0xff808080u}
+        };
+        for (const auto& test : cases)
         {
-            resolveCommandList->close();
-            PrintD3d12Messages(nativeDevice.Get());
-            Fail("exact 2x2 scene-linear resolve did not dispatch", &callback);
-        }
-        resolveCommandList->copyTexture(
-            resolveReadback,
-            nvrhi::TextureSlice(),
-            resolveTarget,
-            nvrhi::TextureSlice());
-        resolveCommandList->close();
-        device->executeCommandList(resolveCommandList);
-        WaitForNativeQueue(nativeDevice.Get(), nativeQueue.Get());
-        if (!callback.errors.empty())
-            Fail("exact 2x2 resolve emitted an error", &callback);
+            std::cout << test.name << '\n';
+            nvrhi::TextureDesc sourceDescription;
+            sourceDescription.width = sourceDescription.height = test.sourceSize;
+            sourceDescription.format = nvrhi::Format::RGBA8_UNORM;
+            sourceDescription.initialState = nvrhi::ResourceStates::ShaderResource;
+            sourceDescription.keepInitialState = true;
+            sourceDescription.debugName = "Common passes test source";
+            auto targetDescription = sourceDescription;
+            targetDescription.width = targetDescription.height = test.targetSize;
+            targetDescription.format = test.targetFormat;
+            targetDescription.isRenderTarget = true;
+            targetDescription.initialState = nvrhi::ResourceStates::RenderTarget;
+            targetDescription.debugName = test.name;
+            auto source = device->createTexture(sourceDescription);
+            auto target = device->createTexture(targetDescription);
+            if (!source || !target)
+                Fail("test textures did not initialize");
+            auto framebuffer = device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(target));
+            auto readback = device->createStagingTexture(targetDescription, nvrhi::CpuAccessMode::Read);
+            auto commands = device->createCommandList();
+            if (!framebuffer || !readback || !commands)
+                Fail("test render resources did not initialize");
+            commands->open();
+            commands->writeTexture(source, 0u, 0u, test.pixels.data(), test.sourceSize * sizeof(uint32_t));
+            if (!commonPasses.BlitTexture(commands, framebuffer, source))
+            {
+                commands->close();
+                PrintD3d12Messages(nativeDevice.Get());
+                Fail("production blit did not dispatch");
+            }
+            commands->copyTexture(readback, nvrhi::TextureSlice(), target, nvrhi::TextureSlice());
+            commands->close();
+            device->executeCommandList(commands);
+            RequireSucceeded(nativeQueue->Signal(fence.Get(), ++sequence), "Queue::Signal");
+            RequireSucceeded(fence->SetEventOnCompletion(sequence, completed), "SetEventOnCompletion");
+            if (WaitForSingleObject(completed, 30000u) != WAIT_OBJECT_0)
+                Fail("native D3D12 queue did not reach the test fence");
+            if (callback.failed)
+                Fail("production blit emitted an error");
 
-        rowPitch = 0u;
-        mapped = device->mapStagingTexture(
-            resolveReadback,
-            nvrhi::TextureSlice(),
-            nvrhi::CpuAccessMode::Read,
-            &rowPitch);
-        if (!mapped || rowPitch < sizeof(std::uint32_t))
-            Fail("exact 2x2 resolve could not be read back", &callback);
-        const std::uint32_t resolvedPixel =
-            *static_cast<const std::uint32_t*>(mapped);
-        device->unmapStagingTexture(resolveReadback);
-        if (resolvedPixel != 0xff808080u)
-            Fail("2x2 linear resolve did not average all four pixels", &callback);
+            size_t rowPitch = 0;
+            const auto* mapped = static_cast<const uint8_t*>(device->mapStagingTexture(
+                readback, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
+            if (!mapped || rowPitch < test.targetSize * sizeof(uint32_t))
+                Fail("blit output could not be read back");
+            bool matches = true;
+            for (uint32_t row = 0; row < test.targetSize; ++row)
+                for (uint32_t column = 0; column < test.targetSize; ++column)
+                {
+                    uint32_t pixel = 0;
+                    std::memcpy(&pixel, mapped + row * rowPitch + column * sizeof(pixel), sizeof(pixel));
+                    if (pixel != test.expected)
+                        std::cerr << "pixel " << column << ',' << row << ": 0x" << std::hex
+                            << pixel << ", expected 0x" << test.expected << std::dec << '\n';
+                    matches &= pixel == test.expected;
+                }
+            device->unmapStagingTexture(readback);
+            if (!matches)
+                Fail("blit pixels changed the known answer");
+        }
+        CloseHandle(completed);
     }
 }
 

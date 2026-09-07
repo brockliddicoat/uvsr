@@ -1,52 +1,51 @@
-# Experiment Postmortem Archive
+# postmortem archive
 
-This directory preserves retired UVSR experiments and strategically sunset
-features, the decisions that removed them from active development, and
-constraints for any successor. An archived item is not part of the renderer
-baseline and is not automatically a recommendation to restore its
-implementation wholesale.
+start with the [screen-space diffuse removal](screen-space-diffuse.md) for the
+complete method lineage, optimization ledger, failed experiments, and a narrower
+future implementation. its supporting records and changed-file preimages are
+preserved here rather than in active runtime code or routine agent context.
 
-## Records
+these are historical records. current source, [architecture](../architecture.md),
+and the user's accepted decisions govern new work. old claims that a feature is
+retained, required, or ready refer only to their recorded candidate. compilation
+and unit tests do not override a negative visual result. historical links may
+name deleted files or local artifacts; follow the recorded revision and hashes.
 
-- [Engine Cutdown Archive](engine-cutdowns/README.md) keeps the dated shader and
-  renderer cutdown reports, complete removal inventories, and restoration
-  boundaries.
-- [Flashlight Camera Centering v1](flashlight-camera-centering-v1.md) records the
-  rejected proximity- and receiver-driven mount experiment, the persistent
-  column-edge lurching that ended it, and the evidence required for a future
-  screen-space successor.
-- [Native-Resolution Analytical/Reconstructive Temporal Anti-Aliasing v1](native-resolution-analytical-reconstructive-temporal-anti-aliasing-v1.md)
-  records the retired temporal anti-aliasing
-  experiment and the required order for a smaller successor.
-- [Tonemapper Drawer and LUTs v1](tonemapper-drawer-and-luts-v1.md) records a
-  successful but prematurely timed optional feature, its exact restoration
-  bundle, and the requirement to pair any revival with bilateral-grid local
-  tone mapping.
-- [Visibility Sample Rotation v1](visibility-sample-rotation-v1.md) records the
-  technically consistent but visually unsuccessful receiver-dithering
-  experiment, its negative product evaluation, and exact revival triggers.
-- [Three-Band Time-of-Day Sky v1](three-band-time-of-day-sky-v1.md) records the
-  retired atmospheric sky and celestial-motion experiment. Its
-  [design snapshot](three-band-time-of-day-sky-v1-design.md) preserves the final
-  implementation contract as historical context, not accepted product design.
+## records
 
-## Archive Meaning
+| topic | record |
+| --- | --- |
+| screen-space AO/GI, estimator lineage, all optimization candidates, and future requirements | [diffuse removal](screen-space-diffuse.md) |
+| shader permutations, engine ownership, MSAA visibility, ReSTIR, accumulation, and stage-two decisions | [engine cutdowns](engine-cutdowns/README.md) |
+| runtime loops, fixed/generic paths, offline noise, and shader families | [shader-path retirements](shader-path-retirements.md) |
+| low-resolution receiver rotation and its negative visual result | [sample rotation](visibility-sample-rotation-v1.md) |
+| current rewrite AA removals | [TAA](taa.md), [MSAA](msaa.md) |
+| older temporal reconstruction experiment | [native-resolution reconstruction](native-resolution-analytical-reconstructive-temporal-anti-aliasing-v1.md) |
+| removed display-sync policies and retained controls | [display sync](display-sync.md) |
+| retired Amp and Ogg skins, font choices, and palette code | [compressed recovery source](archive/legacy-ui-skins.zip) |
+| removed interface animation | [UI animations](ui-animations.md) |
+| separate abandoned denoiser candidate | [denoising replacement](denoising-replacement.md) |
+| rejected camera-relative flashlight mount behavior | [flashlight centering](flashlight-camera-centering-v1.md) |
+| earlier tonemapper/LUT experiment and restore bundle | [tonemapper](tonemapper-drawer-and-luts-v1.md) |
+| retired atmospheric sky and celestial motion | [three-band sky](three-band-time-of-day-sky-v1.md), [design snapshot](three-band-time-of-day-sky-v1-design.md) |
 
-Each record distinguishes technical checks from product acceptance and product
-sequencing. A build, test pass, or mathematically consistent reference model can
-still fail visual validation. A sound feature can also be sunset when its
-optional surface area arrives before the systems it depends on are stable.
-Immutable commits or checksum-bound restoration bundles retain exact source for
-inspection and selective extraction; retired work stays off the active roadmap.
+## checked preservation and publication
 
-## Resuming or Restarting
+[publication-manifest.tsv](publication-manifest.tsv) binds every archive member
+by SHA-256 and source. when a record intentionally changes, review the difference
+and update its hash and provenance. an added file must be represented. raw
+archive bytes are checkout-invariant through `.gitattributes`.
 
-Resume an archive only when investigating its exact historical behavior. Use
-the checkpoint and named paths in its postmortem.
+the developer build-integrity test checks file presence, hashes, exact membership,
+and new postmortem paths in other registered local worktrees. the production
+package target and CI also require every member in the exact committed source
+candidate. run this from the repository before an authorized publication:
 
-Start a successor from the newest verified product commit available at
-that future time. Read the postmortem first, reproduce the minimum rejected case,
-and prove the replacement's core invariant before restoring secondary features.
-Strategic-sunset records can define a different explicit revival contract; when
-they do, follow that record instead of treating the archive as a failed
-experiment.
+```powershell
+cmake -DUVSR_REQUIRE_COMMITTED=ON -P cmake/VerifyPostmortems.cmake
+```
+
+the checker never stages, commits, copies, or uploads records. a local pass proves
+preservation only. a committed-candidate pass proves inclusion in that revision,
+not arrival on GitHub. publication still requires its separate authorized action
+and the existing release gates. the renderer runtime package excludes this archive.

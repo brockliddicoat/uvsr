@@ -27,7 +27,6 @@ struct Entry
 {
     std::string key;
     fs::path object;
-    fs::path dependencies;
 };
 
 std::string read_text(const fs::path& path)
@@ -296,19 +295,14 @@ std::vector<Entry> read_catalog(const fs::path& path)
             line.pop_back();
         if (line.empty())
             continue;
-        const size_t first = line.find('\t');
-        const size_t second = first == std::string::npos
-            ? std::string::npos
-            : line.find('\t', first + 1);
-        if (first == std::string::npos || second == std::string::npos ||
-            line.find('\t', second + 1) != std::string::npos)
+        const size_t delimiter = line.find('\t');
+        if (delimiter == std::string::npos ||
+            line.find('\t', delimiter + 1) != std::string::npos)
             throw std::runtime_error("malformed shader family catalog row");
         Entry entry{
-            line.substr(0, first),
-            fs::u8path(line.substr(first + 1, second - first - 1)),
-            fs::u8path(line.substr(second + 1))};
-        if (entry.object.empty() || entry.dependencies.empty() ||
-            !keys.insert(entry.key).second)
+            line.substr(0, delimiter),
+            fs::u8path(line.substr(delimiter + 1))};
+        if (entry.object.empty() || !keys.insert(entry.key).second)
             throw std::runtime_error("invalid or duplicate shader permutation key");
         entries.push_back(std::move(entry));
     }
@@ -320,64 +314,6 @@ std::vector<Entry> read_catalog(const fs::path& path)
         }))
         throw std::runtime_error("a multi-permutation shader family has an empty key");
     return entries;
-}
-
-std::string trim(std::string value)
-{
-    const size_t first = value.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos)
-        return {};
-    value.erase(0, first);
-    value.erase(value.find_last_not_of(" \t\r\n") + 1);
-    return value;
-}
-
-std::vector<std::string> parse_dependencies(
-    const fs::path& depfile,
-    const fs::path& workingDirectory)
-{
-    std::string text = read_text(depfile);
-    for (size_t position = 0; (position = text.find("\\\r\n", position)) !=
-         std::string::npos;)
-        text.replace(position, 3, " ");
-    for (size_t position = 0; (position = text.find("\\\n", position)) !=
-         std::string::npos;)
-        text.replace(position, 2, " ");
-    const size_t delimiter = text.find(": ", 2);
-    if (delimiter == std::string::npos)
-        throw std::runtime_error("malformed DXC dependency file " + depfile.string());
-    text = text.substr(delimiter + 2);
-
-    std::vector<std::string> dependencies;
-    std::string token;
-    bool escapedSpace = false;
-    for (size_t index = 0; index <= text.size(); ++index)
-    {
-        const char character = index == text.size() ? ' ' : text[index];
-        if ((character == ' ' || character == '\t' || character == '\r' ||
-             character == '\n') && !escapedSpace)
-        {
-            token = trim(token);
-            if (!token.empty())
-            {
-                fs::path dependency = fs::u8path(token);
-                if (dependency.is_relative())
-                    dependency = workingDirectory / dependency;
-                dependencies.push_back(dependency.lexically_normal().generic_string());
-            }
-            token.clear();
-            continue;
-        }
-        if (character == '\\' && index + 1 < text.size() &&
-            (text[index + 1] == ' ' || text[index + 1] == '\t'))
-        {
-            escapedSpace = true;
-            continue;
-        }
-        token.push_back(character == '\\' ? '/' : character);
-        escapedSpace = false;
-    }
-    return dependencies;
 }
 
 std::string escape_depfile_path(const std::string& path)
@@ -564,20 +500,6 @@ void publish_depfile(
     }
 }
 
-void build_depfile(
-    const fs::path& output,
-    const fs::path& depfile,
-    const fs::path& workingDirectory,
-    const std::vector<Entry>& entries)
-{
-    std::set<std::string> dependencies;
-    for (const Entry& entry : entries)
-        for (std::string dependency : parse_dependencies(
-                 entry.dependencies, workingDirectory))
-            dependencies.insert(std::move(dependency));
-    publish_depfile(output, depfile, dependencies);
-}
-
 void build_shader_dependency_file(
     const fs::path& source,
     const fs::path& target,
@@ -637,9 +559,7 @@ int main(int argc, char** argv)
             return 0;
         }
         fs::path output;
-        fs::path depfile;
         fs::path catalog;
-        fs::path workingDirectory;
         std::string headerSymbol;
         for (int index = 1; index < argc; ++index)
         {
@@ -650,23 +570,17 @@ int main(int argc, char** argv)
             const fs::path value = fs::u8path(rawValue);
             if (option == "--output")
                 output = value;
-            else if (option == "--depfile")
-                depfile = value;
             else if (option == "--catalog")
                 catalog = value;
-            else if (option == "--working-directory")
-                workingDirectory = value;
             else if (option == "--header-symbol")
                 headerSymbol = rawValue;
             else
                 throw std::runtime_error("unknown option " + option);
         }
-        if (output.empty() || depfile.empty() || catalog.empty() ||
-            workingDirectory.empty())
+        if (output.empty() || catalog.empty())
             throw std::runtime_error("required shader blob builder option is missing");
         const std::vector<Entry> entries = read_catalog(catalog);
         build_blob(output, entries, headerSymbol);
-        build_depfile(output, depfile, workingDirectory, entries);
         return 0;
     }
     catch (const std::exception& error)
