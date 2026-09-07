@@ -233,7 +233,9 @@ namespace
             if (std::string_view(mode) == "cancel") Throws([&] { RunHealth(executable,17,"1.3.0",stop.get_token()); });
             else Require(RunHealth(executable,17,"1.3.0",{}) == 0,"descendant health failed");
             DWORD pid = 0; std::ifstream(f.root / "descendant.pid") >> pid; Require(pid != 0,"descendant did not start");
-            Handle process(OpenProcess(SYNCHRONIZE,FALSE,pid)); Require(!process.value || WaitForSingleObject(process,0) == WAIT_OBJECT_0,"health descendant escaped its operation");
+            // allow Windows to signal termination before checking for a leaked descendant.
+            Handle process(OpenProcess(SYNCHRONIZE,FALSE,pid));
+            Require(!process.value || WaitForSingleObject(process,5000) == WAIT_OBJECT_0,"health descendant escaped its operation");
             fs::remove(f.root / "descendant.pid");
         }
     }
