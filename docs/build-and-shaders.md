@@ -141,3 +141,10 @@ the full gate is:
 hosted CI builds and validates but does not publish. feed creation, code signing,
 release creation, upload, and endpoint changes are separate authorized actions.
 the production private key and signing certificate are not repository inputs.
+
+for local evaluation, manually dispatch Windows Renderer Package with
+`export-runtime-bundle` enabled. after every hosted gate passes, it retains the
+complete renderer ZIP, launcher, and hash records for one day. extract the whole
+renderer ZIP and open `bin/uvsr-engine.exe`, preserving its sibling runtime files
+and the adjacent `media` directory. copying the executable alone cannot run the
+engine. this candidate export does not publish a release or a signed feed.

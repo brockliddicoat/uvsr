@@ -42,6 +42,12 @@ on:
       - "third_party/**"
       - "tools/**"
   workflow_dispatch:
+    inputs:
+      export-runtime-bundle:
+        description: Retain the complete validated runtime bundle for local evaluation
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -252,4 +258,51 @@ jobs:
           Write-Output "The developer diagnostic cannot prove the packaged production engine."
           Write-Output "The exact Release ZIP must be installed through the trusted launcher and exercised through normal product settings/CLI on local DXR hardware, with package path, manifest source/configuration, independently computed engine SHA-256, identity output, settings/camera, captures, and timings preserved. Focused external pixtool capture and debug-layer replay are additionally required for barrier, lifetime, ray-tracing, and Donut-detachment changes."
           Write-Output "That production runtime matrix remains open until those bound artifacts exist."
-          Write-Output "No artifact upload or publication step is enabled."
+          Write-Output "Runtime bundle export is opt-in. No release or feed is published."
+
+      - name: prepare complete runtime bundle
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.export-runtime-bundle }}
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $env:RUNNER_TEMP "uvsr-runtime-bundle"
+          New-Item -ItemType Directory -Path $bundle | Out-Null
+          $archive = Join-Path $bundle "uvsr-renderer-windows-11-x64.zip"
+          $launcher = Join-Path $bundle "uvsr-launcher.exe"
+          Copy-Item -LiteralPath $env:UVSR_RENDERER_ARCHIVE -Destination $archive
+          Copy-Item -LiteralPath $env:UVSR_LAUNCHER -Destination $launcher
+          Copy-Item -LiteralPath $env:UVSR_LAUNCHER_RECORD -Destination "$bundle/launcher-build-record.json"
+          $manifestPath = Join-Path $env:UVSR_EXTRACTED_RENDERER "package-manifest.json"
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $engine = Join-Path $env:UVSR_EXTRACTED_RENDERER "bin/uvsr-engine.exe"
+          $identity = [ordered]@{
+            sourceCommit = $env:GITHUB_SHA
+            runUrl = "https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+            runAttempt = $env:GITHUB_RUN_ATTEMPT
+            configuration = "Release"
+            settingsHash = $manifest.settingsHash
+            engineVersion = $manifest.engineVersion
+            rebuilt = $true
+            localGpuVerified = $false
+            launcherSha256 = (Get-FileHash -LiteralPath $launcher -Algorithm SHA256).Hash.ToLowerInvariant()
+            engineSha256 = (Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash.ToLowerInvariant()
+            rendererArchiveSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+            manifestSha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $identity | ConvertTo-Json | Set-Content -LiteralPath "$bundle/identity.json" -Encoding utf8NoBOM
+          @(
+            'extract the complete renderer ZIP before opening bin/uvsr-engine.exe.'
+            'keep bin, media, and package-manifest.json together. the engine is not standalone.'
+            'the launcher is separate and uses the configured signed installation feed.'
+            'this is a hosted validation candidate. local GPU validation and release signing remain separate.'
+          ) | Set-Content -LiteralPath "$bundle/readme.txt" -Encoding utf8NoBOM
+          "UVSR_RUNTIME_BUNDLE=$bundle" >> $env:GITHUB_ENV
+
+      - name: retain complete runtime bundle
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.export-runtime-bundle }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: uvsr-runtime-bundle-${{ github.sha }}
+          path: ${{ env.UVSR_RUNTIME_BUNDLE }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
