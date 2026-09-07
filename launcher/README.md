@@ -15,18 +15,18 @@ the configured renderer package target is:
 
 `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/renderer-update-feed-v1.json`
 
-the canonical v2 launcher feed file and its remote endpoint are absent at this
-checkpoint. the renderer feed is also absent. creating, signing, or publishing
-either feed is a separate authorized release action.
+publish the exact tested artifacts before activating their signed feeds. an
+HTTP 404 at either feed URL means installation or update metadata is unavailable;
+a feed alone cannot supply a missing release artifact. signed feeds use
+canonical LF bytes on every checkout.
 
-retain the historical launcher v1 aliases at
-`/main/launcher/launcher-feed-v1.json` and
-`/main/installer/launcher-feed-v1.json` until a separately authorized endpoint
-migration proves released client coverage. current launchers do not consume
-those aliases. both alias files are retained in source, but their remote paths
-are not live at this checkpoint. alias retention is a publication compatibility
-requirement, not permission to restore source build installation or old artifact
-names.
+the historical v1 feed remains at `/main/launcher/launcher-feed-v1.json`.
+the former `/main/installer/launcher-feed-v1.json` alias is retired so launcher
+files have one source directory. the public `uvsr-launcher-latest` v1.1.1 client
+used that retired URL and requires a manual replacement with the current
+launcher. its empty publisher pin already prevented self-update. later published
+clients use `launcher/` URLs. the retained v1 file is historical metadata;
+current native launchers use only the two signed feeds above.
 
 canonical executable names are `uvsr-launcher.exe` and `uvsr-engine.exe`. the
 renderer archive is `uvsr-renderer-windows-11-x64.zip`. versions never appear in
@@ -115,6 +115,10 @@ and submodules. `-DeveloperBuild` permits a recorded dirty identity;
 tests require production mode or explicit `-SystemServicesTests`. these options
 are development boundaries, not production acceptance.
 
+the Windows Launcher workflow can retain the verified executable, its SHA-256,
+and build record for one day when `export-launcher-artifact` is enabled on a
+manual run. it does not create a release or publish a feed.
+
 native tests cover the retained 18 contract responsibilities, plus independent
 RFC 6979 signature verification, strict canonical bytes, old schema 11 state,
 and interrupted activation. `--pure`, `--system-services`, and `--runtime`
@@ -140,7 +144,7 @@ production private key and signing certificate are never stored here.
 
 a restored historical feed is historical data unless its signature, sequence,
 canonical artifact name, size, SHA-256, release artifact, and live endpoint are
-all proven for the intended client. sequence 17 is unissued local verification
-metadata unless an authorized release publishes it. see
+all proven for the intended client. a published sequence must never be reused
+with different artifact bytes or settings. see
 [Recovery](../docs/recovery.md) for source history. historical artifact hashes
 do not prove a current launcher or renderer.

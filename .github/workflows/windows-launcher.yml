@@ -4,7 +4,6 @@ on:
   push:
     paths:
       - "launcher/**"
-      - "installer/launcher-feed-v1.json"
       - "LICENSE.md"
       - "cmake/**"
       - "src/**"
@@ -14,7 +13,6 @@ on:
   pull_request:
     paths:
       - "launcher/**"
-      - "installer/launcher-feed-v1.json"
       - "LICENSE.md"
       - "cmake/**"
       - "src/**"
@@ -25,6 +23,11 @@ on:
     inputs:
       require-publication-signature:
         description: Fail unless the built launcher has a valid Authenticode signature
+        required: true
+        type: boolean
+        default: false
+      export-launcher-artifact:
+        description: Retain the verified launcher and build record for download
         required: true
         type: boolean
         default: false
@@ -43,7 +46,7 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      - name: Verify Historical V1 Aliases
+      - name: Verify Historical V1 Feed
         shell: pwsh
         run: |
           function Get-RepositoryTextHash([string] $path) {
@@ -59,11 +62,6 @@ jobs:
           }
           $launcherHash = Get-RepositoryTextHash(
             "$env:GITHUB_WORKSPACE/launcher/launcher-feed-v1.json")
-          $installerHash = Get-RepositoryTextHash(
-            "$env:GITHUB_WORKSPACE/installer/launcher-feed-v1.json")
-          if ($launcherHash -ne $installerHash) {
-            throw "Historical launcher v1 aliases differ."
-          }
           if ($launcherHash -ne
               "5689fc9d8856c503e5ff48d091825ff59290065986bb915299dfbcc0b96bcd7d") {
             throw "Historical launcher v1 alias bytes changed."
@@ -91,5 +89,17 @@ jobs:
             throw "Public launcher publication is blocked until an authorized certificate produces a valid Authenticode signature."
           }
           if ([string]$signature.Status -eq "NotSigned") {
-            Write-Output "Local CI artifact is unsigned; no upload or publication step is enabled."
+            Write-Output "The launcher has no Authenticode signature. No release is published by this workflow."
           }
+
+      - name: retain verified launcher
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.export-launcher-artifact }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: uvsr-launcher-${{ github.sha }}
+          path: |
+            ${{ env.UVSR_LAUNCHER_OUTPUT }}/uvsr-launcher.exe
+            ${{ env.UVSR_LAUNCHER_OUTPUT }}/uvsr-launcher.exe.sha256
+            ${{ env.UVSR_LAUNCHER_OUTPUT }}/build-record.json
+          if-no-files-found: error
+          retention-days: 1

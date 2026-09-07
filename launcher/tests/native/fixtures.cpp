@@ -117,7 +117,7 @@ namespace test
         services.health = [](const fs::path&, int64_t, std::string_view, std::stop_token) { return 0; };
         services.processes = [](const fs::path&, Component, bool) { return Processes{}; };
         services.start = [](const fs::path&, std::span<const std::wstring>, bool) {};
-        launcher = {Component::Launcher, 18, Commit, "1.4.0", {}, HashFile(UVSR_NEWER_LAUNCHER_FIXTURE), fs::file_size(UVSR_NEWER_LAUNCHER_FIXTURE)};
+        launcher = {Component::Launcher, LauncherSequence + 1, Commit, "1.4.0", {}, HashFile(UVSR_NEWER_LAUNCHER_FIXTURE), fs::file_size(UVSR_NEWER_LAUNCHER_FIXTURE)};
         services.download = [this](std::string_view url, const fs::path& destination, uint64_t, std::optional<std::string_view>, std::stop_token stop, const Report&)
         {
             CheckCancelled(stop); Require(!failDownload, "injected download failure");
