@@ -52,6 +52,10 @@ namespace uvsr
 
         [[nodiscard]] RendererSceneRetirementStatus Poll();
 
+        // Proves queue idleness when asynchronous retirement cannot finish,
+        // including during application shutdown.
+        [[nodiscard]] RendererSceneRetirementStatus CompleteBlocking();
+
         // Completes the handoff after the caller has released its old scene
         // and reset dependent caches. Returns false unless Poll reported Ready.
         [[nodiscard]] bool Consume() noexcept;

@@ -3,23 +3,16 @@
 
 #include "renderer_gpu_helpers.hlsli"
 #include "pbr.hlsli"
+#include "path_tracing_transport_contract.h"
 #include "ray_traced_material_visibility.hlsli"
 
 struct PathTracingSurface
 {
     float3 position;
-    float3 previousPosition;
     float3 geometricNormal;
     float3 shadingNormal;
-    float3 tangent;
-    float tangentSign;
-    float2 texCoord;
-    float hitDistance;
-    uint materialIndex;
-    MaterialConstants materialConstants;
-    MaterialSample material;
-    PbrPreparedMaterial preparedMaterial;
-    uint preparedMaterialValid;
+    PathTracingPreparedMaterialContract preparedMaterial;
+    float3 emissiveRadiance;
 };
 
 bool PathTracingLoadPositionAtOffset(
@@ -197,7 +190,6 @@ bool PathTracingTraceSurface(
     float3 rayDirection,
     float rayMinimum,
     float rayMaximum,
-    bool loadPreviousPosition,
     out PathTracingSurface surface)
 {
     surface = (PathTracingSurface)0;
@@ -327,46 +319,6 @@ bool PathTracingTraceSurface(
         mul(objectToWorld, float4(objectPositions[1], 1.0f)),
         mul(objectToWorld, float4(objectPositions[2], 1.0f))
     };
-    float3 previousPosition = rayOrigin +
-        rayDirection * query.CommittedRayT();
-    const uint instanceIndex = query.CommittedInstanceID();
-    if (loadPreviousPosition &&
-        instanceIndex < g_PathTracing.instanceCount)
-    {
-        const uint previousOffset = geometry.prevPositionOffset != ~0u
-            ? geometry.prevPositionOffset
-            : geometry.positionOffset;
-        float3 previousObjectPositions[3];
-        if (PathTracingLoadPositionAtOffset(
-                vertexBuffer,
-                previousOffset,
-                indices.x,
-                vertexBufferSize,
-                previousObjectPositions[0]) &&
-            PathTracingLoadPositionAtOffset(
-                vertexBuffer,
-                previousOffset,
-                indices.y,
-                vertexBufferSize,
-                previousObjectPositions[1]) &&
-            PathTracingLoadPositionAtOffset(
-                vertexBuffer,
-                previousOffset,
-                indices.z,
-                vertexBufferSize,
-                previousObjectPositions[2]))
-        {
-            const float3 previousObjectPosition =
-                previousObjectPositions[0] * barycentrics.x +
-                previousObjectPositions[1] * barycentrics.y +
-                previousObjectPositions[2] * barycentrics.z;
-            const InstanceData instance =
-                t_PathTracingInstances[instanceIndex];
-            previousPosition = mul(
-                instance.prevTransform,
-                float4(previousObjectPosition, 1.0f));
-        }
-    }
     float3 geometricNormal = PbrSafeNormalize(
         cross(
             worldPositions[1] - worldPositions[0],
@@ -422,20 +374,17 @@ bool PathTracingTraceSurface(
     }
 
     surface.position = rayOrigin + rayDirection * query.CommittedRayT();
-    surface.previousPosition = all(isfinite(previousPosition))
-        ? previousPosition
-        : surface.position;
     surface.geometricNormal = geometricNormal;
     surface.shadingNormal = PbrSafeNormalize(
         material.shadingNormal, geometricNormal);
-    surface.tangent = tangent;
-    surface.tangentSign = objectTangent.w;
-    surface.texCoord = texCoord;
-    surface.hitDistance = query.CommittedRayT();
-    surface.materialIndex = geometry.materialIndex;
-    surface.materialConstants = materialConstants;
-    surface.material = material;
-    surface.preparedMaterialValid = 0u;
+    surface.preparedMaterial = ResolvePathTracingPreparedMaterial(
+        material.baseColor,
+        material.metalness,
+        material.roughness,
+        materialConstants.specularColor.r,
+        (materialConstants.flags &
+            MaterialFlags_UseSpecularGlossModel) != 0);
+    surface.emissiveRadiance = material.emissiveColor;
     return all(isfinite(surface.position)) &&
         all(isfinite(surface.geometricNormal)) &&
         all(isfinite(surface.shadingNormal));

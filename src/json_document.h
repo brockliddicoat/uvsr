@@ -14,6 +14,38 @@
 
 namespace uvsr::json
 {
+    [[nodiscard]] inline std::string Escape(std::string_view value)
+    {
+        constexpr char HexDigits[] = "0123456789abcdef";
+        std::string escaped;
+        escaped.reserve(value.size());
+        for (const unsigned char character : value)
+        {
+            switch (character)
+            {
+            case '"': escaped += "\\\""; break;
+            case '\\': escaped += "\\\\"; break;
+            case '\b': escaped += "\\b"; break;
+            case '\f': escaped += "\\f"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (character < 0x20u)
+                {
+                    escaped += "\\u00";
+                    escaped.push_back(HexDigits[character >> 4u]);
+                    escaped.push_back(HexDigits[character & 0x0fu]);
+                }
+                else
+                {
+                    escaped.push_back(static_cast<char>(character));
+                }
+            }
+        }
+        return escaped;
+    }
+
     struct Value
     {
         enum class Kind { Null, Boolean, Number, String, Array, Object };
@@ -21,6 +53,7 @@ namespace uvsr::json
         Kind kind = Kind::Null;
         bool boolean = false;
         double number = 0.0;
+        // Numbers retain their token so signed contracts never round through double.
         std::string string;
         std::vector<Value> array;
         std::vector<std::pair<std::string, Value>> object;
@@ -41,7 +74,8 @@ namespace uvsr::json
     class Parser
     {
     public:
-        explicit Parser(std::string_view input) : m_Input(input)
+        explicit Parser(std::string_view input, unsigned maximumDepth = 64u)
+            : m_Input(input), m_MaximumDepth(maximumDepth)
         {
             if (input.size() >= 3u &&
                 static_cast<unsigned char>(input[0]) == 0xefu &&
@@ -97,7 +131,7 @@ namespace uvsr::json
 
         [[nodiscard]] Value ParseValue(unsigned depth)
         {
-            if (depth > 64u)
+            if (depth > m_MaximumDepth)
                 Fail("nesting limit exceeded");
             if (m_Position == m_Input.size())
                 Fail("unexpected end of input");
@@ -254,6 +288,7 @@ namespace uvsr::json
             result.kind = Value::Kind::Number;
             const char* first = m_Input.data() + begin;
             const char* last = m_Input.data() + m_Position;
+            result.string.assign(first, last);
             const auto parsed = std::from_chars(
                 first, last, result.number, std::chars_format::general);
             if (parsed.ec != std::errc{} || parsed.ptr != last ||
@@ -415,6 +450,7 @@ namespace uvsr::json
         }
 
         std::string_view m_Input;
+        unsigned m_MaximumDepth;
         std::size_t m_Position = 0u;
     };
 

@@ -86,18 +86,13 @@ function(uvsr_add_direct_shader_bundle)
             math(EXPR task_count "${task_count} + 1")
             set(profile "")
             set(entry_point main)
-            set(output_subdirectory "")
-            set(output_suffix "")
             set(shader_model "${UVSR_SHADER_MODEL}")
-            set(optimization 3)
             set(defines)
             set(compiler_options)
             while(tokens)
                 list(POP_FRONT tokens option)
                 if (option STREQUAL "-T" OR option STREQUAL "-E" OR
-                    option STREQUAL "-D" OR option STREQUAL "-o" OR
-                    option STREQUAL "-O" OR option STREQUAL "-s" OR
-                    option STREQUAL "-m" OR
+                    option STREQUAL "-D" OR option STREQUAL "-m" OR
                     option STREQUAL "--compilerOptionsDXIL")
                     if (NOT tokens)
                         message(FATAL_ERROR
@@ -115,12 +110,6 @@ function(uvsr_add_direct_shader_bundle)
                     set(entry_point "${value}")
                 elseif(option STREQUAL "-D")
                     list(APPEND defines "${value}")
-                elseif(option STREQUAL "-o")
-                    set(output_subdirectory "${value}")
-                elseif(option STREQUAL "-O")
-                    set(optimization "${value}")
-                elseif(option STREQUAL "-s")
-                    set(output_suffix "${value}")
                 elseif(option STREQUAL "-m")
                     set(shader_model "${value}")
                 elseif(option STREQUAL "--compilerOptionsDXIL")
@@ -129,8 +118,7 @@ function(uvsr_add_direct_shader_bundle)
                     list(APPEND compiler_options ${parsed_compiler_options})
                 endif()
             endwhile()
-            if (NOT profile OR NOT optimization MATCHES "^[0-3]$" OR
-                NOT shader_model MATCHES "^[0-9]+_[0-9]+$")
+            if (NOT profile OR NOT shader_model MATCHES "^[0-9]+_[0-9]+$")
                 message(FATAL_ERROR "Invalid direct DXC shader task: ${expanded_line}")
             endif()
 
@@ -142,13 +130,9 @@ function(uvsr_add_direct_shader_bundle)
                 cmake_path(GET source STEM shader_name)
             endif()
             cmake_path(GET source PARENT_PATH shader_parent)
-            if (output_subdirectory)
-                set(shader_parent "${output_subdirectory}")
-            endif()
             if (NOT entry_point STREQUAL "main")
                 string(APPEND shader_name "_${entry_point}")
             endif()
-            string(APPEND shader_name "${output_suffix}")
             if (shader_parent)
                 set(family "${shader_parent}/${shader_name}")
             else()
@@ -200,7 +184,7 @@ function(uvsr_add_direct_shader_bundle)
                 -E "${entry_point}"
                 ${define_arguments}
                 ${include_arguments}
-                "-O${optimization}"
+                -O3
                 ${enable_16bit_argument}
                 ${shader_COMPILER_OPTIONS}
                 ${compiler_options})
@@ -226,7 +210,7 @@ function(uvsr_add_direct_shader_bundle)
                 COMMENT "DXC ${family} [${permutation_key}]"
                 VERBATIM)
             string(APPEND "family_rows_${family_id}"
-                "${permutation_key}\t${object}\t${depfile}\n")
+                "${permutation_key}\t${object}\n")
             list(APPEND "family_objects_${family_id}" "${object}")
         endforeach()
     endforeach()
@@ -249,11 +233,10 @@ function(uvsr_add_direct_shader_bundle)
         else()
             set(blob "${shader_OUTPUT_DIRECTORY}/dxil/${family}.bin")
         endif()
-        set(blob_depfile "${blob}.d")
         set(blob_stamp "${blob}.stamp")
         set(catalog "${shader_OUTPUT_DIRECTORY}/catalogs/${family_id}.txt")
         list(APPEND active_generated_files
-            "${catalog}" "${blob}" "${blob_depfile}" "${blob_stamp}")
+            "${catalog}" "${blob}" "${blob_stamp}")
         get_filename_component(catalog_directory "${catalog}" DIRECTORY)
         get_filename_component(blob_directory "${blob}" DIRECTORY)
         file(MAKE_DIRECTORY "${catalog_directory}")
@@ -263,13 +246,11 @@ function(uvsr_add_direct_shader_bundle)
             CONTENT "${family_rows_${family_id}}")
         add_custom_command(
             OUTPUT "${blob_stamp}"
-            BYPRODUCTS "${blob}" "${blob_depfile}"
+            BYPRODUCTS "${blob}"
             COMMAND ${CMAKE_COMMAND} -E make_directory "${blob_directory}"
             COMMAND $<TARGET_FILE:uvsr_shader_blob_builder>
                 --output "${blob}"
-                --depfile "${blob_depfile}"
                 --catalog "${catalog}"
-                --working-directory "${shader_SOURCE_DIRECTORY}"
                 ${header_arguments}
             COMMAND ${CMAKE_COMMAND} -E touch "${blob_stamp}"
             DEPENDS

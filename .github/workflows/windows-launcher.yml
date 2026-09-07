@@ -4,15 +4,21 @@ on:
   push:
     paths:
       - "launcher/**"
+      - "installer/launcher-feed-v1.json"
       - "LICENSE.md"
-      - "cmake/runtime-shader-inventory.def"
+      - "cmake/**"
+      - "src/**"
+      - "tools/strict_json_contract.h"
       - "assets/fonts/noto-sans/**"
       - ".github/workflows/windows-launcher.yml"
   pull_request:
     paths:
       - "launcher/**"
+      - "installer/launcher-feed-v1.json"
       - "LICENSE.md"
-      - "cmake/runtime-shader-inventory.def"
+      - "cmake/**"
+      - "src/**"
+      - "tools/strict_json_contract.h"
       - "assets/fonts/noto-sans/**"
       - ".github/workflows/windows-launcher.yml"
   workflow_dispatch:
@@ -37,16 +43,37 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      - name: Use Pinned .NET SDK
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
-        with:
-          dotnet-version: 10.0.400
+      - name: Verify Historical V1 Aliases
+        shell: pwsh
+        run: |
+          function Get-RepositoryTextHash([string] $path) {
+            $utf8 = [Text.UTF8Encoding]::new($false, $true)
+            $text = $utf8.GetString([IO.File]::ReadAllBytes($path))
+            $normalized = $text.Replace("`r`n", "`n")
+            if ($normalized.Contains("`r")) {
+              throw "Historical launcher v1 alias has invalid line endings."
+            }
+            return [Convert]::ToHexString(
+              [Security.Cryptography.SHA256]::HashData(
+                $utf8.GetBytes($normalized))).ToLowerInvariant()
+          }
+          $launcherHash = Get-RepositoryTextHash(
+            "$env:GITHUB_WORKSPACE/launcher/launcher-feed-v1.json")
+          $installerHash = Get-RepositoryTextHash(
+            "$env:GITHUB_WORKSPACE/installer/launcher-feed-v1.json")
+          if ($launcherHash -ne $installerHash) {
+            throw "Historical launcher v1 aliases differ."
+          }
+          if ($launcherHash -ne
+              "5689fc9d8856c503e5ff48d091825ff59290065986bb915299dfbcc0b96bcd7d") {
+            throw "Historical launcher v1 alias bytes changed."
+          }
 
       - name: Build And Verify Launcher
         shell: pwsh
         run: |
           $output = Join-Path $env:RUNNER_TEMP "uvsr-launcher-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          ./launcher/build.ps1 -OutputDirectory $output -DotNetPath (Get-Command dotnet).Source -SourceCommit $env:GITHUB_SHA
+          ./launcher/build.ps1 -OutputDirectory $output -SourceCommit $env:GITHUB_SHA
           "UVSR_LAUNCHER_OUTPUT=$output" >> $env:GITHUB_ENV
 
       - name: Enforce Public Signing Gate

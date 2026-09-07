@@ -1,10 +1,11 @@
 #pragma once
 
-#include "adaptive_sync.h"
+#include "tone_mapping_settings.h"
+
 #include "auto_exposure.h"
 #include "camera_controllers.h"
-#include "denoising_settings.h"
 #include "directional_shadow_settings.h"
+#include "display_presentation.h"
 #include "flashlight.h"
 #include "image_based_lighting_shared.h"
 #include "image_based_lighting_sources.h"
@@ -12,11 +13,7 @@
 #include "path_tracing_settings.h"
 #include "pixel_zoom.h"
 #include "ray_traced_sky_visibility_settings.h"
-#include "screen_space_visibility.h"
-#include "temporal_aa_options.h"
-#include "ui_font_family.h"
-#include "ui_skin.h"
-#include "uvsr_ui_renderer.h"
+#include "fast_approximate_aa_options.h"
 #include "world_space_representation.h"
 
 #include <array>
@@ -91,27 +88,22 @@ namespace uvsr
     struct UIData
     {
         bool ShowUI = false;
-        UiSkin Skin = DefaultUiSkin;
-        UiFontFamily FontFamily = DefaultUiFontFamily;
-        bool AnimationsEnabled = true;
+        bool DisplaySyncTestActive = false;
+        double DisplaySyncPosition = 0.0;
+        DisplayPresentationSettings Presentation = DefaultDisplayPresentationSettings;
         bool OverrideVisualMaxes = false;
-        UiAccentSettings Accents;
-        std::array<UiBackdropRect, UiBackdropRectCount> BackdropRects;
         PixelZoomMode PixelZoom = PixelZoomMode::Off;
         std::vector<GpuAdapterChoice> GpuAdapterChoices;
         int ActiveGpuAdapterIndex = -1;
-        AdaptiveSyncMode AdaptiveSync = AdaptiveSyncMode::Off;
         LightingSolution Lighting = LightingSolution::RayMarching;
+        PathTracingSettings PathTracing;
         bool AccumulateSamples = false;
         AntiAliasingSettings AntiAliasing;
-        bool TemporalAaSharpenEnabled = false;
-        float TemporalAaSharpness = TemporalAaDefaultSharpness;
+        ToneMappingSettings ToneMapping;
         DirectionalShadowSettings DirectionalShadows;
-        DenoisingSettings Denoising;
         WorldSpaceRepresentationSettings Representation;
         NoiseSettings Noise;
         RayTracedSkyVisibilitySettings RayTracedSkyVisibility;
-        ScreenSpaceVisibilitySettings ScreenSpaceVisibility;
         bool ShaderReloadRequested = false;
         bool FlashlightEnabled = DefaultFlashlightEnabled;
         FlashlightSettings Flashlight = DefaultFlashlightSettings;
@@ -134,55 +126,11 @@ namespace uvsr
         bool ShowMaterialDrawer = false;
         bool CopyScreenshotToClipboard = false;
 
-        [[nodiscard]] bool HasActiveScreenSpaceVisibilityConsumer() const
-        {
-            if (Lighting != LightingSolution::RayMarching)
-                return false;
-
-            const bool lightingConsumer =
-                HasActiveScreenSpaceLightingConsumer(
-                    ScreenSpaceVisibility.enabled,
-                    ScreenSpaceVisibility.HasActiveAmbientOcclusion(),
-                    ScreenSpaceVisibility.HasActiveIndirectDiffuse(),
-                    IsAmbientFillLobeActive(
-                        EnableAmbientFill,
-                        EnableDiffuseIbl,
-                        DiffuseIblStrength),
-                    IsAmbientFillLobeActive(
-                        EnableAmbientFill,
-                        EnableSpecularIbl,
-                        SpecularIblStrength));
-            return lightingConsumer ||
-                HasActiveScreenSpaceVisibilityDebugConsumer();
-        }
-
-        [[nodiscard]] bool
-            HasActiveScreenSpaceVisibilityDebugConsumer() const
-        {
-            return Lighting == LightingSolution::RayMarching &&
-                ScreenSpaceVisibility.HasActiveConsumer() &&
-                ScreenSpaceVisibility.debugView !=
-                    VisibilityDebugView::FinalImage;
-        }
-
         [[nodiscard]] ResolvedAntiAliasingSettings
             GetResolvedAntiAliasingSettings(
                 const AntiAliasingSettings& settings) const
         {
-            ResolvedAntiAliasingSettings resolved =
-                ResolveAntiAliasingSettings(settings);
-            if (Lighting == LightingSolution::RayMarching)
-            {
-                resolved.temporalEnabled = ShouldUseRasterTemporalAa(
-                    resolved.temporalEnabled,
-                    AccumulateSamples);
-            }
-            else if (Lighting == LightingSolution::PathTracing)
-            {
-                resolved.temporalEnabled = false;
-                resolved.rasterSampleCount = 1u;
-            }
-            return resolved;
+            return ResolveAntiAliasingSettings(settings);
         }
 
         [[nodiscard]] ResolvedAntiAliasingSettings
@@ -191,10 +139,7 @@ namespace uvsr
             return GetResolvedAntiAliasingSettings(AntiAliasing);
         }
 
-        [[nodiscard]] bool UsesLongTermTemporalAA() const
-        {
-            return GetResolvedAntiAliasingSettings().temporalEnabled;
-        }
+
 
         [[nodiscard]] bool UsesFastApproximateAA() const
         {
@@ -208,16 +153,9 @@ namespace uvsr
         SceneSetup,
         Geometry,
         PathTransport,
-        MultisampleResolve,
         ShadowRayDispatch,
-        ShadowDenoise,
         SkyVisibilityRayDispatch,
-        SkyVisibilityDenoise,
         DirectLighting,
-        VisibilityLightingPreparation,
-        ScreenSpaceVisibility,
-        AmbientOcclusionDenoise,
-        DiffuseIlluminationDenoise,
         MaterialPicking,
         EnvironmentBackground,
         AutoExposure,

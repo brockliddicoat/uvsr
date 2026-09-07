@@ -1,6 +1,10 @@
 #pragma once
 
 #include <memory>
+#include <array>
+#include <filesystem>
+#include <string>
+#include "tone_mapping_settings.h"
 
 #include <nvrhi/nvrhi.h>
 
@@ -14,6 +18,17 @@ namespace uvsr
     class RendererShaderFactory;
     class RendererCommonPasses;
 
+    struct ColorLutResource
+    {
+        nvrhi::TextureHandle texture;
+        uint32_t size = 0;
+        std::array<float, 3> domainMin{};
+        std::array<float, 3> domainMax{ 1.f, 1.f, 1.f };
+    };
+
+    [[nodiscard]] bool LoadColorLutResource(nvrhi::IDevice* device,
+        const std::filesystem::path& path, ColorLutResource& result, std::string& error);
+
     class AgxToneMappingPass
     {
     public:
@@ -25,17 +40,21 @@ namespace uvsr
 
         [[nodiscard]] bool IsValid() const noexcept
         {
-            return m_Device && m_Framebuffer && m_PixelShader &&
-                m_UnityExposurePixelShader && m_OutputPixelShader &&
-                m_BindingLayout && m_TextureOnlyBindingLayout &&
-                m_Pipeline && m_UnityExposurePipeline;
+            if (!m_Device || !m_Framebuffer || !m_OutputPixelShader || !m_TextureOnlyBindingLayout)
+                return false;
+            for (const auto& variant : m_Variants)
+                if (!variant.shader || !variant.layout || !variant.pipeline)
+                    return false;
+            return true;
         }
 
         bool Render(
             nvrhi::ICommandList* commandList,
             const donut::engine::ICompositeView& compositeView,
             nvrhi::ITexture* sourceTexture,
-            nvrhi::IBuffer* exposureBuffer);
+            nvrhi::IBuffer* exposureBuffer,
+            const ToneMappingSettings& settings,
+            const ColorLutResource& lut);
 
         bool RenderOutput(
             nvrhi::ICommandList* commandList,
@@ -45,20 +64,22 @@ namespace uvsr
 
     private:
         nvrhi::DeviceHandle m_Device;
-        nvrhi::ShaderHandle m_PixelShader;
-        nvrhi::ShaderHandle m_UnityExposurePixelShader;
         nvrhi::ShaderHandle m_OutputPixelShader;
-        nvrhi::BindingLayoutHandle m_BindingLayout;
         nvrhi::BindingLayoutHandle m_TextureOnlyBindingLayout;
-        nvrhi::BindingSetHandle m_BindingSet;
-        nvrhi::BindingSetHandle m_UnityExposureBindingSet;
         nvrhi::BindingSetHandle m_OutputBindingSet;
-        nvrhi::GraphicsPipelineHandle m_Pipeline;
-        nvrhi::GraphicsPipelineHandle m_UnityExposurePipeline;
         nvrhi::GraphicsPipelineHandle m_OutputPipeline;
-        nvrhi::ITexture* m_BoundSource = nullptr;
-        nvrhi::IBuffer* m_BoundExposure = nullptr;
-        nvrhi::ITexture* m_BoundUnityExposureSource = nullptr;
+        struct Variant
+        {
+            nvrhi::ShaderHandle shader;
+            nvrhi::BindingLayoutHandle layout;
+            nvrhi::GraphicsPipelineHandle pipeline;
+            nvrhi::BindingSetHandle bindingSet;
+            nvrhi::ITexture* source = nullptr;
+            nvrhi::IBuffer* exposure = nullptr;
+            nvrhi::ITexture* lut = nullptr;
+        };
+        std::array<Variant, 4> m_Variants;
+        nvrhi::SamplerHandle m_LutSampler;
         nvrhi::ITexture* m_BoundOutputSource = nullptr;
         nvrhi::Format m_OutputFramebufferFormat = nvrhi::Format::UNKNOWN;
         std::shared_ptr<RendererCommonPasses> m_CommonPasses;

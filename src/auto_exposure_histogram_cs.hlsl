@@ -1,6 +1,7 @@
 #pragma pack_matrix(row_major)
 
 #include "auto_exposure_cb.h"
+#include "auto_exposure_shared.h"
 
 cbuffer c_AutoExposure : register(b0)
 {
@@ -10,8 +11,6 @@ cbuffer c_AutoExposure : register(b0)
 Texture2D<float4> t_SceneColor : register(t0);
 RWBuffer<uint> u_Histogram : register(u0);
 
-static const float AutoExposureMinimumLogLuminance = -20.0f;
-static const float AutoExposureMaximumLogLuminance = 20.0f;
 static const float3 AutoExposureLuminanceWeights = float3(
     0.2126f,
     0.7152f,
@@ -36,11 +35,13 @@ void main(uint2 dispatchPosition : SV_DispatchThreadID)
         return;
 
     const float normalized = saturate(
-        (log2(luminance) - AutoExposureMinimumLogLuminance) /
-        (AutoExposureMaximumLogLuminance -
-            AutoExposureMinimumLogLuminance));
+        (log2(luminance) -
+            UVSR_AUTO_EXPOSURE_MINIMUM_LOG_LUMINANCE) /
+        (UVSR_AUTO_EXPOSURE_MAXIMUM_LOG_LUMINANCE -
+            UVSR_AUTO_EXPOSURE_MINIMUM_LOG_LUMINANCE));
     const uint bin = min(
-        uint(normalized * 256.0f),
-        255u);
+        uint(normalized *
+            float(UVSR_AUTO_EXPOSURE_HISTOGRAM_BIN_COUNT)),
+        UVSR_AUTO_EXPOSURE_HISTOGRAM_BIN_COUNT - 1u);
     InterlockedAdd(u_Histogram[bin], 1u);
 }

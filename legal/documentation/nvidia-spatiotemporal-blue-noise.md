@@ -1,29 +1,30 @@
-# NVIDIA Spatiotemporal Blue Noise
+# NVIDIA spatiotemporal blue noise
 
-## Record
+## record
 
-- Relationship: Independent Implementation and Design Influence
-- Status: Current
-- Confidence: Confirmed
-- Upstream: [Spatiotemporal Blue Noise](https://arxiv.org/abs/2112.09629), [NVIDIA STBN](https://github.com/NVIDIA-RTX/STBN), and [Rendering Guidance](https://developer.nvidia.com/blog/rendering-in-real-time-with-spatiotemporal-blue-noise-textures-part-1/)
-- Revision: Published paper and public project, without an imported source revision
-- Governing Terms: Publication and upstream-repository terms; neither code nor packaged textures are copied
+- relationship: independent implementation and publication influence
+- status: current retained first party output; generator retired
+- confidence: confirmed
+- upstream: [Spatiotemporal Blue Noise](https://arxiv.org/abs/2112.09629), [NVIDIA STBN](https://github.com/NVIDIA-RTX/STBN), and [rendering guidance](https://developer.nvidia.com/blog/rendering-in-real-time-with-spatiotemporal-blue-noise-textures-part-1/)
+- revision: published paper and public project; no imported source revision
+- terms: publication and upstream repository terms; no NVIDIA code or texture
+  copied
 
-## UVSR Relationship
+## UVSR relationship
 
-UVSR's retired deterministic first-party generator followed the published
-spatial and temporal optimization objective. Its checked-in generated volumes
-remain current runtime assets; NVIDIA's generator and texture assets are not
-bundled or translated.
+UVSR's deterministic first party generator followed the published spatial and
+temporal optimization objective. the retained generated volumes are current
+runtime assets. NVIDIA's generator source and texture assets were not bundled,
+translated, or used as the retained bytes.
 
-## Evidence
+## evidence
 
-- [Noise Design](../../docs/noise.md)
-- [Asset Provenance](../../assets/noise/README.md)
-- [Retained Asset Manifest](../../assets/noise/manifest.json)
-- Commit `f892c17e33c007db69ca10f055bd7e59301b37d0`
+- [user guide](../../docs/user-guide.md)
+- [validation contract](../../docs/validation.md)
+- [asset provenance and exact hashes](../../assets/noise/README.md)
+- [generated manifest](../../assets/noise/manifest.json)
+- generation incorporation commit
+  `f892c17e33c007db69ca10f055bd7e59301b37d0`
 
-## Commercial Clearance
-
-Do not describe the generated volumes as NVIDIA assets. Any future reuse of the
+do not describe the retained volumes as NVIDIA assets. any later reuse of the
 upstream generator or textures needs a separate license review.

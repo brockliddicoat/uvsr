@@ -6,7 +6,6 @@
 
 #include <nvrhi/nvrhi.h>
 
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -143,13 +142,8 @@ namespace uvsr
             ImageBasedLightingSource source =
                 ImageBasedLightingSource::Count;
             bool neutralize = false;
-            std::vector<float> pixels;
-            uint32_t width = 0u;
-            uint32_t height = 0u;
             std::vector<ImageBasedLightingHalf4> radianceFaces;
-            std::vector<ImageBasedLightingHalf4> diffuseFaces;
             RendererDiffuseEnvironmentSh diffuseSh;
-            float averageLuminance = 0.f;
         };
 
         ImageBasedLightingEnvironment(
@@ -170,7 +164,7 @@ namespace uvsr
 
         void StagePreparedRadiance(PreparedRadiance prepared);
 
-        // True only after the selected radiance and all derived maps exist.
+        // True only after the selected radiance and requested maps exist.
         // Idle, in-progress, and failed preparation are deliberately distinct.
         [[nodiscard]] bool IsPreparedRadianceReady() const
         {
@@ -188,9 +182,7 @@ namespace uvsr
             return m_PreparationState.Get();
         }
 
-        // Returns true only when the selected radiance field was uploaded and
-        // its derived maps were rebuilt. Exposure and lobe toggles update probe
-        // scalars without touching texture contents.
+        // Returns true after preparing radiance or a newly requested lobe.
         bool Update(
             nvrhi::ICommandList* commandList,
             bool neutralize,
@@ -212,11 +204,9 @@ namespace uvsr
             return m_RadianceTexture.Get();
         }
 
-        [[nodiscard]] nvrhi::ITexture* GetEnvironmentBrdfTexture() const;
-
         [[nodiscard]] const ImageBasedLightingProbe* GetLightProbe() const
         {
-            return m_Uploaded && m_LightProbe.IsActive()
+            return m_PreparationState.IsReady() && m_LightProbe.IsActive()
                 ? &m_LightProbe
                 : nullptr;
         }
@@ -227,41 +217,25 @@ namespace uvsr
         }
 
     private:
-        enum class PreparedRadianceGpuStage
-        {
-            None,
-            EnvironmentBrdf,
-            RadianceFaceUpload,
-            DiffuseUpload,
-            RadianceMipGeneration,
-            SpecularBaseBlit,
-            SpecularMipGeneration
-        };
-
         bool AdvancePreparedRadiance(
             nvrhi::ICommandList* commandList);
-
-        bool RebuildRadiance(
-            nvrhi::ICommandList* commandList,
-            const PreparedRadiance& prepared);
+        bool FailPreparation();
 
         nvrhi::DeviceHandle m_Device;
         std::unique_ptr<RendererLightProbeProcessing> m_ProbeProcessing;
         nvrhi::TextureHandle m_RadianceTexture;
-        nvrhi::TextureHandle m_DiffuseTexture;
-        nvrhi::TextureHandle m_SpecularTexture;
         ImageBasedLightingProbe m_LightProbe;
+        RendererDiffuseEnvironmentSh m_DiffuseSh;
         std::filesystem::path m_EnvironmentAssetDirectory;
         ImageBasedLightingSource m_LastRequestedSource =
             ImageBasedLightingSource::Count;
         float m_RadianceScale = 1.f;
-        bool m_BrdfReady = false;
+        bool m_DiffuseReady = false;
         bool m_Uploaded = false;
         bool m_LastNeutralize = false;
         ImageBasedLightingPreparationState m_PreparationState;
         std::optional<PreparedRadiance> m_PreparedRadiance;
-        PreparedRadianceGpuStage m_PreparedRadianceStage =
-            PreparedRadianceGpuStage::None;
         uint32_t m_PreparedRadianceStep = 0u;
+        uint32_t m_SpecularMip = 0u;
     };
 }

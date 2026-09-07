@@ -1,6 +1,6 @@
 # `GLFW`
 
-## Record
+## record
 
 - Relationship: Dependency Integration
 - Status: Current
@@ -11,18 +11,17 @@
 - Governing Terms: zlib/libpng-style license; copyright Marcus Geelnard and Camilla Löwy
 - License SHA-256: `149704059b5d0bf551637e50042dd4de9c2cae921021f6636298911e3a5f9462`
 
-## UVSR Relationship
+## UVSR relationship
 
 UVSR fetches and builds the immutable upstream GLFW archive directly as a
-static Win32 target. Donut's application shell remains a transitional caller;
-UVSR has no GLFW fork. This is not a final dependency endpoint: remove the pin
-and notice when the direct Win32 shell replaces every GLFW caller.
+static Win32 target. Donut's retained application shell consumes it. UVSR has
+no GLFW fork. keep the pin and notice while that supported caller remains.
 
-## Evidence
+## evidence
 
 - [Direct Pin and Target](../../cmake/DirectThirdParty.cmake)
 - [Application Source](../../src/uvsr.cpp)
 
-## Commercial Clearance
+## commercial clearance
 
 The fetched notice is installed as `bin/licenses/GLFW.txt`.

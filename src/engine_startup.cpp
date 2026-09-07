@@ -1,12 +1,12 @@
 #include "engine_startup.h"
 #include "renderer_log.h"
+#include "sha256.h"
+#include "windows_executable_path.h"
 
 #include <Windows.h>
 #include <ShlObj.h>
-#include <bcrypt.h>
 #include <directx/d3d12.h>
 
-#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <cstdint>
@@ -38,86 +38,6 @@ namespace uvsr
         constexpr uintmax_t RequiredD3D12CoreSize = 5'027'640u;
         constexpr std::string_view RequiredD3D12CoreSha256 =
             "eddf4cff4eda8162624b88694ad2adf4b09bc5aee6339191f39adf8ae48b41e7";
-
-        [[nodiscard]] std::string Sha256File(
-            const std::filesystem::path& path)
-        {
-            BCRYPT_ALG_HANDLE algorithm = nullptr;
-            BCRYPT_HASH_HANDLE hash = nullptr;
-            DWORD objectSize = 0u;
-            DWORD resultSize = 0u;
-            std::vector<unsigned char> object;
-            std::array<unsigned char, 32u> digest{};
-            const auto cleanup = [&]()
-            {
-                if (hash)
-                    BCryptDestroyHash(hash);
-                if (algorithm)
-                    BCryptCloseAlgorithmProvider(algorithm, 0u);
-            };
-
-            NTSTATUS status = BCryptOpenAlgorithmProvider(
-                &algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0u);
-            if (status >= 0)
-            {
-                status = BCryptGetProperty(
-                    algorithm,
-                    BCRYPT_OBJECT_LENGTH,
-                    reinterpret_cast<PUCHAR>(&objectSize),
-                    sizeof(objectSize),
-                    &resultSize,
-                    0u);
-            }
-            if (status >= 0)
-            {
-                object.resize(objectSize);
-                status = BCryptCreateHash(
-                    algorithm,
-                    &hash,
-                    object.data(),
-                    static_cast<ULONG>(object.size()),
-                    nullptr,
-                    0u,
-                    0u);
-            }
-
-            std::ifstream input(path, std::ios::binary);
-            std::vector<char> buffer(1024u * 1024u);
-            while (status >= 0 && input)
-            {
-                input.read(buffer.data(),
-                    static_cast<std::streamsize>(buffer.size()));
-                const std::streamsize count = input.gcount();
-                if (count > 0)
-                {
-                    status = BCryptHashData(
-                        hash,
-                        reinterpret_cast<PUCHAR>(buffer.data()),
-                        static_cast<ULONG>(count),
-                        0u);
-                }
-            }
-            if (!input.eof() || status < 0)
-            {
-                cleanup();
-                return {};
-            }
-            status = BCryptFinishHash(
-                hash, digest.data(), static_cast<ULONG>(digest.size()), 0u);
-            cleanup();
-            if (status < 0)
-                return {};
-
-            constexpr char Hex[] = "0123456789abcdef";
-            std::string text;
-            text.reserve(64u);
-            for (const unsigned char byte : digest)
-            {
-                text.push_back(Hex[byte >> 4u]);
-                text.push_back(Hex[byte & 0x0fu]);
-            }
-            return text;
-        }
 
         [[nodiscard]] const char* GetSeverityName(
             log::Severity severity) noexcept
@@ -225,6 +145,11 @@ namespace uvsr
 
     void InitializeEngineDiagnosticLog()
     {
+#if defined(UVSR_BUILD_TESTING)
+        // each developer executable owns its state independently of installed builds.
+        (void)InitializeEngineDiagnosticLog(
+            GetExecutableDirectoryWide() / "state" / "logs" / "uvsr-engine.log");
+#else
         PWSTR localAppData = nullptr;
         const HRESULT folderResult = SHGetKnownFolderPath(
             FOLDERID_LocalAppData,
@@ -246,6 +171,7 @@ namespace uvsr
         CoTaskMemFree(localAppData);
 
         (void)InitializeEngineDiagnosticLog(logPath);
+#endif
     }
 
     bool InitializeEngineDiagnosticLog(
@@ -329,7 +255,14 @@ namespace uvsr
         const uintmax_t size = std::filesystem::file_size(path, error);
         if (error || size != RequiredD3D12CoreSize)
             return false;
-        return Sha256File(path) == RequiredD3D12CoreSha256;
+        try
+        {
+            return Sha256File(path) == RequiredD3D12CoreSha256;
+        }
+        catch (const Sha256Error&)
+        {
+            return false;
+        }
     }
 
     bool VerifyAppLocalD3D12Core()

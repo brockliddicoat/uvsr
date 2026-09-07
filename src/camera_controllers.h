@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 #include <donut/app/Camera.h>
@@ -14,21 +13,6 @@ namespace uvsr
         ThirdPerson,
         Static,
         Pivot
-    };
-
-    inline const char* GetCameraModeLabel(CameraMode mode)
-    {
-        switch (mode)
-        {
-        case CameraMode::ThirdPerson: return "Freelook";
-        case CameraMode::Static: return "Locked";
-        default: return "Unavailable";
-        }
-    }
-
-    inline constexpr std::array<CameraMode, 2> SelectableCameraModes = {
-        CameraMode::ThirdPerson,
-        CameraMode::Static
     };
 
     class UvsrFirstPersonCamera : public donut::app::FirstPersonCamera
@@ -69,6 +53,11 @@ namespace uvsr
         void KeyboardUpdate(int key, int scancode, int action, int mods) override
         {
             const bool pressed = action == GLFW_PRESS || action == GLFW_REPEAT;
+
+            if (key == GLFW_KEY_LEFT_SHIFT)
+                m_LeftShift = pressed;
+            else if (key == GLFW_KEY_RIGHT_SHIFT)
+                m_RightShift = pressed;
 
             if (key == GLFW_KEY_V)
             {
@@ -113,8 +102,7 @@ namespace uvsr
             // Donut assigns roll-left to Z. UVSR reserves Z for the pixel zoom
             // cycle, so X feeds that existing camera action. Donut's Q/E
             // vertical convention is opposite UVSR's, so swap those actions.
-            // Space is retired and Shift stays suppressed instead of restoring
-            // Donut's former sprint behavior.
+            // shift is handled here so either held key gives exactly 2x movement.
             int forwardedKey = key;
             if (key == GLFW_KEY_X)
                 forwardedKey = GLFW_KEY_Z;
@@ -215,7 +203,10 @@ namespace uvsr
 
         void Animate(float deltaT) override
         {
+            const float moveSpeed = m_MoveSpeed;
+            m_MoveSpeed *= MovementSpeedMultiplier();
             FirstPersonCamera::Animate(deltaT);
+            m_MoveSpeed = moveSpeed;
 
             const float yawInput = float(m_LookLeft) - float(m_LookRight);
             const float pitchInput = float(m_LookUp) - float(m_LookDown);
@@ -245,6 +236,16 @@ namespace uvsr
         }
 
     protected:
+        float MovementSpeedMultiplier() const
+        {
+            return m_LeftShift || m_RightShift ? 2.f : 1.f;
+        }
+
+        void ReleaseMovementSpeedModifier()
+        {
+            m_LeftShift = m_RightShift = false;
+        }
+
         void CancelRollLeveling()
         {
             m_RollLevelingActive = false;
@@ -428,6 +429,8 @@ namespace uvsr
         }
 
         bool m_TranslationEnabled = true;
+        bool m_LeftShift = false;
+        bool m_RightShift = false;
         bool m_LookLeft = false;
         bool m_LookRight = false;
         bool m_LookUp = false;
@@ -513,6 +516,7 @@ namespace uvsr
 
         void CancelPendingMotion()
         {
+            ReleaseMovementSpeedModifier();
             m_RemainingWheelDistance = 0.f;
             m_KeyboardDollyVelocity = 0.f;
             m_KeyboardStrafeVelocity = 0.f;
@@ -660,11 +664,11 @@ namespace uvsr
                 m_RemainingWheelDistance = 0.f;
 
             const float dollyMovement =
-                m_KeyboardDollyVelocity * clampedDeltaT + wheelMovement;
+                m_KeyboardDollyVelocity * clampedDeltaT * MovementSpeedMultiplier() + wheelMovement;
             const float strafeMovement =
-                m_KeyboardStrafeVelocity * clampedDeltaT;
+                m_KeyboardStrafeVelocity * clampedDeltaT * MovementSpeedMultiplier();
             const float verticalMovement =
-                m_KeyboardVerticalVelocity * clampedDeltaT;
+                m_KeyboardVerticalVelocity * clampedDeltaT * MovementSpeedMultiplier();
             if (dollyMovement != 0.f ||
                 strafeMovement != 0.f ||
                 verticalMovement != 0.f)

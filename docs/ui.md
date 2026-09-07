@@ -1,18 +1,18 @@
 # UI contract
 
-preserve the established ImGui language, retained controls, authored spacing,
-palettes, fonts, and interaction behavior. approved removals remain removed.
-do not infer a redesign from an old screenshot or procedure.
+Cap is the only active interface. the [user guide](user-guide.md#startup-and-interface)
+owns visible behavior. [settings](settings.md) owns values and transactions.
 
-add visual treatment only when it improves comprehension or operation. use concrete
-labels and evidence for claims. decorative elements must serve a user purpose.
-preserve exact UI labels rather than applying conversational lowercase rules.
+`src/uvsr_ui_panels.cpp` owns the fixed style and panel layout.
+`src/uvsr_ui_internal.h` contains shared controls. `overrides/imgui-ui.patch`
+contains the few hooks that require ImGui internals; apply it only to build copies.
+prefer normal ImGui controls and style values. do not add a skin abstraction,
+parallel widget framework, or duplicate settings state.
 
-read only the procedure relevant to the change. current source and approved product
-decisions resolve stale procedural descriptions. controls that affect rendering
-must preserve transaction boundaries, resource lifetime, and settings compatibility.
-verify visible changes in the exact candidate with representative output; a source
-check alone does not prove appearance or interaction.
-use the relevant section of [UI procedures](ui-procedures.md), not the whole manual.
-its animation and visual descriptions apply only where retained in the candidate.
-historical incident sections explain specific constraints, not a second policy.
+preserve retained controls, labels, spacing, resets, input precision, and snapshot
+compatibility. hide unavailable controls without clearing stored values. test
+interaction and inspect the exact candidate at representative viewport sizes and
+DPI scales. source checks alone do not prove appearance.
+
+legacy skins live in [compressed recovery material](postmortem/archive/legacy-ui-skins.zip).
+leave it out of routine context and extract it only for requested recovery.

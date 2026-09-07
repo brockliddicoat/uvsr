@@ -46,9 +46,7 @@ namespace uvsr
                     {
                         return RendererSceneQueryStatus::Pending;
                     }
-                    return state->device->waitForIdle()
-                        ? RendererSceneQueryStatus::Complete
-                        : RendererSceneQueryStatus::Failed;
+                    return RendererSceneQueryStatus::Failed;
                 }
                 state->device->resetEventQuery(state->query);
                 return RendererSceneQueryStatus::Complete;
@@ -77,6 +75,24 @@ namespace uvsr
         return true;
     }
 
+    RendererSceneRetirementStatus
+        RendererSceneRetirement::CompleteBlocking()
+    {
+        if (m_State == State::Idle || !m_Operations)
+            return RendererSceneRetirementStatus::Idle;
+        if (m_State == State::Ready)
+            return RendererSceneRetirementStatus::Ready;
+
+        m_UsedBlockingFallback = true;
+        if (!m_Operations.waitForIdle())
+        {
+            m_State = State::Failed;
+            return RendererSceneRetirementStatus::Failed;
+        }
+        m_State = State::Ready;
+        return RendererSceneRetirementStatus::Ready;
+    }
+
     RendererSceneRetirementStatus RendererSceneRetirement::Poll()
     {
         switch (m_State)
@@ -90,14 +106,7 @@ namespace uvsr
                 // Allocation failure is exceptional. Preserve lifetime
                 // correctness with a blocking retirement rather than freeing
                 // resources that may still be referenced by the queue.
-                m_UsedBlockingFallback = true;
-                if (!m_Operations.waitForIdle())
-                {
-                    m_State = State::Failed;
-                    return RendererSceneRetirementStatus::Failed;
-                }
-                m_State = State::Ready;
-                return RendererSceneRetirementStatus::Ready;
+                return CompleteBlocking();
             }
             m_State = State::WaitForQuery;
             return RendererSceneRetirementStatus::Pending;
@@ -111,8 +120,7 @@ namespace uvsr
                 m_State = State::Ready;
                 return RendererSceneRetirementStatus::Ready;
             case RendererSceneQueryStatus::Failed:
-                m_State = State::Failed;
-                return RendererSceneRetirementStatus::Failed;
+                return CompleteBlocking();
             }
             m_State = State::Failed;
             return RendererSceneRetirementStatus::Failed;

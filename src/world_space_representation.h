@@ -1,6 +1,8 @@
 #pragma once
 
+#include "ray_scene_view.h"
 #include "world_space_representation_contract.h"
+#include "world_space_representation_settings.h"
 
 #include <nvrhi/nvrhi.h>
 
@@ -55,10 +57,9 @@ namespace uvsr
         explicit WorldSpaceRepresentation(nvrhi::IDevice* device);
 
         void Reset();
-        void Invalidate(WorldSpaceRepresentationInvalidation invalidation);
 
-        // Returns true only when a coherent TLAS is ready for this scene and
-        // settings generation. When activeConsumer is false, no new build or
+        // Returns true only when a coherent TLAS is ready for this scene
+        // generation. When activeConsumer is false, no new build or
         // update work is submitted.
         [[nodiscard]] bool Update(
             nvrhi::ICommandList* commandList,
@@ -67,16 +68,8 @@ namespace uvsr
             uint32_t frameIndex,
             bool activeConsumer);
 
-        [[nodiscard]] nvrhi::rt::IAccelStruct*
-            GetTopLevelAccelerationStructure() const
-        {
-            return IsReady() ? m_Tlas.Get() : nullptr;
-        }
-
-        [[nodiscard]] nvrhi::IBuffer* GetGeometryIndexMap() const
-        {
-            return IsReady() ? m_GeometryIndexMap.Get() : nullptr;
-        }
+        [[nodiscard]] RaySceneView GetRaySceneView(
+            donut::engine::Scene* scene) const;
 
         [[nodiscard]] bool IsSupported() const
         {
@@ -127,8 +120,6 @@ namespace uvsr
 
         nvrhi::DeviceHandle m_Device;
         donut::engine::Scene* m_Scene = nullptr;
-        WorldSpaceRepresentationSettings m_Settings;
-        bool m_HasSettings = false;
         std::vector<BlasRecord> m_BlasRecords;
         std::vector<std::shared_ptr<donut::engine::MeshInstance>> m_Instances;
         std::vector<SourceInstanceTopology> m_SourceInstanceTopology;
@@ -142,8 +133,7 @@ namespace uvsr
         bool m_ReportedFailure = false;
 
         [[nodiscard]] bool BeginGeneration(
-            donut::engine::Scene* scene,
-            const WorldSpaceRepresentationSettings& settings);
+            donut::engine::Scene* scene);
         [[nodiscard]] bool BuildNextBlas(
             nvrhi::ICommandList* commandList,
             uint32_t frameIndex);

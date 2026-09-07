@@ -14,6 +14,9 @@ smaller code or better metrics never justify lost behavior, evidence, or clarity
 
 ## work
 
+prefer C++ for new first party runtime and substantive tool logic. retain HLSL,
+CMake and small shell glue where appropriate.
+
 work in the intended checkout and read its current instructions. resolve conflicting
 targets before editing. old reports are evidence, not current instructions.
 inspect relevant changes and callers. preserve unrelated work and the Git index.
@@ -78,8 +81,9 @@ changes below this line are intended to be made, but only very sparingly and wit
 
 the only shipped executable names are `uvsr-launcher.exe` and
 `uvsr-engine.exe`. recognize an old name only for one exact installed-state
-migration. one authoritative C++ settings-schema hash owns engine identity,
+migration. one authoritative C++ settings-schema hash owns engine artifact identity,
 Windows version fields, diagnostics, launcher data, and package metadata.
+keep generated version numbers out of the window title.
 
 ship only launcher, engine, required runtime DLLs, compiled shaders, retained
 assets, settings, notices, and licenses. public downloads contain signed

@@ -3,10 +3,7 @@
 #include "noise_settings.h"
 #include "ray_visibility_max_distance.h"
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
-#include <string_view>
 
 namespace uvsr
 {
@@ -15,21 +12,11 @@ namespace uvsr
     inline constexpr uint32_t RayTracedSkyVisibilityMaximumSamplesPerPixel =
         1u << uint32_t(RayTracedSkyVisibilityMaximumSampleRateLog2);
     inline constexpr float RayTracedSkyVisibilityMaximumRayBias = 0.1f;
-    inline constexpr float RayTracedSkyVisibilityHitDistanceInvalid = 0.f;
-    inline constexpr float RayTracedSkyVisibilityHitDistanceMaximum =
-        65472.f;
-    inline constexpr float RayTracedSkyVisibilityHitDistanceMiss = 65504.f;
-    inline constexpr std::array<std::string_view, 7>
-        RayTracedSkyVisibilitySampleRateLabels = {
-            "1", "2", "4", "8", "16", "32", "64"
-        };
-
     struct RayTracedSkyVisibilitySettings
     {
         bool enabled = true;
         bool applyToDiffuseIbl = true;
         bool applyToSpecularIbl = true;
-        bool outputHitDistance = false;
         int32_t sampleRateLog2 = 1;
         float rayBias = 0.002f;
         RayVisibilityMaxDistance maxDistance =
@@ -52,16 +39,6 @@ namespace uvsr
         return IsRayTracedSkyVisibilitySampleRateSupported(sampleRateLog2)
             ? 1u << uint32_t(sampleRateLog2)
             : 1u;
-    }
-
-    [[nodiscard]] inline constexpr std::string_view
-        GetRayTracedSkyVisibilitySampleRateLabel(int32_t sampleRateLog2)
-    {
-        return IsRayTracedSkyVisibilitySampleRateSupported(sampleRateLog2)
-            ? RayTracedSkyVisibilitySampleRateLabels[std::size_t(
-                sampleRateLog2 -
-                RayTracedSkyVisibilityMinimumSampleRateLog2)]
-            : std::string_view{};
     }
 
     [[nodiscard]] inline constexpr bool

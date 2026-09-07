@@ -13,23 +13,12 @@
 
 ## UVSR Relationship
 
-UVSR checks in the unmodified hinted TrueType Regular, SemiBold, and Bold faces
-from Noto Sans v2.015. CMake verifies every source file's exact size and SHA-256
-before building, stages the three faces under `media/fonts/NotoSans/`, and
-installs the complete OFL text as `bin/licenses/Noto-Sans-OFL-1.1.txt`.
-
-`uvsr-launcher.exe` embeds the same exact Regular and Bold files for its visible
-controls, validates their size, SHA-256, family, subfamily, and OS/2 weight
-metadata before opening the interface, and exposes the complete OFL text through
-**Notices**. Existing Regular and Bold roles retain their prior sizes and
-emphasis; no launcher control silently falls back to a Windows system font.
-
-With `Noto Sans` selected, the renderer uses Regular at 13 px for stock/Ogg
-controls, SemiBold at 16 px for the Amp body, and Bold at 16 px for Amp headers.
-When `Ogg (ProggyClean)` supplies the body, authored Amp headings still use Noto
-Sans Bold because ProggyClean has no Bold face. Current builds do not copy
-Windows-installed UI fonts and do not substitute another face when a required
-Noto Sans asset is missing or altered.
+`uvsr-launcher.exe` embeds the unmodified Noto Sans v2.015 Regular and Bold
+faces. it validates their size, SHA-256, family, subfamily, and OS/2 weight before
+opening the interface, and exposes the complete OFL text through **Notices**.
+the renderer uses Windows-installed Segoe UI and does not package Noto Sans.
+the retired SemiBold face is preserved with the legacy skins in
+`docs/postmortem/archive/legacy-ui-skins.zip`.
 
 | Source File | Size | OS/2 Weight | SHA-256 |
 | --- | ---: | ---: | --- |
@@ -41,8 +30,8 @@ Noto Sans asset is missing or altered.
 ## Evidence
 
 - [Bundled Font Assets And License](../../assets/fonts/noto-sans)
-- [Build-Time Font Validation And Packaging](../../CMakeLists.txt)
-- [Renderer Font Roles](../../src/uvsr.cpp)
+- [Launcher Font Validation](../../launcher/native/ui.cpp)
+- [Embedded Fonts And Notice](../../launcher/native/launcher.rc)
 
 ## Redistribution Conditions
 

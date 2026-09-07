@@ -102,8 +102,19 @@ int main()
         !ValidateSettingsSnapshotLoadCode(
             "0002ec8b8c82c37596fba90fe6756c5c",
             loadCodeError) &&
-            loadCodeError.find("does not match") != std::string::npos,
+            !loadCodeError.empty(),
         "a registered historical schema must not load into the current catalog");
+    for (const std::string_view version : SupportedLegacySettingsSnapshotVersions)
+    {
+        Require(
+            ValidateSettingsSnapshotLoadCode(
+                BuildSettingsSnapshotCode("a=b\n", version), loadCodeError) &&
+                loadCodeError.empty(),
+            "every supported legacy migration must remain loadable");
+    }
+    Require(!ValidateSettingsSnapshotLoadCode(
+            BuildSettingsSnapshotCode("a=b\n", "ffff"), loadCodeError),
+        "unknown snapshot versions must fail before catalog lookup");
     Require(
         !ValidateSettingsSnapshotLoadCode(
             "0007CBF29CE4842223256C62272E07BB",

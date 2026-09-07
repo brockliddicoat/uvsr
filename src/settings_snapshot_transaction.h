@@ -1,7 +1,7 @@
 #pragma once
 
 #include "settings_snapshot_decoder.h"
-#include "ui_settings_command_catalog.h"
+#include "settings_value.h"
 
 #include <cstddef>
 #include <functional>
@@ -11,54 +11,39 @@
 
 namespace uvsr
 {
-    enum class SettingsSnapshotApplicationMode
-    {
-        Mutable,
-        LiveDependent,
-        Selector
-    };
-
-    struct SettingsSnapshotCatalogEntry
-    {
-        std::string name;
-        SettingsSnapshotApplicationMode mode =
-            SettingsSnapshotApplicationMode::Mutable;
-    };
+    using SettingsSnapshotApplicationMode = UiSettingsApplicationRole;
 
     struct SettingsSnapshotTransactionEntry
     {
-        std::string name;
+        SettingId id = SettingId::Invalid;
         std::string requestedValue;
-        SettingsSnapshotApplicationMode mode =
-            SettingsSnapshotApplicationMode::Mutable;
     };
-
     using SettingsSnapshotValueReader = std::function<bool(
-        std::string_view name,
+        SettingId id,
         std::string& value,
         std::string& error)>;
 
     using SettingsSnapshotValueWriter = std::function<bool(
-        std::string_view name,
+        SettingId id,
         std::string_view value,
         std::string& error)>;
 
     using SettingsSnapshotValueValidator = std::function<bool(
-        std::string_view name,
+        SettingId id,
         std::string_view value,
+        std::string_view dependencySelector,
         std::string& error)>;
 
     enum class SettingsSnapshotSelectorTransition
     {
         Ready,
         Pending,
-        RestartRequired,
         Failed
     };
 
     using SettingsSnapshotSelectorDriver = std::function<
         SettingsSnapshotSelectorTransition(
-            std::string_view name,
+            SettingId id,
             std::string_view canonicalToken,
             bool begin,
             bool rollback,
@@ -87,34 +72,18 @@ namespace uvsr
         std::string error;
     };
 
-    struct SettingsSnapshotRestartHandoff
-    {
-        std::vector<SettingsSnapshotTransactionEntry> transaction;
-        std::vector<std::string> sourceValues;
-        bool rollingBack = false;
-        std::size_t changedValueCount = 0u;
-        SettingsSnapshotTransactionFailureStage failureStage =
-            SettingsSnapshotTransactionFailureStage::None;
-        std::string failure;
-    };
-
-    using SettingsSnapshotRestartHandoffWriter = std::function<bool(
-        const SettingsSnapshotRestartHandoff& handoff,
-        std::string& error)>;
-
     struct SettingsSnapshotStagedRuntimeAccess
     {
         SettingsSnapshotValueValidator validateValue;
         SettingsSnapshotValueReader readValue;
+        SettingsSnapshotValueReader readRawValue;
         SettingsSnapshotValueWriter writeValue;
         SettingsSnapshotSelectorDriver driveSelector;
-        SettingsSnapshotRestartHandoffWriter persistRestartHandoff;
     };
 
     enum class SettingsSnapshotTransactionProgress
     {
         Pending,
-        RestartRequired,
         Succeeded,
         Failed
     };
@@ -127,19 +96,11 @@ namespace uvsr
         std::string waitingFor;
     };
 
-    [[nodiscard]] bool ValidateSettingsSnapshotSelectorToken(
-        std::string_view name,
-        std::string_view token,
-        std::string& error);
-
     class SettingsSnapshotTransactionCoordinator
     {
     public:
         [[nodiscard]] SettingsSnapshotTransactionStep Begin(
             const std::vector<SettingsSnapshotTransactionEntry>& transaction,
-            const SettingsSnapshotStagedRuntimeAccess& access);
-        [[nodiscard]] SettingsSnapshotTransactionStep Resume(
-            const SettingsSnapshotRestartHandoff& handoff,
             const SettingsSnapshotStagedRuntimeAccess& access);
         [[nodiscard]] SettingsSnapshotTransactionStep Advance(
             const SettingsSnapshotStagedRuntimeAccess& access);
@@ -151,32 +112,43 @@ namespace uvsr
         enum class Phase
         {
             Idle,
-            ApplyAdapter,
             ApplyScene,
             ApplyLight,
-            CaptureLight,
             ApplyMaterial,
-            CaptureMaterial,
-            ApplyDependents,
-            ApplyRemaining,
+            CaptureTarget,
+            ApplyPrerequisites,
+            ValidateTarget,
+            ApplyValues,
             Verify,
-            RollbackTargetDependents,
-            RollbackAdapter,
+            RollbackTargetValues,
             RollbackScene,
             RollbackLight,
-            RollbackOriginalLightDependents,
             RollbackMaterial,
-            RollbackOriginalMaterialDependents,
-            RollbackRemaining,
+            RollbackSourceValues,
             RollbackVerify,
             Succeeded,
             Failed
         };
 
-        std::vector<SettingsSnapshotTransactionEntry> m_Transaction;
-        std::vector<std::string> m_SourceValues;
-        std::vector<std::string> m_TargetValues;
-        std::vector<bool> m_TargetCaptured;
+        struct Entry : SettingsSnapshotTransactionEntry
+        {
+            const UiSettingsCommandDefinition* definition = nullptr;
+        };
+        [[nodiscard]] std::size_t FindTransactionEntry(SettingId id) const;
+        [[nodiscard]] bool BuildTransactionValueOrder(
+            const std::vector<std::string>& desiredValues,
+            const std::vector<std::string>& liveValues,
+            bool reverseDependencies,
+            std::vector<std::size_t>& order,
+            std::string& error) const;
+        [[nodiscard]] bool ValidateRequestedSpotPair(std::string& error) const;
+
+        std::vector<Entry> m_Transaction;
+        std::vector<std::string> m_SourceVisibleValues;
+        std::vector<std::string> m_SourceRawValues;
+        std::vector<std::string> m_TargetRawValues;
+        std::vector<std::size_t> m_ValueOrder;
+        std::vector<bool> m_PrerequisiteApplied;
         std::vector<bool> m_Mutated;
         Phase m_Phase = Phase::Idle;
         std::size_t m_Cursor = 0u;
@@ -185,25 +157,9 @@ namespace uvsr
         SettingsSnapshotTransactionResult m_Result;
     };
 
-    [[nodiscard]] SettingsSnapshotApplicationMode
-    ResolveSettingsSnapshotApplicationMode(
-        const UiSettingsCommandDefinition& definition) noexcept;
-
-    [[nodiscard]] bool ValidateSettingsSnapshotCatalogValue(
-        const UiSettingsCommandDefinition& definition,
-        std::string_view value,
-        std::string& error);
-
     [[nodiscard]] bool BuildSettingsSnapshotTransaction(
         const DecodedSettings& decoded,
-        const std::vector<SettingsSnapshotCatalogEntry>& catalog,
         std::vector<SettingsSnapshotTransactionEntry>& transaction,
         std::string& error);
 
-    [[nodiscard]] SettingsSnapshotTransactionResult
-    ApplySettingsSnapshotTransaction(
-        const std::vector<SettingsSnapshotTransactionEntry>& transaction,
-        const SettingsSnapshotValueValidator& validateValue,
-        const SettingsSnapshotValueReader& readValue,
-        const SettingsSnapshotValueWriter& writeValue);
 }

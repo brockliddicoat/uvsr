@@ -31,17 +31,7 @@ foreach(manifest_entry IN LISTS UVSR_IMGUI_FILE_MANIFEST)
     list(GET manifest_fields 0 relative_path)
     list(GET manifest_fields 1 expected_hash)
     set(source_path "${UVSR_IMGUI_SOURCE_DIR}/${relative_path}")
-    if (NOT EXISTS "${source_path}")
-        message(FATAL_ERROR
-            "Pinned Dear ImGui file is missing: ${relative_path}")
-    endif()
-    file(SHA256 "${source_path}" actual_hash)
-    string(TOUPPER "${actual_hash}" actual_hash)
-    if (NOT actual_hash STREQUAL expected_hash)
-        message(FATAL_ERROR
-            "Pinned Dear ImGui file changed: ${relative_path}; expected "
-            "${expected_hash}, found ${actual_hash}")
-    endif()
+    uvsr_verify_dependency_file("${source_path}" "${expected_hash}")
     list(APPEND UVSR_IMGUI_EXPECTED_FILES "${relative_path}")
 endforeach()
 

@@ -60,10 +60,6 @@ namespace uvsr
             const std::vector<RendererShaderMacro>* defines,
             nvrhi::ShaderType shaderType);
 
-        nvrhi::ShaderLibraryHandle CreateShaderLibrary(
-            const char* fileName,
-            const std::vector<RendererShaderMacro>* defines);
-
     private:
         using Blob = std::vector<uint8_t>;
 

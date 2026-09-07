@@ -1,8 +1,8 @@
 #include "path_tracing_accumulation_contract.h"
-#include "path_tracing_bindings.h"
 #include "path_tracing_miss_contract.h"
-#include "path_tracing_transport_contract.h"
-#include "pbr_surface_light_contract.h"
+#include "path_tracing_settings.h"
+#include "path_tracing_firefly_contract.h"
+#include "lighting_accumulation_contract.h"
 
 #include <cmath>
 #include <cstdint>
@@ -12,533 +12,305 @@
 
 namespace
 {
-    constexpr float Pi = 3.14159265358979323846f;
-
     void Require(bool condition, const char* message)
     {
         if (!condition)
         {
-            std::cerr << "Path tracing semantic validation failed: "
-                << message << '\n';
+            std::cerr << message << '\n';
             std::exit(EXIT_FAILURE);
         }
     }
-
-    bool Near(float actual, float expected, float tolerance = 1e-5f)
+    bool Near(float a, float b, float tolerance = 1e-5f) { return std::abs(a - b) <= tolerance; }
+    template<typename Vector>
+    bool Near3(Vector a, Vector b, float tolerance = 1e-5f)
     {
-        return std::abs(actual - expected) <= tolerance;
+        return Near(a.x, b.x, tolerance) && Near(a.y, b.y, tolerance) && Near(a.z, b.z, tolerance);
+    }
+    constexpr float Pi = 3.14159265358979323846f;
+    const float Nan = std::numeric_limits<float>::quiet_NaN();
+
+    void CheckRandomSchedule()
+    {
+        const auto seed = ShaderMakeUint2(0x12345678u, 0x9abcdef0u);
+        auto replay = PathTracingCreateRandomStream(seed, 0x50415448u);
+        Require(replay.seed.x == 760726995u && replay.seed.y == 2038676650u && replay.dimension == 0,
+            "path RNG seed or domain changed");
+        for (const auto expected : { 3770629490u, 587979643u, 3312729204u, 3680601844u })
+            Require(PathTracingRandomUint(replay) == expected, "path RNG known answer changed");
+        Require(replay.dimension == 4, "path RNG did not consume one dimension per draw");
+        auto camera = PathTracingCreateRandomStream(seed, 0x43414d45u);
+        const auto jitter = PathTracingDrawCameraRandoms(camera);
+        Require(jitter.jitterX == 0.6091696024f && jitter.jitterY == 0.2090272009f && camera.dimension == 2,
+            "camera x/y draws lost their isolated domain");
+
+        struct Bounce { float selection; uint32_t sampleSeed; float branch, x, y; };
+        const Bounce expected[] = {
+            { 0.8779181242f, 587979643u, 0.7713048458f, 0.8569568396f, 0.5072252750f },
+            { 0.7922476530f, 1313725663u, 0.9004507065f, 0.5324558020f, 0.7367506027f },
+            { 0.5096406937f, 3097686502u, 0.1340835989f, 0.2715081871f, 0.4193865359f }
+        };
+        auto stream = PathTracingCreateRandomStream(seed, 0x50415448u);
+        for (unsigned bounce = 0; bounce < 3; ++bounce)
+        {
+            const auto direct = PathTracingDrawDirectLightRandoms(stream);
+            Require(direct.selection == expected[bounce].selection && direct.sampleSeed == expected[bounce].sampleSeed &&
+                stream.dimension == bounce * 5 + 2, "direct light draw order or seed changed");
+            const auto bsdf = PathTracingDrawBsdfRandoms(stream);
+            Require(bsdf.branch == expected[bounce].branch && bsdf.sampleX == expected[bounce].x &&
+                bsdf.sampleY == expected[bounce].y && stream.dimension == bounce * 5 + 5,
+                "BSDF branch/x/y draw order changed");
+        }
+        Require(PathTracingDrawRouletteRandom(stream) == 0.9279705286f && stream.dimension == 16,
+            "roulette draw shifted its dimension");
+        const auto terminal = PathTracingDrawDirectLightRandoms(stream);
+        Require(terminal.selection == 0.1970627010f && terminal.sampleSeed == 3848338464u && stream.dimension == 18,
+            "terminal direct-light draw schedule changed");
+
+        const auto pixel = ShaderMakeUint2(37, 91);
+        const auto first = PathTracingMakeSampleSeed(pixel, 12, 5, 0, .375f);
+        const auto phase = PathTracingMakeAttemptPhase(5, 1);
+        const auto retry = PathTracingMakeSampleSeed(pixel, phase, 5, 1, .375f);
+        const auto control = PathTracingMakeSampleSeed(pixel, phase, 5, 0, .375f);
+        Require(first.x == 3418498407u && first.y == 581247694u &&
+            PathTracingNoiseToUint(1) == 0xffffffffu && PathTracingNoiseToUint(-1) == 0 &&
+            PathTracingMakeAttemptPhase(5, 0) == 5 && phase == 2654435774u &&
+            retry.x == 3857388923u && retry.y == 1091638391u &&
+            control.x == 2545574768u && control.y == 3974641560u,
+            "pixel, accepted count, retry generation or noise lost its sample identity");
+        struct Retry { uint32_t before, accepted, after; bool changed; };
+        for (const Retry test : { Retry{ 0, 0, 1, true }, { 1, 0, 2, true }, { 2, 1, 0, true },
+                 { 0, 1, 0, false }, { 0xffffffffu, 0, 1, true } })
+        {
+            const auto result = ResolvePathTracingRetryGeneration(test.before, test.accepted);
+            Require(result.generation == test.after && bool(result.changed) == test.changed,
+                "rejected path retry did not advance, wrap or clear on acceptance");
+        }
     }
 
-    bool Near(
-        PathTracingAccumulationFloat3 actual,
-        PathTracingAccumulationFloat3 expected,
-        float tolerance = 1e-5f)
+    void CheckTransport()
     {
-        return Near(actual.x, expected.x, tolerance) &&
-            Near(actual.y, expected.y, tolerance) &&
-            Near(actual.z, expected.z, tolerance);
+        const auto cosine = PathTracingSampleCosineHemisphereLocal(ShaderMakeFloat2(.25f, .5f));
+        const auto ggx = PathTracingSampleGgxHalfVectorLocal(ShaderMakeFloat2(.25f, .5f), .4f);
+        Require(Near3(cosine, { -.5f, 0, .8660254f }) && Near(ShaderDot(cosine, cosine), 1) &&
+            Near3(ggx, { -.22501758f, 0, .9743547f }) && Near(ShaderDot(ggx, ggx), 1),
+            "production cosine/GGX samplers changed direction or normalization");
+        const auto material = ResolvePathTracingPreparedMaterial({ .8f, .2f, .1f }, .25f, .5f, .08f, false);
+        Require(Near3(material.diffuseColor, { .6f, .15f, .075f }) &&
+            Near3(material.specularF0, { .26f, .11f, .085f }) && Near(material.alpha, .25f) &&
+            Near(ResolvePathTracingDiffuseSelectionProbability(material), .6316848f),
+            "metallic/roughness transport preparation changed");
+        const auto bsdf = ResolvePathTracingBsdfEvaluation(material, .8f, .6f, .8f, .6f, .9f, .7f);
+        Require(Near3(bsdf.diffuse, { .14098616f, .04239111f, .021790935f }) &&
+            Near3(bsdf.specular, { .04523298f, .01937925f, .01507030f }) &&
+            Near(bsdf.diffusePdf, .19098593f) && Near(bsdf.specularPdf, .11044171f),
+            "Lambert/GGX evaluation or PDF known answer changed");
+        const auto weighted = ResolvePathTracingBsdfWeight(bsdf, ResolvePathTracingDiffuseSelectionProbability(material), .6f, .6f);
+        Require(weighted.valid && Near(weighted.pdf, .16132027f) &&
+            Near3(weighted.weight, { .69260658f, .22974308f, .13709833f }), "BSDF balance weight changed");
+        double lambertIntegral = 0, ggxIntegral = 0;
+        constexpr unsigned steps = 65536;
+        for (unsigned index = 0; index < steps; ++index)
+        {
+            const float angleCosine = (float(index) + .5f) / steps;
+            lambertIntegral += 2.0 * Pi * PathTracingPdfLambert(angleCosine) / steps;
+            ggxIntegral += 2.0 * Pi * PathTracingD_GGXExact(angleCosine, .4f) * angleCosine / steps;
+        }
+        Require(std::abs(lambertIntegral - 1) < 1e-6 && std::abs(ggxIntegral - 1) < 1e-5,
+            "Lambert/GGX PDF lost unit hemisphere mass");
+
+        Require(uvsr::IsValidPathTracingSettings(uvsr::DefaultPathTracingSettings), "default path settings must dispatch");
+        for (const int invalidMaximum : { -1, 0, 31, std::numeric_limits<int>::max() })
+        {
+            auto settings = uvsr::DefaultPathTracingSettings;
+            settings.maximumBounces = invalidMaximum;
+            Require(!uvsr::IsValidPathTracingSettings(settings), "invalid bounce limit must reject before unsigned conversion");
+        }
+        for (const int invalidMinimum : { -1, 0, 31 })
+        {
+            auto settings = uvsr::DefaultPathTracingSettings;
+            settings.minimumBounces = invalidMinimum;
+            Require(!uvsr::IsValidPathTracingSettings(settings), "invalid roulette floor must reject");
+        }
+        for (const float invalidThreshold : { Nan, std::numeric_limits<float>::infinity(), -1.f, 0.f, 9.f, 1000001.f })
+        {
+            auto settings = uvsr::DefaultPathTracingSettings;
+            settings.fireflyFilter = false;
+            settings.fireflyThreshold = invalidThreshold;
+            Require(!uvsr::IsValidPathTracingSettings(settings), "invalid latent threshold must reject even when disabled");
+        }
+        Require(uvsr::IsValidPathTracingSettings({ 1, 1, false, 10.f }) &&
+            uvsr::IsValidPathTracingSettings({ 30, 30, true, 1000000.f }) &&
+            !uvsr::IsValidPathTracingSettings({ 1, 2, true, 5000.f }),
+            "path settings must retain inclusive bounds and reject inverted intervals");
+        for (unsigned maximum = 1; maximum <= 30; ++maximum)
+        {
+            Require(PathTracingBounceSamplesBsdf(maximum, maximum) &&
+                !PathTracingBounceSamplesBsdf(maximum + 1, maximum),
+                "the camera hit must not consume a scattering bounce");
+            for (unsigned minimum = 1; minimum <= maximum; ++minimum)
+                Require(!PathTracingRouletteRequiresRandom(minimum + 1, minimum) &&
+                    PathTracingRouletteRequiresRandom(minimum + 2, minimum),
+                    "roulette must preserve Capsaicin's strict minimum-depth boundary");
+        }
+        const auto before = ResolvePathTracingRoulette(3, 2, { .25f, .5f, .1f }, .99f);
+        const auto survived = ResolvePathTracingRoulette(4, 2, { .25f, .5f, .1f }, .49f);
+        const auto stopped = ResolvePathTracingRoulette(4, 2, { .25f, .5f, .1f }, .5f);
+        const auto invalid = ResolvePathTracingRoulette(1, 2, { Nan, 1, 1 }, 0);
+        const auto floorSurvivor = ResolvePathTracingRoulette(4, 2, { 0, 0, 0 }, .049f);
+        const auto cap = ResolvePathTracingRoulette(4, 2, { 2, 1, .5f }, .95f);
+        Require(before.transportValid && before.continuePath && Near3(before.throughput, { .25f, .5f, .1f }) &&
+            survived.transportValid && survived.continuePath && Near(survived.survival, .5f) &&
+            Near3(survived.throughput, { .5f, 1, .2f }) && stopped.transportValid && !stopped.continuePath &&
+            Near(stopped.survival, .5f), "roulette threshold or unbiased survivor energy changed");
+        Require(PathTracingThroughputIsValid({ 0, 1, 2 }) && !PathTracingThroughputIsValid({ -.01f, 1, 2 }) &&
+            !PathTracingThroughputIsValid({ Nan, 1, 2 }) && !invalid.transportValid && !invalid.continuePath &&
+            floorSurvivor.continuePath && Near(floorSurvivor.survival, .05f) && !cap.continuePath && Near(cap.survival, .95f),
+            "roulette lost finite throughput or probability bounds");
+        Require(Near(PathTracingAdvanceFireflyFilter(1.f, 0.f, 1.f), 1.f) &&
+            Near(PathTracingAdvanceFireflyFilter(1.f, 1.f / float(2.0 * Pi), 1.f),
+                float(32.0 / (32.0 + Pi * Pi)), 1.e-6f) &&
+            Near(PathTracingAdvanceFireflyFilter(1.f, 0.f, .25f), .5f) &&
+            Near(PathTracingAdvanceFireflyFilter(1.e-6f, 1.f, 1.f), 1.e-5f),
+            "firefly scatter factor lost probability, lobe weight or floor");
+        Require(Near3(PathTracingFilterFirefly({ 300, 0, 0 }, 10, 1), { 30, 0, 0 }) &&
+            Near3(PathTracingFilterFirefly({ 60, 30, 0 }, 10, .5f), { 10, 5, 0 }) &&
+            Near3(PathTracingFilterFirefly({ 3, 2, 1 }, 10, 1), { 3, 2, 1 }) &&
+            Near3(PathTracingFilterFirefly({ 300, 20, 1 }, 0, .01f), { 300, 20, 1 }),
+            "firefly cap changed hue, uncapped radiance or the exact off path");
+        float factor = 1.f;
+        for (unsigned bounce = 0; bounce != 30; ++bounce)
+        {
+            const float next = PathTracingAdvanceFireflyFilter(factor, .2f, .5f);
+            Require(next <= factor && next >= 1.e-5f, "scatter history must decay monotonically to its floor");
+            factor = next;
+        }
+        Require(!PathTracingMissUsesEnvironment(0, false) && PathTracingMissUsesEnvironment(0, true) &&
+            PathTracingMissUsesEnvironment(1, false) && PathTracingMissUsesEnvironment(7, false),
+            "background control disabled secondary environment transport");
+
+        const auto directional = ResolvePbrFiniteDirectionalEmitter(6, .2f);
+        Require(directional.valid && Near(directional.oneMinusCosineMaximum, .004995835f, 1e-7f) &&
+            Near(directional.solidAngle, .031389754f, 1e-7f) && Near(directional.directionalPdf, 31.857529f, 1e-4f) &&
+            Near(directional.directionalPdf * directional.solidAngle, 1) &&
+            Near(directional.radianceScale * Pi * std::sin(.1f) * std::sin(.1f), 6),
+            "finite directional emitter lost its cone, PDF or irradiance");
+        const auto sphere = ResolvePbrFiniteSphereEmitter(12, 1, 5);
+        const auto nearEndpoint = ResolvePbrFiniteSphereEndpoint(5, 25, 1, true);
+        const auto enclosing = ResolvePbrFiniteSphereEmitter(12, 1, 0);
+        const auto exitEndpoint = ResolvePbrFiniteSphereEndpoint(0, 0, 1, false);
+        Require(sphere.valid && sphere.receiverOutside && Near(sphere.oneMinusCosineMaximum, .020204103f, 1e-7f) &&
+            Near(sphere.directionalPdf, 7.8773575f) && Near(sphere.directionalPdf * sphere.solidAngle, 1) &&
+            Near(sphere.radianceScale * Pi / 25, 12.f / 25) && nearEndpoint.valid && Near(nearEndpoint.distance, 4),
+            "exterior sphere lost inverse-square irradiance or its near-shell endpoint");
+        Require(enclosing.valid && !enclosing.receiverOutside && Near(enclosing.solidAngle, 4 * Pi) &&
+            Near(enclosing.directionalPdf * enclosing.solidAngle, 1) && exitEndpoint.valid && Near(exitEndpoint.distance, 1),
+            "enclosing sphere lost full-sphere sampling or its exit shell");
     }
 
-    bool Near(
-        PathTracingTransportFloat3 actual,
-        PathTracingTransportFloat3 expected,
-        float tolerance = 1e-5f)
+    void CheckAccumulation()
     {
-        return Near(actual.x, expected.x, tolerance) &&
-            Near(actual.y, expected.y, tolerance) &&
-            Near(actual.z, expected.z, tolerance);
+        const auto repaired = RepairPathTracingAccumulation({ Nan, 2, 3 }, 17);
+        Require(!repaired.count && !repaired.accepted && repaired.publish &&
+            Near3(repaired.mean, {}), "invalid path history was not repaired");
+        const auto prior = RepairPathTracingAccumulation({ 2, 4, 6 }, 3);
+        for (const bool valid : { false, true })
+        {
+            const auto rejected = ResolvePathTracingAccumulation(prior, { valid ? Nan : 9.f, 1, 1 }, valid);
+            Require(rejected.count == 3 && !rejected.accepted && !rejected.publish && Near3(rejected.mean, prior.mean),
+                "invalid path attempt changed published history");
+        }
+        auto path = RepairPathTracingAccumulation({}, 0);
+        const ShaderFloat3 samples[] = { { 0, 0, 0 }, { 3, 6, 9 }, { 0, 3, 0 } };
+        const ShaderFloat3 means[] = { { 0, 0, 0 }, { 1.5f, 3, 4.5f }, { 1, 3, 3 } };
+        for (unsigned index = 0; index < 3; ++index)
+        {
+            path = ResolvePathTracingAccumulation(path, samples[index], true);
+            Require(path.accepted && path.count == index + 1 && Near3(path.mean, means[index]),
+                "finite black miss or hit did not contribute exactly one path sample");
+        }
+        const auto terminalPath = ResolvePathTracingAccumulation(
+            RepairPathTracingAccumulation({ 1, 2, 3 }, UVSR_PATH_TRACING_SATURATED_SAMPLE_COUNT), { 9, 9, 9 }, true);
+        Require(terminalPath.count == UVSR_PATH_TRACING_SATURATED_SAMPLE_COUNT &&
+            !terminalPath.accepted && !terminalPath.publish && Near3(terminalPath.mean, { 1, 2, 3 }),
+            "saturated path history changed");
+
+        Require(ResolveLightingAccumulationAttemptToken(0, false) == 1 &&
+            ResolveLightingAccumulationAttemptToken(17, false) == 18 &&
+            ResolveLightingAccumulationAttemptToken(0xffffffffu, false) == 0xffffffffu &&
+            ResolveLightingAccumulationAttemptToken(0xffffffffu, true) == 1, "lighting attempt token overflowed");
+        for (unsigned reason = 0; reason < 3; ++reason)
+        {
+            const auto empty = RepairLightingAccumulation({ reason == 2 ? Nan : 1.f, 2, 3, 1 },
+                reason == 1 ? 0 : 9, reason == 0);
+            Require(empty.count == 0 && empty.publish && Near3(empty.mean, {}) && empty.mean.w == 0,
+                "reset, empty or invalid lighting history was not repaired");
+        }
+        const auto history = RepairLightingAccumulation({ 2, 4, 6, 1 }, 3, false);
+        for (const bool attempted : { false, true })
+        {
+            const auto rejected = ResolveLightingAccumulationCandidate(history, attempted ? 4 : 0,
+                { 9, attempted ? Nan : 9.f, 9, 1 });
+            Require(bool(rejected.attempted) == attempted && !rejected.accepted && rejected.publish &&
+                rejected.count == 3 && Near3(rejected.mean, history.mean) && rejected.mean.w == 1,
+                "skipped/invalid lighting attempt stopped publishing preserved history");
+        }
+        auto lighting = RepairLightingAccumulation({}, 0, false);
+        const ShaderFloat4 candidates[] = { { -2, 4, 8, -7 }, { 2, 0, 4, 0 }, { 4, 2, 0, 0 } };
+        const ShaderFloat4 expected[] = { { 0, 4, 8, 1 }, { 1, 2, 6, 1 }, { 2, 2, 4, 1 } };
+        for (unsigned index = 0; index < 3; ++index)
+        {
+            lighting = ResolveLightingAccumulationCandidate(lighting, index + 1, candidates[index]);
+            Require(lighting.accepted && lighting.count == index + 1 &&
+                Near3(lighting.mean, expected[index]) && lighting.mean.w == 1, "lighting mean or alpha clamping changed");
+        }
+        const auto terminalLighting = ResolveLightingAccumulationCandidate(
+            RepairLightingAccumulation({ 1, 2, 3, 1 }, 0xffffffffu, false), 0xffffffffu, { 9, 9, 9, 1 });
+        Require(terminalLighting.count == 0xffffffffu && terminalLighting.attempted && !terminalLighting.accepted &&
+            terminalLighting.publish && Near3(terminalLighting.mean, { 1, 2, 3, 1 }) && terminalLighting.mean.w == 1,
+            "terminal lighting history mutated or stopped publishing");
     }
 
-    void RequireDirectLightDraws(
-        PathTracingRandomStream& stream,
-        std::uint32_t expectedSelectionBits,
-        std::uint32_t expectedSampleSeed,
-        std::uint32_t expectedDimension,
-        const char* message)
+    void CheckSelection()
     {
-        const PathTracingDirectLightRandomDraws draws =
-            PathTracingDrawDirectLightRandoms(stream);
-        Require(
-            Near(
-                draws.selection,
-                PathTracingUintToUnitFloat(expectedSelectionBits),
-                0.0f) &&
-                draws.sampleSeed == expectedSampleSeed &&
-                stream.dimension == expectedDimension,
-            message);
-    }
-
-    void RequireBsdfDraws(
-        PathTracingRandomStream& stream,
-        std::uint32_t expectedBranchBits,
-        std::uint32_t expectedSampleXBits,
-        std::uint32_t expectedSampleYBits,
-        std::uint32_t expectedDimension,
-        const char* message)
-    {
-        const PathTracingBsdfRandomDraws draws =
-            PathTracingDrawBsdfRandoms(stream);
-        Require(
-            Near(
-                draws.branch,
-                PathTracingUintToUnitFloat(expectedBranchBits),
-                0.0f) &&
-                Near(
-                    draws.sampleX,
-                    PathTracingUintToUnitFloat(expectedSampleXBits),
-                    0.0f) &&
-                Near(
-                    draws.sampleY,
-                    PathTracingUintToUnitFloat(expectedSampleYBits),
-                    0.0f) &&
-                stream.dimension == expectedDimension,
-            message);
+        using namespace uvsr;
+        using Solution = LightingSolution;
+        using State = SelectedLightingTransportState;
+        const auto enter = ResolveLightingSolutionTransition(Solution::RayMarching, Solution::PathTracing);
+        const auto reapply = ResolveLightingSolutionTransition(Solution::PathTracing, Solution::PathTracing);
+        const auto reject = ResolveLightingSolutionTransition(Solution::PathTracing, static_cast<Solution>(255));
+        Require(IsValidLightingSolution(Solution::RayMarching) && IsValidLightingSolution(Solution::PathTracing) &&
+            !IsValidLightingSolution(static_cast<Solution>(255)) && enter.accepted && enter.changed &&
+            enter.openPathTracingDrawer && enter.resetHistory && enter.selection == Solution::PathTracing &&
+            reapply.accepted && !reapply.changed && !reapply.openPathTracingDrawer && reapply.resetHistory &&
+            !reject.accepted && !reject.changed && !reject.resetHistory && reject.selection == Solution::PathTracing,
+            "lighting selection lost its drawer/reset behavior or retained invalid input");
+        const auto raster = ResolveSelectedLightingTransport(Solution::RayMarching, false, false);
+        Require(raster.renderRayMarching && !raster.retainPathTracingSelection && raster.state == State::RayMarching,
+            "Ray Marching did not select raster transport");
+        struct Phase { bool active, unavailable; State expected; };
+        for (const auto phase : { Phase{ false, false, State::PathTracingPreparing },
+                 { true, false, State::PathTracingActive }, { false, true, State::PathTracingUnavailable } })
+        {
+            const auto selection = ResolveSelectedLightingTransport(Solution::PathTracing, phase.active, phase.unavailable);
+            Require(!selection.renderRayMarching && selection.retainPathTracingSelection && selection.state == phase.expected,
+                "path transport availability erased selection or silently selected raster");
+        }
+        const PathTracingPipelineResources resources{ true, true, true, true, true, true };
+        const auto complete = ResolvePathTracingAvailability(true, resources);
+        const auto failed = ResolvePathTracingAvailability(true, {});
+        const auto unsupported = ResolvePathTracingAvailability(false, resources);
+        Require(complete.rayQuerySupported && complete.executablePipelineAvailable &&
+            failed.rayQuerySupported && !failed.executablePipelineAvailable &&
+            !unsupported.rayQuerySupported && !unsupported.executablePipelineAvailable,
+            "pipeline failure was confused with unsupported DXR hardware");
     }
 }
 
 int main()
 {
-    Require(
-        uvsr::PathTracingUavSlots ==
-            std::array<std::uint32_t, 5>{ 0u, 1u, 2u, 3u, 4u },
-        "path-tracing history, output, or retry UAV slots changed");
-    PathTracingRandomStream replay = PathTracingCreateRandomStream(
-        PathTracingTransportMakeUint2(0x12345678u, 0x9abcdef0u),
-        0x50415448u);
-    Require(
-        replay.seed.x == 760726995u && replay.seed.y == 2038676650u &&
-            replay.dimension == 0u &&
-            PathTracingRandomUint(replay) == 3770629490u &&
-            PathTracingRandomUint(replay) == 587979643u &&
-            PathTracingRandomUint(replay) == 3312729204u &&
-            PathTracingRandomUint(replay) == 3680601844u &&
-            replay.dimension == 4u,
-        "counter-based path RNG known answers changed");
-    PathTracingRandomStream camera = PathTracingCreateRandomStream(
-        PathTracingTransportMakeUint2(0x12345678u, 0x9abcdef0u),
-        0x43414d45u);
-    const PathTracingCameraRandomDraws cameraDraws =
-        PathTracingDrawCameraRandoms(camera);
-    Require(
-        Near(
-            cameraDraws.jitterX,
-            PathTracingUintToUnitFloat(2616363384u),
-            0.0f) &&
-            Near(
-                cameraDraws.jitterY,
-                PathTracingUintToUnitFloat(897765030u),
-                0.0f) &&
-            camera.dimension == 2u,
-        "camera jitter no longer consumes x then y in its isolated domain");
-    PathTracingRandomStream bounceSchedule = PathTracingCreateRandomStream(
-        PathTracingTransportMakeUint2(0x12345678u, 0x9abcdef0u),
-        0x50415448u);
-    RequireDirectLightDraws(
-        bounceSchedule,
-        3770629490u,
-        587979643u,
-        2u,
-        "bounce zero direct-light draws or dimension changed");
-    RequireBsdfDraws(
-        bounceSchedule,
-        3312729204u,
-        3680601844u,
-        2178515750u,
-        5u,
-        "bounce zero BSDF draws or dimension changed");
-    RequireDirectLightDraws(
-        bounceSchedule,
-        3402677836u,
-        1313725663u,
-        7u,
-        "bounce one direct-light draws or dimension changed");
-    RequireBsdfDraws(
-        bounceSchedule,
-        3867406099u,
-        2286880489u,
-        3164319798u,
-        10u,
-        "bounce one BSDF draws or dimension changed");
-    RequireDirectLightDraws(
-        bounceSchedule,
-        2188890170u,
-        3097686502u,
-        12u,
-        "bounce two direct-light draws or dimension changed");
-    RequireBsdfDraws(
-        bounceSchedule,
-        575884726u,
-        1166118829u,
-        1801251354u,
-        15u,
-        "bounce two BSDF draws or dimension changed");
-    const float rouletteDraw =
-        PathTracingDrawRouletteRandom(bounceSchedule);
-    Require(
-        Near(
-            rouletteDraw,
-            PathTracingUintToUnitFloat(3985603113u),
-            0.0f) &&
-            bounceSchedule.dimension == 16u,
-        "bounce two roulette draw or dimension changed");
-    RequireDirectLightDraws(
-        bounceSchedule,
-        846377759u,
-        3848338464u,
-        18u,
-        "terminal bounce direct-light draws or dimension changed");
-    const PathTracingTransportUint2 sampleSeed = PathTracingMakeSampleSeed(
-        PathTracingTransportMakeUint2(37u, 91u),
-        12u,
-        5u,
-        0u,
-        0.375f);
-    Require(
-        sampleSeed.x == 3418498407u && sampleSeed.y == 581247694u &&
-            PathTracingNoiseToUint(1.0f) == 0xffffffffu &&
-            PathTracingNoiseToUint(-1.0f) == 0u,
-        "sample seed no longer binds pixel, phase, accepted count, and noise");
-    const std::uint32_t retryPhase = PathTracingMakeAttemptPhase(5u, 1u);
-    const PathTracingTransportUint2 retrySeed = PathTracingMakeSampleSeed(
-        PathTracingTransportMakeUint2(37u, 91u),
-        retryPhase,
-        5u,
-        1u,
-        0.375f);
-    const PathTracingTransportUint2 retryControlSeed =
-        PathTracingMakeSampleSeed(
-            PathTracingTransportMakeUint2(37u, 91u),
-            retryPhase,
-            5u,
-            0u,
-            0.375f);
-    Require(
-        PathTracingMakeAttemptPhase(5u, 0u) == 5u &&
-            retryPhase == 2654435774u &&
-            retryControlSeed.x == 2545574768u &&
-            retryControlSeed.y == 3974641560u &&
-            retrySeed.x == 3857388923u &&
-            retrySeed.y == 1091638391u &&
-            (retrySeed.x != retryControlSeed.x ||
-                retrySeed.y != retryControlSeed.y),
-        "retry generation no longer changes the noise phase and sample seed");
-
-    const PathTracingRetryGenerationTransition firstReject =
-        ResolvePathTracingRetryGeneration(0u, 0u);
-    const PathTracingRetryGenerationTransition secondReject =
-        ResolvePathTracingRetryGeneration(firstReject.generation, 0u);
-    const PathTracingRetryGenerationTransition acceptedRetry =
-        ResolvePathTracingRetryGeneration(secondReject.generation, 1u);
-    const PathTracingRetryGenerationTransition acceptedInitial =
-        ResolvePathTracingRetryGeneration(0u, 1u);
-    const PathTracingRetryGenerationTransition wrappedReject =
-        ResolvePathTracingRetryGeneration(
-            std::numeric_limits<std::uint32_t>::max(),
-            0u);
-    Require(
-        UVSR_PATH_TRACING_RETRY_GENERATION_CLEARED == 0u &&
-            UVSR_PATH_TRACING_RETRY_GENERATION_FIRST == 1u &&
-            firstReject.generation == 1u && firstReject.changed != 0u &&
-            secondReject.generation == 2u && secondReject.changed != 0u &&
-            acceptedRetry.generation == 0u &&
-            acceptedRetry.changed != 0u &&
-            acceptedInitial.generation == 0u &&
-            acceptedInitial.changed == 0u &&
-            wrappedReject.generation == 1u &&
-            wrappedReject.changed != 0u,
-        "retry generation no longer advances on rejection or clears on acceptance");
-
-    const PathTracingTransportFloat3 cosineSample =
-        PathTracingSampleCosineHemisphereLocal(
-            PathTracingTransportMakeFloat2(0.25f, 0.5f));
-    const PathTracingTransportFloat3 ggxSample =
-        PathTracingSampleGgxHalfVectorLocal(
-            PathTracingTransportMakeFloat2(0.25f, 0.5f),
-            0.4f);
-    Require(
-        Near(cosineSample, { -0.5f, 0.0f, 0.8660254f }) &&
-            Near(PbrContractDot(cosineSample, cosineSample), 1.0f) &&
-            Near(ggxSample, { -0.22501758f, 0.0f, 0.9743547f }) &&
-            Near(PbrContractDot(ggxSample, ggxSample), 1.0f),
-        "cosine or GGX production sampler known answers changed");
-
-    const PathTracingPreparedMaterialContract transportMaterial =
-        ResolvePathTracingPreparedMaterial(
-            { 0.8f, 0.2f, 0.1f },
-            0.25f,
-            0.5f,
-            0.08f,
-            false);
-    Require(
-        Near(transportMaterial.diffuseColor, { 0.6f, 0.15f, 0.075f }) &&
-            Near(transportMaterial.specularF0, { 0.26f, 0.11f, 0.085f }) &&
-            Near(transportMaterial.alpha, 0.25f) &&
-            Near(
-                ResolvePathTracingDiffuseSelectionProbability(
-                    transportMaterial),
-                0.6316848f),
-        "metallic-roughness transport preparation changed");
-    const PathTracingBsdfContractEvaluation bsdf =
-        ResolvePathTracingBsdfEvaluation(
-            transportMaterial,
-            0.8f,
-            0.6f,
-            0.8f,
-            0.6f,
-            0.9f,
-            0.7f);
-    Require(
-        Near(bsdf.diffuse, { 0.14098616f, 0.04239111f, 0.021790935f }) &&
-            Near(bsdf.specular, { 0.04523298f, 0.01937925f, 0.01507030f }) &&
-            Near(bsdf.diffusePdf, 0.19098593f) &&
-            Near(bsdf.specularPdf, 0.11044171f),
-        "Lambert plus exact GGX evaluation/PDF known answers changed");
-    const PathTracingBsdfWeightContract weighted =
-        ResolvePathTracingBsdfWeight(
-            bsdf,
-            ResolvePathTracingDiffuseSelectionProbability(transportMaterial),
-            0.6f,
-            0.6f);
-    Require(
-        weighted.valid != 0u && Near(weighted.pdf, 0.16132027f) &&
-            Near(weighted.weight,
-                { 0.69260658f, 0.22974308f, 0.13709833f }),
-        "Lambert/GGX balance estimator weight changed");
-
-    constexpr std::uint32_t PdfIntegrationSteps = 65536u;
-    double lambertIntegral = 0.0;
-    double ggxNormalIntegral = 0.0;
-    for (std::uint32_t index = 0u; index < PdfIntegrationSteps; ++index)
-    {
-        const float cosine =
-            (static_cast<float>(index) + 0.5f) /
-            static_cast<float>(PdfIntegrationSteps);
-        lambertIntegral += 2.0 * Pi * PathTracingPdfLambert(cosine) /
-            static_cast<double>(PdfIntegrationSteps);
-        ggxNormalIntegral += 2.0 * Pi *
-            PathTracingD_GGXExact(cosine, 0.4f) * cosine /
-            static_cast<double>(PdfIntegrationSteps);
-    }
-    Require(
-        std::abs(lambertIntegral - 1.0) < 1e-6 &&
-            std::abs(ggxNormalIntegral - 1.0) < 1e-5,
-        "Lambert or GGX normal-distribution PDF is not normalized");
-
-    Require(
-        UVSR_PATH_TRACING_BOUNCE_COUNT == 4u &&
-            UVSR_PATH_TRACING_SAMPLES_PER_FRAME == 1u &&
-            UVSR_PATH_TRACING_RUSSIAN_ROULETTE_START == 3u &&
-            PathTracingBounceSamplesBsdf(1u) &&
-            PathTracingBounceSamplesBsdf(3u) &&
-            !PathTracingBounceSamplesBsdf(4u) &&
-            !PathTracingRouletteRequiresRandom(2u) &&
-            PathTracingRouletteRequiresRandom(3u),
-        "fixed path length, sample count, or roulette start changed");
-    const PathTracingRouletteContract beforeRoulette =
-        ResolvePathTracingRoulette(
-            2u,
-            { 0.25f, 0.5f, 0.1f },
-            0.99f);
-    const PathTracingRouletteContract survivedRoulette =
-        ResolvePathTracingRoulette(
-            3u,
-            { 0.25f, 0.5f, 0.1f },
-            0.49f);
-    const PathTracingRouletteContract terminatedRoulette =
-        ResolvePathTracingRoulette(
-            3u,
-            { 0.25f, 0.5f, 0.1f },
-            0.5f);
-    Require(
-        beforeRoulette.transportValid != 0u &&
-            beforeRoulette.continuePath != 0u &&
-            Near(beforeRoulette.throughput, { 0.25f, 0.5f, 0.1f }) &&
-            survivedRoulette.transportValid != 0u &&
-            survivedRoulette.continuePath != 0u &&
-            Near(survivedRoulette.survival, 0.5f) &&
-            Near(survivedRoulette.throughput, { 0.5f, 1.0f, 0.2f }) &&
-            terminatedRoulette.transportValid != 0u &&
-            terminatedRoulette.continuePath == 0u &&
-            Near(terminatedRoulette.survival, 0.5f),
-        "roulette timing, threshold, or unbiased survivor scale changed");
-    const float transportNan = std::numeric_limits<float>::quiet_NaN();
-    const PathTracingRouletteContract invalidThroughput =
-        ResolvePathTracingRoulette(
-            1u,
-            { transportNan, 1.0f, 1.0f },
-            0.0f);
-    const PathTracingRouletteContract floorSurvivor =
-        ResolvePathTracingRoulette(
-            3u,
-            { 0.0f, 0.0f, 0.0f },
-            0.049f);
-    const PathTracingRouletteContract capTermination =
-        ResolvePathTracingRoulette(
-            3u,
-            { 2.0f, 1.0f, 0.5f },
-            0.95f);
-    Require(
-        PathTracingThroughputIsValid({ 0.0f, 1.0f, 2.0f }) &&
-            !PathTracingThroughputIsValid({ -0.01f, 1.0f, 2.0f }) &&
-            !PathTracingThroughputIsValid(
-                { transportNan, 1.0f, 1.0f }) &&
-            invalidThroughput.transportValid == 0u &&
-            invalidThroughput.continuePath == 0u &&
-            floorSurvivor.continuePath != 0u &&
-            Near(floorSurvivor.survival, 0.05f) &&
-            capTermination.continuePath == 0u &&
-            Near(capTermination.survival, 0.95f),
-        "non-finite throughput or roulette probability clamps changed");
-
-    Require(
-        !PathTracingMissUsesEnvironment(0u, false) &&
-            PathTracingMissUsesEnvironment(0u, true) &&
-            PathTracingMissUsesEnvironment(1u, false) &&
-            PathTracingMissUsesEnvironment(7u, false),
-        "primary background suppression changed secondary-miss environment transport");
-
-    const PbrFiniteDirectionalEmitterContract directional =
-        ResolvePbrFiniteDirectionalEmitter(6.f, 0.2f);
-    Require(
-        directional.valid != 0 && Near(
-            directional.oneMinusCosineMaximum,
-            0.004995835f,
-            1e-7f) && Near(
-            directional.solidAngle,
-            0.031389754f,
-            1e-7f) && Near(
-            directional.directionalPdf,
-            31.857529f,
-            1e-4f),
-        "finite directional cone known answers changed");
-    Require(Near(
-        directional.directionalPdf * directional.solidAngle,
-        1.f,
-        1e-6f),
-        "finite directional cone PDF does not integrate to one");
-    Require(Near(
-        directional.radianceScale * Pi *
-            std::sin(0.1f) * std::sin(0.1f),
-        6.f),
-        "finite directional radiance no longer integrates to authored irradiance");
-
-    const PbrFiniteSphereEmitterContract sphere =
-        ResolvePbrFiniteSphereEmitter(12.f, 1.f, 5.f);
-    Require(
-        sphere.valid != 0 && sphere.receiverOutside != 0 && Near(
-            sphere.oneMinusCosineMaximum,
-            0.020204103f,
-            1e-7f) && Near(
-            sphere.directionalPdf,
-            7.8773575f) && Near(
-            sphere.directionalPdf * sphere.solidAngle,
-            1.f,
-            1e-6f),
-        "exterior sphere cone or normalized PDF changed");
-    const PbrFiniteSphereEndpointContract nearEndpoint =
-        ResolvePbrFiniteSphereEndpoint(5.f, 25.f, 1.f, true);
-    Require(
-        nearEndpoint.valid != 0 && Near(nearEndpoint.distance, 4.f),
-        "exterior sphere ray no longer terminates at the near shell");
-    Require(Near(
-        sphere.radianceScale * Pi * (1.f / 25.f),
-        12.f / 25.f),
-        "finite sphere radiance no longer integrates to inverse-square irradiance");
-
-    const PbrFiniteSphereEmitterContract enclosingSphere =
-        ResolvePbrFiniteSphereEmitter(12.f, 1.f, 0.f);
-    const PbrFiniteSphereEndpointContract exitEndpoint =
-        ResolvePbrFiniteSphereEndpoint(0.f, 0.f, 1.f, false);
-    Require(
-        enclosingSphere.valid != 0 &&
-            enclosingSphere.receiverOutside == 0 && Near(
-                enclosingSphere.solidAngle,
-                4.f * Pi) && Near(
-                enclosingSphere.directionalPdf *
-                    enclosingSphere.solidAngle,
-                1.f,
-                1e-6f) &&
-            exitEndpoint.valid != 0 && Near(exitEndpoint.distance, 1.f),
-        "enclosing sphere must sample 4pi and terminate at its exit shell");
-
-    const float nan = std::numeric_limits<float>::quiet_NaN();
-    const PathTracingAccumulationState repaired =
-        RepairPathTracingAccumulation(
-            { nan, 2.f, 3.f },
-            17u);
-    Require(
-        repaired.count == 0u && repaired.accepted == 0u &&
-            repaired.publish == 1u && Near(
-                repaired.mean,
-                PathTracingAccumulationFloat3{}),
-        "non-finite prior mean is not repaired to empty history");
-
-    const PathTracingAccumulationState prior =
-        RepairPathTracingAccumulation({ 2.f, 4.f, 6.f }, 3u);
-    const PathTracingAccumulationState invalidAttempt =
-        ResolvePathTracingAccumulation(
-            prior,
-            { 9.f, 9.f, 9.f },
-            false);
-    const PathTracingAccumulationState nonfiniteAttempt =
-        ResolvePathTracingAccumulation(
-            prior,
-            { nan, 1.f, 1.f },
-            true);
-    Require(
-        invalidAttempt.count == 3u && invalidAttempt.accepted == 0u &&
-            invalidAttempt.publish == 0u && Near(
-                invalidAttempt.mean,
-                prior.mean) &&
-            nonfiniteAttempt.count == 3u &&
-            nonfiniteAttempt.accepted == 0u && Near(
-                nonfiniteAttempt.mean,
-                prior.mean),
-        "invalid attempt changed a valid mean or accepted-sample count");
-
-    PathTracingAccumulationState history =
-        RepairPathTracingAccumulation({}, 0u);
-    history = ResolvePathTracingAccumulation(
-        history,
-        { 0.f, 0.f, 0.f },
-        true);
-    Require(
-        history.accepted == 1u && history.count == 1u && Near(
-            history.mean,
-            PathTracingAccumulationFloat3{}),
-        "finite black miss was not accepted exactly once");
-    history = ResolvePathTracingAccumulation(
-        history,
-        { 3.f, 6.f, 9.f },
-        true);
-    Require(
-        history.accepted == 1u && history.count == 2u && Near(
-            history.mean,
-            PathTracingAccumulationFloat3{ 1.5f, 3.f, 4.5f }),
-        "finite hit was not accumulated exactly once");
-    history = ResolvePathTracingAccumulation(
-        history,
-        { 0.f, 3.f, 0.f },
-        true);
-    Require(
-        history.accepted == 1u && history.count == 3u && Near(
-            history.mean,
-            PathTracingAccumulationFloat3{ 1.f, 3.f, 3.f }),
-        "cumulative lerp diverged from one accepted history");
-
-    const PathTracingAccumulationState saturated =
-        ResolvePathTracingAccumulation(
-            RepairPathTracingAccumulation(
-                { 1.f, 2.f, 3.f },
-                UVSR_PATH_TRACING_SATURATED_SAMPLE_COUNT),
-            { 9.f, 9.f, 9.f },
-            true);
-    Require(
-        saturated.count == UVSR_PATH_TRACING_SATURATED_SAMPLE_COUNT &&
-            saturated.accepted == 0u && saturated.publish == 0u && Near(
-                saturated.mean,
-                PathTracingAccumulationFloat3{ 1.f, 2.f, 3.f }),
-        "saturated accumulation did not stop without mutation");
-
+    CheckRandomSchedule();
+    CheckTransport();
+    CheckAccumulation();
+    CheckSelection();
     return EXIT_SUCCESS;
 }

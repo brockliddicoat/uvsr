@@ -1,28 +1,27 @@
-# Screen-Space Indirect Lighting with Visibility Bitmask
+# screen space indirect lighting with visibility bitmask
 
-## Record
+## record
 
-- Relationship: Independent Implementation and Design Influence
-- Status: Current
-- Confidence: Confirmed
-- Upstream: [Paper by Olivier Therrien, Yannick Levesque, and Guillaume Gilet](https://arxiv.org/abs/2301.11376)
-- Revision: 2023 publication
-- Governing Terms: Publication rights; no upstream implementation code is identified
+- relationship: independent implementation and publication influence
+- status: current
+- confidence: confirmed
+- upstream: [paper by Olivier Therrien, Yannick Levesque, and Guillaume Gilet](https://arxiv.org/abs/2301.11376)
+- revision: 2023 publication
+- terms: publication rights; no upstream implementation code identified
 
-## UVSR Relationship
+## UVSR relationship
 
-UVSR's projected-angle estimator follows the paper's finite-thickness visibility
-bitmask concept. UVSR's solid-angle and cosine-weighted estimators are separate
-first-party alternatives, and the current traversal, validation, and integration
-are not represented as copied paper source code.
+the projected angle estimator follows the paper's finite thickness visibility
+bitmask concept. solid angle and cosine weighted estimation, traversal,
+validation, and renderer integration are first party work. UVSR does not claim
+that publication source code was copied.
 
-## Evidence
+## evidence
 
-- [Estimator Validation](../../docs/visibility-estimator-validation.md)
-- [Estimator Shader](../../src/visibility_estimator_shared.h)
-- [Screen-Space Visibility Shader](../../src/screen_space_visibility_cs.hlsl)
+- [user guide](../../docs/user-guide.md)
+- [validation contract](../../docs/validation.md)
+- [estimator implementation](../../src/visibility_estimator_shared.h)
+- [screen space trace](../../src/screen_space_visibility_cs.hlsl)
 
-## Commercial Clearance
-
-Cite the paper for the algorithmic foundation. Do not reproduce publication
-figures or substantial text without separate permission.
+cite the paper for the algorithmic foundation. reuse of publication figures,
+text, or later upstream code needs separate review.

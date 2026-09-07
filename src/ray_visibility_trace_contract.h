@@ -2,41 +2,19 @@
 #define UVSR_RAY_VISIBILITY_TRACE_CONTRACT_H
 
 // Executable CPU/HLSL reduction contract for one binary inline-ray-query
-// result per visibility sample and closest committed-blocker retention.
+// result per visibility sample.
 
 #ifdef __cplusplus
 
-#include <algorithm>
-#include <cmath>
 #include <cstdint>
 
 using RayVisibilityContractUint = std::uint32_t;
-
-inline bool RayVisibilityContractIsFinite(float value) noexcept
-{
-    return std::isfinite(value);
-}
-
-inline float RayVisibilityContractMin(float left, float right) noexcept
-{
-    return std::min(left, right);
-}
 
 #define UVSR_RAY_VISIBILITY_INLINE inline
 
 #else
 
 #define RayVisibilityContractUint uint
-
-bool RayVisibilityContractIsFinite(float value)
-{
-    return isfinite(value);
-}
-
-float RayVisibilityContractMin(float left, float right)
-{
-    return min(left, right);
-}
 
 #define UVSR_RAY_VISIBILITY_INLINE
 
@@ -45,57 +23,31 @@ float RayVisibilityContractMin(float left, float right)
 struct RayVisibilityTraceSample
 {
     float visibility;
-    float hitDistance;
     RayVisibilityContractUint queryCount;
     RayVisibilityContractUint occluded;
 };
 
 struct RayVisibilityTraceAggregate
 {
-    float closestHitDistance;
     RayVisibilityContractUint queryCount;
     RayVisibilityContractUint sampleCount;
     RayVisibilityContractUint visibleSampleCount;
 };
 
 UVSR_RAY_VISIBILITY_INLINE RayVisibilityTraceSample
-    ResolveRayVisibilityTraceSample(
-        bool committedTriangleHit,
-        float committedRayT,
-        bool outputHitDistance,
-        float maximumHitDistance,
-        float missHitDistance)
+    ResolveRayVisibilityTraceSample(bool committedTriangleHit)
 {
     RayVisibilityTraceSample result;
     result.visibility = committedTriangleHit ? 0.0f : 1.0f;
-    result.hitDistance = missHitDistance;
     result.queryCount = 1u;
     result.occluded = committedTriangleHit ? 1u : 0u;
-    if (!committedTriangleHit)
-        return result;
-    if (!outputHitDistance)
-    {
-        result.hitDistance = 0.0f;
-        return result;
-    }
-    // A committed blocker remains occluding even if a malformed distance is
-    // observed. Publish the conservative maximum rather than turning it into
-    // a miss or a nearer false blocker.
-    result.hitDistance =
-        RayVisibilityContractIsFinite(committedRayT) &&
-            committedRayT >= 0.0f
-        ? RayVisibilityContractMin(
-            committedRayT,
-            maximumHitDistance)
-        : maximumHitDistance;
     return result;
 }
 
 UVSR_RAY_VISIBILITY_INLINE RayVisibilityTraceAggregate
-    BeginRayVisibilityTraceAggregate(float missHitDistance)
+    BeginRayVisibilityTraceAggregate()
 {
     RayVisibilityTraceAggregate result;
-    result.closestHitDistance = missHitDistance;
     result.queryCount = 0u;
     result.sampleCount = 0u;
     result.visibleSampleCount = 0u;
@@ -110,12 +62,6 @@ UVSR_RAY_VISIBILITY_INLINE RayVisibilityTraceAggregate
     aggregate.queryCount += sample.queryCount;
     aggregate.sampleCount += 1u;
     aggregate.visibleSampleCount += sample.occluded == 0u ? 1u : 0u;
-    if (sample.occluded != 0u)
-    {
-        aggregate.closestHitDistance = RayVisibilityContractMin(
-            aggregate.closestHitDistance,
-            sample.hitDistance);
-    }
     return aggregate;
 }
 

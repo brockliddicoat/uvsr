@@ -1,51 +1,55 @@
-# Contributing to UVSR
+# contributing to UVSR
 
-Thank you for improving UVSR. Keep changes focused, explain visible or
-performance-sensitive tradeoffs, and preserve the repository's attribution and
-provenance boundaries.
+keep changes focused, preserve current product behavior unless the proposal
+explicitly changes it, and remove obsolete owners end to end. read
+[`AGENTS.md`](AGENTS.md), the [developer map](docs/README.md), and the
+[validation contract](docs/validation.md) before changing source.
 
-## Contributor Agreement
+## contribution scope
 
-Once CLA enforcement is activated, every commit author must be covered by the
+explain the user or engineering outcome, affected owners, and any visible,
+performance, schema, package, or compatibility change. trace current and
+released consumers before deleting a path. do not restore a deliberate sunset
+or edit Donut. keep generated output and build trees outside Git.
+
+use focused checks while iterating. a source handoff needs the applicable full
+developer gate. a visible, runtime, launcher, or package change also needs fresh
+evidence from the exact production package. documentation only changes need
+heading, link, consumer, and word count checks.
+
+## contributor agreement
+
+once CLA enforcement is active, every commit author must be covered by the
 [UVSR Contributor License Agreement](legal/licenses/UVSR-CONTRIBUTOR-LICENSE-AGREEMENT.md)
-or a separately reviewed owner agreement before a pull request can merge. CLA
-Assistant will post eligible signing links and report `license/cla`. Until that
-status is required on `main`, maintainers must verify coverage manually. You
-retain ownership of your work; the agreement gives UVSR the rights needed to
-publish it under the community license and offer separate commercial licenses.
+or a separately reviewed owner agreement before merge. CLA Assistant supplies
+eligible signing links and reports `license/cla`. until that status is required
+on `main`, maintainers verify coverage manually. contributors retain ownership
+of their work while granting UVSR the rights needed for community and separate
+commercial licensing.
 
-The hosted agreement is limited to adults who personally control their work.
-For employer-, client-, entity-, or minor-owned work, contact
-[contact the UVSR project](mailto:brockliddicoat@gmail.com) for a separate
-owner agreement before submitting.
+the hosted agreement is only for adults who personally control their work. for
+work owned by an employer, client, entity, or minor, [contact UVSR](mailto:brockliddicoat@gmail.com)
+for a separate agreement before submitting. bots cannot sign. maintainers must
+review and explicitly approve each bot identity, output license, and provenance.
 
-Bots cannot sign. Their identity, output license, and provenance must be
-reviewed and explicitly approved before bot-authored commits can merge.
+## outside material
 
-## Third-Party Material
-
-Do not paste or adapt outside code, prompts, generated assets, models, fonts,
-papers, shader samples, or other material without identifying it. In the pull
-request, provide:
+do not include or adapt outside code, prompts, generated assets, models, fonts,
+papers, shader samples, or data without disclosure. the pull request must name:
 
 - the source URL and exact revision;
-- author and copyright holder;
-- exact license and required notices;
-- affected files and whether expression, data, or only ideas were used; and
+- the author and copyright holder;
+- the exact license and required notices;
+- every affected file and whether expression, data, ideas, or a reference were
+  used; and
 - any commercial, redistribution, patent, trademark, or attribution limit.
 
-Mark material not intended for inclusion as `Not a Contribution`. The CLA
-grants only rights you control and does not clear third-party content.
+mark material not intended for inclusion as `Not a Contribution`. the CLA
+grants only rights the contributor controls and does not clear third party
+content. preserve the [legal and provenance records](legal/README.md).
 
-## Verification
+## review
 
-Follow [AGENTS.md](AGENTS.md) and the relevant engineering documentation. Run
-focused checks for your change and the full build/test suite when source or
-packaging changes require it. Check changed-document headings and links
-directly; the repository intentionally has no broad casing parser.
-
-## Conduct and Review
-
-Use clear, respectful review language. Maintainers may decline a contribution
-for product scope, quality, provenance, security, performance, or licensing
-reasons without questioning the contributor's good faith.
+use clear, respectful language. maintainers may decline a contribution for
+scope, quality, provenance, security, performance, licensing, or incomplete
+evidence without questioning good faith.

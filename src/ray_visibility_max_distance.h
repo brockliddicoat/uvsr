@@ -1,10 +1,7 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
-#include <cstddef>
 #include <cstdint>
-#include <string_view>
 
 namespace uvsr
 {
@@ -19,26 +16,12 @@ namespace uvsr
         Count
     };
 
-    inline constexpr std::array<const char*, 6>
-        RayVisibilityMaxDistanceLabels = {
-            "Max", "32m", "16m", "8m", "4m", "2m"
-        };
-
     [[nodiscard]] inline constexpr bool
         IsRayVisibilityMaxDistanceSupported(
             RayVisibilityMaxDistance maxDistance)
     {
         return maxDistance >= RayVisibilityMaxDistance::Maximum &&
             maxDistance < RayVisibilityMaxDistance::Count;
-    }
-
-    [[nodiscard]] inline constexpr std::string_view
-        GetRayVisibilityMaxDistanceLabel(
-            RayVisibilityMaxDistance maxDistance)
-    {
-        return IsRayVisibilityMaxDistanceSupported(maxDistance)
-            ? RayVisibilityMaxDistanceLabels[std::size_t(maxDistance)]
-            : "";
     }
 
     [[nodiscard]] inline constexpr float ResolveRayVisibilityMaxDistance(

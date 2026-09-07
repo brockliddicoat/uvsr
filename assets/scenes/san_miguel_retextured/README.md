@@ -1,48 +1,61 @@
 # San Miguel
 
-This UVSR scene packages the full high-detail San Miguel 2.1 OBJ from Morgan
-McGuire's research-scene archive. The model was created by Guillermo M. Leal
-Llaguno. Morgan McGuire, Guedis Cardenas, Michael Mara, and Nicholas Hull
-improved the 2017 version with permission from the creator.
+UVSR packages a full detail conversion of San Miguel 2.1 from the
+[Computer Graphics Archive](https://casual-effects.com/data/). Guillermo M.
+Leal Llaguno created the model. Morgan McGuire, Guedis Cardenas, Michael Mara,
+and Nicholas Hull improved the 2017 version with the creator's permission. the
+exact source and conversion facts are in
+[`source-provenance.json`](source-provenance.json).
 
-## Source and Attribution
+## source identity and terms
 
-The supplied notice permits research and educational use with attribution. UVSR
-preserves that notice verbatim in `LICENSE.txt`; it governs this asset package.
+| item | bytes | SHA-256 |
+| --- | ---: | --- |
+| `San_Miguel.zip` | 535,519,642 | `85874077735808150E679B3C71D70A37A270CB8833F4911325AA1099DA3F7D4A` |
+| `san-miguel.obj` | 1,143,041,382 | `22533258BE1D94AA1ECE29053E98F11C91EBC17A8A3626545DEE3CECF90B71E3` |
+| `san-miguel.mtl` | 35,143 | `5C0618AE58CEB61B51B09B97C5A16BBB410CCFFC671E99C9076A3926CEE04916` |
+| [supplied notice](LICENSE.txt) | 1,298 | `708C9AD36ADAC62D13BD61DDF47D58D2B892B9E318BD87DA93AE9E55E2B5E680` |
 
-Source page: <https://casual-effects.com/data/>
+the supplied notice permits research and educational use with attribution. it
+does not record a general commercial grant. San Miguel is therefore a
+commercial distribution blocker unless the relevant rights holders grant
+separate permission or the scene is replaced. the
+[legal record](../../../legal/documentation/san-miguel-2-1.md) owns that
+clearance boundary.
 
-## UVSR Conversion
+## conversion
 
-The pinned Blender 5.1.2 importer converts the complete 1.14 GB OBJ to standard
-glTF without decimation, Draco, or texture re-encoding. It preserves 9,963,191
-renderable triangles and all 269 used source PNGs. The source contains 9,186
-faces with repeated position indices that Blender cannot import, and required
-mesh validation removes 8,322 additional invalid polygons before glTF export.
-The audit records both operations explicitly.
+Blender 5.1.2 build `ec6e62d40fa9` imported the OBJ without decimation, Draco,
+or texture reencoding. the generated
+[`blender-import-report.json`](blender-import-report.json) records 9,963,191
+renderable triangles, all 269 used source PNGs, 9,186 rejected faces with
+repeated position indices, and 8,322 additional invalid polygons removed by
+mesh validation. it also records all 287 materials, 264 source `map_Kd`
+bindings, 95 alpha masks, and 56 explicit `N_*` normal maps. the report's
+SHA-256 is
+`3675AB45846945592C59319489A6568402C6020079DF30AD486BDED597A94131`.
 
-The material audit proves that all 287 materials reach glTF, including the exact
-264 source `map_Kd` material-to-image bindings, 95 alpha masks, and 56 explicit
-`N_*` normal maps. The one ambiguous height/normal source map is omitted instead
-of being mislabeled as tangent-space data.
+UVSR has no blended or transmissive draw pass. the conversion keeps
+`material_041` visible as opaque and flattens transmission for `material_79`,
+`materialn`, and `materialo`. the latter fallbacks retain 12 primitives and
+63,910 triangles, but do not preserve transmission. the ambiguous height or
+normal map is omitted instead of being mislabeled as tangent space data.
 
-UVSR has no transparent or transmissive draw pass. The single constant
-half-dissolve material (`material_041`, used by Candle and Glass_B geometry) is
-kept visible as opaque. The importer also flattens transmission for `materialn`,
-`materialo`, and `material_79` while preserving their base PBR, specular, and IOR
-metadata. That fallback keeps another 12 primitives and 63,910 triangles in the
-draw stream; it does not preserve transmission. Three authored `map_Ks` textures
-remain represented by `KHR_materials_specular`, which Donut currently ignores.
+the glTF geometry was repacked by buffer view into five external buffers. the
+generated
+[`components/buffer-repack-report.json`](components/buffer-repack-report.json)
+records all 275 component files, 493,729,206 output bytes, and every SHA-256.
+its own SHA-256 is
+`8C0CC946F8C28BA36D62628876BE3005AEA415C2A8D6437FD6F4202ACF1DBA41`.
 
-The exported geometry buffer is losslessly repacked by buffer view into five
-external buffers. Every packaged file is strictly smaller than GitHub's
-100,000,000-byte tracked-file limit. `blender-import-report.json` contains the
-topology, image, and material audit; `components/buffer-repack-report.json`
-contains the byte-level repack audit.
+## initial camera
 
-## Initial Camera
-
-The descriptor uses the official PBRT San Miguel entry view, mapped from PBRT's
-Z-up coordinates to glTF's Y-up coordinates. The camera is inside the hacienda
-and is independently checked against transformed scene geometry for enclosure,
-floor proximity, forward visibility, and collision clearance.
+the descriptor adapts the PBRT v4 San Miguel entry camera from Z up to glTF Y
+up. the exact source is commit
+`30cf4a0346ae5a80a2d7a530a3ef7d0fa4f70572`, blob
+`3e442fb1f407316e6fb74cb066eddd5bf158ff9a`, at the
+[pinned scene file](https://github.com/mmp/pbrt-v4-scenes/blob/30cf4a0346ae5a80a2d7a530a3ef7d0fa4f70572/sanmiguel/sanmiguel-entry.pbrt).
+the terms governing this camera data are not established, so confirm them or
+replace the camera before commercial reuse. the descriptor is 415 bytes with
+SHA-256
+`F8B3E4896A5489E2120B5AED06D35D52912C262E9D540FF953E5B950E8543A7E`.

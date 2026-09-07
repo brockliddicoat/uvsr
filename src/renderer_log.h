@@ -19,9 +19,7 @@ namespace uvsr::log
     void SetMinimumSeverity(Severity severity) noexcept;
     void SetCallback(Callback callback);
     [[nodiscard]] Callback GetCallback();
-    void ResetCallback();
 
-    void message(Severity severity, const char* format, ...);
     void debug(const char* format, ...);
     void info(const char* format, ...);
     void warning(const char* format, ...);

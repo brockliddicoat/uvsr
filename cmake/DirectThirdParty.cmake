@@ -1,16 +1,3 @@
-function(uvsr_require_direct_dependency_file path expected_size expected_sha256 label)
-    if (NOT EXISTS "${path}")
-        message(FATAL_ERROR "${label} is missing from its pinned archive")
-    endif()
-    file(SIZE "${path}" actual_size)
-    file(SHA256 "${path}" actual_sha256)
-    string(TOUPPER "${actual_sha256}" actual_sha256)
-    if (NOT actual_size EQUAL expected_size OR
-        NOT actual_sha256 STREQUAL expected_sha256)
-        message(FATAL_ERROR "${label} failed its exact size/SHA-256 check")
-    endif()
-endfunction()
-
 FetchContent_Declare(uvsr_cgltf
     URL "https://github.com/jkuhlmann/cgltf/archive/fa3b80fa762790192c9532b63c441627416ff300.zip"
     URL_HASH "SHA256=89351D82A140337AC876E018B091F26176FCC8C227479796993CE79BE33ED8A3"
@@ -20,10 +7,9 @@ FetchContent_MakeAvailable(uvsr_cgltf)
 set(UVSR_CGLTF_FILE_COUNT 19)
 set(UVSR_CGLTF_TREE_DIGEST
     "d949633afa4a966b4550497bfab9025bf8f5900ad275d4dde87840831b1bdffc")
-uvsr_require_direct_dependency_file(
-    "${uvsr_cgltf_SOURCE_DIR}/LICENSE" 1066
-    "F619925F80EF862497AAF8E8155EF218FA6A2190055129523CA3DF9119A9BA95"
-    "cgltf license")
+uvsr_verify_dependency_file(
+    "${uvsr_cgltf_SOURCE_DIR}/LICENSE"
+    "F619925F80EF862497AAF8E8155EF218FA6A2190055129523CA3DF9119A9BA95" 1066)
 add_library(cgltf INTERFACE)
 target_include_directories(cgltf SYSTEM INTERFACE
     "${uvsr_cgltf_SOURCE_DIR}")
@@ -40,10 +26,9 @@ FetchContent_MakeAvailable(uvsr_stb)
 set(UVSR_STB_FILE_COUNT 428)
 set(UVSR_STB_TREE_DIGEST
     "2a1b67948c3c20bdc379e35be58ecfcf99f2518b5390afb4476bf7b58d0abfb4")
-uvsr_require_direct_dependency_file(
-    "${uvsr_stb_SOURCE_DIR}/LICENSE" 2510
-    "BEBFE904B14301657E4E5D655C811D51FD31B97C455B9CC2D8600D6BAC6CFF63"
-    "stb license")
+uvsr_verify_dependency_file(
+    "${uvsr_stb_SOURCE_DIR}/LICENSE"
+    "BEBFE904B14301657E4E5D655C811D51FD31B97C455B9CC2D8600D6BAC6CFF63" 2510)
 add_library(stb INTERFACE)
 target_include_directories(stb SYSTEM INTERFACE "${uvsr_stb_SOURCE_DIR}")
 set_property(TARGET stb PROPERTY UVSR_PINNED_SOURCE "${uvsr_stb_SOURCE_DIR}")
@@ -58,10 +43,9 @@ FetchContent_MakeAvailable(uvsr_jsoncpp)
 set(UVSR_JSONCPP_FILE_COUNT 252)
 set(UVSR_JSONCPP_TREE_DIGEST
     "0fca9881e1f50c15ab94d761e0651c2e9d17b4bb2fb96fe2bb1bb27fb23c3f73")
-uvsr_require_direct_dependency_file(
-    "${uvsr_jsoncpp_SOURCE_DIR}/LICENSE" 2714
-    "CEC0DB5F6D7ED6B3A72647BD50AED02E13C3377FD44382B96DC2915534C042AD"
-    "JsonCpp license")
+uvsr_verify_dependency_file(
+    "${uvsr_jsoncpp_SOURCE_DIR}/LICENSE"
+    "CEC0DB5F6D7ED6B3A72647BD50AED02E13C3377FD44382B96DC2915534C042AD" 2714)
 add_library(jsoncpp_static STATIC EXCLUDE_FROM_ALL
     "${uvsr_jsoncpp_SOURCE_DIR}/src/lib_json/json_reader.cpp"
     "${uvsr_jsoncpp_SOURCE_DIR}/src/lib_json/json_value.cpp"
@@ -92,10 +76,9 @@ FetchContent_MakeAvailable(uvsr_tinyexr)
 set(UVSR_TRANSITIONAL_TINYEXR_FILE_COUNT 161)
 set(UVSR_TRANSITIONAL_TINYEXR_TREE_DIGEST
     "40d1660c24ba12162818a07b7ae1556484c90836ac55cce00ab806547b82e999")
-uvsr_require_direct_dependency_file(
-    "${uvsr_tinyexr_SOURCE_DIR}/tinyexr.h" 486188
-    "6D744B9EFDCFA18D201D28B21386E99DFEAE622E0D03E11FEA4D8684FA714C4C"
-    "TinyEXR header")
+uvsr_verify_dependency_file(
+    "${uvsr_tinyexr_SOURCE_DIR}/tinyexr.h"
+    "6D744B9EFDCFA18D201D28B21386E99DFEAE622E0D03E11FEA4D8684FA714C4C" 486188)
 add_library(tinyexr INTERFACE)
 target_include_directories(tinyexr SYSTEM INTERFACE
     "${uvsr_tinyexr_SOURCE_DIR}")
@@ -121,10 +104,9 @@ FetchContent_MakeAvailable(uvsr_glfw)
 set(UVSR_TRANSITIONAL_GLFW_FILE_COUNT 167)
 set(UVSR_TRANSITIONAL_GLFW_TREE_DIGEST
     "f00c423a12e4bc41452a4d7fb2b6334253f242192fa4e43ba47d8942f9cf1a24")
-uvsr_require_direct_dependency_file(
-    "${uvsr_glfw_SOURCE_DIR}/LICENSE.md" 904
-    "149704059B5D0BF551637E50042DD4DE9C2CAE921021F6636298911E3A5F9462"
-    "GLFW license")
+uvsr_verify_dependency_file(
+    "${uvsr_glfw_SOURCE_DIR}/LICENSE.md"
+    "149704059B5D0BF551637E50042DD4DE9C2CAE921021F6636298911E3A5F9462" 904)
 set_property(TARGET glfw PROPERTY UVSR_PINNED_SOURCE
     "${uvsr_glfw_SOURCE_DIR}")
 set(UVSR_GLFW_LICENSE_SOURCE "${uvsr_glfw_SOURCE_DIR}/LICENSE.md")

@@ -3,7 +3,7 @@
 #include "flashlight_shared.h"
 #include "noise_settings.h"
 #include "path_tracing_settings.h"
-#include "ray_traced_material_visibility.h"
+#include "ray_scene_view.h"
 
 #include <nvrhi/nvrhi.h>
 
@@ -25,17 +25,18 @@ namespace uvsr
     struct PathTracingInputs
     {
         const donut::engine::IView* view = nullptr;
-        const donut::engine::IView* previousView = nullptr;
         uint32_t width = 0u;
         uint32_t height = 0u;
-        RayTracedMaterialVisibilityInputs materialVisibility;
-        nvrhi::rt::IAccelStruct* worldTlas = nullptr;
+        RaySceneView rayScene;
         nvrhi::ITexture* environment = nullptr;
         float environmentScale = 1.f;
         bool showEnvironmentBackground = true;
         nvrhi::ITexture* noiseTexture = nullptr;
         NoiseSettings noiseSettings;
-        std::vector<std::shared_ptr<donut::engine::Light>> lights;
+        PathTracingSettings settings;
+        const std::vector<std::shared_ptr<donut::engine::Light>>* lights =
+            nullptr;
+        bool hardShadows = false;
         const donut::engine::Light* flashlight = nullptr;
         FlashlightBeamProfile flashlightProfile = {};
         uint64_t historyEpoch = 0u;
@@ -52,8 +53,6 @@ namespace uvsr
     {
         nvrhi::ITexture* sceneLinearDisplay = nullptr;
         nvrhi::ITexture* rawMean = nullptr;
-        nvrhi::ITexture* temporalDepth = nullptr;
-        nvrhi::ITexture* motionVectors = nullptr;
         uint64_t currentCenterPixelAcceptedSampleCount = 0u;
         PathTracingCapabilities capabilities;
         bool dispatched = false;
@@ -124,8 +123,6 @@ namespace uvsr
         nvrhi::BindingSetHandle m_BindingSet;
         nvrhi::TextureHandle m_RawMean;
         nvrhi::TextureHandle m_SuccessfulSampleCount;
-        nvrhi::TextureHandle m_Motion;
-        nvrhi::TextureHandle m_Depth;
         nvrhi::TextureHandle m_RetryGeneration;
 
         struct AcceptedSampleReadbackSlot
@@ -141,8 +138,7 @@ namespace uvsr
         uint64_t m_AcceptedSampleGeneration = 1u;
         uint64_t m_CurrentCenterPixelAcceptedSampleCount = 0u;
 
-        nvrhi::rt::IAccelStruct* m_BoundTlas = nullptr;
-        RayTracedMaterialVisibilityInputs m_BoundMaterialVisibility;
+        RaySceneView m_BoundRayScene;
         nvrhi::ITexture* m_BoundEnvironment = nullptr;
         nvrhi::ITexture* m_BoundNoiseTexture = nullptr;
         uint32_t m_Width = 0u;

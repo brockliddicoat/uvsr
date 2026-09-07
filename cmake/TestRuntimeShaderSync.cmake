@@ -9,18 +9,20 @@ if (NOT test_directory MATCHES "runtime-shader-sync-test")
 endif()
 
 file(REMOVE_RECURSE "${test_directory}")
-set(source_root "${test_directory}/source")
+set(framework_root "${test_directory}/compiled/framework")
+set(app_root "${test_directory}/compiled/uvsr")
 set(runtime_parent "${test_directory}/bin")
 set(runtime_root "${runtime_parent}/shaders")
-set(stamp "${test_directory}/sync.stamp")
 file(MAKE_DIRECTORY
-    "${source_root}"
+    "${framework_root}/dxil"
+    "${app_root}/dxil"
     "${runtime_root}/stale/empty")
-file(WRITE "${source_root}/first.bin" "first shader\n")
-file(WRITE "${source_root}/second.bin" "second shader\n")
-file(WRITE "${test_directory}/sources.manifest"
-    "${source_root}/first.bin|framework/dxil/first.bin\n"
-    "${source_root}/second.bin|uvsr/dxil/second.bin\n")
+file(WRITE "${framework_root}/dxil/first.bin" "first shader\n")
+file(WRITE "${app_root}/dxil/second.bin" "second shader\n")
+set(inventory "${test_directory}/runtime-shader-inventory.def")
+file(WRITE "${inventory}"
+    "bin/shaders/framework/dxil/first.bin\n"
+    "bin/shaders/uvsr/dxil/second.bin\n")
 foreach(stale_name IN ITEMS
     stale.txt catalog.json compiler.dll probe.exe stale.bin)
     file(WRITE "${runtime_root}/stale/${stale_name}" "retired\n")
@@ -28,10 +30,12 @@ endforeach()
 
 execute_process(
     COMMAND "${CMAKE_COMMAND}"
-        "-DUVSR_RUNTIME_SHADER_SOURCE_MANIFEST=${test_directory}/sources.manifest"
+        "-DUVSR_RUNTIME_SHADER_INVENTORY=${inventory}"
+        "-DUVSR_RUNTIME_SHADER_EXPECTED_COUNT=2"
+        "-DUVSR_FRAMEWORK_SHADER_SOURCE_ROOT=${framework_root}"
+        "-DUVSR_APP_SHADER_SOURCE_ROOT=${app_root}"
         "-DUVSR_RUNTIME_SHADER_ALLOWED_PARENT=${runtime_parent}"
         "-DUVSR_RUNTIME_SHADER_ROOT=${runtime_root}"
-        "-DUVSR_RUNTIME_SHADER_STAGE_STAMP=${stamp}"
         -P "${UVSR_SYNC_SCRIPT}"
     RESULT_VARIABLE sync_result
     OUTPUT_VARIABLE sync_output

@@ -1,193 +1,105 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string] $OutputDirectory,
-    [Parameter(Mandatory)] [string] $DotNetPath,
+    [string] $BuildDirectory,
     [string] $SourceCommit,
+    [switch] $DeveloperBuild,
+    [switch] $NoApplicationLaunch,
+    [switch] $SystemServicesTests,
     [switch] $SkipTests
 )
-
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-
-$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $output = [IO.Path]::GetFullPath($OutputDirectory)
-$dotnet = [IO.Path]::GetFullPath($DotNetPath)
-$repositoryPrefix = $repositoryRoot.TrimEnd(
-    [IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
-if ($output -eq $repositoryRoot -or
-    $output.StartsWith($repositoryPrefix,
-        [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'Launcher output must be outside the repository.'
+$prefix = $repository.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+if ($output -eq $repository -or $output.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'launcher output must be outside the repository.'
 }
-if (-not (Test-Path -LiteralPath $dotnet -PathType Leaf)) {
-    throw "The .NET host was not found at '$dotnet'."
+$head = ((& git -C $repository rev-parse HEAD) -join '').Trim()
+if ($LASTEXITCODE -ne 0 -or $head -cnotmatch '^[0-9a-f]{40}$') { throw 'could not resolve the source commit.' }
+if (-not $SourceCommit) { $SourceCommit = $head }
+if ($SourceCommit -cne $head) { throw 'the requested source commit differs from the checkout.' }
+$status = ((& git -C $repository status --porcelain=v1 --untracked-files=all --ignore-submodules=none) -join "`n").Trim()
+if ($LASTEXITCODE -ne 0) { throw 'could not inspect source status.' }
+$submodules = ((& git -C $repository submodule foreach --recursive --quiet 'git status --porcelain=v1 --untracked-files=all') -join "`n").Trim()
+if ($LASTEXITCODE -ne 0) { throw 'could not inspect submodule status.' }
+if (-not $DeveloperBuild -and ($status -or $submodules)) { throw 'production launcher builds require a clean exact source tree and submodules.' }
+if (-not $DeveloperBuild -and ($SkipTests -or $NoApplicationLaunch)) { throw 'production launcher builds require all contract and health checks.' }
+$constants = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'native/core.h'))
+$version = [regex]::Match($constants, 'LauncherVersion\[\] = "([0-9.]+)"').Groups[1].Value
+$sequence = [long][regex]::Match($constants, 'LauncherSequence = ([0-9]+)').Groups[1].Value
+if (-not $version -or $sequence -le 0) { throw 'native launcher release identity is missing.' }
+function Read-Inputs {
+    $files = @()
+    foreach ($directory in @('launcher', 'src', 'tools', 'cmake', 'assets/fonts/noto-sans')) {
+        $files += Get-ChildItem -LiteralPath (Join-Path $repository $directory) -File -Recurse |
+            Where-Object { $_.FullName -notmatch '[\\/](obj|bin)[\\/]' }
+    }
+    $files += Get-Item -LiteralPath (Join-Path $repository 'LICENSE.md')
+    return @($files | Sort-Object FullName -Unique | ForEach-Object {
+        [ordered]@{ path = [IO.Path]::GetRelativePath($repository, $_.FullName).Replace('\','/'); bytes = $_.Length
+            sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+    })
 }
-$sdk = (& $dotnet --version).Trim()
-if ($LASTEXITCODE -ne 0 -or $sdk -ne '10.0.400') {
-    throw "UVSR Launcher requires .NET SDK 10.0.400; found '$sdk'."
-}
-$head = ((& git -C $repositoryRoot rev-parse HEAD) -join '').Trim()
-if ($LASTEXITCODE -ne 0 -or $head -notmatch '^[0-9a-f]{40}$') {
-    throw 'The launcher build could not determine the exact source commit.'
-}
-$statusArguments = @('-C', $repositoryRoot, 'status', '--porcelain=v1',
-    '--untracked-files=all', '--ignore-submodules=none')
-$status = ((& git @statusArguments) -join "`n").Trim()
-if ($LASTEXITCODE -ne 0) {
-    throw 'The launcher build could not inspect the source tree.'
-}
-$submoduleArguments = @('-C', $repositoryRoot, 'submodule', 'foreach',
-    '--recursive', '--quiet', 'git status --porcelain=v1 --untracked-files=all')
-$submoduleStatus = ((& git @submoduleArguments) -join "`n").Trim()
-if ($LASTEXITCODE -ne 0) {
-    throw 'The launcher build could not inspect submodule source trees.'
-}
-if ($status.Length -ne 0 -or $submoduleStatus.Length -ne 0) {
-    throw 'The launcher release build requires a clean source tree and submodules.'
-}
-if ([string]::IsNullOrWhiteSpace($SourceCommit)) {
-    $SourceCommit = $head
-}
-if ($SourceCommit -notmatch '^[0-9a-f]{40}$') {
-    throw 'The launcher source commit must be 40 lowercase hexadecimal characters.'
-}
-if ($SourceCommit -cne $head) {
-    throw 'The launcher source commit does not match the checked-out source tree.'
-}
-
-$constantsPath = Join-Path $PSScriptRoot 'src\UVSR.Installer\ProductConstants.cs'
-$constants = [IO.File]::ReadAllText($constantsPath)
-$versionMatch = [regex]::Match($constants,
-    'internal const string LauncherVersion = "(?<value>[0-9]+\.[0-9]+\.[0-9]+)";')
-$sequenceMatch = [regex]::Match($constants,
-    'internal const long LauncherReleaseSequence = (?<value>[0-9]+);')
-if (-not $versionMatch.Success -or -not $sequenceMatch.Success) {
-    throw 'The launcher release identity could not be read.'
-}
-$version = $versionMatch.Groups['value'].Value
-$sequence = [long]$sequenceMatch.Groups['value'].Value
-
+$inputs = Read-Inputs
+$inputText = $inputs | ConvertTo-Json -Depth 4 -Compress
+$inputHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($inputText))).ToLowerInvariant()
+$identity = if ($DeveloperBuild) { "$head-dirty-launcher-$($inputHash.Substring(0,12))" } else { $head }
 New-Item -ItemType Directory -Path $output -Force | Out-Null
-$outputItem = Get-Item -LiteralPath $output -Force
-if (($outputItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-    throw 'Launcher output must not be a filesystem link.'
+if ((Get-Item -LiteralPath $output).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'launcher output cannot be a filesystem link.' }
+$marker = Join-Path $output '.uvsr-launcher-build-owner'
+if (Test-Path -LiteralPath $marker) {
+    if ([IO.File]::ReadAllText($marker) -cne $repository) { throw 'launcher output belongs to another source checkout.' }
+} else {
+    if (@(Get-ChildItem -LiteralPath $output -Force).Count) { throw 'launcher output must be empty or owned by this build.' }
+    [IO.File]::WriteAllText($marker, $repository)
 }
-$publish = Join-Path $output ("publish-" + [guid]::NewGuid().ToString('N'))
-$outputPrefix = $output.TrimEnd([IO.Path]::DirectorySeparatorChar) +
-    [IO.Path]::DirectorySeparatorChar
-if (-not $publish.StartsWith($outputPrefix,
-        [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'Launcher publish staging escaped the output directory.'
-}
-$testArtifacts = Join-Path $output 'test-artifacts'
-$launcherArtifacts = Join-Path $output 'launcher-artifacts'
-New-Item -ItemType Directory -Path $publish | Out-Null
-$publishMarker = Join-Path $publish '.uvsr-launcher-build-owner'
-$publishId = [guid]::NewGuid().ToString('N')
-[IO.File]::WriteAllText($publishMarker, $publishId,
-    [Text.UTF8Encoding]::new($false))
-try {
-    $launcherFeed = Join-Path $PSScriptRoot 'launcher-update-feed-v2.json'
-    if (Test-Path -LiteralPath $launcherFeed -PathType Leaf) {
-        & (Join-Path $PSScriptRoot 'verify-launcher-update-feed.ps1') -Path $launcherFeed |
-            Out-Null
+if (-not $BuildDirectory) { $BuildDirectory = Join-Path $output 'build' }
+$build = [IO.Path]::GetFullPath($BuildDirectory)
+$production = if ($DeveloperBuild) { 'OFF' } else { 'ON' }
+$binaryDirectory = Join-Path $build "bin/$($inputHash.Substring(0,12))"
+& cmake -S $PSScriptRoot -B $build -G 'Visual Studio 17 2022' -A x64 "-DUVSR_LAUNCHER_SOURCE_IDENTITY=$identity" "-DUVSR_LAUNCHER_SOURCE_COMMIT=$head" "-DUVSR_LAUNCHER_PRODUCTION=$production" "-DUVSR_LAUNCHER_BINARY_DIRECTORY=$binaryDirectory" -DBUILD_TESTING=ON
+if ($LASTEXITCODE -ne 0) { throw 'native launcher configuration failed.' }
+$targets = @('uvsr-launcher')
+if (-not $SkipTests -or -not $NoApplicationLaunch) { $targets += 'uvsr_launcher_tests' }
+& cmake --build $build --config Release --parallel 2 --target @targets
+if ($LASTEXITCODE -ne 0) { throw 'native launcher build failed.' }
+$tests = Join-Path $build 'Release/uvsr_launcher_tests.exe'
+if (-not $SkipTests) {
+    & (Join-Path $PSScriptRoot 'tests/FeedTools.Tests.ps1')
+    & $tests --pure
+    if ($LASTEXITCODE -ne 0) { throw 'native launcher pure contracts failed.' }
+    if (-not $NoApplicationLaunch) {
+        & $tests --runtime
+        if ($LASTEXITCODE -ne 0) { throw 'native launcher process contracts failed.' }
     }
-    $rendererFeed = Join-Path $PSScriptRoot 'renderer-update-feed-v1.json'
-    if (Test-Path -LiteralPath $rendererFeed -PathType Leaf) {
-        & (Join-Path $PSScriptRoot 'verify-renderer-update-feed.ps1') -Path $rendererFeed |
-            Out-Null
-    }
-
-    $project = Join-Path $PSScriptRoot 'src\UVSR.Installer\UVSR.Installer.csproj'
-    $tests = Join-Path $PSScriptRoot 'tests\UVSR.Installer.Tests\UVSR.Installer.Tests.csproj'
-    if (-not $SkipTests) {
-        $testArguments = @(
-            'run', '--project', $tests, '-c', 'Release', '--nologo',
-            '--artifacts-path', $testArtifacts
-        )
-        & $dotnet @testArguments
-        if ($LASTEXITCODE -ne 0) {
-            throw "Launcher contract tests failed with exit code $LASTEXITCODE."
-        }
-    }
-
-    $publishArguments = @(
-        'publish', $project, '-c', 'Release', '-r', 'win-x64',
-        '--self-contained', 'true', '--nologo', '-o', $publish,
-        '--artifacts-path', $launcherArtifacts,
-        '-p:PublishSingleFile=true',
-        '-p:IncludeNativeLibrariesForSelfExtract=true',
-        '-p:PublishTrimmed=false',
-        '-p:EnableCompressionInSingleFile=true',
-        '-p:DebugType=None',
-        '-p:DebugSymbols=false',
-        "-p:Version=$version",
-        "-p:FileVersion=$version.0",
-        '-p:IncludeSourceRevisionInInformationalVersion=false',
-        "-p:InformationalVersion=$version+$SourceCommit"
-    )
-    & $dotnet @publishArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Launcher publish failed with exit code $LASTEXITCODE."
-    }
-
-    $published = Join-Path $publish 'uvsr-launcher.exe'
-    if (-not (Test-Path -LiteralPath $published -PathType Leaf)) {
-        throw "The canonical launcher was not produced at '$published'."
-    }
-    $unexpected = @(Get-ChildItem -LiteralPath $publish -File |
-        Where-Object Name -notin @(
-            'uvsr-launcher.exe', '.uvsr-launcher-build-owner'
-        ))
-    if ($unexpected.Count -ne 0) {
-        throw "Launcher publish contained unexpected files: $($unexpected.Name -join ', ')."
-    }
-    $metadata = [Diagnostics.FileVersionInfo]::GetVersionInfo($published)
-    if ($metadata.ProductName -ne 'UVSR Launcher' -or
-        $metadata.FileVersion -ne "$version.0" -or
-        $metadata.ProductVersion -ne "$version+$SourceCommit") {
-        throw 'The launcher executable metadata did not match its source identity.'
-    }
-    $health = Start-Process -FilePath $published -ArgumentList @(
-        '--launcher-health-check', "$sequence", $version
-    ) -PassThru -WindowStyle Hidden
-    try {
-        if (-not $health.WaitForExit(15000)) {
-            $health.Kill($true)
-            $health.WaitForExit()
-            throw 'The launcher health check timed out.'
-        }
-        if ($health.ExitCode -ne 0) {
-            throw 'The launcher health check rejected its release identity.'
-        }
-    }
-    finally {
-        $health.Dispose()
-    }
-
-    $artifact = Join-Path $output 'uvsr-launcher.exe'
-    $checksum = Join-Path $output 'uvsr-launcher.exe.sha256'
-    if ((Test-Path -LiteralPath $artifact) -or
-        (Test-Path -LiteralPath $checksum)) {
-        throw 'The requested output already contains a launcher artifact.'
-    }
-    Copy-Item -LiteralPath $published -Destination $artifact
-    $hash = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
-    $checksumLine = "$hash  uvsr-launcher.exe" + [Environment]::NewLine
-    [IO.File]::WriteAllText($checksum, $checksumLine,
-        [Text.UTF8Encoding]::new($false))
-    Write-Output "Launcher: $artifact"
-    Write-Output "SHA-256: $hash"
-}
-finally {
-    if (Test-Path -LiteralPath $publish) {
-        $resolvedPublish = [IO.Path]::GetFullPath($publish)
-        if (-not $resolvedPublish.StartsWith($outputPrefix,
-                [StringComparison]::OrdinalIgnoreCase) -or
-            -not (Test-Path -LiteralPath $publishMarker -PathType Leaf) -or
-            [IO.File]::ReadAllText($publishMarker) -cne $publishId) {
-            throw "Launcher publish staging could not prove ownership: '$publish'."
-        }
-        Remove-Item -LiteralPath $publish -Recurse -Force
+    if (-not $DeveloperBuild -or $SystemServicesTests) {
+        & $tests --system-services
+        if ($LASTEXITCODE -ne 0) { throw 'native launcher registry and shell contracts failed.' }
     }
 }
+$built = Join-Path $binaryDirectory 'Release/uvsr-launcher.exe'
+$metadata = [Diagnostics.FileVersionInfo]::GetVersionInfo($built)
+if ($metadata.ProductName -cne 'UVSR Launcher' -or $metadata.FileVersion -cne "$version.0" -or $metadata.ProductVersion -cne "$version+$identity") {
+    throw 'native launcher metadata does not bind the source input record.'
+}
+if (-not $NoApplicationLaunch) {
+    & $tests --verify-launcher-health $built
+    if ($LASTEXITCODE -ne 0) { throw 'native launcher executable health failed.' }
+}
+$after = Read-Inputs | ConvertTo-Json -Depth 4 -Compress
+if ($inputText -cne $after) { throw 'launcher source inputs changed during the build.' }
+$artifact = Join-Path $output 'uvsr-launcher.exe'
+Copy-Item -LiteralPath $built -Destination $artifact -Force
+$hash = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
+[IO.File]::WriteAllText((Join-Path $output 'uvsr-launcher.exe.sha256'), "$hash  uvsr-launcher.exe`n", [Text.UTF8Encoding]::new($false))
+$record = [ordered]@{ schemaVersion = 1; sourceRoot = $repository; sourceCommit = $head; sourceIdentity = $identity
+    production = -not [bool]$DeveloperBuild; inputSha256 = $inputHash; inputs = $inputs; buildDirectory = $build
+    version = $version; releaseSequence = $sequence; artifact = $artifact; sha256 = $hash
+    pureTests = -not [bool]$SkipTests; runtimeTests = -not ([bool]$SkipTests -or [bool]$NoApplicationLaunch)
+    systemServicesTests = -not [bool]$SkipTests -and (-not [bool]$DeveloperBuild -or [bool]$SystemServicesTests)
+    applicationHealth = -not [bool]$NoApplicationLaunch }
+[IO.File]::WriteAllText((Join-Path $output 'build-record.json'), ($record | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
+Write-Output "launcher: $artifact"
+Write-Output "SHA-256: $hash"

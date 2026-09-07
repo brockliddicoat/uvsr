@@ -91,19 +91,6 @@ namespace uvsr::log
         return g_Callback;
     }
 
-    void ResetCallback()
-    {
-        SetCallback(DefaultCallback);
-    }
-
-    void message(Severity severity, const char* format, ...)
-    {
-        va_list arguments;
-        va_start(arguments, format);
-        Dispatch(severity, format, arguments);
-        va_end(arguments);
-    }
-
     void debug(const char* format, ...)
     {
         va_list arguments;

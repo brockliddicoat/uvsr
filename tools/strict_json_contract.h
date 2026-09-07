@@ -1,5 +1,7 @@
 #pragma once
 
+#include "json_document.h"
+
 #include <charconv>
 #include <cstdint>
 #include <filesystem>
@@ -14,373 +16,41 @@
 
 namespace uvsr::contract
 {
-    struct JsonValue
+    using JsonValue = json::Value;
+
+    [[nodiscard]] inline std::int64_t Integer(
+        const JsonValue& value,
+        std::string_view description)
     {
-        enum class Kind { String, Integer, Boolean, Object, Array };
+        std::int64_t result = 0;
+        const char* first = value.string.data();
+        const char* last = first + value.string.size();
+        const auto parsed = std::from_chars(first, last, result);
+        if (value.kind != JsonValue::Kind::Number ||
+            parsed.ec != std::errc{} || parsed.ptr != last)
+        {
+            throw std::runtime_error(std::string(description) + " is not an int64 integer");
+        }
+        return result;
+    }
 
-        Kind kind = Kind::String;
-        std::string string;
-        std::int64_t integer = 0;
-        bool boolean = false;
-        std::vector<std::pair<std::string, JsonValue>> object;
-        std::vector<JsonValue> array;
-    };
-
-    class JsonParser
+    inline void ValidateContractValues(const JsonValue& value)
     {
-    public:
-        explicit JsonParser(std::string_view input) : m_Input(input)
-        {
-            if (input.size() >= 3u &&
-                static_cast<unsigned char>(input[0]) == 0xefu &&
-                static_cast<unsigned char>(input[1]) == 0xbbu &&
-                static_cast<unsigned char>(input[2]) == 0xbfu)
-            {
-                Fail("byte-order marks are forbidden");
-            }
-        }
-
-        [[nodiscard]] JsonValue Parse()
-        {
-            SkipWhitespace();
-            JsonValue result = ParseValue(0u);
-            SkipWhitespace();
-            if (m_Position != m_Input.size())
-                Fail("trailing data");
-            return result;
-        }
-
-    private:
-        [[noreturn]] void Fail(std::string_view message) const
-        {
-            throw std::runtime_error(
-                "JSON error at byte " + std::to_string(m_Position) +
-                ": " + std::string(message));
-        }
-
-        void SkipWhitespace()
-        {
-            while (m_Position < m_Input.size())
-            {
-                const char value = m_Input[m_Position];
-                if (value != ' ' && value != '\t' && value != '\r' &&
-                    value != '\n')
-                {
-                    break;
-                }
-                ++m_Position;
-            }
-        }
-
-        [[nodiscard]] JsonValue ParseValue(unsigned depth)
-        {
-            if (depth > 16u)
-                Fail("nesting limit exceeded");
-            if (m_Position == m_Input.size())
-                Fail("unexpected end of input");
-            if (m_Input[m_Position] == '{')
-                return ParseObject(depth);
-            if (m_Input[m_Position] == '[')
-                return ParseArray(depth);
-            if (m_Input[m_Position] == '"')
-            {
-                JsonValue result;
-                result.kind = JsonValue::Kind::String;
-                result.string = ParseString();
-                return result;
-            }
-            if (m_Input[m_Position] == '-' ||
-                (m_Input[m_Position] >= '0' && m_Input[m_Position] <= '9'))
-            {
-                return ParseInteger();
-            }
-            if (m_Input.substr(m_Position, 4u) == "true")
-            {
-                m_Position += 4u;
-                JsonValue result;
-                result.kind = JsonValue::Kind::Boolean;
-                result.boolean = true;
-                return result;
-            }
-            if (m_Input.substr(m_Position, 5u) == "false")
-            {
-                m_Position += 5u;
-                JsonValue result;
-                result.kind = JsonValue::Kind::Boolean;
-                return result;
-            }
-            Fail("unsupported value type");
-        }
-
-        [[nodiscard]] JsonValue ParseObject(unsigned depth)
-        {
-            JsonValue result;
-            result.kind = JsonValue::Kind::Object;
-            ++m_Position;
-            SkipWhitespace();
-            if (Consume('}'))
-                return result;
-            for (;;)
-            {
-                if (m_Position == m_Input.size() ||
-                    m_Input[m_Position] != '"')
-                {
-                    Fail("object property name expected");
-                }
-                std::string name = ParseString();
-                for (const auto& member : result.object)
-                {
-                    if (member.first == name)
-                        Fail("duplicate object property");
-                }
-                SkipWhitespace();
-                if (!Consume(':'))
-                    Fail("colon expected");
-                SkipWhitespace();
-                result.object.emplace_back(
-                    std::move(name), ParseValue(depth + 1u));
-                SkipWhitespace();
-                if (Consume('}'))
-                    return result;
-                if (!Consume(','))
-                    Fail("comma expected");
-                SkipWhitespace();
-            }
-        }
-
-        [[nodiscard]] JsonValue ParseArray(unsigned depth)
-        {
-            JsonValue result;
-            result.kind = JsonValue::Kind::Array;
-            ++m_Position;
-            SkipWhitespace();
-            if (Consume(']'))
-                return result;
-            for (;;)
-            {
-                result.array.push_back(ParseValue(depth + 1u));
-                SkipWhitespace();
-                if (Consume(']'))
-                    return result;
-                if (!Consume(','))
-                    Fail("comma expected");
-                SkipWhitespace();
-            }
-        }
-
-        [[nodiscard]] JsonValue ParseInteger()
-        {
-            const std::size_t begin = m_Position;
-            if (Consume('-') && m_Position == m_Input.size())
-                Fail("integer digits expected");
-            if (m_Input[m_Position] == '0')
-            {
-                ++m_Position;
-                if (m_Position < m_Input.size() &&
-                    m_Input[m_Position] >= '0' && m_Input[m_Position] <= '9')
-                {
-                    Fail("leading zero");
-                }
-            }
-            else
-            {
-                if (m_Input[m_Position] < '1' || m_Input[m_Position] > '9')
-                    Fail("integer digits expected");
-                while (m_Position < m_Input.size() &&
-                    m_Input[m_Position] >= '0' && m_Input[m_Position] <= '9')
-                {
-                    ++m_Position;
-                }
-            }
-            if (m_Position < m_Input.size() &&
-                (m_Input[m_Position] == '.' || m_Input[m_Position] == 'e' ||
-                    m_Input[m_Position] == 'E'))
-            {
-                Fail("only integers are accepted");
-            }
-            JsonValue result;
-            result.kind = JsonValue::Kind::Integer;
-            const char* first = m_Input.data() + begin;
-            const char* last = m_Input.data() + m_Position;
-            const auto parsed = std::from_chars(first, last, result.integer);
-            if (parsed.ec != std::errc{} || parsed.ptr != last)
-                Fail("integer is outside int64 range");
-            return result;
-        }
-
-        [[nodiscard]] std::string ParseString()
-        {
-            ++m_Position;
-            std::string output;
-            while (m_Position < m_Input.size())
-            {
-                const unsigned char value =
-                    static_cast<unsigned char>(m_Input[m_Position++]);
-                if (value == '"')
-                    return output;
-                if (value < 0x20u)
-                    Fail("unescaped control character");
-                if (value == '\\')
-                {
-                    ParseEscape(output);
-                    continue;
-                }
-                if (value < 0x80u)
-                {
-                    output.push_back(static_cast<char>(value));
-                    continue;
-                }
-                AppendValidatedUtf8(output, value);
-            }
-            Fail("unterminated string");
-        }
-
-        void ParseEscape(std::string& output)
-        {
-            if (m_Position == m_Input.size())
-                Fail("unterminated escape");
-            const char escaped = m_Input[m_Position++];
-            switch (escaped)
-            {
-            case '"': output.push_back('"'); return;
-            case '\\': output.push_back('\\'); return;
-            case '/': output.push_back('/'); return;
-            case 'b': output.push_back('\b'); return;
-            case 'f': output.push_back('\f'); return;
-            case 'n': output.push_back('\n'); return;
-            case 'r': output.push_back('\r'); return;
-            case 't': output.push_back('\t'); return;
-            case 'u': break;
-            default: Fail("invalid escape");
-            }
-            std::uint32_t codePoint = ParseHexWord();
-            if (codePoint >= 0xd800u && codePoint <= 0xdbffu)
-            {
-                if (m_Position + 2u > m_Input.size() ||
-                    m_Input[m_Position] != '\\' ||
-                    m_Input[m_Position + 1u] != 'u')
-                {
-                    Fail("high surrogate lacks low surrogate");
-                }
-                m_Position += 2u;
-                const std::uint32_t low = ParseHexWord();
-                if (low < 0xdc00u || low > 0xdfffu)
-                    Fail("invalid low surrogate");
-                codePoint = 0x10000u +
-                    ((codePoint - 0xd800u) << 10u) + (low - 0xdc00u);
-            }
-            else if (codePoint >= 0xdc00u && codePoint <= 0xdfffu)
-            {
-                Fail("unexpected low surrogate");
-            }
-            AppendCodePoint(output, codePoint);
-        }
-
-        [[nodiscard]] std::uint32_t ParseHexWord()
-        {
-            if (m_Position + 4u > m_Input.size())
-                Fail("truncated unicode escape");
-            std::uint32_t result = 0u;
-            for (unsigned index = 0u; index < 4u; ++index)
-            {
-                const char value = m_Input[m_Position++];
-                result <<= 4u;
-                if (value >= '0' && value <= '9')
-                    result += static_cast<unsigned>(value - '0');
-                else if (value >= 'a' && value <= 'f')
-                    result += static_cast<unsigned>(value - 'a' + 10);
-                else if (value >= 'A' && value <= 'F')
-                    result += static_cast<unsigned>(value - 'A' + 10);
-                else
-                    Fail("invalid unicode escape");
-            }
-            return result;
-        }
-
-        void AppendValidatedUtf8(std::string& output, unsigned char first)
-        {
-            unsigned continuationCount = 0u;
-            std::uint32_t codePoint = 0u;
-            if (first >= 0xc2u && first <= 0xdfu)
-            {
-                continuationCount = 1u;
-                codePoint = first & 0x1fu;
-            }
-            else if (first >= 0xe0u && first <= 0xefu)
-            {
-                continuationCount = 2u;
-                codePoint = first & 0x0fu;
-            }
-            else if (first >= 0xf0u && first <= 0xf4u)
-            {
-                continuationCount = 3u;
-                codePoint = first & 0x07u;
-            }
-            else
-                Fail("invalid UTF-8 lead byte");
-            output.push_back(static_cast<char>(first));
-            for (unsigned index = 0u; index < continuationCount; ++index)
-            {
-                if (m_Position == m_Input.size())
-                    Fail("truncated UTF-8 sequence");
-                const unsigned char next =
-                    static_cast<unsigned char>(m_Input[m_Position++]);
-                if ((next & 0xc0u) != 0x80u)
-                    Fail("invalid UTF-8 continuation byte");
-                output.push_back(static_cast<char>(next));
-                codePoint = (codePoint << 6u) | (next & 0x3fu);
-            }
-            const std::uint32_t minimum = continuationCount == 1u ? 0x80u :
-                continuationCount == 2u ? 0x800u : 0x10000u;
-            if (codePoint < minimum || codePoint > 0x10ffffu ||
-                (codePoint >= 0xd800u && codePoint <= 0xdfffu))
-            {
-                Fail("invalid UTF-8 code point");
-            }
-        }
-
-        static void AppendCodePoint(std::string& output, std::uint32_t value)
-        {
-            if (value <= 0x7fu)
-                output.push_back(static_cast<char>(value));
-            else if (value <= 0x7ffu)
-            {
-                output.push_back(static_cast<char>(0xc0u | (value >> 6u)));
-                output.push_back(static_cast<char>(0x80u | (value & 0x3fu)));
-            }
-            else if (value <= 0xffffu)
-            {
-                output.push_back(static_cast<char>(0xe0u | (value >> 12u)));
-                output.push_back(static_cast<char>(0x80u | ((value >> 6u) & 0x3fu)));
-                output.push_back(static_cast<char>(0x80u | (value & 0x3fu)));
-            }
-            else
-            {
-                output.push_back(static_cast<char>(0xf0u | (value >> 18u)));
-                output.push_back(static_cast<char>(0x80u | ((value >> 12u) & 0x3fu)));
-                output.push_back(static_cast<char>(0x80u | ((value >> 6u) & 0x3fu)));
-                output.push_back(static_cast<char>(0x80u | (value & 0x3fu)));
-            }
-        }
-
-        bool Consume(char expected)
-        {
-            if (m_Position == m_Input.size() ||
-                m_Input[m_Position] != expected)
-            {
-                return false;
-            }
-            ++m_Position;
-            return true;
-        }
-
-        std::string_view m_Input;
-        std::size_t m_Position = 0u;
-    };
+        if (value.kind == JsonValue::Kind::Null)
+            throw std::runtime_error("null is forbidden in a signed contract");
+        if (value.kind == JsonValue::Kind::Number)
+            (void)Integer(value, "contract value");
+        for (const auto& member : value.object)
+            ValidateContractValues(member.second);
+        for (const auto& item : value.array)
+            ValidateContractValues(item);
+    }
 
     [[nodiscard]] inline JsonValue ParseJson(std::string_view text)
     {
-        return JsonParser(text).Parse();
+        JsonValue result = json::Parser(text, 16u).Parse();
+        ValidateContractValues(result);
+        return result;
     }
 
     inline void RequireExactObject(
@@ -431,15 +101,6 @@ namespace uvsr::contract
         return value.string;
     }
 
-    [[nodiscard]] inline std::int64_t Integer(
-        const JsonValue& value,
-        std::string_view description)
-    {
-        if (value.kind != JsonValue::Kind::Integer)
-            throw std::runtime_error(std::string(description) + " is not an integer");
-        return value.integer;
-    }
-
     [[nodiscard]] inline bool Boolean(
         const JsonValue& value,
         std::string_view description)
@@ -480,6 +141,39 @@ namespace uvsr::contract
             }
         }
         return true;
+    }
+
+    [[nodiscard]] inline bool IsCanonicalDottedVersion(
+        std::string_view value,
+        unsigned requiredParts,
+        std::int64_t maximumPart)
+    {
+        unsigned parts = 0u;
+        std::size_t position = 0u;
+        for (;;)
+        {
+            const std::size_t begin = position;
+            while (position < value.size() && value[position] >= '0' &&
+                value[position] <= '9')
+            {
+                ++position;
+            }
+            if (begin == position ||
+                (value[begin] == '0' && position - begin != 1u))
+            {
+                return false;
+            }
+            std::int64_t part = 0;
+            const auto parsed = std::from_chars(
+                value.data() + begin, value.data() + position, part);
+            if (parsed.ec != std::errc{} || part > maximumPart)
+                return false;
+            ++parts;
+            if (position == value.size())
+                return parts == requiredParts;
+            if (value[position++] != '.' || position == value.size())
+                return false;
+        }
     }
 
     [[nodiscard]] inline std::vector<unsigned char> DecodeBase64(

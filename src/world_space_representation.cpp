@@ -19,21 +19,6 @@ namespace uvsr
 {
     namespace
     {
-        nvrhi::rt::AccelStructBuildFlags GetBuildPreferenceFlags(
-            BvhBuildPreference preference)
-        {
-            switch (preference)
-            {
-            case BvhBuildPreference::FastBuild:
-                return nvrhi::rt::AccelStructBuildFlags::PreferFastBuild;
-            case BvhBuildPreference::Balanced:
-                return nvrhi::rt::AccelStructBuildFlags::None;
-            case BvhBuildPreference::FastTrace:
-            default:
-                return nvrhi::rt::AccelStructBuildFlags::PreferFastTrace;
-            }
-        }
-
         uint64_t HashCombine(uint64_t hash, uint64_t value)
         {
             value ^= value >> 33u;
@@ -107,7 +92,6 @@ namespace uvsr
 
         bool BuildMeshDescription(
             const std::shared_ptr<MeshInfo>& mesh,
-            const WorldSpaceRepresentationSettings& settings,
             nvrhi::rt::AccelStructDesc& description,
             std::vector<uint32_t>& geometryIndices)
         {
@@ -128,12 +112,11 @@ namespace uvsr
             geometryIndices.clear();
             description.isTopLevel = false;
             description.debugName = "UVSR BLAS: " + mesh->name;
-            description.buildFlags = GetBuildPreferenceFlags(
-                settings.bvhBuildPreference);
+            description.buildFlags =
+                nvrhi::rt::AccelStructBuildFlags::PreferFastTrace;
             const bool dynamic = bool(mesh->skinPrototype) ||
                 mesh->isMorphTargetAnimationMesh;
-            if (dynamic &&
-                settings.blasUpdateMode == BlasUpdateMode::Refit)
+            if (dynamic)
             {
                 description.buildFlags = description.buildFlags |
                     nvrhi::rt::AccelStructBuildFlags::AllowUpdate;
@@ -241,7 +224,6 @@ namespace uvsr
         m_BlasRecords.clear();
         m_NextBlas = 0u;
         m_Scene = nullptr;
-        m_HasSettings = false;
         m_ReportedFailure = false;
         m_Status.builtBlasCount = 0u;
         m_Status.totalBlasCount = 0u;
@@ -249,49 +231,6 @@ namespace uvsr
         m_Status.state = IsSupported()
             ? WorldSpaceRepresentationState::Idle
             : WorldSpaceRepresentationState::Unsupported;
-    }
-
-    void WorldSpaceRepresentation::Invalidate(
-        WorldSpaceRepresentationInvalidation invalidation)
-    {
-        if (invalidation ==
-            WorldSpaceRepresentationInvalidation::None)
-        {
-            return;
-        }
-        if (!IsSupported())
-        {
-            m_Status.state = WorldSpaceRepresentationState::Unsupported;
-            return;
-        }
-        if (!RetainsRayVisibilityGeometryMap(invalidation))
-        {
-            Reset();
-            return;
-        }
-
-        if (m_Status.state == WorldSpaceRepresentationState::Failed)
-        {
-            Reset();
-            return;
-        }
-
-        ++m_Status.generation;
-        ++m_Status.contentRevision;
-        m_Tlas = nullptr;
-        m_InstanceSnapshots.clear();
-        if (m_BlasRecords.empty())
-        {
-            m_Status.state = WorldSpaceRepresentationState::Idle;
-        }
-        else if (m_NextBlas < m_BlasRecords.size())
-        {
-            m_Status.state = WorldSpaceRepresentationState::BuildingBlas;
-        }
-        else
-        {
-            m_Status.state = WorldSpaceRepresentationState::BuildingTlas;
-        }
     }
 
     void WorldSpaceRepresentation::Fail(const char* message)
@@ -318,9 +257,7 @@ namespace uvsr
         }
     }
 
-    bool WorldSpaceRepresentation::BeginGeneration(
-        Scene* scene,
-        const WorldSpaceRepresentationSettings& settings)
+    bool WorldSpaceRepresentation::BeginGeneration(Scene* scene)
     {
         ++m_Status.generation;
         ++m_Status.contentRevision;
@@ -334,8 +271,6 @@ namespace uvsr
         m_BlasRecords.clear();
         m_NextBlas = 0u;
         m_Scene = scene;
-        m_Settings = settings;
-        m_HasSettings = true;
         m_ReportedFailure = false;
 
         if (!scene || !scene->GetSceneGraph())
@@ -375,7 +310,6 @@ namespace uvsr
                 std::vector<uint32_t> geometryIndices;
                 if (!BuildMeshDescription(
                         mesh,
-                        settings,
                         description,
                         geometryIndices))
                 {
@@ -562,20 +496,9 @@ namespace uvsr
             snapshots.push_back(snapshot);
         }
 
-        const nvrhi::rt::AccelStructBuildFlags preference =
-            GetBuildPreferenceFlags(m_Settings.bvhBuildPreference);
-        nvrhi::rt::AccelStructBuildFlags buildFlags = preference;
-        if (m_Settings.tlasUpdateMode == TlasUpdateMode::Refit)
-        {
-            buildFlags = buildFlags |
-                nvrhi::rt::AccelStructBuildFlags::AllowUpdate;
-        }
-
-        if (!m_Tlas || performUpdate &&
-            m_Settings.tlasUpdateMode != TlasUpdateMode::Refit)
-        {
-            m_Tlas = nullptr;
-        }
+        nvrhi::rt::AccelStructBuildFlags buildFlags =
+            nvrhi::rt::AccelStructBuildFlags::PreferFastTrace |
+            nvrhi::rt::AccelStructBuildFlags::AllowUpdate;
         if (!m_Tlas)
         {
             nvrhi::rt::AccelStructDesc description;
@@ -752,12 +675,8 @@ namespace uvsr
                 continue;
             }
             nvrhi::rt::AccelStructBuildFlags flags =
-                record.description.buildFlags;
-            if (m_Settings.blasUpdateMode == BlasUpdateMode::Refit)
-            {
-                flags = flags |
-                    nvrhi::rt::AccelStructBuildFlags::PerformUpdate;
-            }
+                record.description.buildFlags |
+                nvrhi::rt::AccelStructBuildFlags::PerformUpdate;
             commandList->buildBottomLevelAccelStruct(
                 record.accelerationStructure,
                 record.description.bottomLevelGeometries.data(),
@@ -784,29 +703,10 @@ namespace uvsr
         if (!commandList || !scene)
             return false;
 
-        if (scene != m_Scene || !m_HasSettings)
+        if (scene != m_Scene)
         {
-            if (!BeginGeneration(scene, settings))
+            if (!BeginGeneration(scene))
                 return false;
-        }
-        else
-        {
-            const WorldSpaceRepresentationInvalidation invalidation =
-                GetWorldSpaceRepresentationInvalidation(
-                    m_Settings, settings);
-            if (invalidation ==
-                WorldSpaceRepresentationInvalidation::BlasAndTlas)
-            {
-                Reset();
-                if (!BeginGeneration(scene, settings))
-                    return false;
-            }
-            else if (invalidation ==
-                WorldSpaceRepresentationInvalidation::Tlas)
-            {
-                m_Settings = settings;
-                Invalidate(invalidation);
-            }
         }
 
         if (m_Status.state == WorldSpaceRepresentationState::Failed)
@@ -815,7 +715,7 @@ namespace uvsr
         if (!TopologyMatches())
         {
             Reset();
-            if (!BeginGeneration(scene, settings))
+            if (!BeginGeneration(scene))
                 return false;
             return false;
         }
@@ -856,14 +756,30 @@ namespace uvsr
         const bool transformsChanged = InstanceTransformsChanged();
         if (dynamicBlasUpdated || transformsChanged)
         {
-            const bool performUpdate =
-                m_Settings.tlasUpdateMode == TlasUpdateMode::Refit;
-            if (!BuildOrUpdateTlas(commandList, performUpdate))
+            if (!BuildOrUpdateTlas(commandList, true))
             {
                 Fail("the TLAS update could not be submitted");
                 return false;
             }
         }
         return IsReady();
+    }
+
+    RaySceneView WorldSpaceRepresentation::GetRaySceneView(
+        Scene* scene) const
+    {
+        if (!IsReady() || !scene || scene != m_Scene)
+            return {};
+
+        RaySceneView view = {
+            m_Tlas,
+            scene->GetGeometryBuffer(),
+            scene->GetMaterialBuffer(),
+            m_GeometryIndexMap,
+            scene->GetDescriptorTable(),
+            m_Status.generation,
+            m_Status.contentRevision
+        };
+        return view ? view : RaySceneView{};
     }
 }

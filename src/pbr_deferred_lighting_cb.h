@@ -10,14 +10,12 @@ struct PbrDeferredLightingConstants
 {
     DeferredLightingConstants deferred;
 
-    int separateIndirect;
     UVSR_GPU_UINT lightingDebugView;
-    UVSR_GPU_UINT visibilityDebugView;
     UVSR_GPU_UINT skyVisibilityApplication;
-
     UVSR_GPU_INT2 directVisibilityLightIndices;
+
     int flashlightLightIndex;
-    UVSR_GPU_UINT flashlightPadding;
+    UVSR_GPU_UINT3 padding;
 
     FlashlightBeamProfile flashlightBeamProfile;
 };

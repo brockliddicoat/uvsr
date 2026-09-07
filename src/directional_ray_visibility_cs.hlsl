@@ -4,65 +4,21 @@
 #include "directional_ray_visibility_cb.h"
 #include "pbr_gbuffer.hlsli"
 #include "ray_traced_material_visibility.hlsli"
+#include "pbr_surface_light_contract.h"
+#include "noise_sampling.hlsli"
+#include "ray_origin_contract.h"
+#include "sample_accumulation.hlsli"
 
-#ifndef DIRECTIONAL_VISIBILITY_SAMPLES
-#error DIRECTIONAL_VISIBILITY_SAMPLES must be 1, 2, 4, 8, or 16.
-#endif
 
 cbuffer c_DirectionalVisibility : register(b0)
 {
     DirectionalRayVisibilityConstants g_DirectionalVisibility;
 };
 
-RaytracingAccelerationStructure t_WorldBvh : register(t0);
-#if DIRECTIONAL_VISIBILITY_SAMPLES > 1
-Texture2DMS<float, DIRECTIONAL_VISIBILITY_SAMPLES> t_Depth : register(t1);
-Texture2DMS<float4, DIRECTIONAL_VISIBILITY_SAMPLES>
-    t_Material : register(t2);
-Texture2DMS<float4, DIRECTIONAL_VISIBILITY_SAMPLES>
-    t_Normals : register(t3);
-#else
-Texture2D<float> t_Depth : register(t1);
-Texture2D<float4> t_Material : register(t2);
-Texture2D<float4> t_Normals : register(t3);
-#endif
+#define RAY_VISIBILITY_CONSTANTS g_DirectionalVisibility
+#define RAY_VISIBILITY_STOCHASTIC 1
+#include "ray_visibility_receiver.hlsli"
 
-#if DIRECTIONAL_VISIBILITY_SAMPLES > 1
-RWTexture2DArray<float> u_Visibility : register(u0);
-#else
-RWTexture2D<float> u_Visibility : register(u0);
-#endif
-RWTexture2D<float> u_ClosestVisibility : register(u1);
-RWTexture2D<float> u_ClosestHitDistance : register(u2);
-
-static const float kMissHitDistance = 65504.0f;
-
-float LoadDepth(int2 pixel, uint sampleIndex)
-{
-#if DIRECTIONAL_VISIBILITY_SAMPLES > 1
-    return t_Depth.Load(pixel, sampleIndex);
-#else
-    return t_Depth[pixel];
-#endif
-}
-
-float4 LoadMaterial(int2 pixel, uint sampleIndex)
-{
-#if DIRECTIONAL_VISIBILITY_SAMPLES > 1
-    return t_Material.Load(pixel, sampleIndex);
-#else
-    return t_Material[pixel];
-#endif
-}
-
-float4 LoadNormals(int2 pixel, uint sampleIndex)
-{
-#if DIRECTIONAL_VISIBILITY_SAMPLES > 1
-    return t_Normals.Load(pixel, sampleIndex);
-#else
-    return t_Normals[pixel];
-#endif
-}
 
 float StepDepthTowardCamera(float depth)
 {
@@ -126,8 +82,7 @@ float3 PrepareRayOrigin(
 
 bool TraceVisibility(
     float3 origin,
-    float3 direction,
-    out float hitDistance)
+    float3 direction)
 {
     RayDesc ray;
     ray.Origin = origin;
@@ -143,89 +98,64 @@ bool TraceVisibility(
     }
     const bool visible =
         query.CommittedStatus() != COMMITTED_TRIANGLE_HIT;
-    hitDistance = visible
-        ? kMissHitDistance
-        : min(query.CommittedRayT(), kMissHitDistance - 1.0f);
     return visible;
+}
+
+float RayVisibilityEvaluate(int2 pixelPosition, uint2 dispatchPosition,
+    uint sampleSequencePhase, float depth, float4 normalChannels)
+{
+    float visibility = 1.0f;
+    const float2 pixelCenter = float2(pixelPosition) + 0.5f;
+    const float3 directionToLight = g_DirectionalVisibility.directionToLightAndDistance.xyz;
+    const PbrGBufferSurfaceNormals normals =
+        DecodePbrGBufferSurfaceNormals(
+            normalChannels,
+            t_GBufferMaterial[pixelPosition]);
+    const float3 position = ReconstructWorldPosition(
+        g_DirectionalVisibility.view,
+        pixelCenter,
+        depth);
+    if (all(isfinite(position)) &&
+        dot(normals.shadingNormal, directionToLight) > 0.0f)
+    {
+        const float3 viewDirection = -GetIncidentVector(
+            g_DirectionalVisibility.view.cameraDirectionOrPosition,
+            position);
+        const float3 origin = PrepareRayOrigin(
+            position,
+            normals.geometricNormal,
+            viewDirection,
+            pixelCenter,
+            depth);
+        const float angularDiameter = g_DirectionalVisibility.angularDiameter;
+        if (!(angularDiameter > 0.0f))
+            return TraceVisibility(origin, directionToLight) ? 1.0f : 0.0f;
+
+        const uint sampleCount = clamp(g_DirectionalVisibility.sampleCount, 1u, 64u);
+        const uint2 extent = uint2(g_DirectionalVisibility.view.viewportSize);
+        const float2 shift = float2(
+            UVSRSamplePrecomputedNoise(t_Noise, g_DirectionalVisibility.noisePattern,
+                dispatchPosition, extent, sampleSequencePhase, 0x200u),
+            UVSRSamplePrecomputedNoise(t_Noise, g_DirectionalVisibility.noisePattern,
+                dispatchPosition, extent, sampleSequencePhase, 0x201u));
+        visibility = 0.0f;
+        [loop]
+        for (uint index = 0u; index < sampleCount; ++index)
+        {
+            const float2 random = frac(shift + float2(
+                (float(index) + 0.5f) / float(sampleCount),
+                float(index) * 0.6180339887498948482f));
+            const float3 direction = SamplePbrDirectionalEmitter(directionToLight, angularDiameter, random);
+            visibility += dot(normals.shadingNormal, direction) > 0.0f &&
+                TraceVisibility(origin, direction) ? 1.0f : 0.0f;
+        }
+        visibility /= float(sampleCount);
+    }
+    return visibility;
 }
 
 [numthreads(8, 8, 1)]
 void main(uint2 dispatchPosition : SV_DispatchThreadID)
 {
-    if (any(dispatchPosition >=
-            uint2(g_DirectionalVisibility.view.viewportSize)))
-    {
-        return;
-    }
-
-    const int2 pixel = int2(dispatchPosition) +
-        int2(g_DirectionalVisibility.view.viewportOrigin);
-    const float2 pixelCenter = float2(pixel) + 0.5f;
-    const float3 directionToLight =
-        g_DirectionalVisibility.directionToLightAndDistance.xyz;
-    bool foundClosest = false;
-    float closestDepth = 0.0f;
-    float closestVisibility = 1.0f;
-    float closestHitDistance = kMissHitDistance;
-
-    [unroll]
-    for (uint sampleIndex = 0u;
-        sampleIndex < DIRECTIONAL_VISIBILITY_SAMPLES;
-        ++sampleIndex)
-    {
-        float visibility = 1.0f;
-        float hitDistance = kMissHitDistance;
-        const float depth = LoadDepth(pixel, sampleIndex);
-        const float4 normalChannels = LoadNormals(pixel, sampleIndex);
-        const bool covered = isfinite(depth) && depth > 0.0f &&
-            dot(normalChannels.xyz, normalChannels.xyz) > 1.e-12f;
-        if (covered)
-        {
-            const PbrGBufferSurfaceNormals normals =
-                DecodePbrGBufferSurfaceNormals(
-                    normalChannels,
-                    LoadMaterial(pixel, sampleIndex));
-            const float3 position = ReconstructWorldPosition(
-                g_DirectionalVisibility.view,
-                pixelCenter,
-                depth);
-            if (all(isfinite(position)) &&
-                dot(normals.shadingNormal, directionToLight) > 0.0f)
-            {
-                const float3 viewDirection = -GetIncidentVector(
-                    g_DirectionalVisibility.view.cameraDirectionOrPosition,
-                    position);
-                const float3 origin = PrepareRayOrigin(
-                    position,
-                    normals.geometricNormal,
-                    viewDirection,
-                    pixelCenter,
-                    depth);
-                visibility = TraceVisibility(
-                        origin,
-                        directionToLight,
-                        hitDistance)
-                    ? 1.0f
-                    : 0.0f;
-            }
-            const bool depthIsCloser = !foundClosest ||
-                (g_DirectionalVisibility.reverseDepth != 0u
-                    ? depth > closestDepth
-                    : depth < closestDepth);
-            if (depthIsCloser)
-            {
-                foundClosest = true;
-                closestDepth = depth;
-                closestVisibility = visibility;
-                closestHitDistance = hitDistance;
-            }
-        }
-#if DIRECTIONAL_VISIBILITY_SAMPLES > 1
-        u_Visibility[uint3(uint2(pixel), sampleIndex)] = visibility;
-#else
-        u_Visibility[pixel] = visibility;
-#endif
-    }
-    u_ClosestVisibility[pixel] = closestVisibility;
-    u_ClosestHitDistance[pixel] = closestHitDistance;
+    RayVisibilityGenerate(dispatchPosition);
 }

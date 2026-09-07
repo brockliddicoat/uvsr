@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -20,71 +21,6 @@ namespace
     constexpr std::int64_t MaximumLauncherBytes = 256ll * 1024ll * 1024ll;
     constexpr std::int64_t MaximumRendererBytes =
         32ll * 1024ll * 1024ll * 1024ll;
-
-    [[nodiscard]] bool IsStableVersion(std::string_view value)
-    {
-        unsigned parts = 0u;
-        std::size_t position = 0u;
-        while (position < value.size())
-        {
-            const std::size_t begin = position;
-            while (position < value.size() && value[position] >= '0' &&
-                value[position] <= '9')
-            {
-                ++position;
-            }
-            if (begin == position ||
-                (value[begin] == '0' && position - begin != 1u))
-            {
-                return false;
-            }
-            std::int64_t part = 0;
-            const auto parsed = std::from_chars(
-                value.data() + begin, value.data() + position, part);
-            if (parsed.ec != std::errc{} ||
-                part > std::numeric_limits<std::int32_t>::max())
-            {
-                return false;
-            }
-            ++parts;
-            if (position == value.size())
-                break;
-            if (value[position++] != '.')
-                return false;
-        }
-        return parts == 3u;
-    }
-
-    [[nodiscard]] bool IsEngineVersion(std::string_view value)
-    {
-        unsigned parts = 0u;
-        std::size_t position = 0u;
-        while (position < value.size())
-        {
-            const std::size_t begin = position;
-            while (position < value.size() && value[position] >= '0' &&
-                value[position] <= '9')
-            {
-                ++position;
-            }
-            if (begin == position ||
-                (value[begin] == '0' && position - begin != 1u))
-            {
-                return false;
-            }
-            std::int64_t part = 0;
-            const auto parsed = std::from_chars(
-                value.data() + begin, value.data() + position, part);
-            if (parsed.ec != std::errc{} || part > 65535)
-                return false;
-            ++parts;
-            if (position == value.size())
-                break;
-            if (value[position++] != '.')
-                return false;
-        }
-        return parts == 4u;
-    }
 
     [[nodiscard]] JsonValue DecodeEnvelope(
         std::string_view text,
@@ -166,8 +102,9 @@ namespace
               "version", "sourceCommit", "artifact" },
             "launcher feed payload");
         ValidateCommon(payload, 2);
-        if (!IsStableVersion(String(Member(payload, "version"),
-                "launcher version")))
+        if (!IsCanonicalDottedVersion(
+                String(Member(payload, "version"), "launcher version"),
+                3u, std::numeric_limits<std::int32_t>::max()))
         {
             throw std::runtime_error("launcher version is not canonical");
         }
@@ -187,8 +124,9 @@ namespace
             Member(payload, "settingsHash"), "settings hash");
         if (!IsLowerHex(settingsHash, 32u))
             throw std::runtime_error("settings hash is not canonical");
-        if (!IsEngineVersion(String(
-                Member(payload, "engineVersion"), "engine version")))
+        if (!IsCanonicalDottedVersion(String(
+                Member(payload, "engineVersion"), "engine version"),
+                4u, 65535))
             throw std::runtime_error("engine version is not canonical");
         ValidateArtifact(Member(payload, "artifact"),
             "uvsr-renderer-windows-11-x64.zip", MaximumRendererBytes);
@@ -218,10 +156,40 @@ namespace
 
     void SelfTest()
     {
+        for (const std::int64_t expected : {
+            INT64_MIN, INT64_C(-9007199254740993), INT64_C(0),
+            INT64_C(9007199254740993), INT64_MAX })
+        {
+            if (Integer(ParseJson(std::to_string(expected)), "fixture") != expected)
+                throw std::runtime_error("contract integer lost precision");
+        }
+        for (const std::string_view invalid : {
+            "null", "[null]", "{\"a\":null}", "1.0", "1e0", "-01", "+1",
+            "9223372036854775808", "-9223372036854775809", "1 2", "[1,]",
+            "{\"a\":1,\"\\u0061\":2}", "\"\\ud800\"", "\"\\udc00\"",
+            "\"\\ud800\\u0000\"", "\"\\u001\"", "\"\\x20\"", "\"\n\"",
+            "\"\x80\"", "\"\xc0\xaf\"", "\"\xe0\x80\x80\"",
+            "\"\xed\xa0\x80\"", "\"\xf4\x90\x80\x80\"", "\"\xe2\x82\"",
+            "\xef\xbb\xbf{}" })
+        {
+            RequireFailure([&] { (void)ParseJson(invalid); });
+        }
+        const std::string nested = std::string(16, '[') + "0" + std::string(16, ']');
+        (void)ParseJson(nested);
+        RequireFailure([&] { (void)ParseJson("[" + nested + "]"); });
+        (void)uvsr::json::Parse("[null,1.25,-2e3," + nested + "]");
+        if (String(ParseJson("\"\\ud83d\\ude80\""), "fixture") != "\xf0\x9f\x9a\x80")
+            throw std::runtime_error("Unicode surrogate pair did not decode");
+        std::string escaped = "\"\\\xf0\x9f\x9a\x80";
+        for (char control = 0; control < 32; ++control)
+            escaped.push_back(control);
+        if (String(ParseJson("\"" + uvsr::json::Escape(escaped) + "\""), "fixture") != escaped)
+            throw std::runtime_error("JSON string escaping did not round trip");
+
         const std::string commit(40u, 'a');
         const std::string sha(64u, 'b');
-        const std::string settings = "9c50b0f1515e89d856c8ebb627b86984";
-        const std::string engineVersion = "40016.45297.20830.35288";
+        const std::string settings = "de6de78702835696a2634f63d75be74a";
+        const std::string engineVersion = "56941.59271.643.22166";
         const std::string launcherPayload =
             "{\"schemaVersion\":2,\"productId\":\"" +
             std::string(ProductId) +
@@ -262,9 +230,22 @@ namespace
         });
         RequireFailure([&]
         {
+            std::string invalid = launcherPayload;
+            invalid.replace(invalid.find("1.2.0"), 5u, "1.2.0.");
+            ValidateLauncher(Envelope(invalid, 2));
+        });
+        RequireFailure([&]
+        {
             std::string invalid = rendererPayload;
             invalid.replace(invalid.find(engineVersion),
                 engineVersion.size(), "01.2.3.4");
+            ValidateRenderer(Envelope(invalid, 1));
+        });
+        RequireFailure([&]
+        {
+            std::string invalid = rendererPayload;
+            invalid.replace(invalid.find(engineVersion),
+                engineVersion.size(), engineVersion + ".");
             ValidateRenderer(Envelope(invalid, 1));
         });
         RequireFailure([&]

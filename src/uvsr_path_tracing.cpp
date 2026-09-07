@@ -1,15 +1,35 @@
-#include "uvsr_internal.h"
+#include "uvsr_scene_viewer.h"
+#include "uvsr_renderer_scene.h"
+#include "uvsr_renderer_lighting.h"
+#include "uvsr_renderer_frame.h"
+#include "uvsr_runtime.h"
+#include "uvsr_application.h"
+#include "renderer_log.h"
+#include <donut/app/DeviceManager.h>
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <utility>
+
+
+using namespace donut;
+using namespace donut::math;
+using namespace donut::app;
+using namespace donut::vfs;
+using namespace donut::engine;
+using namespace donut::render;
+using namespace uvsr;
 
 auto UvsrSceneViewer::EnsurePathTracingPass() -> void {
-        if (m_PathTracingPass)
+        if (m_lighting->pathTracingPass)
             return;
 
-        m_PathTracingPass = std::make_unique<PathTracingPass>(
+        m_lighting->pathTracingPass = std::make_unique<PathTracingPass>(
             GetDevice(),
-            m_RendererShaderFactory,
-            m_BindlessLayout);
+            m_frame->rendererShaderFactory,
+            m_scene->bindlessLayout);
         const PathTracingAvailability availability =
-            m_PathTracingPass->GetAvailability();
+            m_lighting->pathTracingPass->GetAvailability();
         uvsr::log::info(
             "Path tracing first-use availability: ray queries %s, "
             "executable pipeline %s",
@@ -21,28 +41,28 @@ auto UvsrSceneViewer::EnsurePathTracingPass() -> void {
 
 auto UvsrSceneViewer::GetPathTracingCapabilities() const -> const PathTracingCapabilities& {
         static const PathTracingCapabilities unavailable;
-        return m_PathTracingPass
-            ? m_PathTracingPass->GetCapabilities()
+        return m_lighting->pathTracingPass
+            ? m_lighting->pathTracingPass->GetCapabilities()
             : unavailable;
     }
 
 auto UvsrSceneViewer::GetPathTracingCenterPixelAcceptedSampleCount() const noexcept -> uint64_t {
-        return m_PathTracingPass
-            ? m_PathTracingPass->GetCurrentCenterPixelAcceptedSampleCount()
+        return m_lighting->pathTracingPass
+            ? m_lighting->pathTracingPass->GetCurrentCenterPixelAcceptedSampleCount()
             : 0u;
     }
 
 auto UvsrSceneViewer::GetSelectedLightingTransportState()
         const noexcept -> SelectedLightingTransportState {
-        return m_SelectedLightingTransportState;
+        return m_lighting->selectedLightingTransportState;
     }
 
 auto UvsrSceneViewer::GetPathTracingSceneDomainStatus() const -> PathTracingSceneDomainStatus {
-        if (!m_Scene)
+        if (!m_scene->world)
             return PathTracingSceneDomainStatus::Unsupported;
 
         const std::shared_ptr<SceneGraph> sceneGraph =
-            m_Scene->GetSceneGraph();
+            m_scene->world->GetSceneGraph();
         if (!sceneGraph)
             return PathTracingSceneDomainStatus::Unsupported;
 

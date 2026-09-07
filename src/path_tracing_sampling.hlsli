@@ -3,6 +3,7 @@
 
 #include "pbr_lighting.hlsli"
 #include "path_tracing_transport_contract.h"
+#include "path_tracing_firefly_contract.h"
 
 static const float UVSR_PATH_TWO_PI = 6.28318530717958647692f;
 
@@ -65,27 +66,12 @@ float3 PathTracingSampleGgxHalfVector(
 }
 
 PbrPreparedMaterial PathTracingPrepareMaterial(
-    PathTracingSurface surface)
+    PathTracingPreparedMaterialContract prepared)
 {
-    if (surface.preparedMaterialValid != 0u)
-        return surface.preparedMaterial;
-
-    // Reconstruct the exact UVSR metallic-roughness inputs used by the raster
-    // G-buffer. Donut's diffuseAlbedo is already Fresnel-attenuated and cannot
-    // be fed back into EvaluateBsdfPrepared without attenuating dielectrics a
-    // second time.
-    const PathTracingPreparedMaterialContract resolved =
-        ResolvePathTracingPreparedMaterial(
-            surface.material.baseColor,
-            surface.material.metalness,
-            surface.material.roughness,
-            surface.materialConstants.specularColor.r,
-            (surface.materialConstants.flags &
-                MaterialFlags_UseSpecularGlossModel) != 0);
     PbrPreparedMaterial material;
-    material.diffuseColor = resolved.diffuseColor;
-    material.specularF0 = resolved.specularF0;
-    material.alpha = resolved.alpha;
+    material.diffuseColor = prepared.diffuseColor;
+    material.specularF0 = prepared.specularF0;
+    material.alpha = prepared.alpha;
     return material;
 }
 
@@ -152,32 +138,29 @@ struct PathTracingBsdfSample
     float3 direction;
     float3 weight;
     float pdf;
-    uint diffuseBranch;
+    float lobeProbability;
     uint valid;
 };
 
 PathTracingBsdfSample PathTracingSampleBsdf(
     PathTracingSurface surface,
     float3 viewDirection,
-    float3 random,
-    bool forceDiffuse)
+    float3 random)
 {
     PathTracingBsdfSample result = (PathTracingBsdfSample)0;
     const PbrPreparedMaterial material =
-        PathTracingPrepareMaterial(surface);
+        PathTracingPrepareMaterial(surface.preparedMaterial);
     const PbrPreparedSurface preparedSurface =
         PathTracingPrepareSurface(surface, viewDirection);
     const float diffuseProbability =
         PathTracingDiffuseSelectionProbability(material);
-    const bool sampleDiffuse = forceDiffuse ||
-        random.x < diffuseProbability;
+    const bool sampleDiffuse = random.x < diffuseProbability;
 
     if (sampleDiffuse)
     {
         result.direction = PathTracingSampleCosineHemisphere(
             random.yz,
             preparedSurface.shadingNormal);
-        result.diffuseBranch = 1u;
     }
     else
     {
@@ -207,8 +190,9 @@ PathTracingBsdfSample PathTracingSampleBsdf(
             diffuseProbability,
             dot(preparedSurface.shadingNormal, result.direction),
             dot(preparedSurface.geometricNormal, result.direction));
-    result.pdf = weighted.pdf;
     result.weight = weighted.weight;
+    result.pdf = weighted.pdf;
+    result.lobeProbability = sampleDiffuse ? diffuseProbability : 1.f - diffuseProbability;
     result.valid = weighted.valid;
     return result;
 }
@@ -510,7 +494,8 @@ float3 PathTracingEvaluateSelectedLightPrepared(
     float3 viewDirection,
     uint lightIndex,
     uint sampleSeed,
-    float lightSelectionPdf)
+    float lightSelectionPdf,
+    float fireflyFactor)
 {
     if (lightIndex >= g_PathTracing.lightCount)
         return 0.0f;
@@ -524,11 +509,8 @@ float3 PathTracingEvaluateSelectedLightPrepared(
             g_PathTracing.flashlight.profile,
             sampleSeed);
     const PbrLightSample lightSample = analyticSample.pbr;
-    // The discrete light selector already returns its exact proposal PDF.
-    // Clamping that value here darkens every selected light whose probability
-    // is below the clamp, which is reachable in ordinary high-dynamic-range
-    // Power and NEE-AT distributions. Reject an invalid proposal, but retain
-    // every positive finite probability exactly in the Monte Carlo weight.
+    // Retain every positive finite selection probability exactly in the
+    // Monte Carlo weight.
     const float samplingPdf =
         lightSelectionPdf * lightSample.directionalPdf;
     if (!(samplingPdf > 0.0f) || !isfinite(samplingPdf))
@@ -560,7 +542,7 @@ float3 PathTracingEvaluateSelectedLightPrepared(
         return 0.0f;
     }
     const PbrBsdfEvaluation bsdf = PathTracingEvaluateBsdfPreparedExact(
-        PathTracingPrepareMaterial(surface),
+        PathTracingPrepareMaterial(surface.preparedMaterial),
         preparedSurface,
         lightSample.directionToLight);
     const float cosineTerm = saturate(dot(
@@ -570,7 +552,16 @@ float3 PathTracingEvaluateSelectedLightPrepared(
         saturate(lightSample.visibility) / samplingPdf;
     const float3 evaluated = max(lightSample.incidentRadiance, 0.0f) *
         (bsdf.diffuse + bsdf.specular) * sampleWeight;
-    return all(isfinite(evaluated)) ? evaluated : 0.0f;
+    if (!all(isfinite(evaluated)))
+        return 0.f;
+    if (g_PathTracing.fireflyFilter != 0u)
+    {
+        const float directFactor = PathTracingAdvanceFireflyFilter(
+            fireflyFactor, samplingPdf, 1.f);
+        return PathTracingFilterFirefly(evaluated,
+            g_PathTracing.fireflyThreshold, directFactor);
+    }
+    return evaluated;
 }
 
 float3 PathTracingSampleEnvironment(float3 direction)

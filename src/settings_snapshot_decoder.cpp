@@ -1,6 +1,8 @@
 #include "settings_snapshot_decoder.h"
 
 #include "settings_snapshot.h"
+#include "json_document.h"
+#include "windows_executable_path.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -28,37 +30,6 @@ namespace uvsr
             };
         }
 
-        [[nodiscard]] std::string EscapeJson(std::string_view value)
-        {
-            constexpr char HexDigits[] = "0123456789abcdef";
-            std::string escaped;
-            for (const unsigned char character : value)
-            {
-                switch (character)
-                {
-                case '"': escaped += "\\\""; break;
-                case '\\': escaped += "\\\\"; break;
-                case '\b': escaped += "\\b"; break;
-                case '\f': escaped += "\\f"; break;
-                case '\n': escaped += "\\n"; break;
-                case '\r': escaped += "\\r"; break;
-                case '\t': escaped += "\\t"; break;
-                default:
-                    if (character < 0x20u)
-                    {
-                        escaped += "\\u00";
-                        escaped.push_back(HexDigits[character >> 4u]);
-                        escaped.push_back(HexDigits[character & 0x0fu]);
-                    }
-                    else
-                    {
-                        escaped.push_back(static_cast<char>(character));
-                    }
-                }
-            }
-            return escaped;
-        }
-
         [[nodiscard]] std::string EscapeSnapshotValue(
             std::string_view value)
         {
@@ -84,6 +55,11 @@ namespace uvsr
     {
         if (version.size() != 4u)
             throw std::invalid_argument("snapshot version must have four digits");
+
+#if defined(UVSR_BUILD_TESTING)
+        return { GetExecutableDirectoryWide() / "state" /
+            ("settings-snapshots-v" + std::string(version) + ".txt") };
+#else
 
         wchar_t* localAppDataBuffer = nullptr;
         std::size_t localAppDataSize = 0u;
@@ -135,6 +111,7 @@ namespace uvsr
             error.clear();
         }
         return catalogs;
+#endif
     }
 
     std::vector<std::string> ReadMatchingSettingsSnapshots(
@@ -281,11 +258,14 @@ namespace uvsr
         const std::string_view currentVersion(
             SettingsSnapshotVersionText.data(),
             4u);
-        if (code.substr(0u, 4u) != currentVersion)
+        const std::string_view requestedVersion = code.substr(0u, 4u);
+        if (requestedVersion != currentVersion &&
+            !IsSupportedLegacySettingsSnapshotVersion(requestedVersion))
         {
-            error = "snapshot schema " + std::string(code.substr(0u, 4u)) +
-                " does not match this engine's schema " +
-                std::string(currentVersion);
+            error = "snapshot schema " + std::string(requestedVersion) +
+                " is neither this engine's schema " +
+                std::string(currentVersion) +
+                " nor a supported legacy migration";
             return false;
         }
         return true;
@@ -310,8 +290,8 @@ namespace uvsr
         std::string output = "{\n";
         for (auto iterator = settings.begin(); iterator != settings.end(); ++iterator)
         {
-            output += "  \"" + EscapeJson(iterator->first) + "\": \"" +
-                EscapeJson(iterator->second) + "\"";
+            output += "  \"" + json::Escape(iterator->first) + "\": \"" +
+                json::Escape(iterator->second) + "\"";
             if (std::next(iterator) != settings.end())
                 output.push_back(',');
             output.push_back('\n');

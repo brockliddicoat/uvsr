@@ -1,7 +1,5 @@
 #pragma once
 
-#include <array>
-#include <cstddef>
 #include <utility>
 
 namespace uvsr
@@ -38,7 +36,6 @@ namespace uvsr
         bool blackTexture = false;
         bool whiteTexture = false;
         bool blackCubeArray = false;
-        bool blackDepthArray = false;
         bool blitBindingLayout = false;
         bool uploadCommandList = false;
         bool uploadSubmitted = false;
@@ -48,7 +45,7 @@ namespace uvsr
             return device && fullscreenZeroShader && fullscreenOneShader &&
                 blitShader && linearClampSampler && linearWrapSampler &&
                 blackTexture && whiteTexture && blackCubeArray &&
-                blackDepthArray && blitBindingLayout && uploadCommandList &&
+                blitBindingLayout && uploadCommandList &&
                 uploadSubmitted;
         }
     };
@@ -106,22 +103,4 @@ namespace uvsr
         }
     };
 
-    template<class Handle, std::size_t Count, class Create>
-    [[nodiscard]] bool TryReplaceRendererResources(
-        std::array<Handle, Count>& published,
-        const std::array<bool, Count>& replace,
-        Create&& create)
-    {
-        std::array<Handle, Count> candidate = published;
-        for (std::size_t index = 0u; index < Count; ++index)
-        {
-            if (!replace[index])
-                continue;
-            candidate[index] = create(index);
-            if (!candidate[index])
-                return false;
-        }
-        published = std::move(candidate);
-        return true;
-    }
 }

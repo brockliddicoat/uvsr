@@ -1,42 +1,54 @@
-#include "uvsr_internal.h"
+#include "uvsr_scene_viewer.h"
+#include "uvsr_renderer_scene.h"
+#include "uvsr_renderer_lighting.h"
+#include "uvsr_renderer_frame.h"
+#include "uvsr_runtime.h"
+#include "uvsr_application.h"
+#include "renderer_log.h"
+#include <donut/app/DeviceManager.h>
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <utility>
+#include <donut/engine/SceneGraph.h>
+
+using namespace donut;
+using namespace donut::math;
+using namespace donut::app;
+using namespace donut::vfs;
+using namespace donut::engine;
+using namespace donut::render;
+using namespace uvsr;
 
 auto UvsrSceneViewer::ToggleFlashlight() -> bool {
-        m_ui.FlashlightEnabled = !m_ui.FlashlightEnabled;
-        ResetAntiAliasingState();
+        SetFlashlightEnabled(!m_ui.FlashlightEnabled);
         uvsr::log::info(
             "Flashlight %s",
             m_ui.FlashlightEnabled ? "on" : "off");
         return true;
     }
 
-auto UvsrSceneViewer::ResetFlashlightMotion() -> void {
-        m_FlashlightSwayTime = 0.f;
-        m_FlashlightAimDirection = float3(0.f, 0.f, -1.f);
-        m_FlashlightResolvedPosition = 0.f;
-        m_FlashlightResolvedDirection =
-            float3(0.f, 0.f, -1.f);
-        m_FlashlightResolvedRight =
-            float3(1.f, 0.f, 0.f);
-        m_FlashlightDesiredPosition = 0.f;
-        m_FlashlightCollisionRadius = 0.f;
-        m_FlashlightCollisionInitialized = false;
-        m_FlashlightAimInitialized = false;
-        m_FlashlightPoseValid = false;
-        m_FlashlightMotionSettingsValid = false;
-        m_FlashlightCameraPoseValid = false;
-        m_FlashlightSubmittedPoseValid = false;
+auto UvsrSceneViewer::SetFlashlightEnabled(
+        bool enabled,
+        bool invalidateHistory) -> void {
+        if (m_ui.FlashlightEnabled == enabled)
+            return;
+
+        m_ui.FlashlightEnabled = enabled;
+        if (invalidateHistory)
+            ResetImageBasedLightingHistory();
     }
 
-auto UvsrSceneViewer::SameFlashlightVector(
-        const float3& left,
-        const float3& right) -> bool {
-        return left.x == right.x &&
-            left.y == right.y &&
-            left.z == right.z;
+auto UvsrSceneViewer::ResetFlashlightMotion() -> void {
+        m_lighting->flashlightSwayTime = 0.f;
+        // One valid pose covers the camera, collision, and aim caches.
+        m_lighting->flashlightResolvedRight = float3(1.f, 0.f, 0.f);
+        m_lighting->flashlightPoseValid = false;
+        m_lighting->flashlightSubmittedPoseValid = false;
     }
 
 auto UvsrSceneViewer::ApplyFlashlightPresentation() -> void {
-        if (!m_Flashlight)
+        if (!m_lighting->flashlight)
             return;
 
         const FlashlightSettings settings =
@@ -45,33 +57,31 @@ auto UvsrSceneViewer::ApplyFlashlightPresentation() -> void {
         const FlashlightLobeSettings lobes =
             ResolveFlashlightLobeSettings(settings);
         const float emissionScale =
-            GetFlashlightEmissionScale(m_FlashlightTransition);
+            GetFlashlightEmissionScale(m_lighting->flashlightTransition);
         const float3 color(
             settings.colorLinearRed,
             settings.colorLinearGreen,
             settings.colorLinearBlue);
-        m_Flashlight->color = color;
-        m_Flashlight->intensity =
+        m_lighting->flashlight->color = color;
+        m_lighting->flashlight->intensity =
             settings.peakIntensityCandela * emissionScale;
-        m_Flashlight->radius =
+        m_lighting->flashlight->radius =
             ResolveFlashlightEmitterRadiusMeters(
-                settings.angularSizeDegrees);
-        m_Flashlight->range = settings.rangeMeters;
-        m_Flashlight->innerAngle =
+                ResolveShadowEmitterSize(settings.angularSizeDegrees, m_ui.DirectionalShadows.hardShadows));
+        m_lighting->flashlight->range = settings.rangeMeters;
+        m_lighting->flashlight->innerAngle =
             lobes.spillInnerConeDegrees;
-        m_Flashlight->outerAngle =
+        m_lighting->flashlight->outerAngle =
             lobes.spillOuterConeDegrees;
     }
 
 auto UvsrSceneViewer::UpdateFlashlightAnimation(float elapsedSeconds) -> void {
-        m_FlashlightTransition = AdvanceFlashlightTransition(
-            m_FlashlightTransition,
+        m_lighting->flashlightTransition = AdvanceFlashlightTransition(
+            m_lighting->flashlightTransition,
             m_ui.FlashlightEnabled,
             elapsedSeconds);
 
         ApplyFlashlightPresentation();
-        if (!ShouldSubmitFlashlight(m_FlashlightTransition))
-            ResetFlashlightMotion();
     }
 
 auto UvsrSceneViewer::ClampFlashlightAimLag(
@@ -131,7 +141,7 @@ auto UvsrSceneViewer::InterpolateFlashlightAim(
     }
 
 auto UvsrSceneViewer::UpdateFlashlightMotion(float elapsedSeconds) -> void {
-        if (!ShouldSubmitFlashlight(m_FlashlightTransition))
+        if (!ShouldSubmitFlashlight(m_lighting->flashlightTransition))
         {
             ResetFlashlightMotion();
             return;
@@ -144,34 +154,19 @@ auto UvsrSceneViewer::UpdateFlashlightMotion(float elapsedSeconds) -> void {
             normalize(camera.GetDir());
         const float3 cameraUp = normalize(camera.GetUp());
         const float3 cameraPosition = camera.GetPosition();
-        const FlashlightMotionSettings motionSettings =
-            ResolveFlashlightMotionSettings(settings);
-        const bool cameraPoseChanged =
-            !m_FlashlightCameraPoseValid ||
-            !SameFlashlightVector(
-                cameraPosition,
-                m_FlashlightCameraPosition) ||
-            !SameFlashlightVector(
-                cameraDirection,
-                m_FlashlightCameraDirection) ||
-            !SameFlashlightVector(cameraUp, m_FlashlightCameraUp);
-        const bool motionSettingsChanged =
-            !m_FlashlightMotionSettingsValid ||
-            motionSettings != m_FlashlightMotionSettings;
-        m_FlashlightCameraPosition = cameraPosition;
-        m_FlashlightCameraDirection = cameraDirection;
-        m_FlashlightCameraUp = cameraUp;
-        m_FlashlightCameraPoseValid = true;
-        m_FlashlightMotionSettings = motionSettings;
-        m_FlashlightMotionSettingsValid = true;
-        if (!ShouldAdvanceFlashlightMotion(
-                motionSettings,
-                m_FlashlightPoseValid,
-                cameraPoseChanged,
-                motionSettingsChanged))
-        {
+        const bool cameraPoseChanged = !m_lighting->flashlightPoseValid ||
+            any(cameraPosition != m_lighting->flashlightCameraPosition) ||
+            any(cameraDirection != m_lighting->flashlightCameraDirection) ||
+            any(cameraUp != m_lighting->flashlightCameraUp);
+        const bool motionSettingsChanged = !m_lighting->flashlightPoseValid ||
+            !SameFlashlightMotionSettings(settings, m_lighting->flashlightMotionSettings);
+        m_lighting->flashlightCameraPosition = cameraPosition;
+        m_lighting->flashlightCameraDirection = cameraDirection;
+        m_lighting->flashlightCameraUp = cameraUp;
+        m_lighting->flashlightMotionSettings = settings;
+        if (!ShouldAdvanceFlashlightMotion(settings, m_lighting->flashlightPoseValid,
+                cameraPoseChanged, motionSettingsChanged))
             return;
-        }
 
         float3 cameraRight = cross(cameraDirection, cameraUp);
         if (!(lengthSquared(cameraRight) > 1e-12f))
@@ -194,49 +189,31 @@ auto UvsrSceneViewer::UpdateFlashlightMotion(float elapsedSeconds) -> void {
         const float collisionRadius =
             ResolveFlashlightCollisionRadiusMeters(
                 settings.angularSizeDegrees,
-                m_CameraCollisionRadius);
+                m_scene->cameraCollisionRadius);
         const bool collisionRadiusChanged =
-            !m_FlashlightCollisionInitialized ||
-            std::abs(collisionRadius - m_FlashlightCollisionRadius) >
+            !m_lighting->flashlightPoseValid ||
+            std::abs(collisionRadius - m_lighting->flashlightCollisionRadius) >
                 1e-6f;
         const bool desiredPositionChanged =
-            !m_FlashlightCollisionInitialized ||
+            !m_lighting->flashlightPoseValid ||
             lengthSquared(
                 desiredFlashlightPosition -
-                m_FlashlightDesiredPosition) > 1e-12f;
+                m_lighting->flashlightDesiredPosition) > 1e-12f;
 
-        float3 flashlightPosition = m_FlashlightResolvedPosition;
-        if (!m_FlashlightCollisionInitialized)
+        float3 flashlightPosition = m_lighting->flashlightResolvedPosition;
+        if (collisionRadiusChanged || desiredPositionChanged)
         {
-            const float3 collisionStart =
-                m_CameraCollisionWorld.ResolveSphere(
-                cameraPosition,
-                desiredFlashlightPosition - cameraPosition,
-                collisionRadius);
-            flashlightPosition = m_CameraCollisionWorld.MoveSphere(
-                collisionStart,
-                desiredFlashlightPosition,
-                collisionRadius);
-        }
-        else if (collisionRadiusChanged || desiredPositionChanged)
-        {
-            float3 collisionStart = m_FlashlightResolvedPosition;
+            float3 collisionStart = m_lighting->flashlightPoseValid
+                ? m_lighting->flashlightResolvedPosition : cameraPosition;
             if (collisionRadiusChanged)
-            {
-                collisionStart = m_CameraCollisionWorld.ResolveSphere(
-                    collisionStart,
-                    desiredFlashlightPosition - collisionStart,
-                    collisionRadius);
-            }
-            flashlightPosition = m_CameraCollisionWorld.MoveSphere(
-                collisionStart,
-                desiredFlashlightPosition,
-                collisionRadius);
+                collisionStart = m_scene->cameraCollisionWorld.ResolveSphere(
+                    collisionStart, desiredFlashlightPosition - collisionStart, collisionRadius);
+            flashlightPosition = m_scene->cameraCollisionWorld.MoveSphere(
+                collisionStart, desiredFlashlightPosition, collisionRadius);
         }
 
-        m_FlashlightDesiredPosition = desiredFlashlightPosition;
-        m_FlashlightCollisionRadius = collisionRadius;
-        m_FlashlightCollisionInitialized = true;
+        m_lighting->flashlightDesiredPosition = desiredFlashlightPosition;
+        m_lighting->flashlightCollisionRadius = collisionRadius;
 
         // Collision may displace the emitter, but it never drives the authored
         // camera mount or aim. This keeps wall safety independent from scene
@@ -255,76 +232,74 @@ auto UvsrSceneViewer::UpdateFlashlightMotion(float elapsedSeconds) -> void {
             mountedRight = cameraRight;
         else
             mountedRight = normalize(mountedRight);
-        m_FlashlightResolvedPosition = flashlightPosition;
+        m_lighting->flashlightResolvedPosition = flashlightPosition;
 
         if (!settings.realisticLens)
         {
-            m_FlashlightSwayTime = 0.f;
-            m_FlashlightAimDirection = mountedDirection;
-            m_FlashlightAimInitialized = true;
-            m_FlashlightResolvedDirection = mountedDirection;
-            m_FlashlightResolvedRight = mountedRight;
-            m_FlashlightPoseValid = true;
+            m_lighting->flashlightSwayTime = 0.f;
+            m_lighting->flashlightAimDirection = mountedDirection;
+            m_lighting->flashlightResolvedDirection = mountedDirection;
+            m_lighting->flashlightResolvedRight = mountedRight;
+            m_lighting->flashlightPoseValid = true;
             return;
         }
 
-        if (!m_FlashlightAimInitialized)
+        if (!m_lighting->flashlightPoseValid)
         {
-            m_FlashlightAimDirection = mountedDirection;
-            m_FlashlightAimInitialized = true;
+            m_lighting->flashlightAimDirection = mountedDirection;
         }
         else
         {
             const float blend = GetFlashlightAimCorrectionBlend(
                 elapsedSeconds,
                 settings.aimCorrectionSeconds);
-            m_FlashlightAimDirection = InterpolateFlashlightAim(
-                m_FlashlightAimDirection,
+            m_lighting->flashlightAimDirection = InterpolateFlashlightAim(
+                m_lighting->flashlightAimDirection,
                 mountedDirection,
                 blend);
-            m_FlashlightAimDirection = ClampFlashlightAimLag(
-                m_FlashlightAimDirection,
+            m_lighting->flashlightAimDirection = ClampFlashlightAimLag(
+                m_lighting->flashlightAimDirection,
                 mountedDirection);
         }
 
-        m_FlashlightSwayTime = AdvanceFlashlightSwayTime(
-            m_FlashlightSwayTime,
+        m_lighting->flashlightSwayTime = AdvanceFlashlightSwayTime(
+            m_lighting->flashlightSwayTime,
             elapsedSeconds);
         const FlashlightSwayOffset sway =
             ResolveFlashlightSwayOffset(
-                m_FlashlightSwayTime,
+                m_lighting->flashlightSwayTime,
                 settings.swayDegrees *
                     GetFlashlightEmissionScale(
-                        m_FlashlightTransition));
+                        m_lighting->flashlightTransition));
         float3 beamRight =
-            cross(m_FlashlightAimDirection, cameraUp);
+            cross(m_lighting->flashlightAimDirection, cameraUp);
         if (!(lengthSquared(beamRight) > 1e-12f))
             beamRight = mountedRight;
         else
             beamRight = normalize(beamRight);
         const float3 beamUp = normalize(
-            cross(beamRight, m_FlashlightAimDirection));
-        m_FlashlightResolvedDirection = normalize(
-            m_FlashlightAimDirection +
+            cross(beamRight, m_lighting->flashlightAimDirection));
+        m_lighting->flashlightResolvedDirection = normalize(
+            m_lighting->flashlightAimDirection +
             beamRight * std::tan(radians(sway.yawDegrees)) +
             beamUp * std::tan(radians(sway.pitchDegrees)));
         beamRight -=
-            m_FlashlightResolvedDirection *
-                dot(beamRight, m_FlashlightResolvedDirection);
+            m_lighting->flashlightResolvedDirection *
+                dot(beamRight, m_lighting->flashlightResolvedDirection);
         if (!(lengthSquared(beamRight) > 1e-12f))
         {
             beamRight =
                 mountedRight -
-                m_FlashlightResolvedDirection *
+                m_lighting->flashlightResolvedDirection *
                     dot(
                         mountedRight,
-                        m_FlashlightResolvedDirection);
+                        m_lighting->flashlightResolvedDirection);
         }
-        m_FlashlightResolvedRight =
+        m_lighting->flashlightResolvedRight =
             lengthSquared(beamRight) > 1e-12f
                 ? normalize(beamRight)
                 : float3(1.f, 0.f, 0.f);
-        m_FlashlightPoseValid = true;
+        m_lighting->flashlightPoseValid = true;
     }
 
 auto UvsrSceneViewer::SetFlashlightDirectionAndRoll(
@@ -367,66 +342,57 @@ auto UvsrSceneViewer::SetFlashlightDirectionAndRoll(
     }
 
 auto UvsrSceneViewer::UpdateFlashlightTransform() -> void {
-        if (!m_FlashlightPoseValid ||
-            !ShouldSubmitFlashlight(m_FlashlightTransition) ||
-            !m_Flashlight ||
-            !m_FlashlightNode)
+        if (!m_lighting->flashlightPoseValid ||
+            !ShouldSubmitFlashlight(m_lighting->flashlightTransition) ||
+            !m_lighting->flashlight ||
+            !m_lighting->flashlightNode)
             return;
 
-        const bool positionChanged =
-            !m_FlashlightSubmittedPoseValid ||
-            !SameFlashlightVector(
-                m_FlashlightResolvedPosition,
-                m_FlashlightSubmittedPosition);
-        const bool orientationChanged =
-            !m_FlashlightSubmittedPoseValid ||
-            !SameFlashlightVector(
-                m_FlashlightResolvedDirection,
-                m_FlashlightSubmittedDirection) ||
-            !SameFlashlightVector(
-                m_FlashlightResolvedRight,
-                m_FlashlightSubmittedRight);
+        const bool positionChanged = !m_lighting->flashlightSubmittedPoseValid ||
+            any(m_lighting->flashlightResolvedPosition != m_lighting->flashlightSubmittedPosition);
+        const bool orientationChanged = !m_lighting->flashlightSubmittedPoseValid ||
+            any(m_lighting->flashlightResolvedDirection != m_lighting->flashlightSubmittedDirection) ||
+            any(m_lighting->flashlightResolvedRight != m_lighting->flashlightSubmittedRight);
         if (positionChanged)
-            m_Flashlight->SetPosition(
-                double3(m_FlashlightResolvedPosition));
+            m_lighting->flashlight->SetPosition(
+                double3(m_lighting->flashlightResolvedPosition));
 
         if (orientationChanged)
         {
             SetFlashlightDirectionAndRoll(
-                m_Flashlight,
-                m_FlashlightResolvedDirection,
-                m_FlashlightResolvedRight);
+                m_lighting->flashlight,
+                m_lighting->flashlightResolvedDirection,
+                m_lighting->flashlightResolvedRight);
         }
-        m_FlashlightSubmittedPosition = m_FlashlightResolvedPosition;
-        m_FlashlightSubmittedDirection = m_FlashlightResolvedDirection;
-        m_FlashlightSubmittedRight = m_FlashlightResolvedRight;
-        m_FlashlightSubmittedPoseValid = true;
+        m_lighting->flashlightSubmittedPosition = m_lighting->flashlightResolvedPosition;
+        m_lighting->flashlightSubmittedDirection = m_lighting->flashlightResolvedDirection;
+        m_lighting->flashlightSubmittedRight = m_lighting->flashlightResolvedRight;
+        m_lighting->flashlightSubmittedPoseValid = true;
     }
 
 auto UvsrSceneViewer::AttachFlashlightToScene() -> void {
-        if (!m_Scene ||
-            !m_Scene->GetSceneGraph() ||
-            !m_Scene->GetSceneGraph()->GetRootNode())
+        if (!m_scene->world ||
+            !m_scene->world->GetSceneGraph() ||
+            !m_scene->world->GetSceneGraph()->GetRootNode())
         {
             return;
         }
 
-        m_Flashlight = std::make_shared<SpotLight>();
-        m_Flashlight->SetName(FlashlightPublicName);
+        m_lighting->flashlight = std::make_shared<SpotLight>();
+        m_lighting->flashlight->SetName(FlashlightPublicName);
 
-        m_FlashlightNode = std::make_shared<SceneGraphNode>();
-        m_FlashlightNode->SetName(FlashlightPublicName);
-        m_FlashlightNode->SetLeaf(m_Flashlight);
-        m_Scene->GetSceneGraph()->Attach(
-            m_Scene->GetSceneGraph()->GetRootNode(),
-            m_FlashlightNode);
+        m_lighting->flashlightNode = std::make_shared<SceneGraphNode>();
+        m_lighting->flashlightNode->SetName(FlashlightPublicName);
+        m_lighting->flashlightNode->SetLeaf(m_lighting->flashlight);
+        m_scene->world->GetSceneGraph()->Attach(
+            m_scene->world->GetSceneGraph()->GetRootNode(),
+            m_lighting->flashlightNode);
 
-        m_FlashlightSubmittedPoseValid = false;
+        m_lighting->flashlightSubmittedPoseValid = false;
         ApplyFlashlightPresentation();
         UpdateFlashlightTransform();
     }
 
 auto UvsrSceneViewer::IsFlashlight(const std::shared_ptr<Light>& light) const -> bool {
-        return light && light == m_Flashlight;
+        return light && light == m_lighting->flashlight;
     }
-

@@ -15,7 +15,6 @@ namespace uvsr
         nvrhi::ITexture* fallbackTexture,
         RendererGeometryPassDescription description)
         : m_Device(device)
-        , m_Description(description)
         , m_FallbackTexture(fallbackTexture)
     {
         m_Initialization.device = device != nullptr;
@@ -24,15 +23,10 @@ namespace uvsr
         if (!device || !shaderFactory || !fallbackTexture)
             return;
 
-        const std::vector<RendererShaderMacro> vertexMacros = {
-            RendererShaderMacro(
-                "MOTION_VECTORS",
-                description.enableMotionVectors ? "1" : "0")
-        };
         m_VertexShader = shaderFactory->CreateShader(
             "uvsr/renderer_gbuffer_vs.hlsl",
             "buffer_loads",
-            &vertexMacros,
+            nullptr,
             nvrhi::ShaderType::Vertex);
         m_Initialization.vertexShader = bool(m_VertexShader);
 
@@ -41,9 +35,6 @@ namespace uvsr
             const auto createPixelShader = [&](bool alphaTested)
             {
                 const std::vector<RendererShaderMacro> macros = {
-                    RendererShaderMacro(
-                        "MOTION_VECTORS",
-                        description.enableMotionVectors ? "1" : "0"),
                     RendererShaderMacro(
                         "ALPHA_TESTED",
                         alphaTested ? "1" : "0"),
@@ -161,8 +152,7 @@ namespace uvsr
         if (m_ViewLayout && m_ViewConstantBuffer && m_MaterialSampler)
         {
             nvrhi::BindingSetDesc viewBindingDescription;
-            viewBindingDescription.trackLiveness =
-                description.trackBindingLiveness;
+            viewBindingDescription.trackLiveness = true;
             viewBindingDescription.bindings = {
                 nvrhi::BindingSetItem::ConstantBuffer(
                     UVSR_GBUFFER_BINDING_VIEW_CONSTANTS,
@@ -306,7 +296,7 @@ namespace uvsr
             return found->second;
 
         nvrhi::BindingSetDesc description;
-        description.trackLiveness = m_Description.trackBindingLiveness;
+        description.trackLiveness = true;
         description.bindings.push_back(
             nvrhi::BindingSetItem::ConstantBuffer(
                 UVSR_GBUFFER_BINDING_MATERIAL_CONSTANTS,
@@ -342,7 +332,7 @@ namespace uvsr
             return found->second;
 
         nvrhi::BindingSetDesc description;
-        description.trackLiveness = m_Description.trackBindingLiveness;
+        description.trackLiveness = true;
         description.bindings = {
             nvrhi::BindingSetItem::StructuredBuffer_SRV(
                 UVSR_GBUFFER_BINDING_INSTANCE_BUFFER,
@@ -393,7 +383,7 @@ namespace uvsr
                 : key.cullMode);
         description.renderState.blendState.disableAlphaToCoverage();
         description.renderState.depthStencilState
-            .setDepthWriteEnable(m_Description.enableDepthWrite)
+            .setDepthWriteEnable(true)
             .setDepthFunc(key.reverseDepth
                 ? nvrhi::ComparisonFunc::GreaterOrEqual
                 : nvrhi::ComparisonFunc::LessOrEqual);

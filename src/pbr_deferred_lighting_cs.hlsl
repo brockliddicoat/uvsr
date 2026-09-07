@@ -8,10 +8,6 @@
 #include "pbr_lighting.hlsli"
 #include "renderer_environment_bindings.h"
 
-#ifndef WRITE_SOURCE_RADIANCE
-#define WRITE_SOURCE_RADIANCE 0
-#endif
-
 cbuffer c_Deferred : register(b0)
 {
     PbrDeferredLightingConstants g_PbrDeferred;
@@ -19,7 +15,6 @@ cbuffer c_Deferred : register(b0)
 
 #define g_Deferred g_PbrDeferred.deferred
 
-Texture2DArray t_ShadowMapArray : register(t0);
 TextureCubeArray t_DiffuseEnvironment :
     register(UVSR_PBR_DEFERRED_DIFFUSE_ENVIRONMENT_REGISTER);
 TextureCubeArray t_SpecularEnvironment :
@@ -27,7 +22,6 @@ TextureCubeArray t_SpecularEnvironment :
 Texture2D t_EnvironmentBrdf :
     register(UVSR_PBR_DEFERRED_ENVIRONMENT_BRDF_REGISTER);
 
-SamplerComparisonState s_ShadowSamplerComparison : register(s1);
 SamplerState s_DiffuseEnvironmentSampler : register(s2);
 SamplerState s_EnvironmentBrdfSampler : register(s3);
 
@@ -45,16 +39,6 @@ Texture2D<float> t_SkyVisibility :
     register(UVSR_PBR_SKY_VISIBILITY_REGISTER);
 
 RWTexture2D<float4> u_Output : register(u0);
-#if WRITE_SOURCE_RADIANCE
-RWTexture2D<float4> u_SourceRadiance : register(u1);
-#endif
-
-float GetRandom(float2 position)
-{
-    int x = int(position.x) & 3;
-    int y = int(position.y) & 3;
-    return g_Deferred.noisePattern[y][x];
-}
 
 float3 DecodeDirectLightVisibility(float encoded)
 {
@@ -87,61 +71,6 @@ float3 GetDirectLightVisibility(
     return visibility;
 }
 
-float EvaluateLightVisibility(
-    LightConstants light,
-    float3 surfaceWorldPosition,
-    float2 sinCosRotation,
-    float initialVisibility)
-{
-    float visibility = initialVisibility;
-
-    float2 combinedCascadeVisibility = 0.0f;
-    [loop]
-    for (int cascade = 0; cascade < 4; ++cascade)
-    {
-        if (light.shadowCascades[cascade] < 0)
-            break;
-
-        float2 cascadeVisibility = EvaluateShadowPoisson(
-            t_ShadowMapArray,
-            s_ShadowSamplerComparison,
-            g_Deferred.shadows[light.shadowCascades[cascade]],
-            surfaceWorldPosition,
-            sinCosRotation,
-            3.0f);
-        combinedCascadeVisibility = saturate(
-            combinedCascadeVisibility + cascadeVisibility * (1.0001f - combinedCascadeVisibility.y));
-        if (combinedCascadeVisibility.y == 1.0f)
-            break;
-    }
-
-    combinedCascadeVisibility.x +=
-        (1.0f - combinedCascadeVisibility.y) * light.outOfBoundsShadow;
-    visibility *= combinedCascadeVisibility.x;
-    if (!(visibility > 0.0f))
-        return 0.0f;
-
-    [loop]
-    for (int object = 0; object < 4; ++object)
-    {
-        if (light.perObjectShadows[object] < 0)
-            continue;
-
-        float2 objectVisibility = EvaluateShadowPoisson(
-            t_ShadowMapArray,
-            s_ShadowSamplerComparison,
-            g_Deferred.shadows[light.perObjectShadows[object]],
-            surfaceWorldPosition,
-            sinCosRotation,
-            3.0f);
-        visibility *= saturate(objectVisibility.x + (1.0f - objectVisibility.y));
-        if (!(visibility > 0.0f))
-            break;
-    }
-
-    return saturate(visibility);
-}
-
 [numthreads(16, 16, 1)]
 void main(int2 i_globalIdx : SV_DispatchThreadID)
 {
@@ -153,9 +82,6 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
     if (!(dot(normalChannels.xyz, normalChannels.xyz) > 1e-12f))
     {
         u_Output[pixelPosition] = 0.0f;
-#if WRITE_SOURCE_RADIANCE
-        u_SourceRadiance[pixelPosition] = 0.0f;
-#endif
         return;
     }
 
@@ -221,24 +147,7 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
     }
     if (g_Deferred.numLightProbes > 0u)
     {
-        const bool needDiffuseEnvironment =
-#if WRITE_SOURCE_RADIANCE
-            true;
-#else
-            g_PbrDeferred.separateIndirect == 0 ||
-            g_PbrDeferred.lightingDebugView ==
-                UVSR_PBR_LIGHTING_DEBUG_DIFFUSE_ENVIRONMENT ||
-            g_PbrDeferred.lightingDebugView ==
-                UVSR_PBR_LIGHTING_DEBUG_COMBINED_ENVIRONMENT;
-#endif
-        const bool needSpecularEnvironment =
-            g_PbrDeferred.separateIndirect == 0 ||
-            (g_PbrDeferred.lightingDebugView >=
-                    UVSR_PBR_LIGHTING_DEBUG_PREFILTERED_SPECULAR &&
-                g_PbrDeferred.lightingDebugView <=
-                    UVSR_PBR_LIGHTING_DEBUG_COMBINED_ENVIRONMENT);
-        if (needDiffuseEnvironment &&
-            environmentProbe.diffuseScale > 0.0f)
+        if (environmentProbe.diffuseScale > 0.0f)
         {
             environmentDiffuseResponse =
                 t_DiffuseEnvironment.SampleLevel(
@@ -258,8 +167,7 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
                 environmentDiffuse *= skyVisibility;
         }
 
-        if (needSpecularEnvironment &&
-            environmentProbe.specularScale > 0.0f &&
+        if (environmentProbe.specularScale > 0.0f &&
             preparedEnvironment.valid > 0.0f)
         {
             prefilteredEnvironment =
@@ -386,12 +294,8 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
 
     float3 directDiffuse = 0.0f;
     float3 directSpecular = 0.0f;
-#if WRITE_SOURCE_RADIANCE
-#endif
     if (g_Deferred.numLights > 0u)
     {
-        float angle = GetRandom(i_globalIdx.xy + float2(g_Deferred.randomOffset.x, 0.0f));
-        float2 sinCosRotation = float2(sin(angle), cos(angle));
         [loop]
         for (uint lightIndex = 0; lightIndex < g_Deferred.numLights; ++lightIndex)
         {
@@ -418,11 +322,6 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
                     lightSample.directionToLight))
                 continue;
 
-            float visibility = EvaluateLightVisibility(
-                light, surfaceWorldPosition, sinCosRotation, 1.0f);
-            if (!(visibility > 0.0f))
-                continue;
-            lightSample.visibility = visibility;
             PbrDirectLighting direct = EvaluateDirectLightPrevalidated(
                 preparedMaterial, preparedSurface, lightSample);
             directDiffuse += direct.diffuse * directModulation;
@@ -430,25 +329,9 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
         }
     }
 
-#if WRITE_SOURCE_RADIANCE
-    // Environment diffuse is direct lighting from the global radiance field
-    // at the source surface. Carry it into the diffuse GI source so the next
-    // bounce sees the same sky illumination as the visible surface. Specular
-    // IBL remains excluded from this diffuse transport path.
-    float3 sourceRadiance = max(
-        directDiffuse + environmentDiffuse, 0.0f);
-    if (any(isnan(sourceRadiance)) || any(isinf(sourceRadiance)))
-        sourceRadiance = 0.0f;
-#endif
 
-    float3 diffuse = directDiffuse +
-        (g_PbrDeferred.separateIndirect != 0
-            ? 0.0f
-            : environmentDiffuse);
-    float3 specular = directSpecular +
-        (g_PbrDeferred.separateIndirect != 0
-            ? 0.0f
-            : environmentSpecular);
+    float3 diffuse = directDiffuse + environmentDiffuse;
+    float3 specular = directSpecular + environmentSpecular;
     float3 finalLinearHdr = max(diffuse + specular + gbuffer.material.emissive, 0.0f);
     if (any(isnan(finalLinearHdr)) || any(isinf(finalLinearHdr)))
         finalLinearHdr = 0.0f;
@@ -460,8 +343,4 @@ void main(int2 i_globalIdx : SV_DispatchThreadID)
             : finalLinearHdr;
     u_Output[pixelPosition] = float4(
         min(max(presentedColor, 0.0f), 65504.0f), 0.0f);
-#if WRITE_SOURCE_RADIANCE
-    u_SourceRadiance[pixelPosition] = float4(
-        min(sourceRadiance, 65504.0f), 0.0f);
-#endif
 }

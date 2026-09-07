@@ -14,83 +14,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-
-$productionKeyId = 'uvsr-launcher-update-p256-2026-01'
-$productionPublicKeySpkiBase64 =
-    'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEATbHkDwYIS0nMut5h9Q6m67qfabhuK+VRo6mDW1UlwZQIfeLI7zc1aKblCclkfgd8DDU0LcblFgTFdvoAWgCYg=='
-$productId = '0c47a7a8-1ec4-4ffd-b6c4-2f7614181223'
-$artifactName = 'uvsr-launcher.exe'
-$maximumLauncherBytes = 256L * 1024 * 1024
-$maximumReleaseSequence = 9007199254740991L
-
+. (Join-Path $PSScriptRoot 'FeedTools.ps1')
+$trust = Resolve-FeedTrust ([bool]$AllowTestKey) $TestKeyId $TestPublicKeySpkiBase64
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $PSScriptRoot 'launcher-update-feed-v2.json'
 }
-if ($AllowTestKey) {
-    if ([string]::IsNullOrWhiteSpace($TestKeyId) -or
-        [string]::IsNullOrWhiteSpace($TestPublicKeySpkiBase64)) {
-        throw 'Test-key signing requires both -TestKeyId and -TestPublicKeySpkiBase64.'
-    }
-    $keyId = $TestKeyId
-    $publicKeySpkiBase64 = $TestPublicKeySpkiBase64
-}
-else {
-    if (-not [string]::IsNullOrEmpty($TestKeyId) -or
-        -not [string]::IsNullOrEmpty($TestPublicKeySpkiBase64)) {
-        throw 'A test launcher update key cannot be supplied without -AllowTestKey.'
-    }
-    $keyId = $productionKeyId
-    $publicKeySpkiBase64 = $productionPublicKeySpkiBase64
-}
-
-function Test-StableVersion {
-    param([Parameter(Mandatory)] [string] $Candidate)
-    if ($Candidate -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
-        return $false
-    }
-    foreach ($part in $Candidate.Split('.')) {
-        $component = 0
-        if (-not [int]::TryParse($part,
-                [Globalization.NumberStyles]::None,
-                [Globalization.CultureInfo]::InvariantCulture,
-                [ref]$component)) {
-            return $false
-        }
-    }
-    return $true
-}
-
-function Read-CanonicalBase64 {
-    param(
-        [Parameter(Mandatory)] [string] $Value,
-        [Parameter(Mandatory)] [string] $Description
-    )
-    try {
-        $bytes = [Convert]::FromBase64String($Value)
-    }
-    catch [FormatException] {
-        throw "$Description is not valid base64."
-    }
-    if ([Convert]::ToBase64String($bytes) -cne $Value) {
-        throw "$Description is not canonical base64."
-    }
-    return ,$bytes
-}
-
-function Assert-RegularFile {
-    param(
-        [Parameter(Mandatory)] [string] $Path,
-        [Parameter(Mandatory)] [string] $Description
-    )
-    $fullPath = [IO.Path]::GetFullPath($Path)
-    if (-not [IO.File]::Exists($fullPath)) {
-        throw "$Description is missing at '$fullPath'."
-    }
-    $item = Get-Item -LiteralPath $fullPath -Force
-    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "$Description must be a regular file, not a filesystem link."
-    }
-    return $fullPath
+if (-not (Test-FeedVersion $Version 3 2147483647) -or
+    $ReleaseSequence -lt 1 -or $ReleaseSequence -gt $feedSequenceLimit -or
+    $SourceCommit -cnotmatch '^[0-9a-f]{40}$') {
+    throw 'Launcher release identity is not canonical.'
 }
 
 function Read-PeX64CertificateTable {
@@ -210,152 +142,46 @@ function Assert-LauncherHealth {
     }
 }
 
-if (-not (Test-StableVersion $Version)) {
-    throw 'The launcher update version must be canonical X.Y.Z.'
+$launcherPath = Assert-RegularFile $ArtifactPath 'The launcher artifact'
+if ([IO.Path]::GetFileName($launcherPath) -cne 'uvsr-launcher.exe') {
+    throw "The launcher artifact must use the exact filename ''uvsr-launcher.exe''."
 }
-if ($ReleaseSequence -lt 1 -or $ReleaseSequence -gt $maximumReleaseSequence) {
-    throw 'The launcher update release sequence is outside its safe range.'
+$artifactSize = (Get-Item -LiteralPath $launcherPath).Length
+if ($artifactSize -lt 1 -or $artifactSize -gt (256L * 1024 * 1024)) {
+    throw 'The launcher artifact size is outside its safe range.'
 }
-if ($SourceCommit -cnotmatch '^[0-9a-f]{40}$') {
-    throw 'The launcher update source commit must be 40 lowercase hexadecimal characters.'
+$certificateTable = Read-PeX64CertificateTable $launcherPath
+$authenticode = Get-AuthenticodeSignature -LiteralPath $launcherPath
+if ([string]$authenticode.Status -eq 'Valid') {
+    if ($certificateTable.Size -eq 0 -or
+        $null -eq $authenticode.SignerCertificate) {
+        throw 'The valid launcher signature lacks its PE certificate identity.'
+    }
 }
-if ($keyId -cnotmatch '^[a-z0-9-]{1,96}$') {
-    throw 'The launcher update key ID is not canonical.'
+elseif ([string]$authenticode.Status -eq 'NotSigned') {
+    if ($certificateTable.Size -ne 0 -or
+        [string]$authenticode.SignatureType -ne 'None' -or
+        $null -ne $authenticode.SignerCertificate -or
+        $null -ne $authenticode.TimeStamperCertificate) {
+        throw 'The unsigned launcher has conflicting Authenticode state.'
+    }
 }
+else {
+    throw "The launcher Authenticode signature is not valid: " +
+        [string]$authenticode.Status
+}
+$metadata = [Diagnostics.FileVersionInfo]::GetVersionInfo($launcherPath)
+if ($metadata.ProductName -ne 'UVSR Launcher' -or
+    $metadata.ProductVersion -ne "$Version+$SourceCommit" -or
+    $metadata.FileVersion -ne "$Version.0") {
+    throw 'The launcher artifact product metadata does not match its exact release identity.'
+}
+Assert-LauncherHealth $launcherPath $ReleaseSequence $Version
 
-$privateKeyPath = Assert-RegularFile $PrivateKeyPemPath `
-    'The launcher update private key'
-$expectedPublicKey = Read-CanonicalBase64 $publicKeySpkiBase64 `
-    'The pinned launcher update public key'
-$ecdsa = [Security.Cryptography.ECDsa]::Create()
-try {
-    try {
-        $ecdsa.ImportFromPem([IO.File]::ReadAllText($privateKeyPath))
-        [void]$ecdsa.ExportParameters($true)
-    }
-    catch [Security.Cryptography.CryptographicException] {
-        throw "The launcher update private key is not a valid EC private key: $($_.Exception.Message)"
-    }
-    $actualPublicKey = $ecdsa.ExportSubjectPublicKeyInfo()
-    if (-not [Security.Cryptography.CryptographicOperations]::FixedTimeEquals(
-            $actualPublicKey, $expectedPublicKey) -or $ecdsa.KeySize -ne 256) {
-        throw 'The launcher update private key does not match the pinned P-256 public identity.'
-    }
-    $parameters = $ecdsa.ExportParameters($false)
-    if ($parameters.Curve.Oid.Value -ne '1.2.840.10045.3.1.7') {
-        throw 'The launcher update private key is not on curve P-256.'
-    }
-
-    $launcherPath = Assert-RegularFile $ArtifactPath 'The launcher artifact'
-    if ([IO.Path]::GetFileName($launcherPath) -cne $artifactName) {
-        throw "The launcher artifact must use the exact filename '$artifactName'."
-    }
-    $artifactSize = (Get-Item -LiteralPath $launcherPath).Length
-    if ($artifactSize -lt 1 -or $artifactSize -gt $maximumLauncherBytes) {
-        throw 'The launcher artifact size is outside its safe range.'
-    }
-    $certificateTable = Read-PeX64CertificateTable $launcherPath
-    $authenticode = Get-AuthenticodeSignature -LiteralPath $launcherPath
-    if ([string]$authenticode.Status -eq 'Valid') {
-        if ($certificateTable.Size -eq 0 -or
-            $null -eq $authenticode.SignerCertificate) {
-            throw 'The valid launcher signature lacks its PE certificate identity.'
-        }
-    }
-    elseif ([string]$authenticode.Status -eq 'NotSigned') {
-        if ($certificateTable.Size -ne 0 -or
-            [string]$authenticode.SignatureType -ne 'None' -or
-            $null -ne $authenticode.SignerCertificate -or
-            $null -ne $authenticode.TimeStamperCertificate) {
-            throw 'The unsigned launcher has conflicting Authenticode state.'
-        }
-    }
-    else {
-        throw "The launcher Authenticode signature is not valid: " +
-            [string]$authenticode.Status
-    }
-    $metadata = [Diagnostics.FileVersionInfo]::GetVersionInfo($launcherPath)
-    if ($metadata.ProductName -ne 'UVSR Launcher' -or
-        $metadata.ProductVersion -ne "$Version+$SourceCommit" -or
-        $metadata.FileVersion -ne "$Version.0") {
-        throw 'The launcher artifact product metadata does not match its exact release identity.'
-    }
-    Assert-LauncherHealth $launcherPath $ReleaseSequence $Version
-
-    $artifactHash = (Get-FileHash -LiteralPath $launcherPath `
-        -Algorithm SHA256).Hash.ToLowerInvariant()
-    $payload = '{"schemaVersion":2,"productId":"' + $productId +
-        '","channel":"stable","releaseSequence":' +
-        $ReleaseSequence.ToString([Globalization.CultureInfo]::InvariantCulture) +
-        ',"version":"' + $Version + '","sourceCommit":"' + $SourceCommit +
-        '","artifact":{"name":"' + $artifactName + '","size":' +
-        $artifactSize.ToString([Globalization.CultureInfo]::InvariantCulture) +
-        ',"sha256":"' + $artifactHash + '"}}' + "`n"
-    $payloadBytes = [Text.UTF8Encoding]::new($false, $true).GetBytes($payload)
-    $signature = $ecdsa.SignData($payloadBytes,
-        [Security.Cryptography.HashAlgorithmName]::SHA256,
-        [Security.Cryptography.DSASignatureFormat]::IeeeP1363FixedFieldConcatenation)
-    if ($signature.Length -ne 64) {
-        throw 'The launcher update signature was not a 64-byte P1363 value.'
-    }
-    $envelope = '{"schemaVersion":2,"keyId":"' + $keyId +
-        '","payloadBase64":"' + [Convert]::ToBase64String($payloadBytes) +
-        '","signatureBase64":"' + [Convert]::ToBase64String($signature) +
-        '"}' + "`n"
-    $envelopeBytes = [Text.UTF8Encoding]::new($false, $true).GetBytes($envelope)
-
-    $fullOutputPath = [IO.Path]::GetFullPath($OutputPath)
-    $outputParent = [IO.Path]::GetDirectoryName($fullOutputPath)
-    if (-not [IO.Directory]::Exists($outputParent)) {
-        throw "The launcher update feed output directory is missing at '$outputParent'."
-    }
-    if ([IO.File]::Exists($fullOutputPath) -and -not $Force) {
-        throw "The launcher update feed already exists at '$fullOutputPath'; use -Force to replace it."
-    }
-    if ([IO.File]::Exists($fullOutputPath)) {
-        $outputItem = Get-Item -LiteralPath $fullOutputPath -Force
-        if (($outputItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw 'Refusing to replace a launcher update feed filesystem link.'
-        }
-    }
-    $temporaryPath = Join-Path $outputParent `
-        ".$([IO.Path]::GetFileName($fullOutputPath)).$([Guid]::NewGuid().ToString('N')).tmp"
-    try {
-        $stream = [IO.FileStream]::new($temporaryPath, [IO.FileMode]::CreateNew,
-            [IO.FileAccess]::Write, [IO.FileShare]::None)
-        try {
-            $stream.Write($envelopeBytes, 0, $envelopeBytes.Length)
-            $stream.Flush($true)
-        }
-        finally {
-            $stream.Dispose()
-        }
-        $verifier = Join-Path $PSScriptRoot 'verify-launcher-update-feed.ps1'
-        $verifyParameters = @{
-            Path = $temporaryPath
-        }
-        if ($AllowTestKey) {
-            $verifyParameters.AllowTestKey = $true
-            $verifyParameters.TestKeyId = $keyId
-            $verifyParameters.TestPublicKeySpkiBase64 = $publicKeySpkiBase64
-        }
-        $verifiedPayload = & $verifier @verifyParameters
-        if (($verifiedPayload -join "`n") -cne $payload.TrimEnd("`n")) {
-            throw 'The generated launcher update feed did not round-trip exactly.'
-        }
-        [IO.File]::Move($temporaryPath, $fullOutputPath, [bool]$Force)
-    }
-    finally {
-        if ([IO.File]::Exists($temporaryPath)) {
-            [IO.File]::Delete($temporaryPath)
-        }
-    }
-
-    Write-Output "Launcher update feed: $fullOutputPath"
-    Write-Output "Release identity: $Version sequence $ReleaseSequence"
-    Write-Output "Source commit: $SourceCommit"
-    Write-Output "Artifact: $artifactSize bytes, SHA-256 $artifactHash"
-}
-finally {
-    $ecdsa.Dispose()
-}
+$artifactHash = (Get-FileHash -LiteralPath $launcherPath `
+    -Algorithm SHA256).Hash.ToLowerInvariant()
+$payload = [ordered]@{ schemaVersion = 2; productId = $feedProductId
+    channel = 'stable'; releaseSequence = $ReleaseSequence; version = $Version
+    sourceCommit = $SourceCommit
+    artifact = [ordered]@{ name = 'uvsr-launcher.exe'; size = $artifactSize; sha256 = $artifactHash } }
+Write-SignedFeed $payload $PrivateKeyPemPath $trust $OutputPath ([bool]$Force)

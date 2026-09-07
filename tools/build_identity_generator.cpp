@@ -249,6 +249,15 @@ int main(int argumentCount, char** arguments)
         return EXIT_FAILURE;
     }
 
+    if (!uvsr::ValidateCanonicalSettingsSchema() ||
+        uvsr::ResolveSettingsSnapshotSchemaVersion(
+            uvsr::CurrentSettingsSnapshotSchemaFingerprint) == 0u)
+    {
+        std::cerr << "settings schema is invalid or unregistered; "
+            "run uvsr_settings_snapshot_schema_probe\n";
+        return EXIT_FAILURE;
+    }
+
     try
     {
         WriteText(arguments[2],

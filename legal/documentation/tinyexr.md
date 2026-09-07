@@ -1,6 +1,6 @@
 # `TinyEXR`
 
-## Record
+## record
 
 - Relationship: Dependency Integration
 - Status: Current
@@ -11,20 +11,20 @@
 - Header SHA-256: `6d744b9efdcfa18d201d28b21386e99dfeae622e0d03e11fea4d8684fa714c4c`
 - Governing Terms: BSD-style TinyEXR terms plus embedded OpenEXR notices
 
-## UVSR Relationship
+## UVSR relationship
 
 UVSR fetches the immutable upstream archive directly and owns the `tinyexr`
 interface target. It replaces Donut's unpinned vendored ownership; it is not
-byte-identical to that former header. Donut's transitional texture loader is
-the only current consumer. No retained EXR caller is proven, so remove the pin
-and notice with that loader rather than keeping a second image decoder.
+byte-identical to that former header. Donut's retained texture loader is the
+only current consumer. keep the pin and notice while that supported loader
+uses them. reevaluate the dependency only if its final consumer changes.
 
-## Evidence
+## evidence
 
 - [Direct Pin and Header Check](../../cmake/DirectThirdParty.cmake)
-- [Current Transitional Loader](../../donut/src/engine/TextureCache.cpp)
+- [Current Retained Loader](../../donut/src/engine/TextureCache.cpp)
 
-## Commercial Clearance
+## commercial clearance
 
 Both notices are installed as
 `bin/licenses/TinyEXR-and-OpenEXR-BSD.txt` (SHA-256

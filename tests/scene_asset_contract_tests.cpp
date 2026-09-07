@@ -1,1647 +1,495 @@
+#include "json_document.h"
 #include "scene_catalog.h"
+#include "sha256.h"
 
+#include <DirectXCollision.h>
 #define CGLTF_IMPLEMENTATION
 #include <cgltf.h>
-
-#include <donut/core/json.h>
-#include <donut/core/vfs/VFS.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
-#include <cstdint>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
+
+void CheckLightingAssets(const std::filesystem::path& environmentRoot, const std::filesystem::path& noiseRoot);
 
 namespace
 {
-    // GitHub rejects a blob at or above 100,000,000 decimal bytes. Keeping the
-    // strict comparison here protects both source assets and the exact runtime
-    // copies produced by CMake.
-    constexpr uint64_t kMaximumTrackedFileBytes = 100'000'000ull;
-    constexpr double kPi = 3.14159265358979323846;
+    namespace fs = std::filesystem;
+    using namespace DirectX;
+    using Json = uvsr::json::Value;
+    using Kind = Json::Kind;
 
-    struct Float3
+    void Require(bool value, std::string_view message)
     {
-        double X = 0.0;
-        double Y = 0.0;
-        double Z = 0.0;
-    };
-
-    struct ExpectedCamera
-    {
-        std::array<float, 3> Position{};
-        std::array<float, 3> Direction{ 0.f, 0.f, -1.f };
-        std::array<float, 3> Up{ 0.f, 1.f, 0.f };
-        float VerticalFovDegrees = 60.f;
-    };
-
-    struct ExpectedDescriptor
-    {
-        const char* RelativePath = nullptr;
-        const char* DisplayName = nullptr;
-        size_t ModelCount = 0u;
-    };
-
-    struct ExpectedDownloadedScene
-    {
-        const char* DescriptorRelativePath = nullptr;
-        const char* ModelRelativePath = nullptr;
-        ExpectedCamera Camera;
-        std::array<float, 3> EmbeddedCameraPositionOffset{};
-        size_t MinimumExternalBufferCount = 1u;
-        size_t MinimumHorizontalEnclosureRayCount = 4u;
-        bool ExpectTransformedMeshNodes = false;
-        bool CompareEmbeddedCamera = false;
-    };
-
-    constexpr std::array<ExpectedDescriptor, 2> kExpectedDescriptors = {{
-        {
-            "bistro_interior_retextured/bistro_interior_retextured.scene.json",
-            "Bistro Interior",
-            1u
-        },
-        {
-            "san_miguel_retextured/san_miguel_retextured.scene.json",
-            "San Miguel",
-            1u
-        },
-    }};
-
-    constexpr std::array<ExpectedDownloadedScene, 2> kDownloadedScenes = {{
-        {
-            "bistro_interior_retextured/bistro_interior_retextured.scene.json",
-            "components/bistro_interior.gltf",
-            {
-                { 4.444546f, 2.258351f, -2.746721f },
-                { 0.992681f, -0.037313f, -0.114857f },
-                { 0.037065f, 0.999304f, -0.004289f },
-                33.9666f
-            },
-            { 1.f, 0.f, -0.5f },
-            2u,
-            4u,
-            true,
-            true
-        },
-        {
-            "san_miguel_retextured/san_miguel_retextured.scene.json",
-            "components/san_miguel.gltf",
-            {
-                { 27.6255f, 1.49616f, 2.42353f },
-                { -0.9673232088f, -0.0081301951f, -0.2534160802f },
-                { -0.0078644596f, 0.9999669523f, -0.0020602299f },
-                57.2209f
-            },
-            { 0.f, 0.f, 0.f },
-            2u,
-            4u,
-            false,
-            false
-        },
-    }};
-
-    constexpr std::array<const char*, 2> kSupportedSceneDirectories = {{
-        "bistro_interior_retextured",
-        "san_miguel_retextured",
-    }};
-
-    using RuntimeSceneInventory =
-        std::array<std::set<std::string>, kSupportedSceneDirectories.size()>;
-
-    void Require(bool condition, const std::string& message)
-    {
-        if (!condition)
-            throw std::runtime_error(message);
+        if (!value)
+            throw std::runtime_error(std::string(message));
     }
 
-    std::string Generic(const std::filesystem::path& path)
+    const Json& Member(const Json& value, std::string_view name, Kind kind)
     {
-        return path.lexically_normal().generic_string();
+        const auto* member = value.Find(name);
+        Require(member && member->kind == kind, "missing or mistyped JSON field: " + std::string(name));
+        return *member;
     }
 
-    bool EndsWithCaseInsensitive(
-        std::string_view value,
-        std::string_view suffix)
+    uint64_t Integer(const Json& value, std::string_view name)
     {
-        if (suffix.size() > value.size())
-            return false;
+        const double number = Member(value, name, Kind::Number).number;
+        Require(number >= 0 && number <= 1e12 && std::floor(number) == number, "invalid unsigned audit value");
+        return static_cast<uint64_t>(number);
+    }
 
-        const size_t offset = value.size() - suffix.size();
-        for (size_t index = 0u; index < suffix.size(); ++index)
+    std::string Lower(std::string value)
+    {
+        for (char& c : value)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return value;
+    }
+
+    std::string Relative(std::string value)
+    {
+        const fs::path path(value);
+        Require(!value.empty() && value.find_first_of(":\\;\r\n?#") == std::string::npos &&
+            value.find('\0') == std::string::npos && !path.is_absolute() && !path.has_root_path() &&
+            path.lexically_normal().generic_string() == value, "unsafe relative asset path: " + value);
+        for (const auto& part : path)
+            Require(part != "." && part != ".." && !part.empty(), "asset path escapes its root");
+        return value;
+    }
+
+    std::set<std::string> Files(const fs::path& root, bool staged = false)
+    {
+        Require(fs::is_directory(root) && !fs::is_symlink(root), "missing or linked asset root: " + root.string());
+        std::set<std::string> files, caseKeys;
+        for (const auto& item : fs::recursive_directory_iterator(root))
         {
-            const unsigned char left =
-                static_cast<unsigned char>(value[offset + index]);
-            const unsigned char right =
-                static_cast<unsigned char>(suffix[index]);
-            if (std::tolower(left) != std::tolower(right))
-                return false;
-        }
-        return true;
-    }
-
-    bool IsLoadableSceneFile(const std::filesystem::path& path)
-    {
-        const std::string name = path.generic_string();
-        return EndsWithCaseInsensitive(name, ".scene.json") ||
-            EndsWithCaseInsensitive(name, ".gltf") ||
-            EndsWithCaseInsensitive(name, ".glb");
-    }
-
-    bool IsContainedBy(
-        const std::filesystem::path& root,
-        const std::filesystem::path& candidate)
-    {
-        const std::filesystem::path relative =
-            candidate.lexically_normal().lexically_relative(
-                root.lexically_normal());
-        if (relative.empty() || relative.is_absolute())
-            return false;
-        return *relative.begin() != "..";
-    }
-
-    void RequireRegularFileBelowLimit(
-        const std::filesystem::path& path,
-        const std::string& context)
-    {
-        Require(std::filesystem::is_regular_file(path),
-            context + " is missing: " + Generic(path));
-        const uint64_t fileBytes = std::filesystem::file_size(path);
-        Require(fileBytes < kMaximumTrackedFileBytes,
-            context + " reaches or exceeds the 100,000,000-byte GitHub "
-                "limit: " + Generic(path));
-    }
-
-    void RequireFilesEqual(
-        const std::filesystem::path& source,
-        const std::filesystem::path& staged)
-    {
-        RequireRegularFileBelowLimit(source, "source scene asset");
-        RequireRegularFileBelowLimit(staged, "staged scene asset");
-        Require(std::filesystem::file_size(source) ==
-                std::filesystem::file_size(staged),
-            "staged scene asset size differs: " + Generic(staged));
-
-        std::ifstream left(source, std::ios::binary);
-        std::ifstream right(staged, std::ios::binary);
-        Require(left.good() && right.good(),
-            "failed to open staged comparison inputs");
-        // Keep the streaming buffers off the Windows worker-thread stack.
-        // Two one-megabyte std::arrays exceed the default stack reservation
-        // before the test reaches cgltf or any camera geometry.
-        std::vector<char> leftBytes(1024u * 1024u);
-        std::vector<char> rightBytes(1024u * 1024u);
-        for (;;)
-        {
-            left.read(leftBytes.data(),
-                static_cast<std::streamsize>(leftBytes.size()));
-            right.read(rightBytes.data(),
-                static_cast<std::streamsize>(rightBytes.size()));
-            const std::streamsize leftCount = left.gcount();
-            const std::streamsize rightCount = right.gcount();
-            Require(leftCount == rightCount,
-                "staged scene asset byte count differs: " + Generic(staged));
-            Require(std::equal(
-                    leftBytes.begin(),
-                    leftBytes.begin() + leftCount,
-                    rightBytes.begin()),
-                "staged scene asset bytes differ: " + Generic(staged));
-            if (leftCount == 0)
-                break;
-        }
-    }
-
-    std::set<std::string> CollectSceneTreeFiles(
-        const std::filesystem::path& sceneDirectory)
-    {
-        Require(std::filesystem::is_directory(sceneDirectory),
-            "scene asset directory is missing: " + Generic(sceneDirectory));
-
-        std::set<std::string> result;
-        for (const auto& item :
-            std::filesystem::recursive_directory_iterator(sceneDirectory))
-        {
-            Require(!item.is_symlink(),
-                "scene packages must not contain symlinks: " +
-                    Generic(item.path()));
-            if (!item.is_regular_file())
+            Require(!item.is_symlink(), "asset tree contains a symlink: " + item.path().string());
+            if (item.is_directory())
                 continue;
+            Require(item.is_regular_file(), "asset is not a regular file");
+            const auto relative = Relative(item.path().lexically_relative(root).generic_string());
             if (item.path().filename() == ".uvsr-stage.stamp")
-                continue;
-
-            RequireRegularFileBelowLimit(item.path(), "scene package file");
-            const std::filesystem::path relative =
-                item.path().lexically_normal().lexically_relative(
-                    sceneDirectory.lexically_normal());
-            Require(!relative.empty() && !relative.is_absolute(),
-                "failed to make scene package path relative: " +
-                    Generic(item.path()));
-            Require(result.insert(relative.generic_string()).second,
-                "duplicate scene package path: " + relative.generic_string());
-        }
-        Require(!result.empty(),
-            "scene asset directory is empty: " + Generic(sceneDirectory));
-        return result;
-    }
-
-    RuntimeSceneInventory LoadRuntimeSceneInventory(
-        const std::filesystem::path& inventoryPath)
-    {
-        RequireRegularFileBelowLimit(
-            inventoryPath,
-            "canonical runtime media inventory");
-        std::ifstream inventory(inventoryPath);
-        Require(inventory.good(),
-            "failed to open canonical runtime media inventory: " +
-                Generic(inventoryPath));
-
-        constexpr std::string_view scenePrefix =
-            "media/glTF-Sample-Assets/Models/";
-        RuntimeSceneInventory result;
-        std::string line;
-        size_t lineNumber = 0u;
-        while (std::getline(inventory, line))
-        {
-            ++lineNumber;
-            if (!line.empty() && line.back() == '\r')
-                line.pop_back();
-            Require(!line.empty(),
-                "runtime media inventory has an empty line at " +
-                    std::to_string(lineNumber));
-            if (line.size() < scenePrefix.size() ||
-                !std::equal(scenePrefix.begin(), scenePrefix.end(), line.begin()))
-                continue;
-
-            const std::string scenePath = line.substr(scenePrefix.size());
-            const size_t separator = scenePath.find('/');
-            Require(separator != std::string::npos && separator != 0u &&
-                    separator + 1u < scenePath.size(),
-                "runtime media inventory has a malformed scene entry: " +
-                    line);
-            const std::string scene = scenePath.substr(0u, separator);
-            const auto supported = std::find_if(
-                kSupportedSceneDirectories.begin(),
-                kSupportedSceneDirectories.end(),
-                [&scene](const char* candidate) { return scene == candidate; });
-            Require(supported != kSupportedSceneDirectories.end(),
-                "runtime media inventory names an unsupported scene: " +
-                    scene);
-
-            const std::string relative = scenePath.substr(separator + 1u);
-            const std::filesystem::path relativePath(relative);
-            Require(!relativePath.empty() && !relativePath.is_absolute() &&
-                    relativePath.lexically_normal().generic_string() == relative &&
-                    *relativePath.begin() != "..",
-                "runtime media inventory has an unsafe scene path: " + line);
-            const size_t sceneIndex = static_cast<size_t>(
-                std::distance(kSupportedSceneDirectories.begin(), supported));
-            Require(result[sceneIndex].insert(relative).second,
-                "runtime media inventory repeats scene entry: " + line);
-        }
-        Require(inventory.eof(),
-            "failed while reading canonical runtime media inventory: " +
-                Generic(inventoryPath));
-        for (size_t index = 0u; index < result.size(); ++index)
-        {
-            Require(!result[index].empty(),
-                "runtime media inventory has no files for scene: " +
-                    std::string(kSupportedSceneDirectories[index]));
-        }
-        return result;
-    }
-
-    void ValidateStagedSceneTree(
-        const std::filesystem::path& sourceRoot,
-        const std::filesystem::path& stagingRoot,
-        const std::filesystem::path& relativeSceneDirectory,
-        const std::set<std::string>& expectedRuntimeFiles)
-    {
-        const std::filesystem::path sourceDirectory =
-            sourceRoot / relativeSceneDirectory;
-        const std::filesystem::path stagedDirectory =
-            stagingRoot / relativeSceneDirectory;
-        const std::set<std::string> sourceFiles =
-            CollectSceneTreeFiles(sourceDirectory);
-        const std::set<std::string> stagedFiles =
-            CollectSceneTreeFiles(stagedDirectory);
-        Require(stagedFiles == expectedRuntimeFiles,
-            "staged scene inventory differs from the canonical runtime media "
-            "inventory for " +
-                relativeSceneDirectory.generic_string());
-        for (const std::string& relativeFile : expectedRuntimeFiles)
-        {
-            Require(sourceFiles.find(relativeFile) != sourceFiles.end(),
-                "canonical runtime scene asset is missing from source: " +
-                    relativeSceneDirectory.generic_string() + "/" +
-                    relativeFile);
-            RequireFilesEqual(
-                sourceDirectory / relativeFile,
-                stagedDirectory / relativeFile);
-        }
-    }
-
-    int HexDigitValue(char character)
-    {
-        if (character >= '0' && character <= '9')
-            return character - '0';
-        if (character >= 'a' && character <= 'f')
-            return character - 'a' + 10;
-        if (character >= 'A' && character <= 'F')
-            return character - 'A' + 10;
-        return -1;
-    }
-
-    std::string DecodeRelativeUri(
-        std::string_view uri,
-        const std::string& context)
-    {
-        Require(!uri.empty(), context + " has an empty URI");
-        Require(uri.find("://") == std::string_view::npos &&
-                uri.rfind("data:", 0u) != 0u,
-            context + " must use a local file URI");
-        Require(uri.find('?') == std::string_view::npos &&
-                uri.find('#') == std::string_view::npos &&
-                uri.find('\\') == std::string_view::npos,
-            context + " must use a plain forward-slash file URI");
-
-        std::string decoded;
-        decoded.reserve(uri.size());
-        for (size_t index = 0u; index < uri.size(); ++index)
-        {
-            if (uri[index] != '%')
             {
-                decoded.push_back(uri[index]);
+                Require(staged, "source tree contains a generated staging stamp");
                 continue;
             }
-
-            Require(index + 2u < uri.size(),
-                context + " contains a truncated percent escape");
-            const int high = HexDigitValue(uri[index + 1u]);
-            const int low = HexDigitValue(uri[index + 2u]);
-            Require(high >= 0 && low >= 0,
-                context + " contains an invalid percent escape");
-            const char decodedByte = static_cast<char>((high << 4) | low);
-            Require(decodedByte != '\0',
-                context + " contains an encoded NUL byte");
-            decoded.push_back(decodedByte);
-            index += 2u;
+            Require(item.file_size() < 100000000u, "asset exceeds the strict 100 MB tracked-file limit");
+            Require(caseKeys.insert(Lower(relative)).second, "asset paths collide on Windows");
+            files.insert(relative);
         }
-        return decoded;
+        Require(!files.empty(), "asset inventory is empty");
+        return files;
     }
 
-    std::filesystem::path ResolveExternalResource(
-        const std::filesystem::path& ownerFile,
-        const std::filesystem::path& sceneRoot,
-        std::string_view uri,
-        const std::string& context)
+    struct Scene
     {
-        const std::filesystem::path relative(
-            DecodeRelativeUri(uri, context));
-        Require(!relative.empty() && !relative.is_absolute() &&
-                !relative.has_root_name() && !relative.has_root_directory(),
-            context + " must be relative");
-        const std::filesystem::path candidate =
-            (ownerFile.parent_path() / relative).lexically_normal();
-        Require(IsContainedBy(sceneRoot, candidate),
-            context + " escapes the supported scene root");
-        RequireRegularFileBelowLimit(candidate, context);
-
-        // Lexical containment blocks ordinary ../ escapes. Canonical
-        // containment additionally prevents an on-disk junction or symlink
-        // from redirecting a staged resource outside the package.
-        const std::filesystem::path canonicalRoot =
-            std::filesystem::canonical(sceneRoot);
-        const std::filesystem::path canonicalCandidate =
-            std::filesystem::canonical(candidate);
-        Require(IsContainedBy(canonicalRoot, canonicalCandidate),
-            context + " resolves outside the supported scene root");
-        return candidate;
-    }
-
-    std::array<float, 3> ReadFloat3(
-        const Json::Value& value,
-        const std::string& context)
-    {
-        Require(value.isArray() && value.size() == 3u,
-            context + " must contain three numbers");
-        std::array<float, 3> result{};
-        for (Json::ArrayIndex index = 0u; index < 3u; ++index)
-        {
-            Require(value[index].isNumeric(),
-                context + " contains a non-number");
-            result[index] = value[index].asFloat();
-            Require(std::isfinite(result[index]),
-                context + " contains a non-finite number");
-        }
-        return result;
-    }
-
-    bool NearlyEqual(double left, double right, double tolerance = 1e-5)
-    {
-        return std::abs(left - right) <= tolerance;
-    }
-
-    bool NearlyEqual(
-        const std::array<float, 3>& left,
-        const std::array<float, 3>& right,
-        double tolerance = 1e-5)
-    {
-        return NearlyEqual(left[0], right[0], tolerance) &&
-            NearlyEqual(left[1], right[1], tolerance) &&
-            NearlyEqual(left[2], right[2], tolerance);
-    }
-
-    Float3 ToFloat3(const std::array<float, 3>& value)
-    {
-        return { value[0], value[1], value[2] };
-    }
-
-    Float3 Add(Float3 left, Float3 right)
-    {
-        return {
-            left.X + right.X,
-            left.Y + right.Y,
-            left.Z + right.Z
-        };
-    }
-
-    Float3 Subtract(Float3 left, Float3 right)
-    {
-        return {
-            left.X - right.X,
-            left.Y - right.Y,
-            left.Z - right.Z
-        };
-    }
-
-    Float3 Multiply(Float3 value, double scalar)
-    {
-        return {
-            value.X * scalar,
-            value.Y * scalar,
-            value.Z * scalar
-        };
-    }
-
-    double Dot(Float3 left, Float3 right)
-    {
-        return left.X * right.X +
-            left.Y * right.Y +
-            left.Z * right.Z;
-    }
-
-    Float3 Cross(Float3 left, Float3 right)
-    {
-        return {
-            left.Y * right.Z - left.Z * right.Y,
-            left.Z * right.X - left.X * right.Z,
-            left.X * right.Y - left.Y * right.X
-        };
-    }
-
-    double LengthSquared(Float3 value)
-    {
-        return Dot(value, value);
-    }
-
-    Float3 Normalize(Float3 value, const std::string& context)
-    {
-        const double lengthSquared = LengthSquared(value);
-        Require(std::isfinite(lengthSquared) && lengthSquared > 1e-12,
-            context + " must be finite and nonzero");
-        return Multiply(value, 1.0 / std::sqrt(lengthSquared));
-    }
-
-    bool IsFinite(Float3 value)
-    {
-        return std::isfinite(value.X) &&
-            std::isfinite(value.Y) &&
-            std::isfinite(value.Z);
-    }
-
-    Float3 TransformPoint(const cgltf_float* matrix, Float3 point)
-    {
-        return {
-            matrix[0] * point.X + matrix[4] * point.Y +
-                matrix[8] * point.Z + matrix[12],
-            matrix[1] * point.X + matrix[5] * point.Y +
-                matrix[9] * point.Z + matrix[13],
-            matrix[2] * point.X + matrix[6] * point.Y +
-                matrix[10] * point.Z + matrix[14]
-        };
-    }
-
-    Float3 TransformVector(const cgltf_float* matrix, Float3 vector)
-    {
-        return {
-            matrix[0] * vector.X + matrix[4] * vector.Y +
-                matrix[8] * vector.Z,
-            matrix[1] * vector.X + matrix[5] * vector.Y +
-                matrix[9] * vector.Z,
-            matrix[2] * vector.X + matrix[6] * vector.Y +
-                matrix[10] * vector.Z
-        };
-    }
-
-    bool IsIdentityMatrix(const cgltf_float* matrix)
-    {
-        constexpr std::array<float, 16> identity = {{
-            1.f, 0.f, 0.f, 0.f,
-            0.f, 1.f, 0.f, 0.f,
-            0.f, 0.f, 1.f, 0.f,
-            0.f, 0.f, 0.f, 1.f,
-        }};
-        for (size_t index = 0u; index < identity.size(); ++index)
-        {
-            if (!NearlyEqual(matrix[index], identity[index], 1e-6))
-                return false;
-        }
-        return true;
-    }
-
-    double PointSegmentDistanceSquared(
-        Float3 point,
-        Float3 start,
-        Float3 end)
-    {
-        const Float3 segment = Subtract(end, start);
-        const double segmentLengthSquared = LengthSquared(segment);
-        if (segmentLengthSquared <= 1e-18)
-            return LengthSquared(Subtract(point, start));
-        const double fraction = std::clamp(
-            Dot(Subtract(point, start), segment) / segmentLengthSquared,
-            0.0,
-            1.0);
-        return LengthSquared(Subtract(
-            point,
-            Add(start, Multiply(segment, fraction))));
-    }
-
-    double PointTriangleDistanceSquared(
-        Float3 point,
-        Float3 first,
-        Float3 second,
-        Float3 third)
-    {
-        const Float3 firstSecond = Subtract(second, first);
-        const Float3 firstThird = Subtract(third, first);
-        if (LengthSquared(Cross(firstSecond, firstThird)) <= 1e-18)
-        {
-            return std::min({
-                PointSegmentDistanceSquared(point, first, second),
-                PointSegmentDistanceSquared(point, second, third),
-                PointSegmentDistanceSquared(point, third, first)
-            });
-        }
-
-        const Float3 firstPoint = Subtract(point, first);
-        const double d1 = Dot(firstSecond, firstPoint);
-        const double d2 = Dot(firstThird, firstPoint);
-        if (d1 <= 0.0 && d2 <= 0.0)
-            return LengthSquared(firstPoint);
-
-        const Float3 secondPoint = Subtract(point, second);
-        const double d3 = Dot(firstSecond, secondPoint);
-        const double d4 = Dot(firstThird, secondPoint);
-        if (d3 >= 0.0 && d4 <= d3)
-            return LengthSquared(secondPoint);
-
-        const double vc = d1 * d4 - d3 * d2;
-        if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0)
-        {
-            const double fraction = d1 / (d1 - d3);
-            return LengthSquared(Subtract(
-                point,
-                Add(first, Multiply(firstSecond, fraction))));
-        }
-
-        const Float3 thirdPoint = Subtract(point, third);
-        const double d5 = Dot(firstSecond, thirdPoint);
-        const double d6 = Dot(firstThird, thirdPoint);
-        if (d6 >= 0.0 && d5 <= d6)
-            return LengthSquared(thirdPoint);
-
-        const double vb = d5 * d2 - d1 * d6;
-        if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0)
-        {
-            const double fraction = d2 / (d2 - d6);
-            return LengthSquared(Subtract(
-                point,
-                Add(first, Multiply(firstThird, fraction))));
-        }
-
-        const double va = d3 * d6 - d5 * d4;
-        if (va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0)
-        {
-            const Float3 secondThird = Subtract(third, second);
-            const double fraction =
-                (d4 - d3) / ((d4 - d3) + (d5 - d6));
-            return LengthSquared(Subtract(
-                point,
-                Add(second, Multiply(secondThird, fraction))));
-        }
-
-        const double denominator = va + vb + vc;
-        if (std::abs(denominator) <= 1e-18)
-        {
-            return std::min({
-                PointSegmentDistanceSquared(point, first, second),
-                PointSegmentDistanceSquared(point, second, third),
-                PointSegmentDistanceSquared(point, third, first)
-            });
-        }
-        const double inverseDenominator = 1.0 / denominator;
-        const double secondWeight = vb * inverseDenominator;
-        const double thirdWeight = vc * inverseDenominator;
-        const Float3 closest = Add(
-            first,
-            Add(
-                Multiply(firstSecond, secondWeight),
-                Multiply(firstThird, thirdWeight)));
-        return LengthSquared(Subtract(point, closest));
-    }
-
-    double RayTriangleDistance(
-        Float3 origin,
-        Float3 direction,
-        Float3 first,
-        Float3 second,
-        Float3 third)
-    {
-        const Float3 firstSecond = Subtract(second, first);
-        const Float3 firstThird = Subtract(third, first);
-        const Float3 perpendicular = Cross(direction, firstThird);
-        const double determinant = Dot(firstSecond, perpendicular);
-        if (std::abs(determinant) <= 1e-12)
-            return std::numeric_limits<double>::infinity();
-
-        const double inverseDeterminant = 1.0 / determinant;
-        const Float3 originOffset = Subtract(origin, first);
-        const double firstWeight =
-            inverseDeterminant * Dot(originOffset, perpendicular);
-        if (firstWeight < 0.0 || firstWeight > 1.0)
-            return std::numeric_limits<double>::infinity();
-
-        const Float3 secondPerpendicular = Cross(originOffset, firstSecond);
-        const double secondWeight =
-            inverseDeterminant * Dot(direction, secondPerpendicular);
-        if (secondWeight < 0.0 || firstWeight + secondWeight > 1.0)
-            return std::numeric_limits<double>::infinity();
-
-        const double distance =
-            inverseDeterminant * Dot(firstThird, secondPerpendicular);
-        return distance > 1e-8
-            ? distance
-            : std::numeric_limits<double>::infinity();
-    }
-
-    const char* CgltfResultName(cgltf_result result)
-    {
-        switch (result)
-        {
-        case cgltf_result_success: return "success";
-        case cgltf_result_data_too_short: return "data too short";
-        case cgltf_result_unknown_format: return "unknown format";
-        case cgltf_result_invalid_json: return "invalid JSON";
-        case cgltf_result_invalid_gltf: return "invalid glTF";
-        case cgltf_result_invalid_options: return "invalid options";
-        case cgltf_result_file_not_found: return "file not found";
-        case cgltf_result_io_error: return "I/O error";
-        case cgltf_result_out_of_memory: return "out of memory";
-        case cgltf_result_legacy_gltf: return "legacy glTF";
-        default: return "unknown result";
-        }
-    }
-
-    struct CgltfDataDeleter
-    {
-        void operator()(cgltf_data* data) const
-        {
-            cgltf_free(data);
-        }
+        const char* directory;
+        const char* label;
+        const char* model;
+        uvsr::SceneInitialCamera camera;
+        const char* provenanceHash;
+        const char* repackHash;
+        size_t materialCount, imageCount;
+        bool bistro;
     };
 
-    using CgltfDataPtr = std::unique_ptr<cgltf_data, CgltfDataDeleter>;
+    constexpr Scene Scenes[] = {
+        { "bistro_interior_retextured", "Bistro Interior", "bistro_interior.gltf",
+            { { 4.444546f, 2.258351f, -2.746721f }, { .992681f, -.037313f, -.114857f },
+                { .037065f, .999304f, -.004289f }, 33.9666f },
+            "5acbcd2585a9c3be6d04715ccfb9b5ed7018c3a9b73bf3d9c0662990117511bf",
+            "613b86564d7f785a43b83f9ba59b008a758d3f8e0dac93a2e7e9b0d154f31a76", 74, 201, true },
+        { "san_miguel_retextured", "San Miguel", "san_miguel.gltf",
+            { { 27.6255f, 1.49616f, 2.42353f }, { -.9673232088f, -.0081301951f, -.2534160802f },
+                { -.0078644596f, .9999669523f, -.0020602299f }, 57.2209f },
+            "1117561844626cea69078c3668cf389de8ef5dd4c97ce793427474f37dbf7577",
+            "2fdb20e180585fffe00e0bff799ed825044a8262fdc08cd3a9e5aab7cb096cdc", 287, 269, false }
+    };
 
-    void ValidateExternalResources(
-        const cgltf_data& data,
-        const std::filesystem::path& sourceComponent,
-        const std::filesystem::path& stagedComponent,
-        const std::filesystem::path& sourceRoot,
-        const std::filesystem::path& stagingRoot,
-        size_t minimumExternalBufferCount)
+    Json Audit(const fs::path& path, std::string_view hash)
     {
-        const std::string componentContext = Generic(sourceComponent);
-        if (minimumExternalBufferCount > 0u)
-        {
-            Require(data.file_type == cgltf_file_type_gltf,
-                "downloaded scene component must be ordinary glTF: " +
-                    componentContext);
-            Require(data.buffers_count >= minimumExternalBufferCount,
-                "downloaded scene component has fewer external buffers than "
-                "its audited minimum: " + componentContext);
-        }
-
-        std::set<const cgltf_buffer*> referencedBuffers;
-        for (cgltf_size viewIndex = 0u;
-            viewIndex < data.buffer_views_count;
-            ++viewIndex)
-        {
-            const cgltf_buffer_view& view = data.buffer_views[viewIndex];
-            Require(view.buffer != nullptr,
-                "glTF buffer view has no buffer: " + componentContext);
-            referencedBuffers.insert(view.buffer);
-        }
-
-        for (cgltf_size bufferIndex = 0u;
-            bufferIndex < data.buffers_count;
-            ++bufferIndex)
-        {
-            const cgltf_buffer& buffer = data.buffers[bufferIndex];
-            Require(referencedBuffers.find(&buffer) != referencedBuffers.end(),
-                "glTF declares an unused buffer: " + componentContext);
-            if (data.file_type == cgltf_file_type_glb && buffer.uri == nullptr)
-                continue;
-
-            Require(buffer.uri != nullptr && buffer.uri[0] != '\0',
-                "glTF buffer has no external URI: " + componentContext);
-            const std::string context =
-                "glTF buffer " + std::to_string(bufferIndex);
-            const std::filesystem::path sourceBuffer = ResolveExternalResource(
-                sourceComponent,
-                sourceRoot,
-                buffer.uri,
-                context);
-            const std::filesystem::path stagedBuffer = ResolveExternalResource(
-                stagedComponent,
-                stagingRoot,
-                buffer.uri,
-                "staged " + context);
-            Require(std::filesystem::file_size(sourceBuffer) == buffer.size,
-                context + " byteLength differs from its file size");
-            RequireFilesEqual(sourceBuffer, stagedBuffer);
-        }
-
-        for (cgltf_size imageIndex = 0u;
-            imageIndex < data.images_count;
-            ++imageIndex)
-        {
-            const cgltf_image& image = data.images[imageIndex];
-            const bool hasUri = image.uri != nullptr && image.uri[0] != '\0';
-            const bool hasBufferView = image.buffer_view != nullptr;
-            Require(hasUri != hasBufferView,
-                "glTF image must have exactly one storage source: " +
-                    componentContext);
-            if (hasBufferView)
-            {
-                Require(image.mime_type != nullptr && image.mime_type[0] != '\0',
-                    "buffer-view image has no MIME type: " + componentContext);
-                continue;
-            }
-
-            const std::string context =
-                "glTF image " + std::to_string(imageIndex);
-            const std::filesystem::path sourceImage = ResolveExternalResource(
-                sourceComponent,
-                sourceRoot,
-                image.uri,
-                context);
-            const std::filesystem::path stagedImage = ResolveExternalResource(
-                stagedComponent,
-                stagingRoot,
-                image.uri,
-                "staged " + context);
-            RequireFilesEqual(sourceImage, stagedImage);
-        }
+        std::ifstream stream(path, std::ios::binary);
+        Require(bool(stream), "missing historical audit: " + path.string());
+        std::string text{ std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>() };
+        Require(!stream.bad(), "cannot read historical audit");
+        // Checkout line endings vary. All other bytes of these reviewed records are immutable.
+        text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+        Require(uvsr::Sha256(text) == hash, "historical audit changed: " + path.string());
+        return uvsr::json::Parse(text);
     }
 
-    void ValidateRendererCompatibleMaterials(
-        const cgltf_data& data,
-        const std::filesystem::path& component)
+    void CheckLegal(const fs::path& sourceRoot)
     {
-        const std::string context = Generic(component);
-        for (cgltf_size materialIndex = 0u;
-            materialIndex < data.materials_count;
-            ++materialIndex)
-        {
-            const cgltf_material& material = data.materials[materialIndex];
-            const std::string materialName =
-                material.name != nullptr && material.name[0] != '\0'
-                ? material.name
-                : "material " + std::to_string(materialIndex);
-            Require(material.alpha_mode != cgltf_alpha_mode_blend,
-                "downloaded scene contains a BLEND material that UVSR would "
-                    "skip ('" + materialName + "'): " + context);
-            Require(!material.has_transmission,
-                "downloaded scene contains a transmission material that UVSR "
-                    "would skip ('" + materialName + "'): " + context);
-        }
-    }
-
-    CgltfDataPtr LoadAndValidateComponent(
-        const std::filesystem::path& sourceComponent,
-        const std::filesystem::path& stagedComponent,
-        const std::filesystem::path& sourceRoot,
-        const std::filesystem::path& stagingRoot,
-        size_t minimumExternalBufferCount)
-    {
-        RequireFilesEqual(sourceComponent, stagedComponent);
-
-        cgltf_options options{};
-        cgltf_data* rawData = nullptr;
-        const std::string nativePath = sourceComponent.string();
-        const cgltf_result parseResult =
-            cgltf_parse_file(&options, nativePath.c_str(), &rawData);
-        Require(parseResult == cgltf_result_success && rawData != nullptr,
-            "cgltf failed to parse " + Generic(sourceComponent) + ": " +
-                CgltfResultName(parseResult));
-        CgltfDataPtr data(rawData);
-
-        Require(data->asset.version != nullptr &&
-                std::strcmp(data->asset.version, "2.0") == 0,
-            "scene component is not glTF 2.0: " + Generic(sourceComponent));
-        Require(data->scenes_count > 0u && data->scene != nullptr,
-            "scene component has no default scene: " +
-                Generic(sourceComponent));
-        Require(data->nodes_count > 0u && data->meshes_count > 0u &&
-                data->accessors_count > 0u &&
-                data->buffer_views_count > 0u &&
-                data->buffers_count > 0u,
-            "scene component has no renderable glTF structure: " +
-                Generic(sourceComponent));
-
-        ValidateExternalResources(
-            *data,
-            sourceComponent,
-            stagedComponent,
-            sourceRoot,
-            stagingRoot,
-            minimumExternalBufferCount);
-        if (minimumExternalBufferCount > 0u)
-            ValidateRendererCompatibleMaterials(*data, sourceComponent);
-
-        const cgltf_result loadResult =
-            cgltf_load_buffers(&options, data.get(), nativePath.c_str());
-        Require(loadResult == cgltf_result_success,
-            "cgltf failed to load buffers for " + Generic(sourceComponent) +
-                ": " + CgltfResultName(loadResult));
-        const cgltf_result validationResult = cgltf_validate(data.get());
-        Require(validationResult == cgltf_result_success,
-            "cgltf rejected " + Generic(sourceComponent) + ": " +
-                CgltfResultName(validationResult));
-
-        for (cgltf_size bufferIndex = 0u;
-            bufferIndex < data->buffers_count;
-            ++bufferIndex)
-        {
-            Require(data->buffers[bufferIndex].size == 0u ||
-                    data->buffers[bufferIndex].data != nullptr,
-                "cgltf did not load a declared buffer for " +
-                    Generic(sourceComponent));
-        }
-        return data;
-    }
-
-    size_t NodeIndex(
-        const cgltf_data& data,
-        const cgltf_node* node,
-        const std::string& context)
-    {
-        Require(node != nullptr, context + " contains a null node");
-        const ptrdiff_t index = node - data.nodes;
-        Require(index >= 0 &&
-                static_cast<cgltf_size>(index) < data.nodes_count,
-            context + " contains a node outside the glTF node array");
-        return static_cast<size_t>(index);
-    }
-
-    void VisitSceneNode(
-        const cgltf_data& data,
-        const cgltf_node* node,
-        std::vector<unsigned char>& visitState,
-        std::vector<const cgltf_node*>& sceneNodes,
-        const std::string& context)
-    {
-        const size_t index = NodeIndex(data, node, context);
-        Require(visitState[index] != 1u,
-            context + " scene graph contains a cycle");
-        if (visitState[index] == 2u)
-            return;
-
-        visitState[index] = 1u;
-        sceneNodes.push_back(node);
-        for (cgltf_size childIndex = 0u;
-            childIndex < node->children_count;
-            ++childIndex)
-        {
-            const cgltf_node* child = node->children[childIndex];
-            Require(child != nullptr && child->parent == node,
-                context + " scene graph has an inconsistent parent link");
-            VisitSceneNode(
-                data,
-                child,
-                visitState,
-                sceneNodes,
-                context);
-        }
-        visitState[index] = 2u;
-    }
-
-    std::vector<const cgltf_node*> CollectDefaultSceneNodes(
-        const cgltf_data& data,
-        const std::string& context)
-    {
-        Require(data.scene != nullptr && data.scene->nodes_count > 0u,
-            context + " default scene has no roots");
-        std::vector<unsigned char> visitState(data.nodes_count, 0u);
-        std::vector<const cgltf_node*> sceneNodes;
-        sceneNodes.reserve(data.nodes_count);
-        for (cgltf_size rootIndex = 0u;
-            rootIndex < data.scene->nodes_count;
-            ++rootIndex)
-        {
-            const cgltf_node* root = data.scene->nodes[rootIndex];
-            Require(root != nullptr && root->parent == nullptr,
-                context + " default scene root has a parent");
-            VisitSceneNode(
-                data,
-                root,
-                visitState,
-                sceneNodes,
-                context);
-        }
-        Require(!sceneNodes.empty(), context + " default scene is empty");
-        return sceneNodes;
-    }
-
-    const cgltf_accessor* FindPositionAccessor(
-        const cgltf_primitive& primitive,
-        const std::string& context)
-    {
-        const cgltf_accessor* position = nullptr;
-        for (cgltf_size attributeIndex = 0u;
-            attributeIndex < primitive.attributes_count;
-            ++attributeIndex)
-        {
-            const cgltf_attribute& attribute =
-                primitive.attributes[attributeIndex];
-            if (attribute.type == cgltf_attribute_type_position &&
-                attribute.index == 0)
-            {
-                Require(position == nullptr,
-                    context + " contains duplicate POSITION attributes");
-                position = attribute.data;
-            }
-        }
-        Require(position != nullptr && position->type == cgltf_type_vec3,
-            context + " has no VEC3 POSITION accessor");
-        return position;
-    }
-
-    Float3 ReadTransformedPosition(
-        const cgltf_accessor& positions,
-        cgltf_size index,
-        const cgltf_float* worldTransform,
-        const std::string& context)
-    {
-        Require(index < positions.count,
-            context + " triangle index exceeds the POSITION accessor");
-        std::array<cgltf_float, 3> local{};
-        Require(cgltf_accessor_read_float(
-                &positions,
-                index,
-                local.data(),
-                local.size()) != 0,
-            context + " failed to read a POSITION value");
-        const Float3 world = TransformPoint(
-            worldTransform,
-            { local[0], local[1], local[2] });
-        Require(IsFinite(world),
-            context + " produced a non-finite transformed position");
-        return world;
-    }
-
-    void ValidateEmbeddedCamera(
-        const cgltf_data& data,
-        const std::vector<const cgltf_node*>& sceneNodes,
-        const ExpectedCamera& expected,
-        const std::array<float, 3>& expectedPositionOffset,
-        const std::string& context)
-    {
-        bool foundMatchingCamera = false;
-        for (const cgltf_node* node : sceneNodes)
-        {
-            if (node->camera == nullptr ||
-                node->camera->type != cgltf_camera_type_perspective)
-            {
-                continue;
-            }
-
-            std::array<cgltf_float, 16> world{};
-            cgltf_node_transform_world(node, world.data());
-            const Float3 position = TransformPoint(
-                world.data(),
-                { 0.0, 0.0, 0.0 });
-            const Float3 direction = Normalize(
-                TransformVector(world.data(), { 0.0, 0.0, -1.0 }),
-                context + " embedded camera direction");
-            const Float3 up = Normalize(
-                TransformVector(world.data(), { 0.0, 1.0, 0.0 }),
-                context + " embedded camera up");
-            const double verticalFovDegrees =
-                node->camera->data.perspective.yfov * 180.0 / kPi;
-
-            const Float3 expectedEmbeddedPosition = Subtract(
-                ToFloat3(expected.Position),
-                ToFloat3(expectedPositionOffset));
-            const Float3 expectedDirection = Normalize(
-                ToFloat3(expected.Direction),
-                context + " expected camera direction");
-            const Float3 expectedUp = Normalize(
-                ToFloat3(expected.Up),
-                context + " expected camera up");
-            const bool poseMatches =
-                LengthSquared(Subtract(
-                    position,
-                    expectedEmbeddedPosition)) <= 1e-8 &&
-                Dot(direction, expectedDirection) >= 0.999999 &&
-                Dot(up, expectedUp) >= 0.999999 &&
-                NearlyEqual(
-                    verticalFovDegrees,
-                    expected.VerticalFovDegrees,
-                    1e-3);
-            foundMatchingCamera = foundMatchingCamera || poseMatches;
-        }
-        Require(foundMatchingCamera,
-            context + " descriptor camera no longer preserves its audited "
-                "position offset, direction, up, and FOV relation to the "
-                "embedded perspective camera");
-    }
-
-    void ValidateInitialCameraGeometry(
-        const cgltf_data& data,
-        const ExpectedDownloadedScene& expected,
-        const std::string& context)
-    {
-        const std::vector<const cgltf_node*> sceneNodes =
-            CollectDefaultSceneNodes(data, context);
-        if (expected.CompareEmbeddedCamera)
-        {
-            ValidateEmbeddedCamera(
-                data,
-                sceneNodes,
-                expected.Camera,
-                expected.EmbeddedCameraPositionOffset,
-                context);
-        }
-
-        const Float3 camera = ToFloat3(expected.Camera.Position);
-        const Float3 forward = Normalize(
-            ToFloat3(expected.Camera.Direction),
-            context + " initial camera direction");
-        const std::array<Float3, 6> rayDirections = {{
-            { 0.0, -1.0, 0.0 },
-            { 1.0, 0.0, 0.0 },
-            { -1.0, 0.0, 0.0 },
-            { 0.0, 0.0, 1.0 },
-            { 0.0, 0.0, -1.0 },
-            forward,
-        }};
-        std::array<double, 6> nearestRayHits;
-        nearestRayHits.fill(std::numeric_limits<double>::infinity());
-        double minimumDistanceSquared =
-            std::numeric_limits<double>::infinity();
-        Float3 boundsMinimum{
-            std::numeric_limits<double>::infinity(),
-            std::numeric_limits<double>::infinity(),
-            std::numeric_limits<double>::infinity()
+        constexpr std::pair<const char*, const char*> legal[] = {
+            { "bistro_interior_retextured/LICENSE.txt",
+                "9a9ef3c33320eebe6126b0c7dc327885806bde242283bbe6e4ae77641ad703e4" },
+            { "bistro_interior_retextured/SOURCE-README.txt",
+                "c87c5b60992cedee49fce1ea9bfe10cf60498ebf1113685b723d6dc9006c2bef" },
+            { "san_miguel_retextured/LICENSE.txt",
+                "708c9ad36adac62d13bd61ddf47d58d2b892b9e318bd87da93ae9e55e2b5e680" }
         };
-        Float3 boundsMaximum{
-            -std::numeric_limits<double>::infinity(),
-            -std::numeric_limits<double>::infinity(),
-            -std::numeric_limits<double>::infinity()
-        };
-        uint64_t triangleCount = 0u;
-        bool foundTransformedMeshNode = false;
+        for (const auto& [path, hash] : legal)
+            Require(uvsr::Sha256File(sourceRoot / path) == hash, "bundled source attribution or license changed");
+        const auto repository = sourceRoot.parent_path().parent_path();
+        Require(!fs::exists(repository / "tools/repack_gltf_buffers.py") &&
+            !fs::exists(repository / "tools/import_san_miguel.py"), "retired conversion tool was restored");
+    }
 
-        for (const cgltf_node* node : sceneNodes)
+    void CheckStaging(const fs::path& sourceRoot, const fs::path& stagedRoot, const fs::path& mapPath)
+    {
+        std::ifstream mapFile(mapPath);
+        Require(bool(mapFile), "runtime asset map is missing");
+        constexpr std::string_view prefix = "media/glTF-Sample-Assets/Models/";
+        std::map<std::string, std::string> mappings;
+        std::set<std::string> expected;
+        for (std::string row; std::getline(mapFile, row);)
         {
-            if (node->mesh == nullptr)
+            if (!row.empty() && row.back() == '\r')
+                row.pop_back();
+            const auto separator = row.find('|');
+            Require(separator != std::string::npos && row.find('|', separator + 1) == std::string::npos,
+                "malformed runtime asset map");
+            const auto package = Relative(row.substr(0, separator));
+            const auto source = Relative(row.substr(separator + 1));
+            Require(mappings.emplace(package, source).second, "duplicate runtime asset mapping");
+            if (package.compare(0, prefix.size(), prefix) != 0)
                 continue;
+            const auto path = Relative(package.substr(prefix.size()));
+            const auto scene = *fs::path(path).begin();
+            Require(scene == Scenes[0].directory || scene == Scenes[1].directory, "unexpected runtime scene");
+            Require(source == "assets/scenes/" + path, "scene mapping changes the canonical source identity");
+            expected.insert(path);
+        }
+        Require(!mapFile.bad() && !expected.empty(), "runtime scene map is empty or unreadable");
+        Require(Files(stagedRoot, true) == expected, "staged scene inventory differs from the runtime map");
+        for (const auto& relative : expected)
+            Require(uvsr::Sha256File(sourceRoot / relative) == uvsr::Sha256File(stagedRoot / relative),
+                "staged asset bytes differ from source: " + relative);
+        Require(mappings["bin/licenses/Amazon-Lumberyard-Bistro.txt"] ==
+                "assets/scenes/bistro_interior_retextured/LICENSE.txt" &&
+            mappings["bin/licenses/San-Miguel-2.1.txt"] == "assets/scenes/san_miguel_retextured/LICENSE.txt",
+            "runtime package omits a retained scene license");
+    }
 
-            std::array<cgltf_float, 16> worldTransform{};
-            cgltf_node_transform_world(node, worldTransform.data());
-            for (const cgltf_float value : worldTransform)
+    Json CheckRepack(const fs::path& root, const Scene& scene)
+    {
+        const auto provenance = Audit(root / "source-provenance.json", scene.provenanceHash);
+        Require(Member(provenance, "scene", Kind::String).string == scene.directory, "provenance scene mismatch");
+        const auto report = Audit(root / "components/buffer-repack-report.json", scene.repackHash);
+        const auto& outputs = Member(report, "files", Kind::Array).array;
+        std::set<std::string> reported;
+        uint64_t bufferBytes = 0;
+        size_t buffers = 0;
+        for (const auto& output : outputs)
+        {
+            const auto path = Relative(Member(output, "path", Kind::String).string);
+            const auto bytes = Integer(output, "bytes");
+            Require(reported.insert(path).second, "repack lists an output twice");
+            Require(fs::file_size(root / "components" / path) == bytes &&
+                uvsr::Sha256File(root / "components" / path) ==
+                    Lower(Member(output, "sha256", Kind::String).string),
+                "repacked output differs from its audited bytes: " + path);
+            if (fs::path(path).extension() == ".bin")
             {
-                Require(std::isfinite(value),
-                    context + " mesh node has a non-finite world transform");
+                Require(bytes <= 90000000u, "repacked buffer exceeds its 90 MB limit");
+                bufferBytes += bytes;
+                ++buffers;
             }
-            foundTransformedMeshNode =
-                foundTransformedMeshNode ||
-                !IsIdentityMatrix(worldTransform.data());
+        }
+        auto actual = Files(root / "components");
+        actual.erase("buffer-repack-report.json");
+        actual.erase("blender-export-report.json");
+        Require(actual == reported && reported.count(scene.model) == 1, "repack inventory is incomplete");
+        Require(buffers == 5 && bufferBytes ==
+            Integer(report, "copiedBufferViewBytes") + Integer(report, "alignmentPaddingBytes"),
+            "repack buffer count or lossless byte accounting changed");
+        if (!scene.bistro)
+        {
+            const auto imported = Audit(root / "blender-import-report.json",
+                "21694870a8584b0854b96737b3955dc49ffe814991633a5d82798bb214911a3b");
+            Require(Member(imported, "outputGltfSha256", Kind::String).string ==
+                Member(report, "sourceContainerSha256", Kind::String).string, "Blender/repack chain is broken");
+        }
+        return report;
+    }
 
-            for (cgltf_size primitiveIndex = 0u;
-                primitiveIndex < node->mesh->primitives_count;
-                ++primitiveIndex)
+    XMVECTOR Vector(const std::array<float, 3>& value)
+    {
+        return XMVectorSet(value[0], value[1], value[2], 0);
+    }
+
+    std::vector<const cgltf_node*> SceneNodes(const cgltf_data& data)
+    {
+        std::vector<const cgltf_node*> nodes;
+        std::set<const cgltf_node*> visited;
+        std::function<void(const cgltf_node*)> visit = [&](const cgltf_node* node) {
+            Require(node && visited.insert(node).second, "default scene repeats a node or contains a cycle");
+            nodes.push_back(node);
+            for (size_t i = 0; i < node->children_count; ++i)
             {
-                const cgltf_primitive& primitive =
-                    node->mesh->primitives[primitiveIndex];
-                const std::string primitiveContext =
-                    context + " primitive " +
-                    std::to_string(primitiveIndex);
-                Require(primitive.type == cgltf_primitive_type_triangles,
-                    primitiveContext +
-                        " must use independent triangle topology");
-                const cgltf_accessor* positions =
-                    FindPositionAccessor(primitive, primitiveContext);
-                const cgltf_accessor* indices = primitive.indices;
-                const cgltf_size elementCount =
-                    indices != nullptr ? indices->count : positions->count;
-                Require(elementCount > 0u && elementCount % 3u == 0u,
-                    primitiveContext +
-                        " element count must be nonzero and divisible by three");
+                Require(node->children[i]->parent == node, "default scene has an inconsistent parent");
+                visit(node->children[i]);
+            }
+        };
+        for (size_t i = 0; i < data.scene->nodes_count; ++i)
+        {
+            Require(!data.scene->nodes[i]->parent, "default scene root has a parent");
+            visit(data.scene->nodes[i]);
+        }
+        return nodes;
+    }
 
-                for (cgltf_size elementIndex = 0u;
-                    elementIndex < elementCount;
-                    elementIndex += 3u)
+    void CheckGeometry(const cgltf_data& data, const Scene& scene)
+    {
+        struct Primitive
+        {
+            const cgltf_primitive* primitive;
+            const cgltf_accessor* positions;
+            XMFLOAT4X4 world;
+        };
+        std::vector<Primitive> primitives;
+        BoundingBox bounds;
+        bool hasBounds = false, transformedMesh = false, embeddedCamera = false;
+        const auto camera = Vector(scene.camera.Position);
+        const auto forward = XMVector3Normalize(Vector(scene.camera.Direction));
+        const auto up = XMVector3Normalize(Vector(scene.camera.Up));
+        for (const auto* node : SceneNodes(data))
+        {
+            XMFLOAT4X4 world;
+            cgltf_node_transform_world(node, &world._11);
+            const auto matrix = XMLoadFloat4x4(&world);
+            Require(!XMMatrixIsNaN(matrix) && !XMMatrixIsInfinite(matrix), "nonfinite node transform");
+            if (node->camera && node->camera->type == cgltf_camera_type_perspective)
+            {
+                const auto offset = XMVectorSet(1, 0, -.5f, 0);
+                embeddedCamera |= XMVector3NearEqual(
+                        XMVector3TransformCoord(XMVectorZero(), matrix), XMVectorSubtract(camera, offset),
+                        XMVectorReplicate(1e-4f)) &&
+                    XMVectorGetX(XMVector3Dot(XMVector3Normalize(XMVector3TransformNormal(
+                        XMVectorSet(0, 0, -1, 0), matrix)), forward)) >= .999999f &&
+                    XMVectorGetX(XMVector3Dot(XMVector3Normalize(XMVector3TransformNormal(
+                        XMVectorSet(0, 1, 0, 0), matrix)), up)) >= .999999f &&
+                    std::abs(XMConvertToDegrees(node->camera->data.perspective.yfov) -
+                        scene.camera.VerticalFovDegrees) <= 1e-3f;
+            }
+            if (!node->mesh)
+                continue;
+            transformedMesh |= !XMMatrixIsIdentity(matrix);
+            for (size_t i = 0; i < node->mesh->primitives_count; ++i)
+            {
+                const auto& primitive = node->mesh->primitives[i];
+                const cgltf_accessor* position = nullptr;
+                for (size_t j = 0; j < primitive.attributes_count; ++j)
+                    if (primitive.attributes[j].type == cgltf_attribute_type_position)
+                    {
+                        Require(!position && primitive.attributes[j].index == 0, "duplicate POSITION accessor");
+                        position = primitive.attributes[j].data;
+                    }
+                Require(position && position->type == cgltf_type_vec3 && position->count > 0 &&
+                    position->has_min && position->has_max && primitive.type == cgltf_primitive_type_triangles,
+                    "scene primitive has no bounded triangle positions");
+                BoundingBox local, transformed;
+                BoundingBox::CreateFromPoints(local,
+                    XMVectorSet(position->min[0], position->min[1], position->min[2], 0),
+                    XMVectorSet(position->max[0], position->max[1], position->max[2], 0));
+                local.Transform(transformed, matrix);
+                if (hasBounds)
+                    BoundingBox::CreateMerged(bounds, bounds, transformed);
+                else
+                    bounds = transformed;
+                hasBounds = true;
+                primitives.push_back({ &primitive, position, world });
+            }
+        }
+        Require(hasBounds && bounds.Contains(camera) == CONTAINS, "initial camera is outside scene bounds");
+        Require(!scene.bistro || (transformedMesh && embeddedCamera),
+            "Bistro lost transformed meshes or its audited embedded camera relation");
+        const float diagonal = 2.f * XMVectorGetX(XMVector3Length(XMLoadFloat3(&bounds.Extents)));
+        const float radius = std::max(.1f, diagonal * .0005f);
+        XMFLOAT3 center;
+        XMStoreFloat3(&center, camera);
+        const BoundingSphere clearance(center, radius + .01f);
+        const XMVECTOR directions[] = { XMVectorSet(0, -1, 0, 0), XMVectorSet(1, 0, 0, 0),
+            XMVectorSet(-1, 0, 0, 0), XMVectorSet(0, 0, 1, 0), XMVectorSet(0, 0, -1, 0), forward };
+        std::array<float, 6> hits;
+        hits.fill(std::numeric_limits<float>::infinity());
+        uint64_t triangles = 0;
+        for (const auto& entry : primitives)
+        {
+            const auto* indices = entry.primitive->indices;
+            const size_t count = indices ? indices->count : entry.positions->count;
+            Require(count > 0 && count % 3 == 0, "triangle index count is invalid");
+            const auto matrix = XMLoadFloat4x4(&entry.world);
+            const auto vertex = [&](size_t element) {
+                const size_t index = indices ? cgltf_accessor_read_index(indices, element) : element;
+                XMFLOAT3 position;
+                Require(index < entry.positions->count &&
+                    cgltf_accessor_read_float(entry.positions, index, &position.x, 3), "invalid triangle vertex");
+                const auto result = XMVector3TransformCoord(XMLoadFloat3(&position), matrix);
+                Require(!XMVector3IsNaN(result) && !XMVector3IsInfinite(result), "nonfinite triangle vertex");
+                return result;
+            };
+            for (size_t i = 0; i < count; i += 3)
+            {
+                const auto a = vertex(i), b = vertex(i + 1), c = vertex(i + 2);
+                ++triangles;
+                // DirectXCollision requires nondegenerate triangles, as does the production collision world.
+                if (XMVectorGetX(XMVector3LengthSq(XMVector3Cross(
+                        XMVectorSubtract(b, a), XMVectorSubtract(c, a)))) <= 1e-20f)
+                    continue;
+                Require(!clearance.Intersects(a, b, c), "initial camera sphere intersects authored geometry");
+                for (size_t ray = 0; ray < hits.size(); ++ray)
                 {
-                    const cgltf_size firstIndex = indices != nullptr
-                        ? cgltf_accessor_read_index(indices, elementIndex)
-                        : elementIndex;
-                    const cgltf_size secondIndex = indices != nullptr
-                        ? cgltf_accessor_read_index(indices, elementIndex + 1u)
-                        : elementIndex + 1u;
-                    const cgltf_size thirdIndex = indices != nullptr
-                        ? cgltf_accessor_read_index(indices, elementIndex + 2u)
-                        : elementIndex + 2u;
-                    const Float3 first = ReadTransformedPosition(
-                        *positions,
-                        firstIndex,
-                        worldTransform.data(),
-                        primitiveContext);
-                    const Float3 second = ReadTransformedPosition(
-                        *positions,
-                        secondIndex,
-                        worldTransform.data(),
-                        primitiveContext);
-                    const Float3 third = ReadTransformedPosition(
-                        *positions,
-                        thirdIndex,
-                        worldTransform.data(),
-                        primitiveContext);
-
-                    for (const Float3 vertex : { first, second, third })
-                    {
-                        boundsMinimum.X =
-                            std::min(boundsMinimum.X, vertex.X);
-                        boundsMinimum.Y =
-                            std::min(boundsMinimum.Y, vertex.Y);
-                        boundsMinimum.Z =
-                            std::min(boundsMinimum.Z, vertex.Z);
-                        boundsMaximum.X =
-                            std::max(boundsMaximum.X, vertex.X);
-                        boundsMaximum.Y =
-                            std::max(boundsMaximum.Y, vertex.Y);
-                        boundsMaximum.Z =
-                            std::max(boundsMaximum.Z, vertex.Z);
-                    }
-                    minimumDistanceSquared = std::min(
-                        minimumDistanceSquared,
-                        PointTriangleDistanceSquared(
-                            camera,
-                            first,
-                            second,
-                            third));
-                    for (size_t rayIndex = 0u;
-                        rayIndex < rayDirections.size();
-                        ++rayIndex)
-                    {
-                        nearestRayHits[rayIndex] = std::min(
-                            nearestRayHits[rayIndex],
-                            RayTriangleDistance(
-                                camera,
-                                rayDirections[rayIndex],
-                                first,
-                                second,
-                                third));
-                    }
-                    ++triangleCount;
+                    float distance = 0;
+                    if (TriangleTests::Intersects(camera, directions[ray], a, b, c, distance))
+                        hits[ray] = std::min(hits[ray], distance);
                 }
             }
         }
-
-        Require(triangleCount > 0u &&
-                std::isfinite(minimumDistanceSquared),
-            context + " camera geometry audit found no triangles");
-        Require(!expected.ExpectTransformedMeshNodes ||
-                foundTransformedMeshNode,
-            context + " no longer exercises transformed mesh nodes");
-        Require(camera.X > boundsMinimum.X &&
-                camera.X < boundsMaximum.X &&
-                camera.Y > boundsMinimum.Y &&
-                camera.Y < boundsMaximum.Y &&
-                camera.Z > boundsMinimum.Z &&
-                camera.Z < boundsMaximum.Z,
-            context + " initial camera is outside the scene bounds");
-
-        const double sceneDiagonal = std::sqrt(
-            LengthSquared(Subtract(boundsMaximum, boundsMinimum)));
-        Require(std::isfinite(sceneDiagonal) && sceneDiagonal > 0.0,
-            context + " scene bounds are invalid");
-        const double collisionRadius = std::max(
-            0.1,
-            std::max(sceneDiagonal, 100.0) * 0.0005);
-        const double minimumClearance =
-            std::sqrt(minimumDistanceSquared);
-        std::cout << context << " camera audit candidate: clearance="
-                  << minimumClearance << ", collisionRadius="
-                  << collisionRadius << ", diagonal=" << sceneDiagonal
-                  << ", rays[down,+X,-X,+Z,-Z,forward]=["
-                  << nearestRayHits[0] << ',' << nearestRayHits[1] << ','
-                  << nearestRayHits[2] << ',' << nearestRayHits[3] << ','
-                  << nearestRayHits[4] << ',' << nearestRayHits[5] << ']'
-                  << std::endl;
-        Require(minimumClearance >= collisionRadius + 0.01,
-            context +
-                " initial camera intersects its collision sphere with scene geometry");
-        Require(std::isfinite(nearestRayHits[0]) &&
-                nearestRayHits[0] > collisionRadius &&
-                nearestRayHits[0] <= 3.0,
-            context +
-                " initial camera must have a reachable floor within three meters");
-        size_t horizontalEnclosureRayCount = 0u;
-        for (size_t rayIndex = 1u; rayIndex <= 4u; ++rayIndex)
-        {
-            if (!std::isfinite(nearestRayHits[rayIndex]))
-                continue;
-            Require(nearestRayHits[rayIndex] > collisionRadius &&
-                    nearestRayHits[rayIndex] <= sceneDiagonal * 1.01,
-                context +
-                    " initial camera has an invalid horizontal enclosure hit "
-                    "at ray index " +
-                    std::to_string(rayIndex) + " with distance " +
-                    std::to_string(nearestRayHits[rayIndex]));
-            ++horizontalEnclosureRayCount;
-        }
-        Require(horizontalEnclosureRayCount >=
-                expected.MinimumHorizontalEnclosureRayCount,
-            context + " initial camera has only " +
-                std::to_string(horizontalEnclosureRayCount) +
-                " horizontal enclosure hits; expected at least " +
-                std::to_string(expected.MinimumHorizontalEnclosureRayCount));
-        Require(std::isfinite(nearestRayHits[5]) &&
-                nearestRayHits[5] > collisionRadius &&
-                nearestRayHits[5] <= sceneDiagonal * 1.01,
-            context +
-                " initial camera must face reachable scene geometry");
-
-        std::cout << context << " initial camera: "
-                  << minimumClearance << " m geometry clearance, "
-                  << nearestRayHits[0] << " m above floor, "
-                  << triangleCount << " transformed triangles audited\n";
+        Require(triangles > 0 && std::isfinite(diagonal) && diagonal > 0, "scene has no finite geometry");
+        for (const auto distance : hits)
+            Require(std::isfinite(distance) && distance > radius && distance <= diagonal * 1.01f,
+                "initial camera lost floor, four-sided enclosure or forward geometry");
+        Require(hits[0] <= 3.f, "initial camera is more than three meters above its floor");
+        std::cout << scene.label << ": " << triangles << " transformed triangles, floor " << hits[0] << " m\n";
     }
 
-    const ExpectedDownloadedScene* FindDownloadedScene(
-        std::string_view descriptorRelativePath)
+    fs::path External(const fs::path& root, const char* uri)
     {
-        const auto match = std::find_if(
-            kDownloadedScenes.begin(),
-            kDownloadedScenes.end(),
-            [descriptorRelativePath](const ExpectedDownloadedScene& scene)
-            {
-                return descriptorRelativePath ==
-                    scene.DescriptorRelativePath;
-            });
-        return match == kDownloadedScenes.end() ? nullptr : &*match;
+        Require(uri && *uri, "external resource URI is absent");
+        std::string decoded = uri;
+        decoded.resize(cgltf_decode_uri(decoded.data()));
+        const auto path = root / Relative(decoded);
+        Require(fs::is_regular_file(path) && !fs::is_symlink(path), "external glTF resource is missing");
+        return path;
     }
 
-    std::vector<std::string> DiscoverSceneFiles(
-        const std::filesystem::path& root)
+    void CheckGltf(const fs::path& componentRoot, const Scene& scene, const Json& report)
     {
-        std::vector<std::string> discovered;
-        for (const auto& item :
-            std::filesystem::recursive_directory_iterator(root))
+        cgltf_options options{};
+        cgltf_data* raw = nullptr;
+        const auto path = (componentRoot / scene.model).string();
+        Require(cgltf_parse_file(&options, path.c_str(), &raw) == cgltf_result_success && raw,
+            "retained glTF failed to parse");
+        const std::unique_ptr<cgltf_data, decltype(&cgltf_free)> data(raw, cgltf_free);
+        Require(data->file_type == cgltf_file_type_gltf && data->asset.version &&
+            std::strcmp(data->asset.version, "2.0") == 0 && data->scene && data->scene->nodes_count > 0 &&
+            data->meshes_count > 0 && data->accessors_count > 0 && data->buffers_count == 5 &&
+            data->buffer_views_count == Integer(report, "bufferViewCount") &&
+            data->images_count == scene.imageCount,
+            "retained scene lost its glTF 2.0 structure or audited repack");
+        std::set<const cgltf_buffer*> referenced;
+        for (size_t i = 0; i < data->buffer_views_count; ++i)
         {
-            if (item.is_regular_file() && IsLoadableSceneFile(item.path()))
-                discovered.push_back(Generic(item.path()));
+            Require(data->buffer_views[i].buffer != nullptr, "buffer view has no buffer");
+            referenced.insert(data->buffer_views[i].buffer);
         }
-        return discovered;
+        for (size_t i = 0; i < data->buffers_count; ++i)
+            Require(referenced.count(&data->buffers[i]) == 1 &&
+                fs::file_size(External(componentRoot, data->buffers[i].uri)) == data->buffers[i].size,
+                "declared glTF buffer is unused or has the wrong byteLength");
+        for (size_t i = 0; i < data->images_count; ++i)
+        {
+            const auto& image = data->images[i];
+            Require(bool(image.uri) != bool(image.buffer_view), "image must have exactly one storage source");
+            if (image.uri)
+                (void)External(componentRoot, image.uri);
+            else
+                Require(image.mime_type && *image.mime_type, "embedded image has no MIME type");
+        }
+        Require(data->materials_count == scene.materialCount, "audited scene material count changed");
+        for (size_t i = 0; i < data->materials_count; ++i)
+            Require(data->materials[i].alpha_mode != cgltf_alpha_mode_blend && !data->materials[i].has_transmission,
+                "scene retains a material domain the renderer cannot draw");
+        Require(cgltf_load_buffers(&options, data.get(), path.c_str()) == cgltf_result_success &&
+            cgltf_validate(data.get()) == cgltf_result_success, "CGltf rejected retained buffer/accessor data");
+        CheckGeometry(*data, scene);
     }
 
-    std::vector<uvsr::SceneCatalogEntry> ValidateStagedCatalog(
-        const std::filesystem::path& stagingRoot)
+    void CheckDescriptor(const fs::path& stagedRoot, const Scene& scene,
+        const std::vector<uvsr::SceneCatalogEntry>& catalog)
     {
-        const std::vector<std::string> discovered =
-            DiscoverSceneFiles(stagingRoot);
-        const std::vector<uvsr::SceneCatalogEntry> catalog =
-            uvsr::BuildSceneCatalog(stagingRoot, discovered);
-
-        std::set<std::string> actualDisplayNames;
-        std::set<std::string> actualRelativePaths;
-        for (const uvsr::SceneCatalogEntry& entry : catalog)
+        const auto path = stagedRoot / scene.directory / (std::string(scene.directory) + ".scene.json");
+        const auto descriptor = uvsr::json::Read(path);
+        const auto model = "components/" + std::string(scene.model);
+        const auto& models = Member(descriptor, "models", Kind::Array).array;
+        const auto& graph = Member(descriptor, "graph", Kind::Array).array;
+        Require(Member(descriptor, "displayName", Kind::String).string == scene.label && models.size() == 1 &&
+            models[0].kind == Kind::String && models[0].string == model && graph.size() == 1 &&
+            Member(graph[0], "model", Kind::Number).number == 0, "descriptor lost its single model instance");
+        const auto* entry = uvsr::FindSceneCatalogEntry(catalog, path.generic_string());
+        Require(entry && entry->DisplayName == scene.label && entry->InitialCamera &&
+            !uvsr::FindSceneCatalogEntry(catalog, (path.parent_path() / model).generic_string()),
+            "production catalog lost the descriptor or exposed its component");
+        const auto& rawCamera = Member(descriptor, "initialCamera", Kind::Object);
+        const auto& camera = *entry->InitialCamera;
+        const std::array<std::pair<const char*, std::array<float, 3>>, 3> expected = {{
+            { "position", scene.camera.Position }, { "direction", scene.camera.Direction }, { "up", scene.camera.Up }
+        }};
+        const std::array<std::array<float, 3>, 3> actual = { camera.Position, camera.Direction, camera.Up };
+        for (size_t axis = 0; axis < expected.size(); ++axis)
         {
-            actualDisplayNames.insert(entry.DisplayName);
-            const std::filesystem::path relative =
-                std::filesystem::path(entry.FileName)
-                    .lexically_normal()
-                    .lexically_relative(stagingRoot.lexically_normal());
-            Require(!relative.empty() && !relative.is_absolute(),
-                "catalog entry lies outside the staged scene root: " +
-                    entry.FileName);
-            actualRelativePaths.insert(relative.generic_string());
+            const auto& values = Member(rawCamera, expected[axis].first, Kind::Array).array;
+            Require(values.size() == 3, "camera vector has the wrong dimension");
+            for (size_t i = 0; i < 3; ++i)
+                Require(values[i].kind == Kind::Number && std::abs(values[i].number - expected[axis].second[i]) < 1e-5 &&
+                    std::abs(actual[axis][i] - expected[axis].second[i]) < 1e-5f, "audited camera pose changed");
         }
-
-        std::set<std::string> expectedDisplayNames;
-        std::set<std::string> expectedRelativePaths;
-        for (const ExpectedDescriptor& expected : kExpectedDescriptors)
-        {
-            expectedDisplayNames.insert(expected.DisplayName);
-            expectedRelativePaths.insert(expected.RelativePath);
-        }
-        Require(catalog.size() == kExpectedDescriptors.size() &&
-                actualDisplayNames == expectedDisplayNames &&
-                actualRelativePaths == expectedRelativePaths,
-            "staged scene catalog must contain exactly Bistro Interior and "
-                "San Miguel");
-        return catalog;
-    }
-
-    void ValidateDescriptorCamera(
-        const Json::Value& descriptor,
-        const ExpectedDownloadedScene& expected,
-        const uvsr::SceneCatalogEntry& catalogEntry,
-        const std::string& context)
-    {
-        const Json::Value& camera = descriptor["initialCamera"];
-        Require(camera.isObject(),
-            context + " descriptor has no initialCamera object");
-        const std::array<float, 3> position =
-            ReadFloat3(camera["position"], context + " camera position");
-        const std::array<float, 3> direction =
-            ReadFloat3(camera["direction"], context + " camera direction");
-        const std::array<float, 3> up =
-            ReadFloat3(camera["up"], context + " camera up");
-        Require(NearlyEqual(position, expected.Camera.Position) &&
-                NearlyEqual(direction, expected.Camera.Direction) &&
-                NearlyEqual(up, expected.Camera.Up),
-            context + " descriptor camera pose differs from the audited pose");
-
-        const Float3 normalizedDirection = Normalize(
-            ToFloat3(direction),
-            context + " camera direction");
-        const Float3 normalizedUp = Normalize(
-            ToFloat3(up),
-            context + " camera up");
-        Require(std::abs(Dot(normalizedDirection, normalizedUp)) <= 1e-5,
-            context + " camera direction and up must be orthogonal");
-        Require(camera["verticalFovDegrees"].isNumeric() &&
-                std::isfinite(camera["verticalFovDegrees"].asFloat()) &&
-                NearlyEqual(
-                    camera["verticalFovDegrees"].asFloat(),
-                    expected.Camera.VerticalFovDegrees),
-            context + " descriptor camera FOV differs from the audited FOV");
-
-        Require(catalogEntry.InitialCamera.has_value(),
-            context + " scene catalog discarded the valid initial camera");
-        const uvsr::SceneInitialCamera& catalogCamera =
-            *catalogEntry.InitialCamera;
-        Require(NearlyEqual(
-                    catalogCamera.Position,
-                    expected.Camera.Position) &&
-                NearlyEqual(
-                    catalogCamera.Direction,
-                    expected.Camera.Direction) &&
-                NearlyEqual(
-                    catalogCamera.Up,
-                    expected.Camera.Up) &&
-                NearlyEqual(
-                    catalogCamera.VerticalFovDegrees,
-                    expected.Camera.VerticalFovDegrees),
-            context + " catalog camera differs from descriptor metadata");
-    }
-
-    std::filesystem::path ResolveDescriptorModel(
-        const std::filesystem::path& descriptor,
-        const std::filesystem::path& root,
-        const std::string& model,
-        const std::string& context)
-    {
-        const std::filesystem::path relativeModel(model);
-        Require(!relativeModel.empty() && !relativeModel.is_absolute() &&
-                !relativeModel.has_root_name() &&
-                !relativeModel.has_root_directory(),
-            context + " model reference must be relative");
-        const std::filesystem::path component =
-            (descriptor.parent_path() / relativeModel).lexically_normal();
-        Require(IsContainedBy(root, component),
-            context + " model reference escapes the supported scene root");
-        RequireRegularFileBelowLimit(component, context + " model");
-        return component;
-    }
-
-    void ValidateDescriptor(
-        donut::vfs::IFileSystem& fileSystem,
-        const std::filesystem::path& sourceRoot,
-        const std::filesystem::path& stagingRoot,
-        const ExpectedDescriptor& expected,
-        const std::vector<uvsr::SceneCatalogEntry>& catalog,
-        std::set<std::string>& validatedComponents)
-    {
-        const std::filesystem::path sourceDescriptor =
-            (sourceRoot / expected.RelativePath).lexically_normal();
-        const std::filesystem::path stagedDescriptor =
-            (stagingRoot / expected.RelativePath).lexically_normal();
-        RequireFilesEqual(sourceDescriptor, stagedDescriptor);
-
-        Json::Value descriptor;
-        Require(donut::json::LoadFromFile(
-                fileSystem,
-                Generic(sourceDescriptor),
-                descriptor) && descriptor.isObject(),
-            "failed to parse scene descriptor: " + Generic(sourceDescriptor));
-        Require(descriptor["displayName"].isString() &&
-                descriptor["displayName"].asString() == expected.DisplayName,
-            "scene descriptor displayName differs: " +
-                Generic(sourceDescriptor));
-        Require(descriptor["models"].isArray() &&
-                descriptor["models"].size() == expected.ModelCount,
-            "scene descriptor model count differs: " +
-                Generic(sourceDescriptor));
-        Require(descriptor["graph"].isArray() &&
-                descriptor["graph"].size() == descriptor["models"].size(),
-            "scene descriptor graph must instantiate every model exactly "
-                "once: " + Generic(sourceDescriptor));
-
-        std::vector<bool> instantiatedModels(expected.ModelCount, false);
-        for (const Json::Value& graphNode : descriptor["graph"])
-        {
-            Require(graphNode.isObject() && graphNode["model"].isUInt(),
-                "scene descriptor graph has an invalid model index: " +
-                    Generic(sourceDescriptor));
-            const Json::ArrayIndex modelIndex =
-                graphNode["model"].asUInt();
-            Require(modelIndex < expected.ModelCount &&
-                    !instantiatedModels[modelIndex],
-                "scene descriptor graph repeats or exceeds a model index: " +
-                    Generic(sourceDescriptor));
-            instantiatedModels[modelIndex] = true;
-        }
-        Require(std::all_of(
-                instantiatedModels.begin(),
-                instantiatedModels.end(),
-                [](bool instantiated) { return instantiated; }),
-            "scene descriptor graph omits a model: " +
-                Generic(sourceDescriptor));
-
-        const uvsr::SceneCatalogEntry* catalogEntry =
-            uvsr::FindSceneCatalogEntry(catalog, Generic(stagedDescriptor));
-        Require(catalogEntry != nullptr &&
-                catalogEntry->DisplayName == expected.DisplayName,
-            "scene descriptor is missing or mislabeled in the staged catalog: " +
-                Generic(stagedDescriptor));
-
-        const ExpectedDownloadedScene* downloaded =
-            FindDownloadedScene(expected.RelativePath);
-        if (downloaded != nullptr)
-        {
-            ValidateDescriptorCamera(
-                descriptor,
-                *downloaded,
-                *catalogEntry,
-                expected.DisplayName);
-            Require(descriptor["models"][0u].isString() &&
-                    descriptor["models"][0u].asString() ==
-                        downloaded->ModelRelativePath,
-                std::string(expected.DisplayName) +
-                    " descriptor model path differs from the runtime contract");
-        }
-
-        for (Json::ArrayIndex modelIndex = 0u;
-            modelIndex < descriptor["models"].size();
-            ++modelIndex)
-        {
-            const Json::Value& modelValue = descriptor["models"][modelIndex];
-            Require(modelValue.isString() && !modelValue.asString().empty(),
-                "scene descriptor contains an invalid model reference: " +
-                    Generic(sourceDescriptor));
-            const std::filesystem::path sourceComponent =
-                ResolveDescriptorModel(
-                    sourceDescriptor,
-                    sourceRoot,
-                    modelValue.asString(),
-                    expected.DisplayName);
-            const std::filesystem::path relativeComponent =
-                sourceComponent.lexically_relative(sourceRoot);
-            const std::filesystem::path stagedComponent =
-                (stagingRoot / relativeComponent).lexically_normal();
-            RequireRegularFileBelowLimit(
-                stagedComponent,
-                std::string(expected.DisplayName) + " staged model");
-            Require(uvsr::FindSceneCatalogEntry(
-                    catalog,
-                    Generic(stagedComponent)) == nullptr,
-                "descriptor-owned model is visible in the staged scene picker: " +
-                    Generic(stagedComponent));
-
-            const std::string componentKey = Generic(sourceComponent);
-            if (!validatedComponents.insert(componentKey).second)
-                continue;
-
-            Require(EndsWithCaseInsensitive(componentKey, ".gltf"),
-                "retained scene component must use standard .gltf");
-
-            // Keep the cgltf object local to this iteration. Downloaded scenes
-            // can carry large external buffers, so retaining one scene while
-            // opening the next would needlessly increase peak memory in CI.
-            const size_t minimumExternalBufferCount = downloaded != nullptr
-                ? downloaded->MinimumExternalBufferCount
-                : 0u;
-            CgltfDataPtr component = LoadAndValidateComponent(
-                sourceComponent,
-                stagedComponent,
-                sourceRoot,
-                stagingRoot,
-                minimumExternalBufferCount);
-            if (downloaded != nullptr)
-            {
-                ValidateInitialCameraGeometry(
-                    *component,
-                    *downloaded,
-                    expected.DisplayName);
-            }
-        }
+        Require(std::abs(Member(rawCamera, "verticalFovDegrees", Kind::Number).number -
+                scene.camera.VerticalFovDegrees) < 1e-4 &&
+            std::abs(camera.VerticalFovDegrees - scene.camera.VerticalFovDegrees) < 1e-4f &&
+            std::abs(XMVectorGetX(XMVector3Dot(Vector(camera.Direction), Vector(camera.Up)))) < 1e-5f,
+            "production catalog changed the audited camera FOV or orthogonal axes");
     }
 }
 
-int main(int argumentCount, char** arguments)
+int main(int argc, char** argv)
 {
     try
     {
-        Require(argumentCount == 4,
-            "usage: uvsr_scene_asset_contract_tests "
-            "<source-scene-root> <staged-scene-root> "
-            "<runtime-media-inventory>");
-        const std::filesystem::path sourceRoot =
-            std::filesystem::absolute(arguments[1]).lexically_normal();
-        const std::filesystem::path stagingRoot =
-            std::filesystem::absolute(arguments[2]).lexically_normal();
-        Require(std::filesystem::is_directory(sourceRoot),
-            "source scene root is missing: " + Generic(sourceRoot));
-        Require(std::filesystem::is_directory(stagingRoot),
-            "staged scene root is missing: " + Generic(stagingRoot));
-        const RuntimeSceneInventory runtimeSceneInventory =
-            LoadRuntimeSceneInventory(
-                std::filesystem::absolute(arguments[3]).lexically_normal());
-
-        for (size_t index = 0u;
-             index < kSupportedSceneDirectories.size();
-             ++index)
+        Require(argc == 4, "usage: uvsr_scene_asset_contract_tests <source-scenes> <staged-scenes> <runtime-asset-map>");
+        const auto source = fs::absolute(argv[1]).lexically_normal();
+        const auto staged = fs::absolute(argv[2]).lexically_normal();
+        for (const auto& scene : Scenes)
+            (void)Files(source / scene.directory);
+        CheckLegal(source);
+        CheckStaging(source, staged, argv[3]);
+        std::vector<std::string> discovered;
+        for (const auto& path : Files(staged, true))
         {
-            ValidateStagedSceneTree(
-                sourceRoot,
-                stagingRoot,
-                kSupportedSceneDirectories[index],
-                runtimeSceneInventory[index]);
+            const auto extension = Lower(fs::path(path).extension().string());
+            if (extension == ".json" || extension == ".gltf" || extension == ".glb")
+                discovered.push_back((staged / path).generic_string());
         }
-        Require(!std::filesystem::exists(stagingRoot / "nvidia_bistro"),
-            "the preserved source-only NVIDIA Bistro downloads must not be "
-                "staged as standalone runtime scenes");
-
-        donut::vfs::NativeFileSystem fileSystem;
-        const std::vector<uvsr::SceneCatalogEntry> catalog =
-            ValidateStagedCatalog(stagingRoot);
-
-        std::set<std::string> validatedComponents;
-        for (const ExpectedDescriptor& expected : kExpectedDescriptors)
+        const auto catalog = uvsr::BuildSceneCatalog(staged, discovered);
+        Require(catalog.size() == std::size(Scenes), "scene picker does not contain exactly the two retained scenes");
+        for (const auto& scene : Scenes)
         {
-            ValidateDescriptor(
-                fileSystem,
-                sourceRoot,
-                stagingRoot,
-                expected,
-                catalog,
-                validatedComponents);
+            const auto report = CheckRepack(source / scene.directory, scene);
+            CheckDescriptor(staged, scene, catalog);
+            CheckGltf(staged / scene.directory / "components", scene, report);
         }
-
-        std::cout << "scene asset contract tests passed\n";
+        CheckLightingAssets(source.parent_path() / "environments", source.parent_path() / "noise");
+        std::cout << "scene, provenance, HDR and noise asset contracts passed\n";
         return 0;
     }
     catch (const std::exception& error)
     {
-        std::cerr << "scene asset contract tests failed: "
-                  << error.what() << '\n';
+        std::cerr << "asset contract failed: " << error.what() << '\n';
         return 1;
     }
 }

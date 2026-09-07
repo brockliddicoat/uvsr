@@ -52,7 +52,6 @@ namespace uvsr
         [[nodiscard]] nvrhi::ITexture* BlackTexture() const;
         [[nodiscard]] nvrhi::ITexture* WhiteTexture() const;
         [[nodiscard]] nvrhi::ITexture* BlackCubeArray() const;
-        [[nodiscard]] nvrhi::ITexture* BlackDepthArray() const;
         [[nodiscard]] bool HasBlitPipelineFailure() const;
 
         bool BlitTexture(
@@ -73,7 +72,6 @@ namespace uvsr
         nvrhi::TextureHandle m_BlackTexture;
         nvrhi::TextureHandle m_WhiteTexture;
         nvrhi::TextureHandle m_BlackCubeArray;
-        nvrhi::TextureHandle m_BlackDepthArray;
         nvrhi::BindingLayoutHandle m_BlitBindingLayout;
         RendererCommonInitializationContract m_Initialization;
         RendererBlitPipelineFailureLatch m_BlitPipelineFailure;

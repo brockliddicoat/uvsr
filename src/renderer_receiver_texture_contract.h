@@ -6,13 +6,7 @@
 
 namespace uvsr
 {
-    [[nodiscard]] inline constexpr bool
-    IsRendererReceiverSampleCountSupported(uint32_t sampleCount) noexcept
-    {
-        return sampleCount == 1u || sampleCount == 2u ||
-            sampleCount == 4u || sampleCount == 8u ||
-            sampleCount == 16u;
-    }
+
 
     [[nodiscard]] inline constexpr bool
     IsRendererReceiverTextureDescriptorSupported(
@@ -20,16 +14,13 @@ namespace uvsr
     {
         if (descriptor.width == 0u || descriptor.height == 0u ||
             descriptor.depth != 1u || descriptor.arraySize != 1u ||
-            descriptor.mipLevels != 1u ||
-            !IsRendererReceiverSampleCountSupported(
-                descriptor.sampleCount))
+            descriptor.mipLevels != 1u || descriptor.sampleQuality != 0u ||
+            descriptor.sampleCount != 1u)
         {
             return false;
         }
 
-        return descriptor.sampleCount == 1u
-            ? descriptor.dimension == nvrhi::TextureDimension::Texture2D
-            : descriptor.dimension == nvrhi::TextureDimension::Texture2DMS;
+        return descriptor.dimension == nvrhi::TextureDimension::Texture2D;
     }
 
     [[nodiscard]] inline constexpr bool
@@ -47,11 +38,7 @@ namespace uvsr
 
         return material.width == depth.width &&
             material.height == depth.height &&
-            material.sampleCount == depth.sampleCount &&
-            material.sampleQuality == depth.sampleQuality &&
             normals.width == depth.width &&
-            normals.height == depth.height &&
-            normals.sampleCount == depth.sampleCount &&
-            normals.sampleQuality == depth.sampleQuality;
+            normals.height == depth.height;
     }
 }

@@ -1,6 +1,7 @@
 #pragma pack_matrix(row_major)
 
 #include "auto_exposure_cb.h"
+#include "auto_exposure_shared.h"
 
 cbuffer c_AutoExposure : register(b0)
 {
@@ -10,16 +11,14 @@ cbuffer c_AutoExposure : register(b0)
 Buffer<uint> t_Histogram : register(t0);
 RWBuffer<float> u_Exposure : register(u0);
 
-static const float AutoExposureMinimumLogLuminance = -20.0f;
-static const float AutoExposureMaximumLogLuminance = 20.0f;
-static const float AutoExposureMiddleGray = 0.18f;
-
 [numthreads(1, 1, 1)]
 void main(uint3 dispatchPosition : SV_DispatchThreadID)
 {
     uint validPixelCount = 0u;
     [unroll]
-    for (uint bin = 0u; bin < 256u; ++bin)
+    for (uint bin = 0u;
+        bin < UVSR_AUTO_EXPOSURE_HISTOGRAM_BIN_COUNT;
+        ++bin)
         validPixelCount += t_Histogram[bin];
 
     float previousExposure = u_Exposure[0];
@@ -41,7 +40,9 @@ void main(uint3 dispatchPosition : SV_DispatchThreadID)
         uint cumulative = 0u;
         uint medianBin = 0u;
         [loop]
-        for (uint bin = 0u; bin < 256u; ++bin)
+        for (uint bin = 0u;
+            bin < UVSR_AUTO_EXPOSURE_HISTOGRAM_BIN_COUNT;
+            ++bin)
         {
             cumulative += t_Histogram[bin];
             if (cumulative >= medianRank)
@@ -52,13 +53,14 @@ void main(uint3 dispatchPosition : SV_DispatchThreadID)
         }
 
         const float normalizedBinCenter =
-            (float(medianBin) + 0.5f) / 256.0f;
+            (float(medianBin) + 0.5f) /
+                float(UVSR_AUTO_EXPOSURE_HISTOGRAM_BIN_COUNT);
         const float meteredLuminance = exp2(lerp(
-            AutoExposureMinimumLogLuminance,
-            AutoExposureMaximumLogLuminance,
+            UVSR_AUTO_EXPOSURE_MINIMUM_LOG_LUMINANCE,
+            UVSR_AUTO_EXPOSURE_MAXIMUM_LOG_LUMINANCE,
             normalizedBinCenter));
         const float targetEV = clamp(
-            log2(AutoExposureMiddleGray /
+            log2(UVSR_AUTO_EXPOSURE_MIDDLE_GRAY /
                 max(meteredLuminance, 1e-8f)),
             minimumAutomaticEV,
             maximumAutomaticEV);

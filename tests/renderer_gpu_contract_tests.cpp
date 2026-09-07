@@ -1,400 +1,47 @@
 #include "renderer_gpu_contract.h"
 #include "renderer_pixel_readback_cb.h"
-#include "denoising_cb.h"
 #include "directional_ray_visibility_cb.h"
 #include "path_tracing_cb.h"
 #include "pbr_deferred_lighting_cb.h"
 #include "ray_traced_flashlight_shadows_cb.h"
 #include "ray_traced_sky_visibility_cb.h"
-#include "screen_space_visibility_cb.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <iostream>
+#include <initializer_list>
+#include <iterator>
+#include <map>
+#include <regex>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <string>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
-#define UVSR_ASSERT_GPU_TYPE(type, expectedSize) \
-    static_assert(sizeof(type) == expectedSize); \
-    static_assert(alignof(type) == 4u); \
-    static_assert(std::is_trivial_v<type>); \
-    static_assert(std::is_standard_layout_v<type>); \
-    static_assert(std::is_trivially_copyable_v<type>)
-#define UVSR_ASSERT_GPU_MEMBER(type, member, expectedOffset) \
-    static_assert(offsetof(type, member) == expectedOffset)
-
-UVSR_ASSERT_GPU_TYPE(uvsr::gpu_contract::Float2, 8u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Float2, x, 0u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Float2, y, 4u);
-UVSR_ASSERT_GPU_TYPE(uvsr::gpu_contract::Float3, 12u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Float3, x, 0u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Float3, y, 4u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Float3, z, 8u);
-UVSR_ASSERT_GPU_TYPE(uvsr::gpu_contract::Float4, 16u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Float4, x, 0u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Float4, y, 4u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Float4, z, 8u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Float4, w, 12u);
-UVSR_ASSERT_GPU_TYPE(uvsr::gpu_contract::Int2, 8u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Int2, x, 0u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Int2, y, 4u);
-UVSR_ASSERT_GPU_TYPE(uvsr::gpu_contract::Int4, 16u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Int4, values, 0u);
-UVSR_ASSERT_GPU_TYPE(uvsr::gpu_contract::Uint2, 8u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Uint2, x, 0u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Uint2, y, 4u);
-UVSR_ASSERT_GPU_TYPE(uvsr::gpu_contract::Uint3, 12u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Uint3, x, 0u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Uint3, y, 4u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Uint3, z, 8u);
-UVSR_ASSERT_GPU_TYPE(uvsr::gpu_contract::Uint4, 16u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Uint4, x, 0u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Uint4, y, 4u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Uint4, z, 8u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Uint4, w, 12u);
-UVSR_ASSERT_GPU_TYPE(uvsr::gpu_contract::Float3x4, 48u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Float3x4, values, 0u);
-UVSR_ASSERT_GPU_TYPE(uvsr::gpu_contract::Float4x4, 64u);
-UVSR_ASSERT_GPU_MEMBER(uvsr::gpu_contract::Float4x4, values, 0u);
-
-UVSR_ASSERT_GPU_TYPE(PlanarViewConstants, 720u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, matWorldToView, 0u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, matViewToClip, 64u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, matWorldToClip, 128u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, matClipToView, 192u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, matViewToWorld, 256u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, matClipToWorld, 320u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, matViewToClipNoOffset, 384u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, matWorldToClipNoOffset, 448u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, matClipToViewNoOffset, 512u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, matClipToWorldNoOffset, 576u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, viewportOrigin, 640u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, viewportSize, 648u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, viewportSizeInv, 656u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, pixelOffset, 664u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, clipToWindowScale, 672u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, clipToWindowBias, 680u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, windowToClipScale, 688u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, windowToClipBias, 696u);
-UVSR_ASSERT_GPU_MEMBER(PlanarViewConstants, cameraDirectionOrPosition, 704u);
-
-UVSR_ASSERT_GPU_TYPE(GeometryData, 64u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, numIndices, 0u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, numVertices, 4u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, indexBufferIndex, 8u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, indexOffset, 12u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, vertexBufferIndex, 16u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, positionOffset, 20u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, prevPositionOffset, 24u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, texCoord1Offset, 28u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, texCoord2Offset, 32u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, normalOffset, 36u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, tangentOffset, 40u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, curveRadiusOffset, 44u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, materialIndex, 48u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, pad0, 52u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, pad1, 56u);
-UVSR_ASSERT_GPU_MEMBER(GeometryData, pad2, 60u);
-
-UVSR_ASSERT_GPU_TYPE(InstanceData, 112u);
-UVSR_ASSERT_GPU_MEMBER(InstanceData, flags, 0u);
-UVSR_ASSERT_GPU_MEMBER(InstanceData, firstGeometryInstanceIndex, 4u);
-UVSR_ASSERT_GPU_MEMBER(InstanceData, firstGeometryIndex, 8u);
-UVSR_ASSERT_GPU_MEMBER(InstanceData, numGeometries, 12u);
-UVSR_ASSERT_GPU_MEMBER(InstanceData, transform, 16u);
-UVSR_ASSERT_GPU_MEMBER(InstanceData, prevTransform, 64u);
-
-UVSR_ASSERT_GPU_TYPE(MaterialConstants, 208u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, baseOrDiffuseColor, 0u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, flags, 12u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, specularColor, 16u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, materialID, 28u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, emissiveColor, 32u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, domain, 44u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, opacity, 48u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, roughness, 52u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, metalness, 56u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, normalTextureScale, 60u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, occlusionStrength, 64u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, alphaCutoff, 68u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, transmissionFactor, 72u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, baseOrDiffuseTextureIndex, 76u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, metalRoughOrSpecularTextureIndex, 80u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, emissiveTextureIndex, 84u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, normalTextureIndex, 88u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, occlusionTextureIndex, 92u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, transmissionTextureIndex, 96u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, opacityTextureIndex, 100u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, normalTextureTransformScale, 104u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, padding1, 112u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, sssScale, 124u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, sssTransmissionColor, 128u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, sssAnisotropy, 140u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, sssScatteringColor, 144u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, hairMelanin, 156u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, hairBaseColor, 160u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, hairMelaninRedness, 172u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, hairLongitudinalRoughness, 176u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, hairAzimuthalRoughness, 180u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, hairIor, 184u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, hairCuticleAngle, 188u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, hairDiffuseReflectionTint, 192u);
-UVSR_ASSERT_GPU_MEMBER(MaterialConstants, hairDiffuseReflectionWeight, 204u);
-
-UVSR_ASSERT_GPU_TYPE(ShadowConstants, 112u);
-UVSR_ASSERT_GPU_MEMBER(ShadowConstants, matWorldToUvzwShadow, 0u);
-UVSR_ASSERT_GPU_MEMBER(ShadowConstants, shadowFadeScale, 64u);
-UVSR_ASSERT_GPU_MEMBER(ShadowConstants, shadowFadeBias, 72u);
-UVSR_ASSERT_GPU_MEMBER(ShadowConstants, shadowMapCenterUV, 80u);
-UVSR_ASSERT_GPU_MEMBER(ShadowConstants, shadowFalloffDistance, 88u);
-UVSR_ASSERT_GPU_MEMBER(ShadowConstants, shadowMapArrayIndex, 92u);
-UVSR_ASSERT_GPU_MEMBER(ShadowConstants, shadowMapSizeTexels, 96u);
-UVSR_ASSERT_GPU_MEMBER(ShadowConstants, shadowMapSizeTexelsInv, 104u);
-
-UVSR_ASSERT_GPU_TYPE(LightConstants, 112u);
-UVSR_ASSERT_GPU_MEMBER(LightConstants, direction, 0u);
-UVSR_ASSERT_GPU_MEMBER(LightConstants, lightType, 12u);
-UVSR_ASSERT_GPU_MEMBER(LightConstants, position, 16u);
-UVSR_ASSERT_GPU_MEMBER(LightConstants, radius, 28u);
-UVSR_ASSERT_GPU_MEMBER(LightConstants, color, 32u);
-UVSR_ASSERT_GPU_MEMBER(LightConstants, intensity, 44u);
-UVSR_ASSERT_GPU_MEMBER(LightConstants, angularSizeOrInvRange, 48u);
-UVSR_ASSERT_GPU_MEMBER(LightConstants, innerAngle, 52u);
-UVSR_ASSERT_GPU_MEMBER(LightConstants, outerAngle, 56u);
-UVSR_ASSERT_GPU_MEMBER(LightConstants, outOfBoundsShadow, 60u);
-UVSR_ASSERT_GPU_MEMBER(LightConstants, shadowCascades, 64u);
-UVSR_ASSERT_GPU_MEMBER(LightConstants, perObjectShadows, 80u);
-UVSR_ASSERT_GPU_MEMBER(LightConstants, shadowChannel, 96u);
-
-UVSR_ASSERT_GPU_TYPE(LightProbeConstants, 128u);
-UVSR_ASSERT_GPU_MEMBER(LightProbeConstants, diffuseScale, 0u);
-UVSR_ASSERT_GPU_MEMBER(LightProbeConstants, specularScale, 4u);
-UVSR_ASSERT_GPU_MEMBER(LightProbeConstants, mipLevels, 8u);
-UVSR_ASSERT_GPU_MEMBER(LightProbeConstants, padding1, 12u);
-UVSR_ASSERT_GPU_MEMBER(LightProbeConstants, diffuseArrayIndex, 16u);
-UVSR_ASSERT_GPU_MEMBER(LightProbeConstants, specularArrayIndex, 20u);
-UVSR_ASSERT_GPU_MEMBER(LightProbeConstants, padding2, 24u);
-UVSR_ASSERT_GPU_MEMBER(LightProbeConstants, frustumPlanes, 32u);
-
-UVSR_ASSERT_GPU_TYPE(DeferredLightingConstants, 6496u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, view, 0u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, shadowMapTextureSize, 720u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, enableAmbientOcclusion, 728u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, padding, 732u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, ambientColorTop, 736u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, ambientColorBottom, 752u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, numLights, 768u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, numLightProbes, 772u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, indirectDiffuseScale, 776u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, indirectSpecularScale, 780u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, randomOffset, 784u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, padding2, 792u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, noisePattern, 800u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, lights, 864u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, shadows, 2656u);
-UVSR_ASSERT_GPU_MEMBER(DeferredLightingConstants, lightProbes, 4448u);
-
-UVSR_ASSERT_GPU_TYPE(GBufferFillConstants, 1440u);
-UVSR_ASSERT_GPU_MEMBER(GBufferFillConstants, view, 0u);
-UVSR_ASSERT_GPU_MEMBER(GBufferFillConstants, viewPrev, 720u);
-
-UVSR_ASSERT_GPU_TYPE(GBufferPushConstants, 28u);
-UVSR_ASSERT_GPU_MEMBER(GBufferPushConstants, startInstanceLocation, 0u);
-UVSR_ASSERT_GPU_MEMBER(GBufferPushConstants, startVertexLocation, 4u);
-UVSR_ASSERT_GPU_MEMBER(GBufferPushConstants, positionOffset, 8u);
-UVSR_ASSERT_GPU_MEMBER(GBufferPushConstants, prevPositionOffset, 12u);
-UVSR_ASSERT_GPU_MEMBER(GBufferPushConstants, texCoordOffset, 16u);
-UVSR_ASSERT_GPU_MEMBER(GBufferPushConstants, normalOffset, 20u);
-UVSR_ASSERT_GPU_MEMBER(GBufferPushConstants, tangentOffset, 24u);
-
-UVSR_ASSERT_GPU_TYPE(SceneVertex, 60u);
-UVSR_ASSERT_GPU_MEMBER(SceneVertex, pos, 0u);
-UVSR_ASSERT_GPU_MEMBER(SceneVertex, prevPos, 12u);
-UVSR_ASSERT_GPU_MEMBER(SceneVertex, texCoord, 24u);
-UVSR_ASSERT_GPU_MEMBER(SceneVertex, normal, 32u);
-UVSR_ASSERT_GPU_MEMBER(SceneVertex, tangent, 44u);
-
-UVSR_ASSERT_GPU_TYPE(FlashlightBeamProfile, 48u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfile, beamRightX, 0u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfile, beamRightY, 4u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfile, beamRightZ, 8u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfile, shapeExponent, 12u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfile, spillInnerCosine, 16u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfile, spillOuterCosine, 20u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfile, spillWeight, 24u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfile, hotspotWeight, 28u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfile, hotspotInnerCosine, 32u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfile, hotspotOuterCosine, 36u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfile, emitterRadiusMeters, 40u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfile, active, 44u);
-
-UVSR_ASSERT_GPU_TYPE(FlashlightBeamProfileBinding, 64u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfileBinding, profile, 0u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfileBinding, lightIndex, 48u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfileBinding, padding0, 52u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfileBinding, padding1, 56u);
-UVSR_ASSERT_GPU_MEMBER(FlashlightBeamProfileBinding, padding2, 60u);
-
-UVSR_ASSERT_GPU_TYPE(DenoisingConstants, 832u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, view, 0u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, fullResolution, 720u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, denoiserResolution, 728u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, sourceResolution, 736u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, fullResolutionInv, 744u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, denoiserResolutionInv, 752u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, sourceResolutionInv, 760u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, hitDistanceNormalization, 768u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, motionScaleX, 772u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, motionScaleY, 776u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, denoisingRange, 780u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, localLightPosition, 784u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, localLightRadius, 796u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, directionalTanAngularRadius, 800u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, reverseDepth, 804u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, method, 808u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, signalType, 812u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, spatialRadius, 816u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, spatialMethod, 820u);
-UVSR_ASSERT_GPU_MEMBER(DenoisingConstants, spatialPadding, 824u);
-
-UVSR_ASSERT_GPU_TYPE(DirectionalRayVisibilityConstants, 752u);
-UVSR_ASSERT_GPU_MEMBER(DirectionalRayVisibilityConstants, view, 0u);
-UVSR_ASSERT_GPU_MEMBER(
-    DirectionalRayVisibilityConstants, directionToLightAndDistance, 720u);
-UVSR_ASSERT_GPU_MEMBER(DirectionalRayVisibilityConstants, rayBias, 736u);
-UVSR_ASSERT_GPU_MEMBER(
-    DirectionalRayVisibilityConstants, depthQuantizationStep, 740u);
-UVSR_ASSERT_GPU_MEMBER(DirectionalRayVisibilityConstants, reverseDepth, 744u);
-UVSR_ASSERT_GPU_MEMBER(DirectionalRayVisibilityConstants, floatDepth, 748u);
-
-UVSR_ASSERT_GPU_TYPE(PathTracingConstants, 1568u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, view, 0u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, previousView, 720u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, flashlight, 1440u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, environmentScale, 1504u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, rayBias, 1508u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, maximumRayDistance, 1512u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, noisePattern, 1516u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, dispatchExtent, 1520u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, lightCount, 1528u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, flags, 1532u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, previousViewValid, 1536u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, instanceCount, 1540u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, padding0, 1544u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, padding1, 1548u);
-UVSR_ASSERT_GPU_MEMBER(PathTracingConstants, rayMaterialLimits, 1552u);
-
-UVSR_ASSERT_GPU_TYPE(PbrDeferredLightingConstants, 6576u);
-UVSR_ASSERT_GPU_MEMBER(PbrDeferredLightingConstants, deferred, 0u);
-UVSR_ASSERT_GPU_MEMBER(PbrDeferredLightingConstants, separateIndirect, 6496u);
-UVSR_ASSERT_GPU_MEMBER(PbrDeferredLightingConstants, lightingDebugView, 6500u);
-UVSR_ASSERT_GPU_MEMBER(PbrDeferredLightingConstants, visibilityDebugView, 6504u);
-UVSR_ASSERT_GPU_MEMBER(
-    PbrDeferredLightingConstants, skyVisibilityApplication, 6508u);
-UVSR_ASSERT_GPU_MEMBER(
-    PbrDeferredLightingConstants, directVisibilityLightIndices, 6512u);
-UVSR_ASSERT_GPU_MEMBER(
-    PbrDeferredLightingConstants, flashlightLightIndex, 6520u);
-UVSR_ASSERT_GPU_MEMBER(
-    PbrDeferredLightingConstants, flashlightPadding, 6524u);
-UVSR_ASSERT_GPU_MEMBER(
-    PbrDeferredLightingConstants, flashlightBeamProfile, 6528u);
-
-UVSR_ASSERT_GPU_TYPE(RayTracedFlashlightShadowConstants, 832u);
-UVSR_ASSERT_GPU_MEMBER(RayTracedFlashlightShadowConstants, view, 0u);
-UVSR_ASSERT_GPU_MEMBER(
-    RayTracedFlashlightShadowConstants, lightPositionAndRange, 720u);
-UVSR_ASSERT_GPU_MEMBER(
-    RayTracedFlashlightShadowConstants,
-    lightDirectionAndEmitterRadius,
-    736u);
-UVSR_ASSERT_GPU_MEMBER(
-    RayTracedFlashlightShadowConstants, beamProfile, 752u);
-UVSR_ASSERT_GPU_MEMBER(
-    RayTracedFlashlightShadowConstants, depthQuantizationStep, 800u);
-UVSR_ASSERT_GPU_MEMBER(RayTracedFlashlightShadowConstants, rayBias, 804u);
-UVSR_ASSERT_GPU_MEMBER(
-    RayTracedFlashlightShadowConstants, reverseDepth, 808u);
-UVSR_ASSERT_GPU_MEMBER(
-    RayTracedFlashlightShadowConstants, floatDepth, 812u);
-UVSR_ASSERT_GPU_MEMBER(
-    RayTracedFlashlightShadowConstants, sampleSequencePhase, 816u);
-UVSR_ASSERT_GPU_MEMBER(
-    RayTracedFlashlightShadowConstants, sampleCount, 820u);
-UVSR_ASSERT_GPU_MEMBER(
-    RayTracedFlashlightShadowConstants, noisePattern, 824u);
-UVSR_ASSERT_GPU_MEMBER(
-    RayTracedFlashlightShadowConstants, sampleSequenceMode, 828u);
-
-UVSR_ASSERT_GPU_TYPE(RayTracedSkyVisibilityConstants, 768u);
-UVSR_ASSERT_GPU_MEMBER(RayTracedSkyVisibilityConstants, view, 0u);
-UVSR_ASSERT_GPU_MEMBER(
-    RayTracedSkyVisibilityConstants, sampleSequencePhase, 720u);
-UVSR_ASSERT_GPU_MEMBER(RayTracedSkyVisibilityConstants, sampleCount, 724u);
-UVSR_ASSERT_GPU_MEMBER(RayTracedSkyVisibilityConstants, noisePattern, 728u);
-UVSR_ASSERT_GPU_MEMBER(RayTracedSkyVisibilityConstants, rayDistance, 732u);
-UVSR_ASSERT_GPU_MEMBER(
-    RayTracedSkyVisibilityConstants, depthQuantizationStep, 736u);
-UVSR_ASSERT_GPU_MEMBER(RayTracedSkyVisibilityConstants, rayBias, 740u);
-UVSR_ASSERT_GPU_MEMBER(RayTracedSkyVisibilityConstants, reverseDepth, 744u);
-UVSR_ASSERT_GPU_MEMBER(RayTracedSkyVisibilityConstants, floatDepth, 748u);
-UVSR_ASSERT_GPU_MEMBER(
-    RayTracedSkyVisibilityConstants, sampleSequenceMode, 752u);
-UVSR_ASSERT_GPU_MEMBER(RayTracedSkyVisibilityConstants, padding0, 756u);
-
-UVSR_ASSERT_GPU_TYPE(ScreenSpaceVisibilityConstants, 848u);
-UVSR_ASSERT_GPU_MEMBER(ScreenSpaceVisibilityConstants, view, 0u);
-UVSR_ASSERT_GPU_MEMBER(ScreenSpaceVisibilityConstants, fullResolution, 720u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, samplingResolution, 728u);
-UVSR_ASSERT_GPU_MEMBER(ScreenSpaceVisibilityConstants, radiusWorld, 736u);
-UVSR_ASSERT_GPU_MEMBER(ScreenSpaceVisibilityConstants, thicknessWorld, 740u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, stepDistributionExponent, 744u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, sampleSequenceMode, 748u);
-UVSR_ASSERT_GPU_MEMBER(ScreenSpaceVisibilityConstants, ambientStrength, 752u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, indirectDiffuseIntensity, 756u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, sampleSequencePhase, 760u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, maximumSampleCount, 764u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, sourceRadianceAvailable, 768u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, enableAmbientOcclusion, 772u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, enableIndirectDiffuse, 776u);
-UVSR_ASSERT_GPU_MEMBER(ScreenSpaceVisibilityConstants, reverseDepth, 780u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, orthographicProjection, 784u);
-UVSR_ASSERT_GPU_MEMBER(ScreenSpaceVisibilityConstants, resolutionScale, 788u);
-UVSR_ASSERT_GPU_MEMBER(ScreenSpaceVisibilityConstants, noisePattern, 792u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, visibilityDebugView, 796u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, diffuseEnvironmentEnabled, 800u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, diffuseEnvironmentScale, 804u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, diffuseEnvironmentArrayIndex, 808u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, specularEnvironmentEnabled, 812u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, specularEnvironmentScale, 816u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, specularEnvironmentMipLevels, 820u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, specularEnvironmentArrayIndex, 824u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, lightingDebugView, 828u);
-UVSR_ASSERT_GPU_MEMBER(
-    ScreenSpaceVisibilityConstants, skyVisibilityApplication, 832u);
-UVSR_ASSERT_GPU_MEMBER(ScreenSpaceVisibilityConstants, padding0, 836u);
-UVSR_ASSERT_GPU_MEMBER(ScreenSpaceVisibilityConstants, padding1, 840u);
-UVSR_ASSERT_GPU_MEMBER(ScreenSpaceVisibilityConstants, padding2, 844u);
+#define GPU_POD(type, bytes) \
+    static_assert(sizeof(type) == bytes && alignof(type) == 4 && std::is_trivial_v<type> && \
+        std::is_standard_layout_v<type> && std::is_trivially_copyable_v<type>)
+GPU_POD(uvsr::gpu_contract::Float2, 8);
+GPU_POD(uvsr::gpu_contract::Float3, 12);
+GPU_POD(uvsr::gpu_contract::Float4, 16);
+GPU_POD(uvsr::gpu_contract::Int2, 8);
+GPU_POD(uvsr::gpu_contract::Int4, 16);
+GPU_POD(uvsr::gpu_contract::Uint2, 8);
+GPU_POD(uvsr::gpu_contract::Uint3, 12);
+GPU_POD(uvsr::gpu_contract::Uint4, 16);
+GPU_POD(uvsr::gpu_contract::Float3x4, 48);
+GPU_POD(uvsr::gpu_contract::Float4x4, 64);
+GPU_POD(SceneVertex, 60);
+static_assert(offsetof(SceneVertex, pos) == 0 && offsetof(SceneVertex, prevPos) == 12 &&
+    offsetof(SceneVertex, texCoord) == 24 && offsetof(SceneVertex, normal) == 32 && offsetof(SceneVertex, tangent) == 44);
+#undef GPU_POD
 
 static_assert(MaterialDomain_Opaque == 0);
 static_assert(MaterialDomain_AlphaTested == 1);
@@ -450,113 +97,345 @@ static_assert(UVSR_SKY_VISIBILITY_APPLY_DIFFUSE_IBL == 1u);
 static_assert(UVSR_SKY_VISIBILITY_APPLY_SPECULAR_IBL == 2u);
 static_assert(UVSR_SKY_VISIBILITY_APPLY_BOTH_IBL == 3u);
 
-#undef UVSR_ASSERT_GPU_MEMBER
-#undef UVSR_ASSERT_GPU_TYPE
-
 namespace
 {
-    bool Require(bool condition, const char* message)
+    void Require(bool condition, const std::string& message)
     {
         if (!condition)
-            std::cerr << message << '\n';
-        return condition;
+            throw std::runtime_error(message);
     }
 
-    bool GeometrySerializationKnownAnswer()
+    struct Member
     {
-        const GeometryData value = {
-            1u, 2u, 3, 4u,
-            5, 6u, 7u, 8u,
-            9u, 10u, 11u, 12u,
-            13u, 14u, 15u, 16u
-        };
-        std::array<std::uint32_t, 16> words{};
-        std::memcpy(words.data(), &value, sizeof(value));
-        for (std::uint32_t index = 0; index < words.size(); ++index)
+        std::string name;
+        size_t offset, bytes, elements;
+        bool checked = false;
+    };
+    struct Layout
+    {
+        size_t bytes;
+        std::vector<Member> members;
+    };
+    using Layouts = std::map<std::string, Layout>;
+
+    template<class T>
+    void AddLayout(Layouts& layouts, const char* name, std::initializer_list<Member> members)
+    {
+        static_assert(alignof(T) == 4 && std::is_trivial_v<T> && std::is_standard_layout_v<T> &&
+            std::is_trivially_copyable_v<T>);
+        size_t end = 0;
+        std::set<std::string> names;
+        for (const auto& member : members)
         {
-            if (words[index] != index + 1u)
-                return false;
+            Require(member.offset == end && member.bytes > 0 && names.insert(member.name).second,
+                std::string(name) + ": incomplete or duplicate C++ member list");
+            end += member.bytes;
         }
-        return true;
+        Require(end == sizeof(T), std::string(name) + ": C++ member list does not cover sizeof");
+        Require(layouts.emplace(name, Layout{sizeof(T), members}).second, "duplicate C++ type");
     }
 
-    bool PackedPodSerializationKnownAnswer()
+    Layouts HostLayouts()
     {
-        const uvsr::gpu_contract::Float4 floats = {
-            1.f, -2.f, 3.5f, -4.25f };
-        const std::array<float, 4> expectedFloats = {
-            1.f, -2.f, 3.5f, -4.25f };
-        std::array<float, 4> actualFloats{};
-        std::memcpy(actualFloats.data(), &floats, sizeof(floats));
-
-        uvsr::gpu_contract::Int4 integers = { { 1, -2, 3, -4 } };
-        integers[2] = 5;
-        const std::array<std::int32_t, 4> expectedIntegers = {
-            1, -2, 5, -4 };
-        std::array<std::int32_t, 4> actualIntegers{};
-        std::memcpy(actualIntegers.data(), &integers, sizeof(integers));
-        return actualFloats == expectedFloats &&
-            actualIntegers == expectedIntegers;
+        Layouts layouts;
+#define M(member) Member{#member, offsetof(C, member), sizeof(decltype(C::member)), std::extent_v<decltype(C::member)>}
+#define LAYOUT(type, ...) { using C = type; AddLayout<C>(layouts, #type, {__VA_ARGS__}); }
+        LAYOUT(PlanarViewConstants,
+            M(matWorldToView), M(matViewToClip), M(matWorldToClip), M(matClipToView), M(matViewToWorld),
+            M(matClipToWorld), M(matViewToClipNoOffset), M(matWorldToClipNoOffset), M(matClipToViewNoOffset),
+            M(matClipToWorldNoOffset), M(viewportOrigin), M(viewportSize), M(viewportSizeInv),
+            M(pixelOffset), M(clipToWindowScale), M(clipToWindowBias), M(windowToClipScale),
+            M(windowToClipBias), M(cameraDirectionOrPosition));
+        LAYOUT(GeometryData,
+            M(numIndices), M(numVertices), M(indexBufferIndex), M(indexOffset), M(vertexBufferIndex),
+            M(positionOffset), M(prevPositionOffset), M(texCoord1Offset), M(texCoord2Offset),
+            M(normalOffset), M(tangentOffset), M(curveRadiusOffset), M(materialIndex), M(pad0), M(pad1),
+            M(pad2));
+        LAYOUT(InstanceData,
+            M(flags), M(firstGeometryInstanceIndex), M(firstGeometryIndex), M(numGeometries), M(transform),
+            M(prevTransform));
+        LAYOUT(MaterialConstants,
+            M(baseOrDiffuseColor), M(flags), M(specularColor), M(materialID), M(emissiveColor), M(domain),
+            M(opacity), M(roughness), M(metalness), M(normalTextureScale), M(occlusionStrength),
+            M(alphaCutoff), M(transmissionFactor), M(baseOrDiffuseTextureIndex),
+            M(metalRoughOrSpecularTextureIndex), M(emissiveTextureIndex), M(normalTextureIndex),
+            M(occlusionTextureIndex), M(transmissionTextureIndex), M(opacityTextureIndex),
+            M(normalTextureTransformScale), M(padding1), M(sssScale), M(sssTransmissionColor),
+            M(sssAnisotropy), M(sssScatteringColor), M(hairMelanin), M(hairBaseColor), M(hairMelaninRedness),
+            M(hairLongitudinalRoughness), M(hairAzimuthalRoughness), M(hairIor), M(hairCuticleAngle),
+            M(hairDiffuseReflectionTint), M(hairDiffuseReflectionWeight));
+        LAYOUT(ShadowConstants,
+            M(matWorldToUvzwShadow), M(shadowFadeScale), M(shadowFadeBias), M(shadowMapCenterUV),
+            M(shadowFalloffDistance), M(shadowMapArrayIndex), M(shadowMapSizeTexels),
+            M(shadowMapSizeTexelsInv));
+        LAYOUT(LightConstants,
+            M(direction), M(lightType), M(position), M(radius), M(color), M(intensity),
+            M(angularSizeOrInvRange), M(innerAngle), M(outerAngle), M(outOfBoundsShadow), M(shadowCascades),
+            M(perObjectShadows), M(shadowChannel));
+        LAYOUT(LightProbeConstants,
+            M(diffuseScale), M(specularScale), M(mipLevels), M(padding1), M(diffuseArrayIndex),
+            M(specularArrayIndex), M(padding2), M(frustumPlanes));
+        LAYOUT(DeferredLightingConstants,
+            M(view), M(shadowMapTextureSize), M(enableAmbientOcclusion), M(padding), M(ambientColorTop),
+            M(ambientColorBottom), M(numLights), M(numLightProbes), M(indirectDiffuseScale),
+            M(indirectSpecularScale), M(randomOffset), M(padding2), M(noisePattern), M(lights), M(shadows),
+            M(lightProbes));
+        LAYOUT(GBufferFillConstants,
+            M(view), M(viewPrev));
+        LAYOUT(GBufferPushConstants,
+            M(startInstanceLocation), M(startVertexLocation), M(positionOffset), M(prevPositionOffset),
+            M(texCoordOffset), M(normalOffset), M(tangentOffset));
+        LAYOUT(FlashlightBeamProfile,
+            M(beamRightX), M(beamRightY), M(beamRightZ), M(shapeExponent), M(spillInnerCosine),
+            M(spillOuterCosine), M(spillWeight), M(hotspotWeight), M(hotspotInnerCosine),
+            M(hotspotOuterCosine), M(emitterRadiusMeters), M(active));
+        LAYOUT(FlashlightBeamProfileBinding,
+            M(profile), M(lightIndex), M(padding0), M(padding1), M(padding2));
+        LAYOUT(DirectionalRayVisibilityConstants,
+            M(view), M(directionToLightAndDistance), M(rayBias), M(depthQuantizationStep), M(reverseDepth),
+            M(floatDepth), M(angularDiameter), M(sampleCount), M(sampleSequencePhase),
+            M(sampleSequenceMode), M(noisePattern), M(padding1), M(padding2), M(padding3));
+        LAYOUT(PathTracingConstants,
+            M(view), M(flashlight), M(environmentScale), M(rayBias), M(maximumRayDistance),
+            M(noisePattern), M(dispatchExtent), M(lightCount), M(flags), M(rayMaterialLimits),
+            M(maximumBounces), M(minimumBounces), M(fireflyThreshold), M(fireflyFilter));
+        LAYOUT(PbrDeferredLightingConstants,
+            M(deferred), M(lightingDebugView), M(skyVisibilityApplication),
+            M(directVisibilityLightIndices), M(flashlightLightIndex),
+            M(padding), M(flashlightBeamProfile));
+        LAYOUT(RayTracedFlashlightShadowConstants,
+            M(view), M(lightPositionAndRange), M(lightDirectionAndEmitterRadius), M(beamProfile),
+            M(depthQuantizationStep), M(rayBias), M(reverseDepth), M(floatDepth), M(sampleSequencePhase),
+            M(sampleCount), M(noisePattern), M(sampleSequenceMode));
+        LAYOUT(RayTracedSkyVisibilityConstants,
+            M(view), M(sampleSequencePhase), M(sampleCount), M(noisePattern), M(rayDistance),
+            M(depthQuantizationStep), M(rayBias), M(reverseDepth), M(floatDepth), M(sampleSequenceMode),
+            M(padding0));
+        LAYOUT(RendererPixelReadbackConstants,
+            M(pixelX), M(pixelY), M(padding0), M(padding1));
+#undef LAYOUT
+#undef M
+        return layouts;
     }
 
-    bool PushConstantSerializationKnownAnswer()
+    struct Frame
     {
-        const GBufferPushConstants value = {
-            0x01020304u,
-            0x11121314u,
-            0x21222324u,
-            0x31323334u,
-            0x41424344u,
-            0x51525354u,
-            0x61626364u
-        };
-        const std::array<std::uint32_t, 7> expected = {
-            0x01020304u,
-            0x11121314u,
-            0x21222324u,
-            0x31323334u,
-            0x41424344u,
-            0x51525354u,
-            0x61626364u
-        };
-        std::array<std::uint32_t, 7> actual{};
-        std::memcpy(actual.data(), &value, sizeof(value));
-        return actual == expected;
+        std::string type;
+        std::vector<Member> members;
+    };
+
+    std::set<std::string> VerifyDump(const std::string& text, const Layouts& layouts)
+    {
+        const size_t begin = text.find("; Buffer Definitions:");
+        const size_t end = text.find("; Resource Bindings:", begin);
+        Require(begin != std::string::npos && end != std::string::npos && end > begin, "missing DXIL layout boundaries");
+        std::istringstream lines(text.substr(begin + 21, end - begin - 21));
+        const std::regex typePattern(R"(^struct ([A-Za-z_][A-Za-z0-9_.:]*)$)");
+        const std::regex scalarPattern(R"(^(?:row_major )?(?:float|int|uint)([1-4])?(?:x([1-4]))?$)");
+        const std::regex memberPattern(
+            R"(^.*?([A-Za-z_$][A-Za-z0-9_$]*)(?:\[([0-9]+)\])?;;?[ ]*; Offset:[ ]*([0-9]+)(?: Size:[ ]*([0-9]+))?[ ]*$)");
+        std::vector<Frame> stack;
+        std::set<std::string> seen;
+        std::string pending, line;
+        while (std::getline(lines, line))
+        {
+            if (!line.empty() && line.back() == '\r')
+                line.pop_back();
+            if (line.empty())
+                continue;
+            Require(line.front() == ';', "malformed DXIL layout line");
+            line.erase(0, 1);
+            const size_t first = line.find_first_not_of(' ');
+            if (first == std::string::npos)
+                continue;
+            line = line.substr(first);
+            std::smatch match;
+            if (std::regex_match(line, match, typePattern))
+            {
+                Require(pending.empty(), "DXIL type omitted its opening brace");
+                pending = match[1].str();
+                pending = pending.substr(pending.find_last_of('.') + 1);
+                continue;
+            }
+            if (line == "{")
+            {
+                Require(!pending.empty() || stack.empty(), "unexpected DXIL opening brace");
+                stack.push_back({pending, {}});
+                pending.clear();
+                continue;
+            }
+            if (stack.empty())
+            {
+                Require(pending.empty() && (line.rfind("cbuffer ", 0) == 0 ||
+                    line.rfind("Resource bind info for ", 0) == 0), "unexpected DXIL layout content");
+                continue;
+            }
+            if (line == "}" && stack.back().type.empty())
+            {
+                stack.pop_back();
+                continue;
+            }
+            Require(pending.empty() && std::regex_match(line, match, memberPattern), "malformed DXIL member or closing brace: " + line);
+            Member member{match[1].str(), std::stoull(match[3].str()), 0,
+                match[2].matched ? std::stoull(match[2].str()) : 0};
+            const size_t bytes = match[4].matched ? std::stoull(match[4].str()) : 0;
+            if (line.front() == '}')
+            {
+                Require(!stack.back().type.empty(), "untyped DXIL closing member");
+                Frame frame = std::move(stack.back());
+                stack.pop_back();
+                const auto expected = layouts.find(frame.type);
+                if (expected != layouts.end())
+                {
+                    const auto& host = expected->second;
+                    Require(frame.members.size() == host.members.size(), frame.type + ": missing or extra DXIL members");
+                    for (size_t index = 0; index < host.members.size(); ++index)
+                    {
+                        const auto& observed = frame.members[index];
+                        const auto& wanted = host.members[index];
+                        Require(observed.name == wanted.name && observed.offset >= member.offset &&
+                            observed.offset - member.offset == wanted.offset && observed.elements == wanted.elements &&
+                            observed.bytes * (observed.elements ? observed.elements : 1) == wanted.bytes,
+                            frame.type + "." + wanted.name + ": DXIL member layout differs from C++");
+                    }
+                    member.bytes = host.bytes;
+                    member.checked = true;
+                    Require(!bytes || bytes == host.bytes * (member.elements ? member.elements : 1),
+                        frame.type + ": DXIL size differs from sizeof");
+                    seen.insert(frame.type);
+                }
+                else if (bytes && !frame.members.empty() && std::all_of(frame.members.begin(), frame.members.end(),
+                    [](const auto& child) { return child.checked; }))
+                {
+                    const auto& last = frame.members.back();
+                    Require(last.offset >= member.offset && bytes == last.offset - member.offset +
+                        last.bytes * (last.elements ? last.elements : 1), frame.type + ": cbuffer size differs from C++");
+                    if (frame.members.size() == 1)
+                        Require(frame.members[0].offset == 0, frame.type + ": cbuffer root is not at zero");
+                }
+            }
+            else
+            {
+                const size_t name = static_cast<size_t>(match.position(1));
+                const std::string declaration = line.substr(0, name ? name - 1 : 0);
+                std::smatch scalar;
+                if (std::regex_match(declaration, scalar, scalarPattern))
+                    member.bytes = 4 * (scalar[1].matched ? std::stoull(scalar[1].str()) : 1) *
+                        (scalar[2].matched ? std::stoull(scalar[2].str()) : 1);
+            }
+            Require(!stack.empty(), "DXIL member has no containing block");
+            auto& siblings = stack.back().members;
+            Require(std::none_of(siblings.begin(), siblings.end(),
+                [&](const auto& sibling) { return sibling.name == member.name; }), "duplicate DXIL member");
+            siblings.push_back(std::move(member));
+        }
+        Require(stack.empty() && pending.empty(), "unterminated DXIL structure");
+        return seen;
     }
 
-    bool NestedArrayBoundariesKnownAnswer()
+    void ByteGoldens()
     {
-        DeferredLightingConstants value{};
-        const auto* base = reinterpret_cast<const std::byte*>(&value);
-        return reinterpret_cast<const std::byte*>(&value.lights[0]) - base ==
-                864 &&
-            reinterpret_cast<const std::byte*>(&value.lights[15]) - base ==
-                2544 &&
-            reinterpret_cast<const std::byte*>(&value.shadows[0]) - base ==
-                2656 &&
-            reinterpret_cast<const std::byte*>(&value.shadows[15]) - base ==
-                4336 &&
-            reinterpret_cast<const std::byte*>(&value.lightProbes[0]) - base ==
-                4448 &&
-            reinterpret_cast<const std::byte*>(&value.lightProbes[15]) - base ==
-                6368;
+        GeometryData geometry{};
+        geometry.indexBufferIndex = -3;
+        geometry.materialIndex = 0x01020304;
+        std::array<uint32_t, 16> words{};
+        static_assert(sizeof(geometry) == sizeof(words));
+        std::memcpy(words.data(), &geometry, sizeof(geometry));
+        Require(words[2] == 0xfffffffdu && words[12] == 0x01020304u, "geometry buffer byte positions changed");
+        const uvsr::gpu_contract::Float4 floating{1.f, -2.f, 3.5f, -4.25f};
+        uvsr::gpu_contract::Int4 integer{{1, -2, 3, -4}};
+        integer[2] = 5;
+        std::array<uint32_t, 4> floats{}, integers{};
+        std::memcpy(floats.data(), &floating, sizeof(floating));
+        std::memcpy(integers.data(), &integer, sizeof(integer));
+        Require(floats == std::array<uint32_t, 4>{0x3f800000u, 0xc0000000u, 0x40600000u, 0xc0880000u} &&
+            integers == std::array<uint32_t, 4>{1u, 0xfffffffeu, 5u, 0xfffffffcu},
+            "scalar bit patterns, signed integer storage or Int4 mutation changed");
+        DeferredLightingConstants deferred{};
+        const auto* base = reinterpret_cast<const std::byte*>(&deferred);
+        Require(reinterpret_cast<const std::byte*>(&deferred.lights[15]) - base == 2544 &&
+            reinterpret_cast<const std::byte*>(&deferred.shadows[15]) - base == 4336 &&
+            reinterpret_cast<const std::byte*>(&deferred.lightProbes[15]) - base == 6368,
+            "deferred array boundary bytes changed");
+    }
+
+    void RejectCorruption(const std::string& original, const Layouts& layouts)
+    {
+        const size_t token = original.find("matWorldToView;");
+        Require(token != std::string::npos, "GPU probe omitted its real matrix member");
+        const size_t begin = original.rfind('\n', token) + 1;
+        const size_t end = original.find('\n', token);
+        Require(end != std::string::npos, "GPU probe matrix line is incomplete");
+        const size_t close = original.find("} g_View;");
+        const size_t size = original.find("Size:");
+        const size_t array = original.find("frustumPlanes[6]");
+        Require(close != std::string::npos && size != std::string::npos && array != std::string::npos,
+            "GPU probe omitted its structure, size or array evidence");
+        for (unsigned corruption = 0; corruption < 8; ++corruption)
+        {
+            std::string changed = original;
+            if (corruption == 0)
+                changed.erase(begin, end + 1 - begin);
+            else if (corruption == 1)
+                changed.insert(begin, original.substr(begin, end + 1 - begin));
+            else if (corruption == 2)
+                changed.insert(end, "bad-offset");
+            else if (corruption == 3)
+                changed.erase(close, 1);
+            else if (corruption == 4 || corruption == 5)
+            {
+                const size_t value = changed.find_first_of("0123456789",
+                    corruption == 4 ? changed.find("Offset:", token) : size);
+                const size_t after = changed.find_first_not_of("0123456789", value);
+                Require(value != std::string::npos && after != std::string::npos, "probe number is incomplete");
+                changed.replace(value, after - value, "999999");
+            }
+            else if (corruption == 6)
+                changed.replace(array, 16, "frustumPlanes[5]");
+            else
+                changed.replace(changed.rfind("float4x4", token), 8, "float3x4");
+            bool rejected = false;
+            try { (void)VerifyDump(changed, layouts); }
+            catch (const std::exception&) { rejected = true; }
+            Require(rejected, "DXIL parser accepted incomplete, duplicated or changed ABI evidence");
+        }
     }
 }
 
-int main()
+int main(int argc, char** argv)
 {
-    bool ok = true;
-    ok &= Require(
-        PackedPodSerializationKnownAnswer(),
-        "Packed GPU POD serialization changed.");
-    ok &= Require(
-        GeometrySerializationKnownAnswer(),
-        "GeometryData serialization changed.");
-    ok &= Require(
-        PushConstantSerializationKnownAnswer(),
-        "GBuffer push-constant serialization changed.");
-    ok &= Require(
-        NestedArrayBoundariesKnownAnswer(),
-        "Deferred-light array boundaries changed.");
-    return ok ? 0 : 1;
+    const char* dumpPath = "host";
+    try
+    {
+        Require(argc > 1, "expected actual compiled DXIL dump paths");
+        ByteGoldens();
+        const auto layouts = HostLayouts();
+        std::set<std::string> seen;
+        for (int argument = 1; argument < argc; ++argument)
+        {
+            dumpPath = argv[argument];
+            std::ifstream input(dumpPath, std::ios::binary);
+            Require(bool(input), "cannot open DXIL dump");
+            const std::string text{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+            const auto observed = VerifyDump(text, layouts);
+            seen.insert(observed.begin(), observed.end());
+            if (argument == 1)
+                RejectCorruption(text, layouts);
+        }
+        dumpPath = "compiled type inventory";
+        Require(seen.size() == layouts.size(), "compiled DXIL omitted an expected C++ contract type");
+        for (const auto& [name, layout] : layouts)
+        {
+            std::cout << name << " sizeof=" << layout.bytes << '\n';
+            for (const auto& member : layout.members)
+                std::cout << "  " << member.name << " offsetof=" << member.offset <<
+                    " sizeof=" << member.bytes << " elements=" << member.elements << '\n';
+        }
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "GPU ABI " << dumpPath << ": " << error.what() << '\n';
+        return 1;
+    }
+    return 0;
 }

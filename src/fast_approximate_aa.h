@@ -1,6 +1,6 @@
 #pragma once
 
-#include "temporal_aa_options.h"
+#include "fast_approximate_aa_options.h"
 
 #include <nvrhi/nvrhi.h>
 

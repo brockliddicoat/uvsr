@@ -12,10 +12,8 @@
 
 ## UVSR Relationship
 
-The `Ogg (ProggyClean)` interface-font option uses Dear ImGui's existing
-embedded ProggyClean data at 13 pixels for stock/Ogg controls and registers the
-same Regular face at 16 pixels for Amp body text. Because ProggyClean has no
-Bold face, authored Amp headings retain Noto Sans Bold. UVSR does not stage a
+Dear ImGui retains embedded ProggyClean data and its default font loader.
+Cap uses Segoe UI. UVSR does not stage a
 standalone ProggyClean font. The pinned upstream TTF represented by the embedded
 payload is 41,208 bytes with SHA-256
 `527d2a443ce051f93f7e77b855609722b8cb220a9f104b4aa037be5c90b71324`;
@@ -31,7 +29,7 @@ requires them.
 - [Exact Packaged Notice](../../assets/fonts/proggy-clean/ProggyClean-MIT.txt)
 - [Embedded Font Attribution and Data](../../third_party/imgui/imgui_draw.cpp)
 - [Pinned Upstream Reference TTF](https://github.com/ocornut/imgui/blob/45acd5e0e82f4c954432533ae9985ff0e1aad6d5/misc/fonts/ProggyClean.ttf)
-- [Package Validation](../../launcher/src/UVSR.Installer/PayloadPackager.cs)
+- [Package Validation](../../launcher/native/package.cpp)
 
 ## Redistribution Conditions
 

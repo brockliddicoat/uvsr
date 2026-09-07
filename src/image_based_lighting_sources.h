@@ -12,7 +12,7 @@ namespace uvsr
         FarmFieldSoftDay,
         Kloppenheim07Night,
         QwantaniStarryNight,
-        QuadrangleCloudyLegacy,
+        QuadrangleCloudy,
         Count
     };
 

@@ -104,23 +104,13 @@ RendererCommonPasses::RendererCommonPasses(
     textureDescription.debugName = "Renderer/Black Cube Array";
     m_BlackCubeArray = device->createTexture(textureDescription);
 
-    textureDescription.dimension = nvrhi::TextureDimension::Texture2DArray;
-    textureDescription.arraySize = 1u;
-    textureDescription.format = nvrhi::Format::D24S8;
-    textureDescription.isRenderTarget = true;
-    textureDescription.isTypeless = true;
-    textureDescription.debugName = "Renderer/Black Depth Array";
-    m_BlackDepthArray = device->createTexture(textureDescription);
-
     m_Initialization.blackTexture = bool(m_BlackTexture);
     m_Initialization.whiteTexture = bool(m_WhiteTexture);
     m_Initialization.blackCubeArray = bool(m_BlackCubeArray);
-    m_Initialization.blackDepthArray = bool(m_BlackDepthArray);
 
     if (!creationSequence.Require([this]
         {
-            return m_BlackTexture && m_WhiteTexture && m_BlackCubeArray &&
-                m_BlackDepthArray;
+            return m_BlackTexture && m_WhiteTexture && m_BlackCubeArray;
         }))
     {
         log::error("Renderer common fallback texture creation failed");
@@ -167,21 +157,10 @@ RendererCommonPasses::RendererCommonPasses(
         m_BlackCubeArray,
         nvrhi::AllSubresources,
         nvrhi::ResourceStates::Common);
-    commandList->beginTrackingTextureState(
-        m_BlackDepthArray,
-        nvrhi::AllSubresources,
-        nvrhi::ResourceStates::Common);
     commandList->writeTexture(m_BlackTexture, 0u, 0u, &black, 0u);
     commandList->writeTexture(m_WhiteTexture, 0u, 0u, &white, 0u);
     for (std::uint32_t slice = 0u; slice < 6u; ++slice)
         commandList->writeTexture(m_BlackCubeArray, slice, 0u, &black, 0u);
-    commandList->clearDepthStencilTexture(
-        m_BlackDepthArray,
-        nvrhi::AllSubresources,
-        true,
-        0.f,
-        true,
-        0u);
     commandList->setPermanentTextureState(
         m_BlackTexture,
         nvrhi::ResourceStates::ShaderResource);
@@ -190,9 +169,6 @@ RendererCommonPasses::RendererCommonPasses(
         nvrhi::ResourceStates::ShaderResource);
     commandList->setPermanentTextureState(
         m_BlackCubeArray,
-        nvrhi::ResourceStates::ShaderResource);
-    commandList->setPermanentTextureState(
-        m_BlackDepthArray,
         nvrhi::ResourceStates::ShaderResource);
     commandList->commitBarriers();
     commandList->close();
@@ -234,11 +210,6 @@ nvrhi::ITexture* RendererCommonPasses::WhiteTexture() const
 nvrhi::ITexture* RendererCommonPasses::BlackCubeArray() const
 {
     return m_BlackCubeArray.Get();
-}
-
-nvrhi::ITexture* RendererCommonPasses::BlackDepthArray() const
-{
-    return m_BlackDepthArray.Get();
 }
 
 bool RendererCommonPasses::HasBlitPipelineFailure() const

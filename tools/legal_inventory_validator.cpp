@@ -1,8 +1,6 @@
-#include <Windows.h>
-#include <bcrypt.h>
+#include "../src/sha256.h"
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
@@ -13,7 +11,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace
 {
@@ -51,76 +48,14 @@ namespace
 
     [[nodiscard]] std::string Sha256(std::string_view input)
     {
-        BCRYPT_ALG_HANDLE algorithm = nullptr;
-        BCRYPT_HASH_HANDLE hash = nullptr;
-        DWORD objectSize = 0u;
-        DWORD resultSize = 0u;
-        std::vector<unsigned char> object;
-        std::array<unsigned char, 32> digest{};
-        const auto cleanup = [&]
+        try
         {
-            if (hash)
-                BCryptDestroyHash(hash);
-            if (algorithm)
-                BCryptCloseAlgorithmProvider(algorithm, 0u);
-        };
-
-        NTSTATUS status = BCryptOpenAlgorithmProvider(
-            &algorithm,
-            BCRYPT_SHA256_ALGORITHM,
-            nullptr,
-            0u);
-        if (status >= 0)
-        {
-            status = BCryptGetProperty(
-                algorithm,
-                BCRYPT_OBJECT_LENGTH,
-                reinterpret_cast<PUCHAR>(&objectSize),
-                sizeof(objectSize),
-                &resultSize,
-                0u);
+            return uvsr::Sha256(input);
         }
-        if (status >= 0)
+        catch (const uvsr::Sha256Error&)
         {
-            object.resize(objectSize);
-            status = BCryptCreateHash(
-                algorithm,
-                &hash,
-                object.data(),
-                static_cast<ULONG>(object.size()),
-                nullptr,
-                0u,
-                0u);
-        }
-        if (status >= 0)
-        {
-            status = BCryptHashData(
-                hash,
-                reinterpret_cast<PUCHAR>(const_cast<char*>(input.data())),
-                static_cast<ULONG>(input.size()),
-                0u);
-        }
-        if (status >= 0)
-        {
-            status = BCryptFinishHash(
-                hash,
-                digest.data(),
-                static_cast<ULONG>(digest.size()),
-                0u);
-        }
-        cleanup();
-        if (status < 0)
             throw std::runtime_error("Windows SHA-256 operation failed");
-
-        constexpr char Hex[] = "0123456789abcdef";
-        std::string text;
-        text.reserve(digest.size() * 2u);
-        for (const unsigned char byte : digest)
-        {
-            text.push_back(Hex[byte >> 4u]);
-            text.push_back(Hex[byte & 0x0fu]);
         }
-        return text;
     }
 
     void CheckLicense(const std::filesystem::path& root)

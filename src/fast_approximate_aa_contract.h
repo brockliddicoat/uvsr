@@ -2,8 +2,6 @@
 
 #include <nvrhi/nvrhi.h>
 
-#include <algorithm>
-#include <cmath>
 #include <cstdint>
 
 namespace uvsr
@@ -58,17 +56,4 @@ namespace uvsr
             view.maxY == static_cast<int32_t>(height);
     }
 
-    [[nodiscard]] inline float GetFastApproximateAaPerceptualLuma(
-        float red,
-        float green,
-        float blue) noexcept
-    {
-        const float saturatedRed = std::clamp(red, 0.f, 1.f);
-        const float saturatedGreen = std::clamp(green, 0.f, 1.f);
-        const float saturatedBlue = std::clamp(blue, 0.f, 1.f);
-        return std::sqrt(
-            saturatedRed * 0.2126f +
-            saturatedGreen * 0.7152f +
-            saturatedBlue * 0.0722f);
-    }
 }
