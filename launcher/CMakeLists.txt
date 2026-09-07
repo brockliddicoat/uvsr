@@ -134,6 +134,10 @@ if(BUILD_TESTING)
     endforeach()
     add_executable(uvsr_launcher_tests tests/native/contracts.cpp tests/native/fixtures.cpp tests/native/system_proof.cpp)
     target_link_libraries(uvsr_launcher_tests PRIVATE uvsr_launcher_core crypt32 user32 gdi32)
+    # retained package paths need the same long-path support as the launcher.
+    target_link_options(uvsr_launcher_tests PRIVATE
+        "/MANIFEST:EMBED"
+        "/MANIFESTINPUT:${CMAKE_CURRENT_BINARY_DIR}/generated/launcher.manifest")
     target_compile_options(uvsr_launcher_tests PRIVATE /W4 /utf-8 /permissive-)
     target_compile_definitions(uvsr_launcher_tests PRIVATE
         "UVSR_TEST_SOURCE=L\"${CMAKE_CURRENT_SOURCE_DIR}\""
