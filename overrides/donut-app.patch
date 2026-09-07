@@ -403,7 +403,19 @@ index c92cd3991415b90f0337914a1055723d25b201e8..4153fad0c320bf5f07473eea498c9c59
  
  #if DONUT_WITH_STREAMLINE
  #include <StreamlineIntegration.h>
-@@ -424,6 +427,7 @@ bool DeviceManager_DX12::CreateSwapChain()
+@@ -324,9 +327,11 @@ bool DeviceManager_DX12::CreateDevice()
+     m_NvrhiDevice = nvrhi::d3d12::createDevice(deviceDesc);
+ 
++#if NVRHI_WITH_VALIDATION
+     if (m_DeviceParams.enableNvrhiValidationLayer)
+     {
+         m_NvrhiDevice = nvrhi::validation::createValidationLayer(m_NvrhiDevice);
+     }
++#endif
+ 
+ #if DONUT_WITH_STREAMLINE
+     StreamlineIntegration::Get().InitializeDeviceDX(m_NvrhiDevice);
+@@ -424,6 +429,7 @@ bool DeviceManager_DX12::CreateSwapChain()
      for(UINT bufferIndex = 0; bufferIndex < m_SwapChainDesc.BufferCount; bufferIndex++)
      {
          m_FrameFenceEvents.push_back( CreateEvent(nullptr, false, true, nullptr) );
