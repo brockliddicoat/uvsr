@@ -19,6 +19,7 @@ publish the exact tested artifacts before activating their signed feeds. an
 HTTP 404 at either feed URL means installation or update metadata is unavailable;
 a feed alone cannot supply a missing release artifact. signed feeds use
 canonical LF bytes on every checkout.
+CI verifies both signatures with the production public key.
 
 the historical v1 feed remains at `/main/launcher/launcher-feed-v1.json`.
 the former `/main/installer/launcher-feed-v1.json` alias is retired so launcher
@@ -118,6 +119,13 @@ are development boundaries, not production acceptance.
 the Windows Launcher workflow can retain the verified executable, its SHA-256,
 and build record for one day when `export-launcher-artifact` is enabled on a
 manual run. it does not create a release or publish a feed.
+`verify-release-artifacts` downloads the exact signed release candidates,
+including draft assets, and checks their hashes, launcher health, archive
+installation and recovery, engine identity, and COM shortcuts. it uses the
+release assets rather than treating a later CI rebuild as the same release.
+`stage-renderer-artifact` copies the ZIP from `renderer-artifact-run` to its
+existing draft release after checking the run, source commit, size, and signed
+SHA-256. only that manual copy job has release write permission.
 
 native tests cover the retained 18 contract responsibilities, plus independent
 RFC 6979 signature verification, strict canonical bytes, old schema 11 state,
