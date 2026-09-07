@@ -33,6 +33,7 @@ namespace test
                 WinCheck(ResumeThread(thread) != DWORD(-1), "resume exact engine identity process");
                 CloseHandle(write.value); write.value = nullptr;
                 std::string output;
+                bool exited = false;
                 const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
                 for (;;)
                 {
@@ -46,7 +47,9 @@ namespace test
                         WinCheck(::ReadFile(read, bytes.data(), available, &received, nullptr), "read exact engine identity");
                         output.append(bytes.data(), received);
                     }
-                    else if (WaitForSingleObject(process, 10) == WAIT_OBJECT_0) break;
+                    else if (exited) break;
+                    // observe the pipe again after process exit so its final output is drained.
+                    else exited = WaitForSingleObject(process, 10) == WAIT_OBJECT_0;
                     Require(std::chrono::steady_clock::now() < deadline, "engine identity process timed out");
                 }
                 DWORD exit = 1; WinCheck(GetExitCodeProcess(process, &exit), "read engine identity exit");
