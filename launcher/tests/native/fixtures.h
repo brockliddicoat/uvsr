@@ -16,7 +16,8 @@ namespace test
         std::string Sign(const Feed& feed, bool canonical = true) const;
         std::string SignPayload(std::string_view bytes, Component component) const;
     };
-    void Zip(const fs::path& root, const fs::path& destination, std::optional<std::string> badPath = {}, bool deflate = true);
+    void Zip(const fs::path& root, const fs::path& destination, std::optional<std::string> badPath = {},
+        bool deflate = true, std::string_view engineDeflate = {});
     Feed MakePackage(const fs::path& root, int64_t sequence = 16, bool legacy = false);
     Json InstallOldLauncher(const Paths& paths, std::string_view owner, bool oldName = false);
     void VerifyProductionServices(const fs::path& engine, const fs::path& launcher);

@@ -49,7 +49,8 @@ namespace test
             {"size", JNumber(int64_t(feed.size))}, {"sha256", JString(feed.hash)}}));
         return SignPayload(Serialize(payload) + (canonical ? "\n" : ""), feed.component);
     }
-    void Zip(const fs::path& root, const fs::path& destination, std::optional<std::string> badPath, bool deflate)
+    void Zip(const fs::path& root, const fs::path& destination, std::optional<std::string> badPath,
+        bool deflate, std::string_view engineDeflate)
     {
         std::string local, central; uint16_t count = 0;
         for (const auto& entry : fs::recursive_directory_iterator(root))
@@ -58,7 +59,8 @@ namespace test
             auto name = Utf8(entry.path().lexically_relative(root).generic_wstring());
             if (badPath && name == "bin/uvsr-engine.exe") name = *badPath;
             auto raw = ReadFile(entry.path(), MaximumExpandedBytes); std::string compressed = raw;
-            if (deflate)
+            if (!engineDeflate.empty() && name == "bin/uvsr-engine.exe") compressed = engineDeflate;
+            else if (deflate)
             {
                 z_stream stream{}; Require(deflateInit2(&stream, 6, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY) == Z_OK, "create deflate fixture");
                 compressed.resize(size_t(deflateBound(&stream, uLong(raw.size())))); stream.next_in = reinterpret_cast<Bytef*>(raw.data()); stream.avail_in = uInt(raw.size());

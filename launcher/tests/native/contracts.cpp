@@ -89,6 +89,35 @@ namespace
         catch (...) { SelectObject(dc, old); DeleteObject(bitmap); DeleteDC(dc); throw; }
         SelectObject(dc, old); DeleteObject(bitmap); DeleteDC(dc);
     }
+    void ArchiveBufferBoundary()
+    {
+        Fixture fixture;
+        const auto package = fixture.root / "boundary-package", archive = fixture.root / "boundary.zip";
+        const auto engine = package / "bin/uvsr-engine.exe";
+        CreateDirectories(engine.parent_path());
+        WriteAtomic(package / PackageName, "{}");
+        std::string expanded(128 * 1024, '\0');
+        WriteAtomic(engine, expanded);
+        // a fixed block emits 14 zeroes, then two stored blocks fill both 128 KiB buffers.
+        // the separate empty final block requires another input read to finish the stream.
+        std::string encoded("\x62\x40\x01\x00\x00\xff\xff\x00\x00", 9);
+        encoded.append(65535, '\0');
+        encoded.append("\x00\xf3\xff\x0c\x00", 5);
+        encoded.append(65523, '\0');
+        Require(encoded.size() == expanded.size(), "archive boundary fixture has the wrong size");
+        encoded.append("\x01\x00\x00\xff\xff", 5);
+        Zip(package, archive, {}, true, encoded);
+        const auto output = fixture.root / "boundary-output";
+        ExtractPackage(archive, output, {}, {});
+        Require(ReadFile(output / "bin/uvsr-engine.exe", expanded.size()) == expanded, "streamed archive content changed");
+        Zip(package, archive, {}, true, encoded.substr(0, encoded.size() - 5));
+        Throws([&] { ExtractPackage(archive, fixture.root / "truncated-output", {}, {}); });
+        Zip(package, archive, {}, true, encoded + "x");
+        Throws([&] { ExtractPackage(archive, fixture.root / "trailing-output", {}, {}); });
+        expanded[0] = 1; WriteAtomic(engine, expanded);
+        Zip(package, archive, {}, true, encoded);
+        Throws([&] { ExtractPackage(archive, fixture.root / "crc-output", {}, {}); });
+    }
     void FeedProof(Component component)
     {
         Fixture f; f.Package(); const auto feed = component == Component::Launcher ? f.launcher : f.renderer;
@@ -321,6 +350,7 @@ int wmain(int argc, wchar_t** argv)
             {"install update repair and current classification", [] { Fixture f; f.Package(); Require(Classify({},true,f.renderer)==UpdateState::NotInstalled,"fresh classification"); auto i=f.Make(); i.Execute(Operation::Install,true,{},{}); auto state=i.Inspect().state; Require(Classify(state,true,f.renderer)==UpdateState::Current && Classify(state,false,f.renderer)==UpdateState::RepairNeeded,"installed classification"); auto feed=f.renderer; ++feed.sequence; Require(Classify(state,true,feed)==UpdateState::UpdateAvailable,"update classification"); }},
             {"manifest and PE bind signed identity", [] { Fixture f; f.Package(); ValidatePackage(f.root / "package-16",&f.renderer); auto feed=f.renderer; ++feed.sequence; Throws([&]{ValidatePackage(f.root / "package-16",&feed);}); }},
             {"stored and deflated archive round trips and unsafe archive paths", [] { Fixture f; f.Package(); for(bool compressed:{false,true}) { auto archive=f.root/(compressed?"deflate.zip":"stored.zip"); Zip(f.root/"package-16",archive,{},compressed); auto output=f.root/(compressed?"deflated":"stored"); ExtractPackage(archive,output,{},{}); ValidatePackage(output); } Zip(f.root/"package-16",f.root/"unsafe.zip","../uvsr-engine.exe"); Throws([&]{ExtractPackage(f.root/"unsafe.zip",f.root/"unsafe",{},{});}); }},
+            {"streamed archive boundaries and malformed deflate rejection", ArchiveBufferBoundary},
             {"retained media cannot be missing or swapped", [] { Fixture f; f.Package(); auto root=f.root/"package-16"; auto path=Descendant(root,runtime_asset_map[0]); auto content=ReadFile(path, MaximumExpandedBytes); WriteAtomic(path,"swapped"); Throws([&]{ValidatePackage(root);}); WriteAtomic(path,content); fs::remove(path); Throws([&]{ValidatePackage(root);}); }},
             {"real installer lifecycle and modified-file preservation", Lifecycle},
             {"canonical executable names and stage identity", [] { Require(std::string_view(LauncherName)=="uvsr-launcher.exe" && std::string_view(EngineName)=="uvsr-engine.exe","canonical names changed"); Fixture f; EnsureOwnership(f.paths); auto i=f.Make(); i.Ready(true,{},{}); auto owner=InspectOwnership(f.paths); auto state=i.InspectLauncher(*owner).valid; Require(state && fs::exists(f.paths.Launcher(Text(*state,"executableSha256"))/LauncherName),"canonical launcher stage failed"); }},
