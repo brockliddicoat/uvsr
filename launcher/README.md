@@ -125,7 +125,8 @@ installation and recovery, engine identity, and COM shortcuts. it uses the
 release assets rather than treating a later CI rebuild as the same release.
 `stage-renderer-artifact` copies the ZIP from `renderer-artifact-run` to its
 existing draft release after checking the run, source commit, size, and signed
-SHA-256. only that manual copy job has release write permission.
+SHA-256. only the manual release jobs have write permission. GitHub requires
+write access to read unpublished release assets, including the proof downloads.
 
 native tests cover the retained 18 contract responsibilities, plus independent
 RFC 6979 signature verification, strict canonical bytes, old schema 11 state,

@@ -106,8 +106,48 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Renderer draft upload failed.' }
           Write-Output "Staged $($feed.artifact.name), SHA-256 $($feed.artifact.sha256)."
 
+  verify-release-artifacts:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify-release-artifacts && !inputs.stage-renderer-artifact }}
+    runs-on: windows-2025
+    timeout-minutes: 30
+    # GitHub requires write access even to read unpublished release assets.
+    permissions:
+      contents: write
+    steps:
+      - name: check out release proof sources
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: verify feed signatures and draft access
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $launcher = ./launcher/verify-launcher-update-feed.ps1 | ConvertFrom-Json
+          $renderer = ./launcher/verify-renderer-update-feed.ps1 | ConvertFrom-Json
+          foreach ($tag in @("uvsr-launcher-v$($launcher.version)", "uvsr-engine-r$($renderer.releaseSequence)")) {
+            gh release view $tag --repo brockliddicoat/uvsr --json tagName | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Release is unavailable: $tag" }
+          }
+
+      - name: build native proof helper
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP "uvsr-launcher-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          ./launcher/build.ps1 -OutputDirectory $output -SourceCommit $env:GITHUB_SHA
+          "UVSR_LAUNCHER_OUTPUT=$output" >> $env:GITHUB_ENV
+
+      - name: verify exact release artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./launcher/verify-release-artifacts.ps1 -LauncherTests "$env:UVSR_LAUNCHER_OUTPUT/build/Release/uvsr_launcher_tests.exe" -OutputDirectory "$env:RUNNER_TEMP/uvsr-release-proof"
+
   build:
-    if: ${{ !inputs.stage-renderer-artifact }}
+    if: ${{ !inputs.stage-renderer-artifact && !inputs.verify-release-artifacts }}
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -150,14 +190,6 @@ jobs:
           $output = Join-Path $env:RUNNER_TEMP "uvsr-launcher-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           ./launcher/build.ps1 -OutputDirectory $output -SourceCommit $env:GITHUB_SHA
           "UVSR_LAUNCHER_OUTPUT=$output" >> $env:GITHUB_ENV
-
-      - name: verify exact release artifacts
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify-release-artifacts }}
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          ./launcher/verify-release-artifacts.ps1 -LauncherTests "$env:UVSR_LAUNCHER_OUTPUT/build/Release/uvsr_launcher_tests.exe" -OutputDirectory "$env:RUNNER_TEMP/uvsr-release-proof"
 
       - name: Enforce Public Signing Gate
         shell: pwsh
