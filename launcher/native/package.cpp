@@ -120,7 +120,7 @@ namespace uvsr::launcher
             for (const auto required : LegacyShaders)
                 Require(recorded.contains(std::string(required)), "The installed schema 11 inventory is incomplete.");
             for (const auto required : {"bin/licenses/Andrew-Helmer-Stochastic-Generation-MIT.txt", "bin/licenses/Microsoft-DirectX-Graphics-Samples.txt"})
-                Require(recorded.contains(required), "An installed schema 11 license is missing.");
+                Require(recorded.contains(Lower(required)), "An installed schema 11 license is missing.");
         }
         std::set<std::string> actual;
         for (const auto& item : fs::recursive_directory_iterator(root))
