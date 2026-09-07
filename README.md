@@ -26,6 +26,10 @@ the [user guide](docs/user-guide.md) explains controls and visible outcomes.
 
 ## install and update
 
+download [uvsr-launcher.exe](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.3.1/uvsr-launcher.exe)
+and choose **Install**. use **Update** in the native launcher for
+later updates.
+
 the only shipped executable names are `uvsr-launcher.exe` and
 `uvsr-engine.exe`. the launcher installs and updates a signed and hash bound
 renderer package transactionally:
@@ -37,9 +41,7 @@ uvsr-launcher.exe -> signed feed -> verified renderer package -> uvsr-engine.exe
 public packages contain runtime files, retained assets, settings, notices, and
 licenses. they do not contain source, tests, interpreters, Git, CMake, compilers,
 SDKs, debug layers, symbols, or benchmark tools. see the
-[launcher guide](launcher/README.md) for the trust and recovery contract. no
-download is linked here until an exact published artifact has passed the release
-gate.
+[launcher guide](launcher/README.md) for the trust and recovery contract.
 
 ## build
 

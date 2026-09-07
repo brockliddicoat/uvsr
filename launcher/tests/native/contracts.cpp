@@ -212,10 +212,10 @@ namespace
         WriteRecord(f.paths.state / "state.json", state); auto installer = f.Make();
         Require(!installer.Inspect().damaged, "old schema package cannot be inspected");
         Throws([&] { ValidatePackage(package, &oldFeed); });
-        installer.Ready(true, {}, {}); Require(Number(*installer.InspectLauncher(owner).valid,"releaseSequence") == 17, "old launcher state did not upgrade");
+        installer.Ready(true, {}, {}); Require(Number(*installer.InspectLauncher(owner).valid,"releaseSequence") == LauncherSequence, "old launcher state did not upgrade");
         installer.Execute(Operation::Update,true,{},{}); Require(!installer.Inspect().damaged && Number(*installer.Inspect().state,"releaseSequence") == 16, "old renderer state did not upgrade");
         auto update = installer.UpdateLauncher(f.launcher, true, true, {}, {});
-        Require(update.continuation && update.relaunch.filename() == LauncherName && Number(*installer.InspectLauncher(owner).valid,"releaseSequence") == 18,
+        Require(update.continuation && update.relaunch.filename() == LauncherName && Number(*installer.InspectLauncher(owner).valid,"releaseSequence") == f.launcher.sequence,
             "signed launcher self-update did not activate its canonical successor");
         fs::path redirected;
         f.services.start = [&](const fs::path& target, std::span<const std::wstring> arguments, bool)
@@ -252,15 +252,15 @@ namespace
     void Health()
     {
         Fixture f; auto executable = f.root / LauncherName; fs::copy_file(UVSR_LAUNCHER_FIXTURE, executable);
-        Require(RunHealth(executable,17,"1.3.0",{}) == 0,"health success failed");
-        WriteAtomic(f.root / "health-mode.txt","fail"); Require(RunHealth(executable,17,"1.3.0",{}) == 9,"health failure was hidden");
+        Require(RunHealth(executable,LauncherSequence,LauncherVersion,{}) == 0,"health success failed");
+        WriteAtomic(f.root / "health-mode.txt","fail"); Require(RunHealth(executable,LauncherSequence,LauncherVersion,{}) == 9,"health failure was hidden");
         for (auto mode : {"descendant","cancel"})
         {
             WriteAtomic(f.root / "health-mode.txt",mode); std::stop_source stop;
             std::jthread cancel;
             if (std::string_view(mode) == "cancel") cancel = std::jthread([&] { std::this_thread::sleep_for(std::chrono::milliseconds(500)); stop.request_stop(); });
-            if (std::string_view(mode) == "cancel") Throws([&] { RunHealth(executable,17,"1.3.0",stop.get_token()); });
-            else Require(RunHealth(executable,17,"1.3.0",{}) == 0,"descendant health failed");
+            if (std::string_view(mode) == "cancel") Throws([&] { RunHealth(executable,LauncherSequence,LauncherVersion,stop.get_token()); });
+            else Require(RunHealth(executable,LauncherSequence,LauncherVersion,{}) == 0,"descendant health failed");
             DWORD pid = 0; std::ifstream(f.root / "descendant.pid") >> pid; Require(pid != 0,"descendant did not start");
             // allow Windows to signal termination before checking for a leaked descendant.
             Handle process(OpenProcess(SYNCHRONIZE,FALSE,pid));
@@ -345,6 +345,17 @@ int wmain(int argc, wchar_t** argv)
             {"static busy and percentage progress output", ProgressOutput},
             {"signed launcher feed and canonical bytes", [] { FeedProof(Component::Launcher); }},
             {"signed renderer feed", [] { FeedProof(Component::Renderer); }},
+            {"published launcher supersedes sequence 17 developer binaries", [] {
+                const auto installed = JObject({{"releaseSequence", JNumber(17)}, {"version", JString("1.3.0")},
+                    {"executableSha256", JString(std::string(64, 'a'))}});
+                Feed published{Component::Launcher, LauncherSequence, Commit, LauncherVersion, {}, std::string(64, 'b'), 1};
+                Require(Classify(installed, true, published) == UpdateState::UpdateAvailable,
+                    "published launcher reused the developer release sequence");
+                Require(!ShouldRedirect(LauncherSequence, L"C:/download/uvsr-launcher.exe", 17,
+                    L"C:/installed/uvsr-launcher.exe", {}), "new launcher redirected to the developer binary");
+                published.sequence = 17;
+                Throws([&] { Classify(installed, true, published); });
+            }},
             {"tampering, duplicates, unknown fields and unsafe numbers", Tamper},
             {"sequence reuse and downgrade rejection", [] { Fixture f; f.Package(); auto i=f.Make(); i.Execute(Operation::Install,true,{},{}); auto state=i.Inspect().state; auto feed=f.renderer; feed.hash=std::string(64,'c'); Throws([&]{Classify(state,true,feed);}); feed=f.renderer; --feed.sequence; Require(Classify(state,true,feed)==UpdateState::Current,"older feed classified as update"); }},
             {"install update repair and current classification", [] { Fixture f; f.Package(); Require(Classify({},true,f.renderer)==UpdateState::NotInstalled,"fresh classification"); auto i=f.Make(); i.Execute(Operation::Install,true,{},{}); auto state=i.Inspect().state; Require(Classify(state,true,f.renderer)==UpdateState::Current && Classify(state,false,f.renderer)==UpdateState::RepairNeeded,"installed classification"); auto feed=f.renderer; ++feed.sequence; Require(Classify(state,true,feed)==UpdateState::UpdateAvailable,"update classification"); }},

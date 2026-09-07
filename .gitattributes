@@ -28,6 +28,9 @@ assets/noise/*.bin -diff -text
 /launcher/src/UVSR.Installer/** text eol=lf
 /launcher/verify-launcher-update-feed.ps1 text eol=lf
 /launcher/verify-renderer-update-feed.ps1 text eol=lf
+/launcher/verify-release-artifacts.ps1 text eol=lf
+/launcher/launcher-update-feed-v2.json text eol=lf
+/launcher/renderer-update-feed-v1.json text eol=lf
 /cmake/runtime-asset-map.def text eol=lf
 /cmake/runtime-shader-inventory.def text eol=lf
 /cmake/NRDConfig.hlsli.in text eol=lf

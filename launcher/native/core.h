@@ -25,8 +25,8 @@ namespace uvsr::launcher
     inline constexpr char ProductId[] = "0c47a7a8-1ec4-4ffd-b6c4-2f7614181223";
     inline constexpr char KeyId[] = "uvsr-launcher-update-p256-2026-01";
     inline constexpr char PublicKey[] = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEATbHkDwYIS0nMut5h9Q6m67qfabhuK+VRo6mDW1UlwZQIfeLI7zc1aKblCclkfgd8DDU0LcblFgTFdvoAWgCYg==";
-    inline constexpr char LauncherVersion[] = "1.3.0";
-    inline constexpr int64_t LauncherSequence = 17;
+    inline constexpr char LauncherVersion[] = "1.3.1";
+    inline constexpr int64_t LauncherSequence = 18;
     inline constexpr int64_t MaximumSequence = 9007199254740991ll;
     inline constexpr uint64_t MaximumLauncherBytes = 256ull << 20;
     inline constexpr uint64_t MaximumArchiveBytes = 32ull << 30;
