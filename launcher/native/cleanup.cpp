@@ -282,9 +282,10 @@ namespace uvsr::launcher
                 try
                 {
                     VerifyFile(path, uint64_t(size), Text(file, "sha256"));
-                    fs::remove(path); RemoveEmptyParents(path.parent_path(), roots[size_t(rootIndex)]); Checkpoint("uninstall-file-removed");
+                    fs::remove(path); RemoveEmptyParents(path.parent_path(), roots[size_t(rootIndex)]);
                 }
-                catch (const std::exception& error) { Log(std::string("Preserved a changed or unavailable file: ") + error.what(), report); }
+                catch (const std::exception& error) { Log(std::string("Preserved a changed or unavailable file: ") + error.what(), report); continue; }
+                Checkpoint("uninstall-file-removed");
             }
             for (const auto& root : roots)
             {

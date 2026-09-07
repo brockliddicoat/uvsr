@@ -29,7 +29,9 @@ set(ZLIB_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(ZLIB_BUILD_STATIC ON CACHE BOOL "" FORCE)
 set(ZLIB_INSTALL OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(zlib
-    URL https://zlib.net/fossils/zlib-1.3.2.tar.gz
+    URL
+        https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz
+        https://zlib.net/fossils/zlib-1.3.2.tar.gz
     URL_HASH SHA256=bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(zlib)
@@ -134,6 +136,10 @@ if(BUILD_TESTING)
     endforeach()
     add_executable(uvsr_launcher_tests tests/native/contracts.cpp tests/native/fixtures.cpp tests/native/system_proof.cpp)
     target_link_libraries(uvsr_launcher_tests PRIVATE uvsr_launcher_core crypt32 user32 gdi32)
+    # retained package paths need the same long-path support as the launcher.
+    target_link_options(uvsr_launcher_tests PRIVATE
+        "/MANIFEST:EMBED"
+        "/MANIFESTINPUT:${CMAKE_CURRENT_BINARY_DIR}/generated/launcher.manifest")
     target_compile_options(uvsr_launcher_tests PRIVATE /W4 /utf-8 /permissive-)
     target_compile_definitions(uvsr_launcher_tests PRIVATE
         "UVSR_TEST_SOURCE=L\"${CMAKE_CURRENT_SOURCE_DIR}\""

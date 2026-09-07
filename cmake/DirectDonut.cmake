@@ -133,7 +133,8 @@ target_link_libraries(donut_app PUBLIC
 target_compile_definitions(donut_app PUBLIC
     DONUT_WITH_AFTERMATH=0
     DONUT_WITH_STREAMLINE=0)
-target_compile_definitions(donut_app PRIVATE DONUT_FORCE_DISCRETE_GPU=0)
+target_compile_definitions(donut_app PRIVATE DONUT_FORCE_DISCRETE_GPU=0
+    NVRHI_WITH_VALIDATION=$<BOOL:${NVRHI_WITH_VALIDATION}>)
 
 foreach(target donut_core donut_engine donut_render donut_app imgui)
     set_target_properties("${target}" PROPERTIES FOLDER "Donut")

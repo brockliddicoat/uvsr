@@ -406,7 +406,7 @@ set(UVSR_IMGUI_STAGE_TREE_DIGEST
 set(UVSR_TRANSITIONAL_DONUT_ENGINE_STAGE_TREE_DIGEST
     "0e164755d95956f5247618982d5cbe74be5044fed772b57bef65e48906cc7339")
 set(UVSR_TRANSITIONAL_DONUT_APP_STAGE_TREE_DIGEST
-    "5722132f4dd85a7ec3ca78becb59b6078fdd491411136d909e7883ea0a4d7ab5")
+    "ec0d63eda25f5d1ec5c36aac1da74b21d01dcd5f4fc6aa2728060f69129cecff")
 
 add_library(uvsr_shader_blob STATIC src/shader_blob.cpp)
 target_include_directories(uvsr_shader_blob PUBLIC

@@ -4,10 +4,12 @@
 - version: 1.3.2
 - upstream: [zlib](https://zlib.net/)
 - archive: `https://zlib.net/fossils/zlib-1.3.2.tar.gz`
+- official mirror: [GitHub release archive](https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz)
 - archive SHA-256: `bb329a0a2cd0274d05519d61c667c062e06990d72e125ee2dfa8de64f0119d16`
 - terms: the complete upstream `LICENSE` embedded in the launcher
 
-`launcher/CMakeLists.txt` fetches the exact archive and links `zlibstatic`.
+`launcher/CMakeLists.txt` tries GitHub, then zlib.net, with the same archive hash
+and links `zlibstatic`.
 `launcher/native/archive.cpp` uses raw DEFLATE inflation after validating ZIP
 paths, sizes, headers, and supported encodings. the archive verifier and its
 resource limits are first-party code. the renderer does not gain this dependency.

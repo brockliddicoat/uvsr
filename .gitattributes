@@ -29,6 +29,7 @@ assets/noise/*.bin -diff -text
 /launcher/verify-launcher-update-feed.ps1 text eol=lf
 /launcher/verify-renderer-update-feed.ps1 text eol=lf
 /cmake/runtime-asset-map.def text eol=lf
+/cmake/runtime-shader-inventory.def text eol=lf
 /cmake/NRDConfig.hlsli.in text eol=lf
 /cmake/NRDRetainedShaders.cfg text eol=lf
 /assets/environments/README.md text eol=lf

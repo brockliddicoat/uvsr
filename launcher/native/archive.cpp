@@ -192,12 +192,14 @@ namespace uvsr::launcher
                     auto before = stream.avail_in;
                     int result = inflate(&stream, Z_NO_FLUSH);
                     size_t produced = buffer.size() - stream.avail_out;
-                    Require(result == Z_OK || result == Z_STREAM_END, "The ZIP deflate stream is invalid.");
+                    Require(result == Z_OK || result == Z_STREAM_END,
+                        "The ZIP deflate stream is invalid for " + entry.name + " (zlib " + std::to_string(result) + ").");
                     write(std::span(buffer).first(produced));
                     if (result == Z_STREAM_END)
                     { Require(stream.avail_in == 0 && consumed == entry.compressed, "The ZIP deflate stream has trailing compressed data."); ended = true; break; }
                     Require(produced || stream.avail_in < before, "The ZIP deflate stream made no progress.");
-                } while (stream.avail_in || inflater.stream.avail_out == 0);
+                    // refill exhausted input before draining again, except after the final chunk.
+                } while (stream.avail_in || (stream.avail_out == 0 && consumed == entry.compressed));
             }
             Require((entry.method == 0 || ended) && writtenTotal == entry.expanded && uint32_t(crc) == entry.crc,
                 "The extracted ZIP member failed its size or CRC check.");
