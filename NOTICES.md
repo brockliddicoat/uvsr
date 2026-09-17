@@ -1,4 +1,6 @@
-# third-party research sources
+# notices
+
+## research sources
 
 no third-party implementation has been copied or translated into the new Rust project. these pinned revisions are the inspected research baselines. any future import or translation must include its exact license, copyright notices, provenance, and file-level disposition.
 

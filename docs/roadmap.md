@@ -4,7 +4,7 @@ status: prepared research baseline. implementation, builds, GPU execution, and u
 
 ## source baseline
 
-the inspected revisions are listed in [third-party notices](../THIRD_PARTY_NOTICES.md). refresh them once when implementation starts, record relevant changes, then pin the chosen baseline.
+the inspected revisions are listed in [notices](../NOTICES.md). refresh them once when implementation starts, record relevant changes, then pin the chosen baseline.
 
 ## stages
 
