@@ -48,7 +48,7 @@ the complete sequence and exit criteria are in the [roadmap](docs/roadmap.md).
 - `AGENTS.md` and `CONTRIBUTING.md` define the direct-to-`main` pull request and checkpoint commit workflow;
 - `THIRD_PARTY_NOTICES.md` records pinned research sources and retained scene restrictions.
 
-the prior C++ UVSR implementation is preserved on [`codex/v6-recovery-20260916`](https://github.com/brockliddicoat/uvsr/tree/codex/v6-recovery-20260916). it is not duplicated in the new `main` source tree.
+the prior C++ UVSR implementation is preserved on [`uvsr-delta-recovery`](https://github.com/brockliddicoat/uvsr/tree/uvsr-delta-recovery). it is not duplicated in the new `main` source tree.
 
 ## current status
 
