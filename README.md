@@ -42,7 +42,7 @@ the complete sequence and exit criteria are in the [roadmap](docs/roadmap.md).
 
 ## repository contents
 
-- `.github/workflows` retains the existing C++ project workflows for owner-led revision;
+- `.github/workflows` validates the repository baseline and automatically runs Rust formatting and workspace tests once `Cargo.toml` exists;
 - `assets/scenes` retains Bistro Interior and San Miguel as future graphics fixtures, together with their provenance, conversion reports, and controlling notices;
 - `docs` defines the new architecture, roadmap, testing contract, and upstream boundary;
 - `AGENTS.md` and `CONTRIBUTING.md` define the direct-to-`main` pull request and checkpoint commit workflow;
@@ -52,7 +52,7 @@ the prior C++ UVSR implementation is preserved on [`codex/v6-recovery-20260916`]
 
 ## current status
 
-the planning baseline is ready for implementation. there is not yet a Rust workspace, compiler patch, successful build, GPU result, backend parity result, or upstream pull request. retained workflow files and scene files are source material, not evidence that the new project builds or renders them.
+the planning baseline is ready for implementation. there is not yet a Rust workspace, compiler patch, successful build, GPU result, backend parity result, or upstream pull request. retained scene files are source material, not evidence that the new project builds or renders them.
 
 ## contributing
 
