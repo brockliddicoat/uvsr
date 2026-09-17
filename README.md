@@ -46,7 +46,7 @@ the complete sequence and exit criteria are in the [roadmap](docs/roadmap.md).
 - `assets/scenes` retains Bistro Interior and San Miguel as future graphics fixtures, together with their provenance, conversion reports, and controlling notices;
 - `docs` defines the new architecture, roadmap, testing contract, and upstream boundary;
 - `AGENTS.md` and `CONTRIBUTING.md` define the direct-to-`main` pull request and checkpoint commit workflow;
-- `THIRD_PARTY_NOTICES.md` records pinned research sources and retained scene restrictions.
+- `NOTICES.md` records pinned research sources and retained scene restrictions.
 
 the prior C++ UVSR implementation is preserved on [`uvsr-delta-recovery`](https://github.com/brockliddicoat/uvsr/tree/uvsr-delta-recovery). it is not duplicated in the new `main` source tree.
 
@@ -58,4 +58,4 @@ the planning baseline is ready for implementation. there is not yet a Rust works
 
 read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before changing the repository. use one purpose-named task branch, commit coherent verified checkpoints, and open the pull request directly into `main`. do not create merge-only branches.
 
-first-party material remains under the [PolyForm Noncommercial License](LICENSE.md). upstream projects and retained assets keep their own licenses and notices. review [third-party notices](THIRD_PARTY_NOTICES.md) before importing code, translating shaders, or redistributing scene data.
+first-party material remains under the [PolyForm Noncommercial License](LICENSE.md). upstream projects and retained assets keep their own licenses and notices. review [notices](NOTICES.md) before importing code, translating shaders, or redistributing scene data.

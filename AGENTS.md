@@ -20,6 +20,8 @@ preserve the tracked `.github` workflows and repository metadata unless the task
 
 routine commits on an authorized task branch are expected. commit each coherent, verified checkpoint while it is still easy to review and recover. batch tightly coupled edits, and do not interrupt active debugging or create low-value commits solely to increase commit count.
 
+write commit subjects as short lowercase past-tense results without colons. do not use Conventional Commit prefixes such as `docs:` or `refactor:`. write `documented shader ABI`, `updated Vulkan capability table`, or `refactored descriptor ownership` instead.
+
 do not create speculative, duplicate, per-agent, or merge-only branches. use one purposeful task branch when a change needs review. open the pull request directly from that branch into `main`, merge through the pull request, then delete the task branch. never create a second branch just to merge the first one. do not push directly to protected `main`.
 
 at steady state, the remote should contain `main` and any explicitly designated long-term preservation branch. transient task branches exist only while their pull requests are active. pushing, opening or merging pull requests, deleting branches, releases, and publication require current user or standing task authority.
