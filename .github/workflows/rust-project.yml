@@ -34,6 +34,8 @@ jobs:
             'docs/roadmap.md',
             'docs/testing.md',
             'docs/upstream.md',
+            'docs/postmortems/README.md',
+            'docs/postmortems/source-map.md',
             'assets/scenes/bistro_interior_retextured/LICENSE.txt',
             'assets/scenes/bistro_interior_retextured/source-provenance.json',
             'assets/scenes/san_miguel_retextured/LICENSE.txt',

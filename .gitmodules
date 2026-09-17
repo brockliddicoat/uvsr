@@ -1,6 +1,2 @@
-[submodule "donut"]
-	path = donut
-	url = https://github.com/NVIDIAGameWorks/donut.git
-[submodule "uvsr-nvrhi"]
-	path = third_party/nvrhi
-	url = https://github.com/NVIDIAGameWorks/NVRHI.git
+# this Rust project currently has no Git submodules.
+# add one only when its dependency, ownership, license, and provenance are explicit.
