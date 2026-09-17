@@ -1,6 +1,6 @@
 # bundled scenes
 
-UVSR packages exactly two scenes:
+the repository retains exactly two converted scenes as future graphics fixtures:
 
 - [Bistro Interior](bistro_interior_retextured/README.md), a converted Wine
   variant associated with Amazon Lumberyard Bistro
@@ -10,14 +10,12 @@ UVSR packages exactly two scenes:
 each scene keeps its source provenance, license, conversion report, loadable
 descriptor, and runtime components together. the JSON reports are generated
 evidence and remain byte for byte records. tool names inside them describe how
-the retained bytes were made; they are not active tool dependencies.
+the retained bytes were made. they are not active tool dependencies.
 
-[`CMakeLists.txt`](../../CMakeLists.txt) stages only `.scene.json`, `.gltf`,
-`.glb`, `.bin`, and `.png` files from these two directories. the exact package
-allowlist is
-[`cmake/runtime-asset-map.def`](../../cmake/runtime-asset-map.def).
-provenance and legal files are not inferred from directory contents.
+the new Rust project has not yet defined a runtime asset manifest or asserted
+that either scene loads. future code must consume the recorded files directly
+and must not infer provenance or legal terms from directory contents.
 
-the scene assets are protected byte for byte. a replacement or repaired asset
-must update its adjacent provenance, generated reports, package inventory, and
-legal record in the same change.
+the scene data is protected byte for byte. a replacement or repaired asset must
+update its adjacent provenance, generated reports, future runtime inventory,
+and legal record in the same change.

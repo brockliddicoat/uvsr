@@ -1,82 +1,61 @@
-![UVSR engine banner](assets/branding/uvsr-banner.png)
+# cross-platform Rust GPU framework
 
-# UVSR
+this repository is the working home for a lightweight Rust graphics framework with explicit D3D12, Vulkan, and Metal 4 backends. the finished system is intended to make Rust, Slang, and HLSL equally usable shader languages, expose modern bindless and GPU-pointer capabilities without hiding native behavior, and provide one conformance system for interactive review and automated diagnosis.
 
-**Unified Visibility Stochastic Rendering Engine**
+[AGFX](https://github.com/AmelieHeinrich/agfx) supplies the behavioral and architectural reference for the graphics API. [ShaderToHuman](https://github.com/electronicarts/ShaderToHuman) supplies additional shader regression material. the product itself is a native Rust system with explicit ownership, small reviewed native API boundaries, and a shared result model across every supported backend and shader language.
 
-[![license: Polyform Noncommercial](https://img.shields.io/badge/license-polyform_noncommercial-8250DF?style=flat-square)](LICENSE.md)
-![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C?style=flat-square&logo=cplusplus&logoColor=white)
-![HLSL](https://img.shields.io/badge/HLSL-shaders-C62828?style=flat-square&logo=microsoft&logoColor=white)
+the first end-to-end proof will run a Rust-authored shader through the real [NoGraphicsAPI](https://github.com/sebbbi/NoGraphicsAPI) host, exercising physical GPU pointers and native descriptor heaps. reusable compiler and shader-library work will be designed for contribution to [rust-gpu](https://github.com/Rust-GPU/rust-gpu).
 
-UVSR is a focused C++17 and HLSL renderer for real time visibility, lighting,
-and antialiasing research. it is DirectX 12 only and uses ImGui. developer and
-production builds use the same renderer features.
+## target matrix
 
-## product
+the project plans to support shaders authored in Rust, Slang, and HLSL across each applicable native backend:
 
-UVSR provides deferred physically based lighting, one conventional path tracer,
-ray traced directional, sky, and flashlight
-visibility and FXAA with single-sample rasterization. it
-ships Bistro Interior, San Miguel, six HDR environments, and the retained white,
-blue, and spatiotemporal blue noise set. material editing, pixel zoom, timing,
-buffer inspection, settings snapshots, and diagnostics remain available through
-the ImGui interface.
+| platform | backend | Rust | Slang | HLSL |
+| --- | --- | :---: | :---: | :---: |
+| Windows | D3D12 | planned | planned | planned |
+| Linux | Vulkan | planned | planned | planned |
+| macOS | Metal 4 | planned | planned | planned |
 
-the [user guide](docs/user-guide.md) explains controls and visible outcomes.
+compiled bytes, shader stage, entry point, source language, and required backend metadata remain explicit. a Rust host that executes only HLSL does not count as Rust shader support.
 
-## install and update
+## design direction
 
-download [uvsr-launcher.exe](https://github.com/brockliddicoat/uvsr/releases/download/uvsr-launcher-v1.3.1/uvsr-launcher.exe)
-and choose **Install**. use **Update** in the native launcher for
-later updates.
+- provide a small explicit API whose behavior and coverage can be compared directly with AGFX;
+- use explicit Rust ownership with small reviewed `unsafe` boundaries around native graphics APIs;
+- retain backend-specific capabilities and failure modes where flattening them would hide real behavior;
+- keep generic rust-gpu changes separate from AGFX host code and narrow NoGraphicsAPI integration;
+- use one test truth for human-readable reports and machine-readable failure analysis.
 
-the only shipped executable names are `uvsr-launcher.exe` and
-`uvsr-engine.exe`. the launcher installs and updates a signed and hash bound
-renderer package transactionally:
+the detailed contracts live in [architecture](docs/architecture.md), [testing](docs/testing.md), and [upstream contribution boundaries](docs/upstream.md).
 
-```text
-uvsr-launcher.exe -> signed feed -> verified renderer package -> uvsr-engine.exe
-```
+## planned stages
 
-public packages contain runtime files, retained assets, settings, notices, and
-licenses. they do not contain source, tests, interpreters, Git, CMake, compilers,
-SDKs, debug layers, symbols, or benchmark tools. see the
-[launcher guide](launcher/README.md) for the trust and recovery contract.
+1. freeze the pinned AGFX, rust-gpu, NoGraphicsAPI, ShaderToHuman, and SPIRV-Cross baselines;
+2. reproduce the authoritative AGFX test inventory and expected behavior;
+3. establish the Rust workspace and shared API contracts;
+4. bring up Vulkan, D3D12, and Metal 4 backends in explicit capability slices;
+5. run Rust-authored shaders through NoGraphicsAPI's physical-pointer and descriptor-heap paths;
+6. integrate useful ShaderToHuman coverage into the AGFX-style runner with separate **AGFX** and **ShaderToHuman** report tabs;
+7. prepare generic rust-gpu compiler and library changes as focused upstream contributions.
 
-## build
+the complete sequence and exit criteria are in the [roadmap](docs/roadmap.md).
 
-use 64 bit Windows 11, Visual Studio 2022 with C++, a Windows SDK, CMake 3.24 or
-newer, and a DirectX 12 adapter with Shader Model 6.5. ray queries require DXR
-1.1. clone submodules and keep one external build tree per worktree.
+## repository contents
 
-```powershell
-git clone --recurse-submodules https://github.com/brockliddicoat/uvsr.git
-cd uvsr
-$buildRoot = Join-Path $env:LOCALAPPDATA 'UVSR\builds\<worktree-id>'
-cmake -S . -B $buildRoot -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
-cmake --build $buildRoot --config Release --target uvsr-engine --parallel
-ctest --test-dir $buildRoot -C Release --output-on-failure
-& "$buildRoot\bin\uvsr-engine.exe"
-```
+- `.github/workflows` retains the existing C++ project workflows for owner-led revision;
+- `assets/scenes` retains Bistro Interior and San Miguel as future graphics fixtures, together with their provenance, conversion reports, and controlling notices;
+- `docs` defines the new architecture, roadmap, testing contract, and upstream boundary;
+- `AGENTS.md` and `CONTRIBUTING.md` define the direct-to-`main` pull request and checkpoint commit workflow;
+- `THIRD_PARTY_NOTICES.md` records pinned research sources and retained scene restrictions.
 
-use a stable `<worktree-id>`. use `BUILD_TESTING=OFF` only for a production
-package. keep builds, caches, downloads, binaries, and staging outside Git.
+the prior C++ UVSR implementation is preserved on [`codex/v6-recovery-20260916`](https://github.com/brockliddicoat/uvsr/tree/codex/v6-recovery-20260916). it is not duplicated in the new `main` source tree.
 
-## documentation
+## current status
 
-- [documentation map](docs/README.md)
-- [settings and snapshots](docs/settings.md)
-- [validation](docs/validation.md)
-- [scene catalog](assets/scenes/README.md)
-- [environment catalog](assets/environments/README.md)
-- [noise assets](assets/noise/README.md)
-- [launcher and package contract](launcher/README.md)
-- [legal and provenance guide](legal/README.md)
-- [contribution guide](CONTRIBUTING.md)
+the planning baseline is ready for implementation. there is not yet a Rust workspace, compiler patch, successful build, GPU result, backend parity result, or upstream pull request. retained workflow files and scene files are source material, not evidence that the new project builds or renders them.
 
-## license
+## contributing
 
-first party material is available under the
-[Polyform Noncommercial License](LICENSE.md). commercial use or sublicensing
-requires a separate written agreement. third party code and assets retain their
-own terms. review the [legal guide](legal/README.md) before redistribution.
+read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before changing the repository. use one purpose-named task branch, commit coherent verified checkpoints, and open the pull request directly into `main`. do not create merge-only branches.
+
+first-party material remains under the [PolyForm Noncommercial License](LICENSE.md). upstream projects and retained assets keep their own licenses and notices. review [third-party notices](THIRD_PARTY_NOTICES.md) before importing code, translating shaders, or redistributing scene data.
