@@ -1,0 +1,100 @@
+name: Rust Project Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  project:
+    name: project
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Validate repository baseline
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @(
+            'README.md',
+            'AGENTS.md',
+            'CONTRIBUTING.md',
+            'LICENSE.md',
+            'THIRD_PARTY_NOTICES.md',
+            'docs/architecture.md',
+            'docs/roadmap.md',
+            'docs/testing.md',
+            'docs/upstream.md',
+            'assets/scenes/bistro_interior_retextured/LICENSE.txt',
+            'assets/scenes/bistro_interior_retextured/source-provenance.json',
+            'assets/scenes/san_miguel_retextured/LICENSE.txt',
+            'assets/scenes/san_miguel_retextured/source-provenance.json'
+          )
+          $missing = @($required | Where-Object {
+            -not (Test-Path -LiteralPath $_ -PathType Leaf)
+          })
+          if ($missing.Count) {
+            throw "Required repository files are missing: $($missing -join ', ')"
+          }
+
+          $agentWords = ((Get-Content -LiteralPath AGENTS.md -Raw) -split '\s+' |
+            Where-Object { $_ }).Count
+          if ($agentWords -gt 1000) {
+            throw "AGENTS.md has $agentWords words; the limit is 1000."
+          }
+
+          $sceneFiles = @(git ls-files 'assets/scenes/**')
+          if ($sceneFiles.Count -eq 0) {
+            throw 'No tracked scene fixtures were found.'
+          }
+          Write-Output "Repository baseline passed with $($sceneFiles.Count) scene files."
+
+      - name: Validate local Markdown links
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $broken = [System.Collections.Generic.List[string]]::new()
+          foreach ($file in @(git ls-files '*.md')) {
+            $text = Get-Content -LiteralPath $file -Raw
+            $base = Split-Path -Parent $file
+            if ([string]::IsNullOrWhiteSpace($base)) { $base = '.' }
+            foreach ($match in [regex]::Matches(
+              $text, '\[[^\]]+\]\(([^)]+)\)')) {
+              $target = $match.Groups[1].Value.Trim('<', '>')
+              if ($target -match '^(https?://|mailto:|#)') { continue }
+              $target = ($target -split '#', 2)[0]
+              if ([string]::IsNullOrWhiteSpace($target)) { continue }
+              $path = Join-Path $base $target
+              if (-not (Test-Path -LiteralPath $path)) {
+                $broken.Add("$file -> $target")
+              }
+            }
+          }
+          if ($broken.Count) {
+            $broken | ForEach-Object { Write-Error $_ }
+            throw "$($broken.Count) broken local Markdown link(s)."
+          }
+          Write-Output 'All tracked local Markdown links resolve.'
+
+      - name: Check Rust workspace when present
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path -LiteralPath Cargo.toml -PathType Leaf)) {
+            Write-Output 'Cargo.toml is not present yet; documentation baseline only.'
+            exit 0
+          }
+
+          cargo fmt --all --check
+          if ($LASTEXITCODE -ne 0) { throw 'cargo fmt failed.' }
+          cargo test --workspace --all-targets
+          if ($LASTEXITCODE -ne 0) { throw 'cargo test failed.' }
