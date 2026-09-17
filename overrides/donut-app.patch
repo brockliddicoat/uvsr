@@ -328,7 +328,7 @@ index c92cd3991415b90f0337914a1055723d25b201e8..4153fad0c320bf5f07473eea498c9c59
 +#if UVSR_WITH_NVRHI_VALIDATION
          m_NvrhiDevice = nvrhi::validation::createValidationLayer(m_NvrhiDevice);
 +#else
-+        log::error("NVRHI validation is unavailable in this build");
++        donut::log::error("NVRHI validation is unavailable in this build");
 +        return false;
 +#endif
      }
