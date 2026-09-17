@@ -10,3 +10,17 @@
 *.vcxproj.user
 # Generated local artifacts.
 /work/
+
+# Rust project builds and local test evidence.
+/target/
+/.cache/
+/.vscode/
+/.idea/
+/captures/
+/reports/generated/
+/test-output/
+*.pdb
+*.spv
+*.dxil
+*.metallib
+*.dSYM/

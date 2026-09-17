@@ -43,3 +43,13 @@ assets/noise/*.bin -diff -text
 
 # historical records and their manifest use exact bytes on every checkout.
 /docs/postmortem/** -text
+
+# Rust project source and generated shader outputs.
+*.rs text eol=lf
+*.toml text eol=lf
+*.slang text eol=lf
+*.wgsl text eol=lf
+*.spv -diff -text
+*.dxil -diff -text
+*.metallib -diff -text
+*.png -diff -text
