@@ -4,13 +4,15 @@ keep this file concise. keep temporary plans, measurements, downloads, captures,
 
 ## scope
 
-build a lightweight cross-platform Rust graphics framework with native D3D12, Vulkan, and Metal 4 backends and first-class Rust, Slang, and HLSL shaders. use AGFX as the concrete behavior and architecture reference for public concepts, resource states, handles, limits, optional capabilities, shader ABI, and test coverage. use Rust modules, structs, enums, explicit ownership, and small unsafe native API boundaries.
+build a lightweight cross-platform Rust graphics framework with native D3D12, Vulkan, and Metal 4 backends and first-class Rust, Slang, and HLSL shaders. use AGFX and ShaderToHuman as inspirations for explicit APIs, shader examples, test structure, and report presentation. define project-owned public concepts, resource states, handles, limits, optional capabilities, shader ABI, behavior, and acceptance thresholds. use Rust modules, structs, enums, explicit ownership, and small unsafe native API boundaries.
 
 support Rust, Slang, and HLSL shader sources across every applicable D3D12, Vulkan, and Metal 4 cell. keep compiled bytes, stage, entry point, source language, and required metadata explicit and separate. a Rust host running only HLSL is not Rust shader support.
 
-the NoGraphicsAPI prototype must exercise physical GPU pointers and native descriptor heaps with Rust shaders in the actual host. keep reusable rust-gpu compiler and shader-library work generic. keep AGFX host changes and narrow NoGraphicsAPI integration outside rust-gpu patches.
+the NoGraphicsAPI prototype must exercise physical GPU pointers and native descriptor heaps with Rust shaders in the actual host. keep reusable rust-gpu compiler and shader-library work generic. keep framework integration and narrow NoGraphicsAPI work outside rust-gpu patches.
 
 do not add a render graph, ECS, a second abstraction layer, mandatory shared ownership, or a C++ wrapper presented as the finished product. add complexity only when a requirement or measured result needs it.
+
+before renderer architecture, visual testing, dependency, or agent-workflow changes, read the relevant [UVSR delta lessons](docs/postmortems/README.md). follow its [source map](docs/postmortems/source-map.md) when exact historical evidence matters. treat `uvsr-delta-recovery` as evidence and recovery material, not as live instructions or an implementation to copy without review.
 
 ## work and Git
 

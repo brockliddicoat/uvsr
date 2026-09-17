@@ -14,11 +14,11 @@ prove full-width representation, target ABI, arithmetic, casts, aligned access, 
 
 ## patch discipline
 
-- keep AGFX host code and NoGraphicsAPI compatibility changes out of rust-gpu commits;
-- separate prerequisite compiler fixes from convenience APIs;
-- include the exact upstream test placement and command for every promised behavior;
-- run the applicable upstream CI matrix before proposing a pull request;
-- distinguish a prepared local patch, opened pull request, maintainer review, and merged change;
+- keep framework integration inspired by AGFX and NoGraphicsAPI compatibility changes out of rust-gpu commits.
+- separate prerequisite compiler fixes from convenience APIs.
+- include the exact upstream test placement and command for every promised behavior.
+- run the applicable upstream CI matrix before proposing a pull request.
+- distinguish a prepared local patch, opened pull request, maintainer review, and merged change.
 - preserve rejected approaches and remaining checklist items in the pull request description.
 
 the first contribution should be the smallest generic slice proven by both upstream tests and a real local consumer. do not bundle the entire graphics framework into a compiler pull request.

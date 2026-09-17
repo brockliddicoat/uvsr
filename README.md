@@ -1,13 +1,13 @@
 # cross-platform Rust GPU framework
 
-![host: Rust](https://img.shields.io/badge/host-Rust-000000?style=flat-square&logo=rust&logoColor=white)
-![shaders: Rust | Slang | HLSL](https://img.shields.io/badge/shaders-Rust%20%7C%20Slang%20%7C%20HLSL-C62828?style=flat-square)
-![backends: D3D12 | Vulkan | Metal 4](https://img.shields.io/badge/backends-D3D12%20%7C%20Vulkan%20%7C%20Metal%204-4C8F20?style=flat-square)
-[![license: Polyform Noncommercial](https://img.shields.io/badge/license-polyform_noncommercial-8250DF?style=flat-square)](LICENSE.md)
+![host: Rust](https://img.shields.io/badge/host-Rust-000000?logo=rust&logoColor=white)
+![shaders: Rust | Slang | HLSL](https://img.shields.io/badge/shaders-Rust%20%7C%20Slang%20%7C%20HLSL-C62828)
+![backends: D3D12 | Vulkan | Metal 4](https://img.shields.io/badge/backends-D3D12%20%7C%20Vulkan%20%7C%20Metal%204-4C8F20)
+[![license: Polyform Noncommercial](https://img.shields.io/badge/license-polyform_noncommercial-8250DF)](LICENSE.md)
 
 this repository is the working home for a lightweight Rust graphics framework with explicit D3D12, Vulkan, and Metal 4 backends. the finished system is intended to make Rust, Slang, and HLSL equally usable shader languages, expose modern bindless and GPU-pointer capabilities without hiding native behavior, and provide one conformance system for interactive review and automated diagnosis.
 
-[AGFX](https://github.com/AmelieHeinrich/agfx) supplies the behavioral and architectural reference for the graphics API. [ShaderToHuman](https://github.com/electronicarts/ShaderToHuman) supplies additional shader regression material. the product itself is a native Rust system with explicit ownership, small reviewed native API boundaries, and a shared result model across every supported backend and shader language.
+[AGFX](https://github.com/AmelieHeinrich/agfx) and [ShaderToHuman](https://github.com/electronicarts/ShaderToHuman) are design and testing inspirations. their explicit APIs, shader examples, golden-image tests, structured results, and report presentation inform the project, but they are not direct implementation sources or compatibility specifications. this project defines and tests its own Rust contracts.
 
 the first end-to-end proof will run a Rust-authored shader through the real [NoGraphicsAPI](https://github.com/sebbbi/NoGraphicsAPI) host, exercising physical GPU pointers and native descriptor heaps. reusable compiler and shader-library work will be designed for contribution to [rust-gpu](https://github.com/Rust-GPU/rust-gpu).
 
@@ -25,35 +25,39 @@ compiled bytes, shader stage, entry point, source language, and required backend
 
 ## design direction
 
-- provide a small explicit API whose behavior and coverage can be compared directly with AGFX;
-- use explicit Rust ownership with small reviewed `unsafe` boundaries around native graphics APIs;
-- retain backend-specific capabilities and failure modes where flattening them would hide real behavior;
-- keep generic rust-gpu changes separate from AGFX host code and narrow NoGraphicsAPI integration;
-- use one test truth for human-readable reports and machine-readable failure analysis.
+- provide a small explicit API with project-owned behavior and native escape hatches.
+- use explicit Rust ownership with small reviewed `unsafe` boundaries around native graphics APIs.
+- retain backend-specific capabilities and failure modes where flattening them would hide real behavior.
+- keep generic rust-gpu changes separate from framework integration and narrow NoGraphicsAPI work.
+- use one result model for human reports and concise machine-readable failure analysis.
+- prove one vertical slice before expanding API coverage, settings, or backend variants.
 
 the detailed contracts live in [architecture](docs/architecture.md), [testing](docs/testing.md), and [upstream contribution boundaries](docs/upstream.md).
 
+## lessons from UVSR delta
+
+the repository also preserves what people and LLMs can learn from UVSR delta. its experiments exposed recurring problems in rendering strategy, visual verification, dependency ownership, agent competence, test duration, product evidence, and feature growth. the [postmortem index](docs/postmortems/README.md) reorganizes every historical postmortem into general guidance that applies across languages and graphics APIs.
+
+the prior C++ implementation and exact historical records remain on [`uvsr-delta-recovery`](https://github.com/brockliddicoat/uvsr/tree/uvsr-delta-recovery). that branch is evidence and recovery material. it is not duplicated into the new product source tree.
+
 ## planned stages
 
-1. freeze the pinned AGFX, rust-gpu, NoGraphicsAPI, ShaderToHuman, and SPIRV-Cross baselines;
-2. reproduce the authoritative AGFX test inventory and expected behavior;
-3. establish the Rust workspace and shared API contracts;
-4. bring up Vulkan, D3D12, and Metal 4 backends in explicit capability slices;
-5. run Rust-authored shaders through NoGraphicsAPI's physical-pointer and descriptor-heap paths;
-6. integrate useful ShaderToHuman coverage into the AGFX-style runner with separate **AGFX** and **ShaderToHuman** report tabs;
-7. prepare generic rust-gpu compiler and library changes as focused upstream contributions.
+1. pin inspected inspirations, compiler targets, consumer baselines, and available platform capabilities.
+2. choose a small project-owned API slice and a structured test-result contract.
+3. prove device creation, one shader, one resource, one submission, readback, and retirement on each native backend.
+4. prove the risky Rust shader, physical-pointer, descriptor-heap, and translation paths with bounded probes.
+5. expand only the API and shader-language cells supported by executed evidence.
+6. contribute reusable rust-gpu changes as focused upstream patches.
 
 the complete sequence and exit criteria are in the [roadmap](docs/roadmap.md).
 
 ## repository contents
 
-- `.github/workflows` validates the repository baseline and automatically runs Rust formatting and workspace tests once `Cargo.toml` exists;
-- `assets/scenes` retains Bistro Interior and San Miguel as future graphics fixtures, together with their provenance, conversion reports, and controlling notices;
-- `docs` defines the new architecture, roadmap, testing contract, and upstream boundary;
-- `AGENTS.md` and `CONTRIBUTING.md` define the direct-to-`main` pull request and checkpoint commit workflow;
-- `NOTICES.md` records pinned research sources and retained scene restrictions.
-
-the prior C++ UVSR implementation is preserved on [`uvsr-delta-recovery`](https://github.com/brockliddicoat/uvsr/tree/uvsr-delta-recovery). it is not duplicated in the new `main` source tree.
+- `.github/workflows` validates the repository baseline and automatically runs Rust formatting and workspace tests once `Cargo.toml` exists.
+- `assets/scenes` retains Bistro Interior and San Miguel as future graphics fixtures, together with their provenance, conversion reports, and controlling notices.
+- `docs` defines the architecture, roadmap, testing contract, upstream boundary, and lessons from prior experiments.
+- `AGENTS.md` and `CONTRIBUTING.md` define the direct-to-`main` pull request and checkpoint commit workflow.
+- `NOTICES.md` records pinned inspirations, research references, and retained scene restrictions.
 
 ## current status
 
