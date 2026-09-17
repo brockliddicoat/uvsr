@@ -1,5 +1,10 @@
 # cross-platform Rust GPU framework
 
+![host: Rust](https://img.shields.io/badge/host-Rust-000000?style=flat-square&logo=rust&logoColor=white)
+![shaders: Rust | Slang | HLSL](https://img.shields.io/badge/shaders-Rust%20%7C%20Slang%20%7C%20HLSL-C62828?style=flat-square)
+![backends: D3D12 | Vulkan | Metal 4](https://img.shields.io/badge/backends-D3D12%20%7C%20Vulkan%20%7C%20Metal%204-4C8F20?style=flat-square)
+[![license: Polyform Noncommercial](https://img.shields.io/badge/license-polyform_noncommercial-8250DF?style=flat-square)](LICENSE.md)
+
 this repository is the working home for a lightweight Rust graphics framework with explicit D3D12, Vulkan, and Metal 4 backends. the finished system is intended to make Rust, Slang, and HLSL equally usable shader languages, expose modern bindless and GPU-pointer capabilities without hiding native behavior, and provide one conformance system for interactive review and automated diagnosis.
 
 [AGFX](https://github.com/AmelieHeinrich/agfx) supplies the behavioral and architectural reference for the graphics API. [ShaderToHuman](https://github.com/electronicarts/ShaderToHuman) supplies additional shader regression material. the product itself is a native Rust system with explicit ownership, small reviewed native API boundaries, and a shared result model across every supported backend and shader language.
