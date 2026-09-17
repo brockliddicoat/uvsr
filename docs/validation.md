@@ -185,7 +185,7 @@ modified, linked, debug, source, test, toolchain, interpreter, symbol, or
 benchmark content.
 
 install or exercise that exact archive through the trusted launcher path on
-local DXR hardware. run the applicable 30 cases through normal product controls
+local DXR hardware. run the 34 named cases through normal product controls
 and startup snapshots. preserve captures, timings, debug layer results, package
 path, manifest, launcher and engine SHA-256, and identity output. barrier,
 lifetime, ray tracing, and Donut boundary changes also need a focused PIX

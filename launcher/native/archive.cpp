@@ -192,6 +192,13 @@ namespace uvsr::launcher
                     auto before = stream.avail_in;
                     int result = inflate(&stream, Z_NO_FLUSH);
                     size_t produced = buffer.size() - stream.avail_out;
+                    if (result == Z_BUF_ERROR)
+                    {
+                        // a full output buffer can require a probe before the next input chunk.
+                        Require(produced == 0 && before == 0 && stream.avail_in == 0 && consumed < entry.compressed,
+                            "The ZIP deflate stream is invalid.");
+                        break;
+                    }
                     Require(result == Z_OK || result == Z_STREAM_END, "The ZIP deflate stream is invalid.");
                     write(std::span(buffer).first(produced));
                     if (result == Z_STREAM_END)

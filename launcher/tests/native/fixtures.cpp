@@ -50,7 +50,8 @@ namespace test
                 {"settingsHash", JString(feed.settingsHash)}, {"engineVersion", JString(feed.version)}, {"artifact", artifact}});
         return SignPayload(Serialize(payload) + (canonical ? "\n" : ""), feed.component);
     }
-    void Zip(const fs::path& root, const fs::path& destination, std::optional<std::string> badPath, bool deflate)
+    void Zip(const fs::path& root, const fs::path& destination, std::optional<std::string> badPath,
+        bool deflate, std::optional<std::string_view> engineDeflate)
     {
         std::string local, central; uint16_t count = 0;
         for (const auto& entry : fs::recursive_directory_iterator(root))
@@ -59,7 +60,8 @@ namespace test
             auto name = Utf8(entry.path().lexically_relative(root).generic_wstring());
             if (badPath && name == "bin/uvsr-engine.exe") name = *badPath;
             auto raw = ReadFile(entry.path(), MaximumExpandedBytes); std::string compressed = raw;
-            if (deflate)
+            if (deflate && engineDeflate && name == "bin/uvsr-engine.exe") compressed = *engineDeflate;
+            else if (deflate)
             {
                 z_stream stream{}; Require(deflateInit2(&stream, 6, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY) == Z_OK, "create deflate fixture");
                 compressed.resize(size_t(deflateBound(&stream, uLong(raw.size())))); stream.next_in = reinterpret_cast<Bytef*>(raw.data()); stream.avail_in = uInt(raw.size());
@@ -76,6 +78,62 @@ namespace test
         auto offset = local.size(), length = central.size(); local += central;
         Little(local,0x06054b50,4); Little(local,0,4); Little(local,count,2); Little(local,count,2); Little(local,length,4); Little(local,offset,4); Little(local,0,2);
         WriteAtomic(destination, local);
+    }
+    void ArchiveInputBoundary()
+    {
+        constexpr unsigned chunk = 128 * 1024;
+        std::string compressed;
+        unsigned bit = 0;
+        const auto put = [&](unsigned value, unsigned count)
+        {
+            for (unsigned i = 0; i < count; ++i, ++bit)
+            {
+                if (!(bit % 8)) compressed += '\0';
+                compressed.back() |= char(((value >> i) & 1u) << (bit % 8));
+            }
+        };
+        const auto code = [&](unsigned value, unsigned count)
+        {
+            unsigned reversed = 0;
+            for (unsigned i = 0; i < count; ++i) { reversed = (reversed << 1) | (value & 1u); value >>= 1; }
+            put(reversed, count);
+        };
+        // a non-final fixed block occupies and expands to exactly one input/output chunk.
+        put(2, 3); code(0x190, 9); code(0x190, 9);
+        for (unsigned i = 0; i < chunk - 5; ++i) code(0x30, 8);
+        code(1, 7); put(0, 5); code(0, 7);
+        Require(bit == chunk * 8 && compressed.size() == chunk, "deflate boundary fixture is misaligned");
+        put(3, 3); code(0, 7);
+        std::string raw(chunk, '\0'); raw[0] = raw[1] = '\x90';
+        std::array<unsigned char, chunk> output{};
+        z_stream stream{};
+        Require(inflateInit2(&stream, -MAX_WBITS) == Z_OK, "initialize boundary fixture");
+        stream.next_in = reinterpret_cast<Bytef*>(compressed.data()); stream.avail_in = chunk;
+        stream.next_out = output.data(); stream.avail_out = chunk;
+        const auto first = inflate(&stream, Z_NO_FLUSH);
+        const bool boundary = first == Z_OK && stream.avail_in == 0 && stream.avail_out == 0 &&
+            stream.total_in == chunk && stream.total_out == chunk;
+        stream.next_out = output.data(); stream.avail_out = chunk;
+        const auto probe = inflate(&stream, Z_NO_FLUSH);
+        const bool starved = probe == Z_BUF_ERROR && stream.avail_in == 0 && stream.avail_out == chunk;
+        inflateEnd(&stream);
+        Require(boundary && starved, "fixture did not reach the input-starved output boundary");
+        Fixture fixture;
+        const auto source = fixture.root / "source";
+        WriteAtomic(source / PackageName, "{}"); WriteAtomic(source / "bin/uvsr-engine.exe", raw);
+        const auto archive = fixture.root / "boundary.zip";
+        Zip(source, archive, {}, true, compressed);
+        ExtractPackage(archive, fixture.root / "complete", {}, {});
+        Require(ReadFile(fixture.root / "complete/bin/uvsr-engine.exe", raw.size()) == raw, "boundary extraction changed bytes");
+        const auto truncated = compressed.substr(0, chunk);
+        Zip(source, fixture.root / "truncated.zip", {}, true, truncated);
+        Throws([&] { ExtractPackage(fixture.root / "truncated.zip", fixture.root / "truncated", {}, {}); });
+        const auto trailing = compressed + "x";
+        Zip(source, fixture.root / "trailing.zip", {}, true, trailing);
+        Throws([&] { ExtractPackage(fixture.root / "trailing.zip", fixture.root / "trailing", {}, {}); });
+        raw[0] = 'x'; WriteAtomic(source / "bin/uvsr-engine.exe", raw);
+        Zip(source, fixture.root / "crc.zip", {}, true, compressed);
+        Throws([&] { ExtractPackage(fixture.root / "crc.zip", fixture.root / "crc", {}, {}); });
     }
     Feed MakePackage(const fs::path& root, int64_t sequence, bool legacy)
     {
@@ -116,7 +174,7 @@ namespace test
         services.health = [](const fs::path&, int64_t, std::string_view, std::stop_token) { return 0; };
         services.processes = [](const fs::path&, Component, bool) { return Processes{}; };
         services.start = [](const fs::path&, std::span<const std::wstring>, bool) {};
-        launcher = {Component::Launcher, 18, Commit, "1.4.0", {}, HashFile(UVSR_NEWER_LAUNCHER_FIXTURE), fs::file_size(UVSR_NEWER_LAUNCHER_FIXTURE)};
+        launcher = {Component::Launcher, LauncherSequence + 1, Commit, "1.4.0", {}, HashFile(UVSR_NEWER_LAUNCHER_FIXTURE), fs::file_size(UVSR_NEWER_LAUNCHER_FIXTURE)};
         services.download = [this](std::string_view url, const fs::path& destination, uint64_t, std::optional<std::string_view>, std::stop_token stop, const Report&)
         {
             CheckCancelled(stop); Require(!failDownload, "injected download failure");

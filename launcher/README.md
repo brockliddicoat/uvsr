@@ -15,18 +15,17 @@ the configured renderer package target is:
 
 `https://raw.githubusercontent.com/brockliddicoat/uvsr/main/launcher/renderer-update-feed-v1.json`
 
-the canonical v2 launcher feed file and its remote endpoint are absent at this
-checkpoint. the renderer feed is also absent. creating, signing, or publishing
-either feed is a separate authorized release action.
+these endpoints refer to `main`, independently of a recovery checkout.
+creating, signing, or updating either feed is a separate authorized release
+action.
 
 retain the historical launcher v1 aliases at
 `/main/launcher/launcher-feed-v1.json` and
 `/main/installer/launcher-feed-v1.json` until a separately authorized endpoint
 migration proves released client coverage. current launchers do not consume
-those aliases. both alias files are retained in source, but their remote paths
-are not live at this checkpoint. alias retention is a publication compatibility
-requirement, not permission to restore source build installation or old artifact
-names.
+those aliases. source copies do not establish that the remote endpoints are
+live. verify released client coverage before changing an alias. retention does
+not authorize source build installation or old artifact names.
 
 canonical executable names are `uvsr-launcher.exe` and `uvsr-engine.exe`. the
 renderer archive is `uvsr-renderer-windows-11-x64.zip`. versions never appear in
@@ -50,6 +49,9 @@ or missing paths fail. package identity, settings identity, PE version
 resources, executable hash, and manifest entries must agree. the independent
 renderer package contract is defined in
 [Build and Shaders](../docs/build-and-shaders.md).
+
+the pinned manifest from published renderer r16 selects its historical shader
+and license inventory. packages that mix old and current files fail validation.
 
 ## transaction and rollback
 
@@ -140,7 +142,7 @@ production private key and signing certificate are never stored here.
 
 a restored historical feed is historical data unless its signature, sequence,
 canonical artifact name, size, SHA-256, release artifact, and live endpoint are
-all proven for the intended client. sequence 17 is unissued local verification
-metadata unless an authorized release publishes it. see
+all proven for the intended client. local sequence metadata remains unissued
+until its intended release publication is authorized and verified. see
 [Recovery](../docs/recovery.md) for source history. historical artifact hashes
 do not prove a current launcher or renderer.
