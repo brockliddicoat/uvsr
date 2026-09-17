@@ -4,7 +4,7 @@
 
 cbuffer c_Probe : register(b0)
 {
-    PlanarViewConstants g_View;
+    RendererViewConstants g_View;
     MaterialConstants g_Material;
     ShadowConstants g_Shadow;
     LightConstants g_Light;
@@ -25,6 +25,7 @@ Texture2D t_Material6 : register(t6);
 StructuredBuffer<GeometryData> t_Geometry : register(t8);
 StructuredBuffer<InstanceData> t_Instance : register(t9);
 StructuredBuffer<MaterialConstants> t_Materials : register(t10);
+StructuredBuffer<RendererMaterialTableEntry> t_MaterialTable : register(t11);
 SamplerState s_Material : register(s0);
 RWStructuredBuffer<float4> u_Output : register(u0);
 
@@ -42,7 +43,6 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     float3 incident = GetIncidentVector(
         g_View.cameraDirectionOrPosition,
         world);
-    float3 motion = GetMotionVector(world, world, g_View, g_View);
     float4 packed = Unpack_RGBA8_SNORM(g_Push.startInstanceLocation);
     GeometryData geometry = t_Geometry[0];
     InstanceData instance = t_Instance[0];
@@ -50,10 +50,11 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     float contractTouch = float(
         geometry.materialIndex + instance.firstGeometryIndex) +
         instance.prevTransform[0][0] + structuredMaterial.opacity +
+        t_MaterialTable[0].material.opacity + float(t_MaterialTable[0].padding[2].w) +
         g_Deferred.lightProbes[15].frustumPlanes[5].w +
-        g_GBuffer.viewPrev.cameraDirectionOrPosition.w;
+        g_GBuffer.view.cameraDirectionOrPosition.w;
     u_Output[dispatchThreadId.x] = float4(
-        material.baseColor + world + view + incident + motion + packed.xyz,
+        material.baseColor + world + view + incident + packed.xyz,
         g_Shadow.matWorldToUvzwShadow[0][0] + packed.w + float(g_Light.lightType) +
             g_Probe.diffuseScale + contractTouch);
 }

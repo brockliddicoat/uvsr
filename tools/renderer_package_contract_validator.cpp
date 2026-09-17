@@ -190,7 +190,7 @@ namespace
         {
             if (!line.empty() && line.back() == '\r')
                 line.pop_back();
-            if (line.empty() || !StartsWith(line, "bin/shaders/") ||
+            if (line.empty() || !StartsWith(line, "bin/shaders/uvsr/dxil/") ||
                 !EndsWith(line, ".bin") || !IsAllowedFile(line) ||
                 (!previous.empty() && line <= previous) ||
                 !result.insert(line).second)
@@ -200,7 +200,7 @@ namespace
             }
             previous = line;
         }
-        if (stream.bad() || result.size() != 33u)
+        if (stream.bad() || result.size() != 27u)
             throw std::runtime_error("runtime shader inventory is incomplete");
         return result;
     }
@@ -284,34 +284,15 @@ namespace
         return result;
     }
 
-    [[nodiscard]] bool EqualContractValue(const JsonValue& left, const JsonValue& right)
+    [[nodiscard]] bool EqualContractValue(const JsonDocument& left, const JsonDocument& right)
     {
-        if (left.kind != right.kind || left.object.size() != right.object.size() ||
-            left.array.size() != right.array.size())
-            return false;
-        switch (left.kind)
-        {
-        case JsonValue::Kind::Number: return Integer(left, "value") == Integer(right, "value");
-        case JsonValue::Kind::String: return left.string == right.string;
-        case JsonValue::Kind::Boolean: return left.boolean == right.boolean;
-        default: break;
-        }
-        for (std::size_t index = 0; index < left.array.size(); ++index)
-            if (!EqualContractValue(left.array[index], right.array[index]))
-                return false;
-        for (const auto& member : left.object)
-        {
-            const JsonValue* expected = right.Find(member.first);
-            if (!expected || !EqualContractValue(member.second, *expected))
-                return false;
-        }
-        return true;
+        return uvsr::json::Equal(left.Root(), right.Root(), uvsr::json::NumberComparison::Integer);
     }
 
     void ValidateSettingsContract(const fs::path& path, const Manifest& manifest)
     {
-        const JsonValue actual = ParseJson(ReadFile(path, 1024u * 1024u));
-        const JsonValue expected = ParseJson(uvsr::BuildSettingsContractJson());
+        const JsonDocument actual = ParseJson(ReadFile(path, 1024u * 1024u));
+        const JsonDocument expected = ParseJson(uvsr::BuildSettingsContractJson());
         if (!EqualContractValue(actual, expected) ||
             String(Member(actual, "settingsHash"), "settings hash") != manifest.settingsHash ||
             String(Member(actual, "engineVersion"), "engine version") != manifest.engineVersion)
@@ -331,23 +312,22 @@ namespace
 
     [[nodiscard]] std::string Sha256(const fs::path& path)
     {
-        try
+        uvsr::Sha256Digest digest;
+        uvsr::Sha256Result result;
+        if (!uvsr::Sha256File(path.c_str(), digest, result))
         {
-            return uvsr::Sha256File(path);
-        }
-        catch (const uvsr::Sha256Error& error)
-        {
-            if (error.Stage() == uvsr::Sha256Stage::OpenFile)
+            if (result.stage == uvsr::Sha256Stage::OpenFile)
             {
                 throw std::runtime_error("cannot hash " + path.string());
             }
             throw std::runtime_error("Windows SHA-256 operation failed");
         }
+        return digest.text;
     }
 
     [[nodiscard]] Manifest ParseManifest(std::string_view text)
     {
-        const JsonValue root = ParseJson(text);
+        const JsonDocument root = ParseJson(text);
         RequireExactObject(root,
             { "schemaVersion", "productId", "production", "releaseSequence",
               "configuration", "sourceCommit", "settingsHash", "engineVersion",
@@ -383,14 +363,14 @@ namespace
             throw std::runtime_error("manifest values are not canonical");
         }
         const JsonValue& files = Member(root, "files");
-        if (files.kind != JsonValue::Kind::Array || files.array.empty() ||
-            files.array.size() > 100000u)
+        if (files.Type() != uvsr::json::Kind::Array || !files.Count() ||
+            files.Count() > 100000u)
         {
             throw std::runtime_error("manifest file count is outside its limit");
         }
         std::set<std::string> insensitivePaths;
         std::string previous;
-        for (const JsonValue& value : files.array)
+        for (JsonValue value = files.First(); value.IsValid(); value = value.Next())
         {
             RequireExactObject(value, { "relativePath", "size", "sha256" },
                 "manifest file");
@@ -695,6 +675,12 @@ namespace
             throw std::runtime_error("cannot finish " + path.string());
     }
 
+    void WriteText(const fs::path& path, const uvsr::json::EncodedText& text)
+    {
+        if (!text.IsValid()) uvsr::json::Throw(text.Failure());
+        WriteText(path, std::string_view{text.Data(), text.Size()});
+    }
+
     [[nodiscard]] std::string ManifestText(
         const fs::path& root,
         const ShaderInventory& shaders,
@@ -800,7 +786,7 @@ namespace
         const fs::path& shaderInventoryPath,
         const fs::path& assetMapPath)
     {
-        const JsonValue equivalent = ParseJson("{\"a\":0,\"b\":[true,\"a\"]}");
+        const JsonDocument equivalent = ParseJson("{\"a\":0,\"b\":[true,\"a\"]}");
         if (!EqualContractValue(equivalent,
                 ParseJson("{ \"b\" : [ true, \"\\u0061\" ], \"a\" : -0 }")))
             throw std::runtime_error("equivalent JSON object encodings differ");
@@ -828,6 +814,12 @@ namespace
                 0u, invalidShaders.find('\n') + 1u);
             const fs::path invalidShaderPath =
                 root / "invalid-shader-inventory.def";
+            WriteText(invalidShaderPath, invalidShaders);
+            RequireFailure([&] {
+                (void)LoadShaderInventory(invalidShaderPath);
+            });
+            invalidShaders = ReadFile(shaderInventoryPath, 1024u * 1024u);
+            invalidShaders.replace(invalidShaders.find("uvsr/dxil/"), 10u, "framework/dxil/");
             WriteText(invalidShaderPath, invalidShaders);
             RequireFailure([&] {
                 (void)LoadShaderInventory(invalidShaderPath);
@@ -933,7 +925,9 @@ namespace
             WriteText(root / "package-manifest.json",
                 ManifestText(root, shaders, protectedRuntime));
 
-            std::string invalidSettings = uvsr::BuildSettingsContractJson();
+            const auto encodedSettings = uvsr::BuildSettingsContractJson();
+            if (!encodedSettings.IsValid()) uvsr::json::Throw(encodedSettings.Failure());
+            std::string invalidSettings(encodedSettings.Data(), encodedSettings.Size());
             const std::size_t membership =
                 invalidSettings.find("\"snapshotMember\":true");
             if (membership == std::string::npos)

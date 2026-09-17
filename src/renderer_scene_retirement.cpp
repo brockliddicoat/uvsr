@@ -1,68 +1,11 @@
 #include "renderer_scene_retirement.h"
 
-#include <chrono>
-#include <memory>
-#include <utility>
 
 namespace uvsr
 {
     RendererSceneRetirement::RendererSceneRetirement(
-        nvrhi::IDevice* device)
-        : RendererSceneRetirement([device]()
-        {
-            if (!device)
-                return RendererSceneRetirementOperations{};
-
-            struct DeviceQueryState
-            {
-                nvrhi::DeviceHandle device;
-                nvrhi::EventQueryHandle query;
-                std::chrono::steady_clock::time_point armedAt;
-            };
-            auto state = std::make_shared<DeviceQueryState>();
-            state->device = device;
-
-            RendererSceneRetirementOperations operations;
-            operations.armQuery = [state]()
-            {
-                if (!state->query)
-                    state->query = state->device->createEventQuery();
-                if (!state->query)
-                    return false;
-                state->device->resetEventQuery(state->query);
-                state->device->setEventQuery(
-                    state->query, nvrhi::CommandQueue::Graphics);
-                state->armedAt = std::chrono::steady_clock::now();
-                return true;
-            };
-            operations.pollQuery = [state]()
-            {
-                if (!state->device || !state->query)
-                    return RendererSceneQueryStatus::Failed;
-                if (!state->device->pollEventQuery(state->query))
-                {
-                    if (std::chrono::steady_clock::now() - state->armedAt <
-                        std::chrono::seconds(5))
-                    {
-                        return RendererSceneQueryStatus::Pending;
-                    }
-                    return RendererSceneQueryStatus::Failed;
-                }
-                state->device->resetEventQuery(state->query);
-                return RendererSceneQueryStatus::Complete;
-            };
-            operations.waitForIdle = [state]()
-            {
-                return state->device && state->device->waitForIdle();
-            };
-            return operations;
-        }())
-    {
-    }
-
-    RendererSceneRetirement::RendererSceneRetirement(
         RendererSceneRetirementOperations operations)
-        : m_Operations(std::move(operations))
+        : m_Operations(operations)
     {
     }
 
@@ -84,7 +27,7 @@ namespace uvsr
             return RendererSceneRetirementStatus::Ready;
 
         m_UsedBlockingFallback = true;
-        if (!m_Operations.waitForIdle())
+        if (!m_Operations.waitForIdle(m_Operations.context))
         {
             m_State = State::Failed;
             return RendererSceneRetirementStatus::Failed;
@@ -101,18 +44,17 @@ namespace uvsr
             return RendererSceneRetirementStatus::Idle;
 
         case State::ArmQuery:
-            if (!m_Operations.armQuery())
+            if (!m_Operations.armQuery(m_Operations.context))
             {
-                // Allocation failure is exceptional. Preserve lifetime
-                // correctness with a blocking retirement rather than freeing
-                // resources that may still be referenced by the queue.
+                // query creation or recording failed. keep the scene until
+                // blocking completion supplies a valid proof.
                 return CompleteBlocking();
             }
             m_State = State::WaitForQuery;
             return RendererSceneRetirementStatus::Pending;
 
         case State::WaitForQuery:
-            switch (m_Operations.pollQuery())
+            switch (m_Operations.pollQuery(m_Operations.context))
             {
             case RendererSceneQueryStatus::Pending:
                 return RendererSceneRetirementStatus::Pending;

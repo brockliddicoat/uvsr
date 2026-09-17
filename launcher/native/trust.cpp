@@ -94,7 +94,7 @@ namespace uvsr::launcher
             (feed.component == Component::Launcher ? "uvsr-launcher-v" + feed.version + "/" + LauncherName :
             "uvsr-engine-r" + std::to_string(feed.sequence) + "/" + ArchiveName);
     }
-    void ValidateState(const Json& state, std::string_view installation, Component component)
+    void ValidateState(JsonValue state, std::string_view installation, Component component)
     {
         if (component == Component::Launcher)
         {
@@ -107,7 +107,7 @@ namespace uvsr::launcher
             Require(IsVersionId(Text(state, "activeVersionId")) && IsLowerHex(Text(state, "commit"), 40) &&
                 IsLowerHex(Text(state, "settingsHash"), 32) && IsLowerHex(Text(state, "artifactSha256"), 64) &&
                 IsCanonicalDottedVersion(Text(state, "engineVersion"), 4, 65535), "The installed renderer identity is invalid.");
-            Require(Text(state, "activeVersionId").starts_with(Text(state, "commit") + "-"), "The renderer directory does not bind its source commit.");
+            Require(Text(state, "activeVersionId").starts_with(std::string(Text(state, "commit")) + "-"), "The renderer directory does not bind its source commit.");
         }
         ValidateSequence(Number(state, "releaseSequence"));
         Require(Number(state, "schemaVersion") == 1 && IsGuid(installation) && Text(state, "installationId") == installation && IsLowerHex(Text(state, "executableSha256"), 64), "The installed ownership record is invalid.");

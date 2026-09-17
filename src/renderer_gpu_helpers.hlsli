@@ -24,9 +24,10 @@
 #define UVSR_RENDERER_GPU_HELPERS_HLSLI
 
 #include "renderer_gpu_contract.h"
+#include "renderer_packing.hlsli"
 
 float4 ReconstructClipPosition(
-    PlanarViewConstants view,
+    RendererViewConstants view,
     float2 pixelPosition,
     float depth)
 {
@@ -35,7 +36,7 @@ float4 ReconstructClipPosition(
 }
 
 float3 ReconstructViewPosition(
-    PlanarViewConstants view,
+    RendererViewConstants view,
     float2 pixelPosition,
     float depth)
 {
@@ -46,7 +47,7 @@ float3 ReconstructViewPosition(
 }
 
 float3 ReconstructWorldPosition(
-    PlanarViewConstants view,
+    RendererViewConstants view,
     float2 pixelPosition,
     float depth)
 {
@@ -63,50 +64,6 @@ float3 GetIncidentVector(
     return cameraDirectionOrPosition.w > 0.0f
         ? normalize(surfacePosition - cameraDirectionOrPosition.xyz)
         : cameraDirectionOrPosition.xyz;
-}
-
-float3 GetMotionVector(
-    float3 position,
-    float3 previousWorldPosition,
-    PlanarViewConstants view,
-    PlanarViewConstants previousView)
-{
-    float4 previousClip = mul(
-        float4(previousWorldPosition, 1.0f),
-        previousView.matWorldToClip);
-    if (previousClip.w <= 0.0f)
-        return 0.0f;
-
-    previousClip.xyz /= previousClip.w;
-    float2 previousWindow = previousClip.xy * view.clipToWindowScale +
-        view.clipToWindowBias;
-    return float3(
-        previousWindow - position.xy +
-            (view.pixelOffset - previousView.pixelOffset),
-        previousClip.z - position.z);
-}
-
-float Unpack_R8_SNORM(uint value)
-{
-    int signedValue = int(value << 24u) >> 24;
-    return clamp(float(signedValue) / 127.0f, -1.0f, 1.0f);
-}
-
-float3 Unpack_RGB8_SNORM(uint value)
-{
-    return float3(
-        Unpack_R8_SNORM(value),
-        Unpack_R8_SNORM(value >> 8u),
-        Unpack_R8_SNORM(value >> 16u));
-}
-
-float4 Unpack_RGBA8_SNORM(uint value)
-{
-    return float4(
-        Unpack_R8_SNORM(value),
-        Unpack_R8_SNORM(value >> 8u),
-        Unpack_R8_SNORM(value >> 16u),
-        Unpack_R8_SNORM(value >> 24u));
 }
 
 MaterialSample DefaultMaterialSample()

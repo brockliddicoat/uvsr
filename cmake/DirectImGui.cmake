@@ -1,8 +1,14 @@
+include_guard(GLOBAL)
+include("${CMAKE_CURRENT_LIST_DIR}/VerifyDirectDependencyState.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/PatchedSources.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/NoCppExceptions.cmake")
+
 set(UVSR_IMGUI_UPSTREAM_URL "https://github.com/ocornut/imgui.git")
 set(UVSR_IMGUI_UPSTREAM_COMMIT
     "45acd5e0e82f4c954432533ae9985ff0e1aad6d5")
 set(UVSR_IMGUI_SOURCE_DIR
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui")
+    "${CMAKE_CURRENT_LIST_DIR}/../third_party/imgui")
+cmake_path(NORMAL_PATH UVSR_IMGUI_SOURCE_DIR)
 set(UVSR_IMGUI_SOURCE_TREE_DIGEST
     "dbce2679c4571dea928ed4dd3e48f9dbc088e6d3bfa08081ae87153dc2945fb8")
 
@@ -47,3 +53,41 @@ if (NOT "${UVSR_IMGUI_ACTUAL_FILES}" STREQUAL
     message(FATAL_ERROR
         "Direct Dear ImGui inventory differs from the pinned 15-file manifest")
 endif()
+
+set(UVSR_IMGUI_OVERRIDE_DIR
+    "${CMAKE_BINARY_DIR}/uvsr_imgui_overrides")
+set(UVSR_IMGUI_PATCH_FILES
+    "${CMAKE_CURRENT_LIST_DIR}/../overrides/imgui-ui.patch"
+    "${CMAKE_CURRENT_LIST_DIR}/../overrides/imgui-window-iteration.patch")
+uvsr_stage_patched_sources(
+    "${UVSR_IMGUI_SOURCE_DIR}"
+    "${UVSR_IMGUI_PATCH_FILES}"
+    "${UVSR_IMGUI_OVERRIDE_DIR}"
+    imgui.cpp
+    imgui.h
+    imgui_draw.cpp
+    imgui_internal.h
+    imgui_tables.cpp
+    imgui_widgets.cpp)
+
+set(UVSR_IMGUI_STAGE_TREE_DIGEST
+    "a306a77081afb084cd65fada92a7bebd02b1d0bc9d68c63fdfc39cc885ecd387")
+add_library(imgui STATIC EXCLUDE_FROM_ALL
+    "${UVSR_IMGUI_SOURCE_DIR}/imconfig.h"
+    "${UVSR_IMGUI_SOURCE_DIR}/imstb_rectpack.h"
+    "${UVSR_IMGUI_SOURCE_DIR}/imstb_textedit.h"
+    "${UVSR_IMGUI_SOURCE_DIR}/imstb_truetype.h"
+    "${UVSR_IMGUI_OVERRIDE_DIR}/imgui.cpp"
+    "${UVSR_IMGUI_OVERRIDE_DIR}/imgui.h"
+    "${UVSR_IMGUI_OVERRIDE_DIR}/imgui_draw.cpp"
+    "${UVSR_IMGUI_OVERRIDE_DIR}/imgui_internal.h"
+    "${UVSR_IMGUI_OVERRIDE_DIR}/imgui_tables.cpp"
+    "${UVSR_IMGUI_OVERRIDE_DIR}/imgui_widgets.cpp")
+target_include_directories(imgui PUBLIC
+    "${UVSR_IMGUI_OVERRIDE_DIR}"
+    "${UVSR_IMGUI_SOURCE_DIR}")
+set_property(TARGET imgui PROPERTY
+    UVSR_PINNED_SOURCE "${UVSR_IMGUI_SOURCE_DIR}")
+
+uvsr_disable_cpp_exceptions(imgui)
+set_target_properties(imgui PROPERTIES FOLDER "Direct Dependencies")

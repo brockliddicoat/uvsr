@@ -87,9 +87,9 @@ namespace uvsr::launcher
         Require(!fs::exists(paths.operations / "uninstall.json"), "A UVSR uninstall is already pending. Close the earlier launcher window, then try again.");
         const auto transaction = Guid();
         auto snapshot = Inspect();
-        auto record = JObject({{"schemaVersion", JNumber(1)}, {"productId", JString(ProductId)}, {"installationId", JString(std::string(owner))},
+        auto record = JObject({{"schemaVersion", JNumber(1)}, {"productId", JString(ProductId)}, {"installationId", JString(owner)},
             {"transactionId", JString(transaction)}, {"phase", JString("prepared")}, {"previousState", Nullable(snapshot.state)}, {"startedUtc", JString(UtcNow())}});
-        auto journal = JObject({{"schemaVersion", JNumber(1)}, {"installationId", JString(std::string(owner))}, {"transactionId", JString(transaction)},
+        auto journal = JObject({{"schemaVersion", JNumber(1)}, {"installationId", JString(owner)}, {"transactionId", JString(transaction)},
             {"operation", JNumber(int(Operation::Uninstall))}, {"phase", JString("uninstall-pending")}, {"candidateVersionId", Json{}},
             {"previousState", Nullable(snapshot.state)}, {"startedUtc", JString(UtcNow())}});
         WriteRecord(paths.state / "transaction.json", journal); WriteRecord(paths.operations / "uninstall.json", record);
@@ -101,7 +101,7 @@ namespace uvsr::launcher
             WinCheck(CopyFileW(services.executable.c_str(), helper.c_str(), TRUE), "Stage uninstall helper");
             const auto hash = HashFile(services.executable); const auto size = fs::file_size(services.executable);
             VerifyFile(helper, size, hash); ValidateLauncherMetadata(helper, LauncherVersion);
-            WriteRecord(helperRoot / ".uvsr-helper.json", JObject({{"schemaVersion", JNumber(1)}, {"installationId", JString(std::string(owner))},
+            WriteRecord(helperRoot / ".uvsr-helper.json", JObject({{"schemaVersion", JNumber(1)}, {"installationId", JString(owner)},
                 {"transactionId", JString(transaction)}, {"sha256", JString(hash)}, {"size", JNumber(int64_t(size))}}));
             std::array<std::wstring, 5> arguments{L"--cleanup", std::to_wstring(GetCurrentProcessId()), std::to_wstring(ProcessStartTicks(GetCurrentProcess())), Wide(owner), Wide(transaction)};
             services.start(helper, arguments, true);
@@ -141,12 +141,12 @@ namespace uvsr::launcher
             const auto planPath = paths.operations / ("removal-" + id + ".json");
             if (!fs::exists(planPath))
             {
-                Json files; files.kind = Json::Kind::Array;
+                Json files = JArray();
                 const auto add = [&](size_t rootIndex, const fs::path& path)
                 {
                     Require(IsDescendant(path, roots[rootIndex]), "Cleanup inventory escaped its root.");
                     RejectReparseChain(path);
-                    files.array.push_back(JObject({{"root", JNumber(int64_t(rootIndex))}, {"path", JString(Utf8(path.lexically_relative(roots[rootIndex]).generic_wstring()))},
+                    Append(files, JObject({{"root", JNumber(int64_t(rootIndex))}, {"path", JString(Utf8(path.lexically_relative(roots[rootIndex]).generic_wstring()))},
                         {"size", JNumber(int64_t(fs::file_size(path)))}, {"sha256", JString(HashFile(path))}}));
                 };
                 for (size_t rootIndex : {size_t(0), size_t(2)})
@@ -263,20 +263,20 @@ namespace uvsr::launcher
                                 catch (const std::exception& error) { Log(std::string("Preserved an unverified launcher download: ") + error.what(), report); }
                     }
                 }
-                WriteRecord(planPath, JObject({{"schemaVersion", JNumber(1)}, {"installationId", JString(std::string(installation))}, {"transactionId", JString(std::string(transaction))}, {"files", files}}));
+                WriteRecord(planPath, JObject({{"schemaVersion", JNumber(1)}, {"installationId", JString(installation)}, {"transactionId", JString(transaction)}, {"files", files}}));
             }
             Set(record, "phase", JString("deleting")); WriteRecord(recordPath, record); Checkpoint("uninstall-deleting");
             const auto plan = ReadRecord(planPath, 32u << 20);
             RequireExactObject(plan, {"schemaVersion", "installationId", "transactionId", "files"}, "uninstall removal inventory");
             Require(Number(plan, "schemaVersion") == 1 && Text(plan, "installationId") == installation && Text(plan, "transactionId") == transaction &&
-                Member(plan, "files").kind == Json::Kind::Array && Member(plan, "files").array.size() <= 200000, "The cleanup inventory does not prove ownership.");
+                Member(plan, "files").Type() == json::Kind::Array && Member(plan, "files").Count() <= 200000, "The cleanup inventory does not prove ownership.");
             std::set<std::pair<int64_t, std::string>> unique;
-            for (const auto& file : Member(plan, "files").array)
+            for (auto file = Member(plan, "files").First(); file.IsValid(); file = file.Next())
             {
                 RequireExactObject(file, {"root", "path", "size", "sha256"}, "cleanup file");
                 const auto rootIndex = Number(file, "root"), size = Number(file, "size"); const auto relative = Text(file, "path");
                 Require(rootIndex >= 0 && rootIndex < int64_t(roots.size()) && size >= 0 && IsLowerHex(Text(file, "sha256"), 64) &&
-                    unique.emplace(rootIndex, Lower(relative)).second, "The cleanup file identity is invalid.");
+                    unique.emplace(rootIndex, Lower(std::string(relative))).second, "The cleanup file identity is invalid.");
                 auto path = Descendant(roots[size_t(rootIndex)], relative);
                 if (!fs::exists(path)) continue;
                 try
@@ -315,7 +315,8 @@ namespace uvsr::launcher
     {
         if (!fs::exists(paths.operations) || fs::exists(paths.operations / "uninstall.json")) return;
         OperationLock operation(Wide(lockSuffix));
-        const auto owner = Text(ReadRecord(paths.operations / OwnerName), "installationId");
+        const auto ownerRecord = ReadRecord(paths.operations / OwnerName);
+        const auto owner = Text(ownerRecord, "installationId");
         CheckRootOwner(paths.operations, owner);
         const auto helpers = paths.operations / "helpers";
         if (!fs::exists(helpers)) return;

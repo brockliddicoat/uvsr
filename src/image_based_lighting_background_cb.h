@@ -1,12 +1,19 @@
 #ifndef UVSR_IMAGE_BASED_LIGHTING_BACKGROUND_CB_H
 #define UVSR_IMAGE_BASED_LIGHTING_BACKGROUND_CB_H
 
+#include "renderer_gpu_scalar.h"
+
 struct ImageBasedLightingBackgroundConstants
 {
-    float4x4 matClipToTranslatedWorld;
+    UVSR_GPU_FLOAT4X4 matClipToTranslatedWorld;
 
     float radianceScale;
-    float3 padding;
+    UVSR_GPU_FLOAT3 padding;
 };
 
-#endif // UVSR_IMAGE_BASED_LIGHTING_BACKGROUND_CB_H
+#ifdef __cplusplus
+static_assert(sizeof(ImageBasedLightingBackgroundConstants) == 80);
+static_assert(offsetof(ImageBasedLightingBackgroundConstants, radianceScale) == 64);
+#endif
+
+#endif

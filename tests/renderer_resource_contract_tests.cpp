@@ -2,14 +2,14 @@
 #include "image_based_lighting_environment.h"
 #include "pbr_deferred_dispatch_contract.h"
 #include "pbr_deferred_lighting_bindings.h"
-#include "ray_scene_view.h"
-#include "lighting_surface.h"
+#include "ray_scene_view_nvrhi.h"
+#include "lighting_surface_nvrhi.h"
 #include "renderer_environment_bindings.h"
-#include "renderer_geometry_passes.h"
-#include "renderer_pixel_readback_cb.h"
+#include "renderer_environment_math.h"
+#include "renderer_geometry_passes_nvrhi.h"
 #include "renderer_producer_contract.h"
 #include "renderer_resource_contract.h"
-#include "renderer_targets.h"
+#include "renderer_targets_nvrhi.h"
 #include "renderer_texture_bmp.h"
 #include "sky_visibility_application.h"
 
@@ -48,19 +48,6 @@ namespace
             Require(sequence.IsValid() == (failure == 4) && calls == std::min(failure + 1, size_t{4}),
                 "dependent resource creation continued after failure");
         }
-        constexpr RendererReadbackUint4 expected{ 7, 11, 13, 17 };
-        for (const bool mapped : { false, true })
-        {
-            unsigned unmaps = 0;
-            const auto value = ReadRendererUint4(
-                [&]() -> const void* { return mapped ? &expected : nullptr; }, [&] { ++unmaps; });
-            Require(bool(value) == mapped && unmaps == unsigned(mapped),
-                "failed readback published a value or unmapped an absent mapping");
-            if (value)
-                Require(value->x == 7 && value->y == 11 && value->z == 13 && value->w == 17,
-                    "readback lost the picked identity");
-        }
-
         RenderTargets targets;
         Require(!targets.IsValid() &&
             !targets.Init(nullptr, { 1280, 720 }, { 1280, 720 }, true, true) &&
@@ -195,9 +182,9 @@ namespace
         int object = 0;
         auto* buffer = reinterpret_cast<nvrhi::IBuffer*>(&object);
         RaySceneView reference{ reinterpret_cast<nvrhi::rt::IAccelStruct*>(&object), buffer, buffer, buffer,
-            reinterpret_cast<nvrhi::IDescriptorTable*>(&object), 13, 17 };
+            reinterpret_cast<nvrhi::IDescriptorTable*>(&object), 13, 17, 23 };
         Require(reference.HasSameBindings(reference), "unchanged ray scene missed its binding cache");
-        for (unsigned field = 0; field < 6; ++field)
+        for (unsigned field = 0; field < 7; ++field)
         {
             auto changed = reference;
             switch (field)
@@ -208,10 +195,14 @@ namespace
             case 3: changed.geometryIndexMap = nullptr; break;
             case 4: changed.descriptorTable = nullptr; break;
             case 5: ++changed.generation; break;
+            case 6: ++changed.sceneGeneration; break;
             }
             Require(!reference.HasSameBindings(changed), "changed ray scene reused stale bindings");
         }
         auto updated = reference;
+        updated.sceneGeneration = 0;
+        Require(!updated, "missing source generation must not publish ray resources");
+        updated = reference;
         ++updated.contentRevision;
         Require(reference.HasSameBindings(updated), "in-place scene content forced a resource rebind");
         LightingSurfaceView surface;
@@ -239,7 +230,7 @@ namespace
             0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0xee, 0xee, 0xee, 0xee,
             0x90, 0xa0, 0xb0, 0xc0, 0xd0, 0xe0, 0xf0, 0xff, 0xdd, 0xdd, 0xdd, 0xdd
         };
-        Require(WriteRendererBmp(output, 2, 2, 12, rgba.data()), "known-answer BMP was not written");
+        Require(WriteRendererBmp(output.c_str(), 2, 2, 12, rgba.data()), "known-answer BMP was not written");
         std::ifstream input(output, std::ios::binary);
         const std::vector<uint8_t> bytes{ std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>() };
         constexpr std::array<uint8_t, 16> pixels{
@@ -251,10 +242,10 @@ namespace
             std::equal(pixels.begin(), pixels.end(), bytes.begin() + 54), "BMP lost source pitch, row order or BGRA bytes");
         const auto invalid = directory / "invalid.bmp";
         std::filesystem::remove(invalid);
-        Require(!WriteRendererBmp(invalid, 0, 2, 12, rgba.data()) && !WriteRendererBmp(invalid, 2, 0, 12, rgba.data()) &&
-            !WriteRendererBmp(invalid, 2, 2, 7, rgba.data()) && !WriteRendererBmp(invalid, 2, 2, 12, nullptr) &&
+        Require(!WriteRendererBmp(invalid.c_str(), 0, 2, 12, rgba.data()) && !WriteRendererBmp(invalid.c_str(), 2, 0, 12, rgba.data()) &&
+            !WriteRendererBmp(invalid.c_str(), 2, 2, 7, rgba.data()) && !WriteRendererBmp(invalid.c_str(), 2, 2, 12, nullptr) &&
             !std::filesystem::exists(invalid), "invalid BMP input published an artifact");
-        Require(!WriteRendererBmp(directory, 2, 2, 12, rgba.data()), "unwritable BMP destination reported success");
+        Require(!WriteRendererBmp(directory.c_str(), 2, 2, 12, rgba.data()), "unwritable BMP destination reported success");
     }
 }
 

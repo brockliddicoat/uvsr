@@ -45,13 +45,13 @@ namespace
         const Requests& request, const SettingsSnapshotStagedRuntimeAccess& access)
     {
         SettingsSnapshotTransactionCoordinator coordinator;
-        auto step = coordinator.Begin(request, access);
+        auto step = coordinator.Begin({request.data(), request.size()}, access);
         for (unsigned iteration = 0u;
              step.progress == SettingsSnapshotTransactionProgress::Pending && iteration < 64u;
              ++iteration)
-            step = coordinator.Advance(access);
+            step = coordinator.Advance();
         Require(!coordinator.IsActive(), "synchronous fixture did not terminate");
-        return step.result;
+        return std::move(step.result);
     }
 
     enum class Fault { None, BeforeWrite, AfterWrite, IgnoreWrite, Rollback };
@@ -72,48 +72,52 @@ namespace
 
         SettingsSnapshotStagedRuntimeAccess Access()
         {
-            const auto reader = [this](Id id, std::string& value, std::string& error) {
-                ++reads;
-                const auto found = values.find(id);
-                if (id == rejectRead || found == values.end())
+            const auto reader = [](void* owner, Id id, SettingsSnapshotText& value, SettingsSnapshotError& error) noexcept {
+                auto& live = *static_cast<Runtime*>(owner);
+                ++live.reads;
+                const auto found = live.values.find(id);
+                if (id == live.rejectRead || found == live.values.end())
                 {
-                    error = "injected capture failure";
+                    error.code = SettingsSnapshotErrorCode::InvalidInput;
+                    error.message = "injected capture failure";
                     return false;
                 }
-                value = found->second;
-                return true;
+                return value.Assign(found->second, error);
             };
             return {
-                [this](Id id, std::string_view value, std::string_view, std::string& error) {
-                    ++validations;
-                    if (id == rejectValue)
+                this,
+                [](void* owner, Id id, std::string_view value, std::string_view, SettingsSnapshotError& error) noexcept {
+                    auto& live = *static_cast<Runtime*>(owner);
+                    ++live.validations;
+                    if (id == live.rejectValue)
                     {
-                        error = "injected late parse failure";
+                        error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "injected late parse failure", {}};
                         return false;
                     }
-                    return ValidateSettingsSnapshotCatalogValue(Definition(id), value, error, context);
+                    return ValidateSettingsSnapshotCatalogValue(Definition(id), value, error, live.context);
                 },
                 reader, reader,
-                [this](Id id, std::string_view value, std::string& error) {
-                    ++writes;
-                    if (fault != Fault::None && !faultIssued &&
+                [](void* owner, Id id, std::string_view value, SettingsSnapshotError& error) noexcept {
+                    auto& live = *static_cast<Runtime*>(owner);
+                    ++live.writes;
+                    if (live.fault != Fault::None && !live.faultIssued &&
                         id == Id::ShadowsRayTracedSamplesPerPixel && value == "32")
                     {
-                        faultIssued = true;
-                        if (fault == Fault::IgnoreWrite)
+                        live.faultIssued = true;
+                        if (live.fault == Fault::IgnoreWrite)
                             return true;
-                        if (fault == Fault::AfterWrite)
-                            values[id] = value;
-                        error = "injected SET failure";
+                        if (live.fault == Fault::AfterWrite)
+                            live.values[id] = value;
+                        error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "injected SET failure", {}};
                         return false;
                     }
-                    if (fault == Fault::Rollback && faultIssued &&
+                    if (live.fault == Fault::Rollback && live.faultIssued &&
                         id == Id::NoisePattern && value == "spatiotemporal-blue")
                     {
-                        error = "injected rollback failure";
+                        error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "injected rollback failure", {}};
                         return false;
                     }
-                    values[id] = value;
+                    live.values[id] = value;
                     return true;
                 }, {}
             };
@@ -150,12 +154,12 @@ namespace
             { Id::LightSelected, "0:flashlight_1", "00:flashlight_1" },
             { Id::MaterialSelected, "none", "-1" }
         };
-        std::string error;
+        SettingsSnapshotError error;
         for (const auto& item : cases)
         {
             const auto& definition = Definition(item.id);
             Require(ValidateSettingsSnapshotCatalogValue(definition, item.valid, error),
-                std::string(definition.name) + " rejected canonical value: " + error);
+                std::string(definition.name) + " rejected canonical value: " + std::string(error.MessageView()));
             Require(!ValidateSettingsSnapshotCatalogValue(definition, item.invalid, error),
                 std::string(definition.name) + " accepted invalid value " + item.invalid);
         }
@@ -164,8 +168,8 @@ namespace
             if (IsSettingsSnapshotValue(definition) && !definition.dynamic &&
                 definition.typedDefault.HasValue())
                 Require(ValidateSettingsSnapshotCatalogValue(definition,
-                    FormatUiSettingsDefaultAnchor(definition), error),
-                    std::string(definition.name) + " rejected declared default: " + error);
+                    FormatUiSettingsDefaultAnchor(definition).View(), error),
+                    std::string(definition.name) + " rejected declared default: " + std::string(error.MessageView()));
         }
         const Requests opacity = { { Id::MaterialSelectedOpacity, "2" } };
         Runtime untextured({ { Id::MaterialSelectedOpacity, "1" } });
@@ -181,32 +185,36 @@ namespace
     void TestMembership()
     {
         DecodedSettings decoded;
+        SettingsSnapshotError storageError;
         std::vector<Id> expectedIds;
         for (const auto& definition : UiSettingsCommandCatalog)
         {
             if (!IsSettingsSnapshotValue(definition))
                 continue;
-            decoded.emplace(definition.name, FormatUiSettingsDefaultAnchor(definition));
+            Require(decoded.Insert(definition.name, FormatUiSettingsDefaultAnchor(definition).View(), storageError),
+                "cannot prepare complete snapshot membership");
             expectedIds.push_back(definition.id);
         }
-        Requests transaction;
-        std::string error;
-        Require(BuildSettingsSnapshotTransaction(decoded, transaction, error) &&
-            transaction.size() == expectedIds.size(), "complete canonical membership must build");
-        for (std::size_t index = 0u; index < transaction.size(); ++index)
+        SettingsSnapshotTransactionEntry transaction[AllSettingIds.size()];
+        std::size_t transactionCount = 0;
+        SettingsSnapshotError error;
+        Require(BuildSettingsSnapshotTransaction(decoded, transaction, transactionCount, error) &&
+            transactionCount == expectedIds.size(), "complete canonical membership must build");
+        for (std::size_t index = 0u; index < transactionCount; ++index)
             Require(transaction[index].id == expectedIds[index] &&
-                transaction[index].requestedValue == decoded.at(std::string(SettingName(expectedIds[index]))),
+                transaction[index].requestedValue == decoded.Find(SettingName(expectedIds[index]))->value,
                 "builder must retain values in canonical catalog order");
-        const auto complete = decoded;
-        decoded.erase(std::string(SettingName(Id::SkyAmbientFillEnabled)));
-        Require(!BuildSettingsSnapshotTransaction(decoded, transaction, error) && transaction.empty() &&
-            error.find("missing") != std::string::npos, "missing member must clear the plan");
+        DecodedSettings complete;
+        Require(decoded.CloneTo(complete, storageError), "cannot retain complete membership");
+        (void)decoded.Erase(SettingName(Id::SkyAmbientFillEnabled));
+        Require(!BuildSettingsSnapshotTransaction(decoded, transaction, transactionCount, error) && transactionCount == 0 &&
+            error.MessageView().find("missing") != std::string::npos, "missing member must clear the plan");
         for (const char* name : { "unknown.fixture.setting", "ui.settings-collapsed", "reset-settings" })
         {
-            decoded = complete;
-            decoded.emplace(name, "on");
-            Require(!BuildSettingsSnapshotTransaction(decoded, transaction, error) && transaction.empty() &&
-                error.find("unknown") != std::string::npos, "unknown or nonpersistent name must reject");
+            Require(complete.CloneTo(decoded, storageError), "cannot restore complete membership");
+            Require(decoded.Insert(name, "on", storageError), "cannot insert unknown membership");
+            Require(!BuildSettingsSnapshotTransaction(decoded, transaction, transactionCount, error) && transactionCount == 0 &&
+                error.MessageView().find("unknown") != std::string::npos, "unknown or nonpersistent name must reject");
         }
         const std::vector<Requests> invalid = {
             { { Id::Invalid, "on" } },
@@ -248,7 +256,7 @@ namespace
         Runtime live({ { Id::SkyAmbientFillEnabled, "off" }, { Id::GpuAdapter, "0" } });
         const auto mismatch = live.Apply(adapter);
         Require(mismatch.failureStage == Stage::Preflight && live.writes == 0u &&
-            mismatch.error.find("-adapter") != std::string::npos,
+            mismatch.error.MessageView().find("-adapter") != std::string::npos,
             "read-only adapter mismatch must precede mutable writes");
         live.values[Id::GpuAdapter] = "1";
         Require(live.Apply(adapter).succeeded && live.writes == 1u,
@@ -267,7 +275,7 @@ namespace
         Runtime selector({ { Id::SceneCurrent, "san-miguel/main.scene.json" } });
         const auto unresolved = selector.Apply({ { Id::SceneCurrent, "bistro/main.scene.json" } });
         Require(unresolved.failureStage == Stage::Selector && !unresolved.rollbackAttempted &&
-            selector.writes == 0u && unresolved.error.find("no selector driver") != std::string::npos,
+            selector.writes == 0u && unresolved.error.MessageView().find("no selector driver") != std::string::npos,
             "changed selector requires its driver before mutation");
         Runtime capture({ { Id::SkyAmbientFillEnabled, "off" } });
         capture.rejectRead = Id::SkyAmbientFillEnabled;
@@ -319,7 +327,7 @@ namespace
             Runtime mismatch(requestedUnavailable ? available : unavailable);
             const auto result = mismatch.Apply(Request(requestedUnavailable ? unavailable : available));
             Require(result.failureStage == Stage::Preflight && mismatch.writes == 0u &&
-                result.error.find("availability") != std::string::npos,
+                result.error.MessageView().find("availability") != std::string::npos,
                 "either direction of unavailable mismatch must reject before writes");
         }
         Runtime ordinary({ { Id::SkyAmbientFillEnabled, "off" } });
@@ -343,7 +351,7 @@ namespace
             Require(result.failureStage == (fault == Fault::IgnoreWrite ? Stage::Readback : Stage::Apply),
                 "rollback must preserve the original failure stage");
             if (fault == Fault::Rollback)
-                Require(!result.rollbackSucceeded && result.error.find("rollback failed") != std::string::npos,
+                Require(!result.rollbackSucceeded && result.error.MessageView().find("rollback failed") != std::string::npos,
                     "failed rollback must remain distinguishable from the original failure");
             else
                 Require(result.rollbackSucceeded && live.values == baseline,

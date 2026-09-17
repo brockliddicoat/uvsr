@@ -5,7 +5,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <string>
 #include <string_view>
 
 namespace uvsr
@@ -45,9 +44,16 @@ namespace uvsr
         return hash;
     }
 
-    [[nodiscard]] inline std::string BuildSettingsSnapshotCode(
+    struct SettingsSnapshotCode
+    {
+        char text[SettingsSnapshotCodeLength + 1u]{};
+        std::size_t size = 0;
+        [[nodiscard]] std::string_view View() const noexcept { return {text, size}; }
+    };
+
+    [[nodiscard]] inline SettingsSnapshotCode BuildSettingsSnapshotCode(
         std::string_view canonicalSettings,
-        std::string_view version)
+        std::string_view version) noexcept
     {
         constexpr char HexDigits[] = "0123456789abcdef";
         constexpr std::uint64_t FnvOffset = 14695981039346656037ull;
@@ -83,21 +89,22 @@ namespace uvsr
         if (version.size() != 4u)
             return {};
 
-        std::string code(SettingsSnapshotCodeLength, '0');
+        SettingsSnapshotCode code;
+        code.size = SettingsSnapshotCodeLength;
         for (std::size_t index = 0u; index < 4u; ++index)
-            code[index] = version[index];
+            code.text[index] = version[index];
         for (std::size_t index = 0u; index < payload.size(); ++index)
         {
-            code[4u + index * 2u] =
+            code.text[4u + index * 2u] =
                 HexDigits[(payload[index] >> 4u) & 0x0fu];
-            code[5u + index * 2u] =
+            code.text[5u + index * 2u] =
                 HexDigits[payload[index] & 0x0fu];
         }
         return code;
     }
 
-    [[nodiscard]] inline std::string BuildSettingsSnapshotCode(
-        std::string_view canonicalSettings)
+    [[nodiscard]] inline SettingsSnapshotCode BuildSettingsSnapshotCode(
+        std::string_view canonicalSettings) noexcept
     {
         return BuildSettingsSnapshotCode(
             canonicalSettings,

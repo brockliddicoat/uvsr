@@ -1,12 +1,10 @@
 #pragma once
 
-#include <nvrhi/nvrhi.h>
-
-#include <functional>
+#include <stdint.h>
 
 namespace uvsr
 {
-    enum class RendererSceneRetirementStatus
+    enum class RendererSceneRetirementStatus : uint8_t
     {
         Idle,
         Pending,
@@ -14,7 +12,7 @@ namespace uvsr
         Failed
     };
 
-    enum class RendererSceneQueryStatus
+    enum class RendererSceneQueryStatus : uint8_t
     {
         Pending,
         Complete,
@@ -23,13 +21,16 @@ namespace uvsr
 
     struct RendererSceneRetirementOperations
     {
-        std::function<bool()> armQuery;
-        std::function<RendererSceneQueryStatus()> pollQuery;
-        std::function<bool()> waitForIdle;
+        // borrowed until the gate is destroyed. callbacks execute synchronously;
+        // their context must outlive the gate and must not move while retained.
+        void* context = nullptr;
+        bool (*armQuery)(void*) = nullptr;
+        RendererSceneQueryStatus (*pollQuery)(void*) = nullptr;
+        bool (*waitForIdle)(void*) = nullptr;
 
         [[nodiscard]] explicit operator bool() const noexcept
         {
-            return bool(armQuery) && bool(pollQuery) && bool(waitForIdle);
+            return armQuery && pollQuery && waitForIdle;
         }
     };
 
@@ -39,9 +40,10 @@ namespace uvsr
     class RendererSceneRetirement final
     {
     public:
-        explicit RendererSceneRetirement(nvrhi::IDevice* device);
         explicit RendererSceneRetirement(
-            RendererSceneRetirementOperations operations);
+            RendererSceneRetirementOperations operations = {});
+        RendererSceneRetirement(const RendererSceneRetirement&) = delete;
+        RendererSceneRetirement& operator=(const RendererSceneRetirement&) = delete;
 
         [[nodiscard]] bool IsValid() const noexcept
         {

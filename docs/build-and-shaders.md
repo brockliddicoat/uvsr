@@ -47,7 +47,7 @@ or release proof.
 
 the root CMake graph owns exact DirectX 12 dependencies through the `Direct*`
 modules. NVRHI and ImGui use direct checked out pins. DXC, DirectX Headers,
-Agility SDK, cgltf, stb, JsonCpp, TinyEXR, and GLFW use exact
+Agility SDK, cgltf, stb, TinyEXR, GLFW, fastgltf, and simdjson use exact
 source, archive, or runtime identities recorded by their modules.
 
 [`VerifyDirectDependencyState.cmake`](../cmake/VerifyDirectDependencyState.cmake)
@@ -55,30 +55,42 @@ checks revisions, archive hashes, source trees, licenses, and staged patches.
 patches are applied only to build tree copies. never edit Donut or a pinned
 dependency to make a local build pass.
 
-Donut, JsonCpp, TinyEXR, and GLFW are retained consumers. direct pinning does
-not authorize Donut detachment or removal of a dependency that it still uses.
+[`DirectNVRHI.cmake`](../cmake/DirectNVRHI.cmake) owns the common and D3D12
+targets and DirectX-Headers configuration. remaining Donut modules consume
+those parent targets. [`direct dependency boundaries`](../cmake/direct-dependencies.md)
+own compiler modes, shared codec implementations and vendor failure limits.
 
 ## shader contract
 
 pinned DXC compiles all active HLSL through
 [`DirectXShaderCatalog.cmake`](../cmake/DirectXShaderCatalog.cmake). the compiler
-input is a task catalog such as `src/shaders.cfg`, the retained Donut shader
-catalog. task catalogs describe compilation. they
-are not package inventories.
+input is [`src/shaders.cfg`](../src/shaders.cfg). native comparison shader targets
+are retired after their consumers moved to [captured GPU data](../tests/renderer_gpu_fixture.md)
+and [composition records](../tests/import_composition_fixture.md). task catalogs
+describe compilation; the runtime inventory owns package membership.
 
-[`shader_blob.h`](../src/shader_blob.h) and
-[`shader_blob.cpp`](../src/shader_blob.cpp) own the runtime blob format and
-lookup. [`shader_blob_builder.cpp`](../tools/shader_blob_builder.cpp) owns
-dependency scanning and deterministic packing. each task produces a DXIL object
+[`shader_bytecode.h`](../src/shader_bytecode.h) and
+[`shader_bytecode.cpp`](../src/shader_bytecode.cpp) own the runtime blob format and
+lookup. [`RendererShaderFactory`](../src/renderer_shader_factory_nvrhi.h) owns
+checked file loading, bytecode caching and NVRHI shader creation.
+[`shader_blob_builder.cpp`](../tools/shader_blob_builder.cpp) owns
+iterative dependency scanning and deterministic streamed packing. its checked
+file and allocation errors preserve the previous output; unchanged bytes preserve
+its timestamp. Windows path rules remain private to this standalone tool.
+[`shader_blob_fixture.cpp`](../tests/shader_blob_fixture.cpp) supplies independent
+test enumeration and serialization. the unused Donut diagnostic formatter is
+retired. production blob compilation contains only the borrowed bytecode lookup;
+the build tool keeps its checked streaming writer. each task produces a DXIL object
 and depfile. a content stable catalog produces one family blob. do not introduce
 a second blob format, compiler wrapper, or broad rebuild stamp.
 
 [`runtime-shader-inventory.def`](../cmake/runtime-shader-inventory.def) is the
-sole shipped shader allowlist. it covers both first party and remaining
-framework blobs. [`SyncRuntimeShaderBundle.cmake`](../cmake/SyncRuntimeShaderBundle.cmake)
-copies exact inputs, verifies hashes, and removes stale outputs. remove an
-inventory row only after its runtime consumer and compile task are gone. add a
-row only with a proven runtime consumer.
+sole shipped shader allowlist, containing 27 first-party families.
+[`SyncRuntimeShaderBundle.cmake`](../cmake/SyncRuntimeShaderBundle.cmake) copies
+the exact compiled inputs and removes stale outputs, including the retired
+framework subtree. the bundle contract checks staged bytes against compiled
+families. remove an inventory row only after its runtime consumer and
+production compile task are gone. add a row only with a proven runtime consumer.
 
 when a shader input changes, rebuild the affected bundle and its consumers. do
 not restage assets or rebuild unrelated shaders. a shader change is complete

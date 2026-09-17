@@ -1,5 +1,5 @@
 function(uvsr_read_runtime_shader_inventory inventory output_variable)
-    set(expected_count 33)
+    set(expected_count 27)
     if (ARGC GREATER 2)
         set(expected_count "${ARGV2}")
     endif()
@@ -20,7 +20,7 @@ function(uvsr_read_runtime_shader_inventory inventory output_variable)
     endif()
     foreach(path IN LISTS paths)
         if (NOT path MATCHES
-                "^bin/shaders/(framework|uvsr)/dxil/([A-Za-z0-9_]+/)*[A-Za-z0-9_]+\\.bin$")
+                "^bin/shaders/uvsr/dxil/[A-Za-z0-9_]+\\.bin$")
             message(FATAL_ERROR
                 "Invalid runtime shader inventory path: ${path}")
         endif()

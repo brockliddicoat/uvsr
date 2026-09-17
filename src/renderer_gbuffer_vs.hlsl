@@ -58,7 +58,6 @@ void buffer_loads(
     vertex.tangent.xyz = mul(
         instanceData.transform, float4(localTangent.xyz, 0.f));
     vertex.tangent.w = localTangent.w;
-    vertex.prevPos = vertex.pos;
 
     position = mul(float4(vertex.pos, 1.f), c_GBuffer.view.matWorldToClip);
 }

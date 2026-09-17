@@ -4,22 +4,35 @@ this document describes the current renderer architecture. UVSR is a Windows 11,
 12 renderer. ImGui and one product feature set are permanent. developer builds
 add tests and diagnostics, not alternate rendering features.
 
-Donut is an intentionally retained architecture dependency. direct ownership
-work complements its framework services. the executable links `donut_app`,
-`donut_engine`, and `donut_render`; their runtime calls, shaders, patches, and
-nested dependencies are supported boundaries, not a detachment backlog.
+Donut removal is in progress. `donut_app` and `donut_core` retain the device and
+window host. the core archive compiles only logging; inline Donut math remains
+in the host's gamepad path. the Donut engine target, native comparison shaders,
+engine patch stage and JsonCpp target are retired. NVRHI remains the initial graphics backend; fastgltf owns
+production glTF parsing through the private import boundary.
+
+the [glossary](glossary.md) links shared terms. current portable examples are
+[rendering values](../src/renderer_contracts.md), [borrowed worklists](../src/checked_worklist.md)
+and the [readback](../src/renderer_pixel_readback.md) and
+[scene lifetime](../src/renderer_scene_lifetime.md) boundaries. the new
+[flat scene owner](../src/renderer_scene.md) receives the complete import transaction
+and owns mutable scene values. the production importer cutover is implemented;
+its fixed structural and visible comparison remains open.
 
 ## ownership map
 
 | area | current owner | boundary |
 | --- | --- | --- |
-| process startup and identity | UVSR | [`engine_startup.cpp`](../src/engine_startup.cpp), [`engine_identity.h`](../src/engine_identity.h), and generated version resources own startup checks and the source, settings, configuration, and release identity. |
-| window, device, and message loop | Donut with UVSR policy | [`uvsr.cpp`](../src/uvsr.cpp) uses Donut `DeviceManager` and `ApplicationBase`. GLFW remains behind `donut_app`. UVSR owns adapter policy, DirectX 12 requirements, Agility SDK checks, and failure reporting. |
+| process startup and identity | UVSR | [`engine_startup.cpp`](../src/engine_startup.cpp), [`engine_identity.h`](../src/engine_identity.h), and generated version resources own startup checks and the source, settings, configuration, and release identity. [durable logging](../src/engine_diagnostic_log.md), [native SHA-256](../src/sha256.md) and [executable paths](../src/windows_executable_path.md) have checked owners. |
+| window, device, and message loop | Donut with UVSR policy | [`uvsr.cpp`](../src/uvsr.cpp) uses Donut `DeviceManager`; the native scene viewer implements `IRenderPass` directly. GLFW remains behind `donut_app`. UVSR owns scene loading and retirement, adapter policy, DirectX 12 requirements, Agility SDK checks, and failure reporting. |
+| frame order | UVSR | the [frame module](../src/renderer_frame.md) owns the concrete scene, UI and presentation sequence through a temporary private Donut adapter. |
 | GPU abstraction | direct NVRHI | The direct `third_party/nvrhi` pin owns resource, command list, descriptor, query, and ray tracing interfaces. only its DirectX 12 backend is enabled. |
-| scene, VFS, view, and draw model | Donut with UVSR lifecycle | Donut still owns the scene graph, glTF import, texture cache, VFS, camera and view types, draw strategy, and several geometry contracts. [`uvsr_scene_lifecycle.cpp`](../src/uvsr_scene_lifecycle.cpp) owns UVSR load, promotion, and retirement policy. |
+| mutable CPU scene and geometry selection | UVSR | the [flat scene owner](../src/renderer_scene.md) owns records, edits, temporal snapshots and the checked draw list used by geometry/depth passes. material/light commands have no native mirror. |
+| material editing and camera collision | UVSR | [generation-checked editing and collision](../src/renderer_scene.md#editing-and-camera-collision) consume canonical records. one joined worker borrows packed CPU geometry before camera activation and visible publication. |
+| files, shaders and view model | UVSR | explicit file owners, checked shader loading and renderer view values serve production. native scene, texture, view and common-pass comparisons use preserved reference data. the remaining Donut core boundary is host logging and inline gamepad math. |
+| scene import | UVSR private document, description, geometry and image owners | the [import boundary](../src/renderer_import.md) owns checked parsing, iterative conversion/composition, paths and canonical records. one joined handoff moves scene, packed geometry and decoded images to [`uvsr_scene_lifecycle.cpp`](../src/uvsr_scene_lifecycle.cpp). the NVRHI resource owner uploads them before render publication. public values exclude parser and graphics types. |
 | render targets and focused passes | UVSR | `renderer_*` owners implement targets, shader loading, common passes, geometry integration, readback, logging, scene work, and retirement. effects under `src/` own FXAA, sky, exposure, flashlight, lighting, and path tracing behavior. |
-| shaders | UVSR direct DXC path | UVSR owns the compiler pin, dependency scan, blob format, staging, and package inventory. a small set of packaged framework shaders still comes from Donut sources. |
-| UI | direct ImGui plus Donut integration | UVSR pins and patches ImGui directly. `UIRenderer` still derives from Donut's ImGui renderer and material editor integration. |
+| shaders | UVSR direct DXC path | UVSR owns the compiler pin, dependency scan, checked loading, blob format, staging, and 27-family package inventory. captured controls replace the retired native comparison shader target. |
+| UI | direct ImGui with a temporary host interface | UVSR owns context, input, styling, atlas upload and draw resources. `UIRenderer` retains only the Donut `IRenderPass` host interface. |
 | package and launcher | UVSR | CMake owns the renderer package. the native C++ launcher verifies signed feeds and exact packages, then installs and starts `uvsr-engine.exe`. |
 
 [`DirectDonut.cmake`](../cmake/DirectDonut.cmake) declares the retained
@@ -29,33 +42,35 @@ the build tree. the `donut/` checkout stays pristine.
 ## runtime flow
 
 `WinMain` validates startup policy, creates the Donut DirectX 12 device manager,
-selects an adapter, creates the window and swapchain, registers the scene viewer
-and UI render passes, and enters the message loop.
+selects an adapter and creates the window and swapchain. the viewer mounts media
+and shader roots, creates services and starts the scene worker. after UI
+initialization, one borrowed binding enters the [frame sequence](../src/renderer_frame.md).
+that page owns frame order, resource validity, completion and allocation phases.
 
-the viewer then:
+[`uvsr_command_line.h`](../src/uvsr_command_line.h) publishes startup options only
+after parsing succeeds. text borrows process-lifetime arguments; dimensions use
+zero when unspecified, and adapter indices use minus one so adapter zero remains
+selectable. [`settings_snapshot_code.h`](../src/settings_snapshot_code.h) exposes
+the checked snapshot-code validation owned by the authoritative settings catalog.
+the parser and this validation use explicit results without C++ exceptions.
 
-1. mounts packaged media and shader roots;
-2. creates the direct and retained shader, cache, descriptor, and pass
-   services;
-3. loads a retained scene through the background scene worker;
-4. uploads bounded scene work, promotes one complete scene, and retires the old
-   scene only after GPU use is safe;
-5. updates camera, settings, lights, and invalidation state;
-6. renders geometry and material data, ray visibility and lighting,
-   retained accumulation and exposure passes, display processing, and ImGui; and
-7. presents through the current Donut device manager.
-
-the order is a resource contract. a producer must publish only complete finite
-data. consumers must not read resources before their producer and required
-barriers complete. resize, scene change, camera cut, material or light change,
-and relevant setting changes invalidate the histories they affect. a failed
-replacement must leave the previous valid resource or fail closed. it must not
-publish partial state.
+the [settings snapshot owner](../src/settings_snapshot.md) keeps decoded byte
+strings, canonical output and catalog payloads in checked storage. native lookup
+takes an explicit location, and the controller publishes canonical text and its
+fixed fingerprint together only after successful refresh. catalog persistence
+uses a native byte writer that publishes only after write, flush and close succeed.
 
 ## lighting contracts
 
 `WorldSpaceRepresentation` publishes one borrowed `RaySceneView` after its
 TLAS and scene buffers are coherent. every ray technique borrows that view.
+the [canonical scene owner](../src/renderer_scene.md#ray-selection) supplies
+caster membership and material classification. [canonical GPU tables](../src/renderer_scene.md#gpu-tables)
+provide ray geometry, shared raster/ray materials and canonical instance data.
+the same affine encoder supplies raster and TLAS transforms. previous transforms
+advance after successful visible submission; light-only changes do
+not upload instances or refit the TLAS. private scene GPU owners supply mesh/texture
+handles and descriptor slots. loading-only skin initialization retains its current shader.
 `generation` invalidates bindings only when resource identity changes, while
 `contentRevision` invalidates temporal or progressive history after in place
 updates. techniques do not rebuild or duplicate the scene acceleration data.
@@ -141,11 +156,8 @@ release gates. see [Performance](performance.md) for measurement evidence and
 
 ## change rules
 
-keep Donut pinned and pristine. improve UVSR-owned code at explicit boundaries
-without replacing Donut framework services. delete only proven first-party
-duplication or unused adapters. do not create a detachment path or add needless
-coupling.
-
-keep direct NVRHI as the current GPU boundary within the Donut integration. a
-later direct D3D12 rewrite or change to Donut's role is a separate user
-decision. preserve all protected features and assets while changing ownership.
+keep dependency checkouts pinned and pristine. replace Donut owners with their
+actual consumers, then remove unused adapters, patches and build dependencies.
+preserve controls, behavior and legal material. pure engine contracts must not
+expose NVRHI or native API types; keep current graphics implementation details in
+named private adapters. a complete second renderer is not part of this removal.

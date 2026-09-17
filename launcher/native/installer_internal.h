@@ -4,9 +4,10 @@
 
 namespace uvsr::launcher
 {
-    inline std::optional<Json> Optional(const Json& value)
-    { return value.kind == Json::Kind::Null ? std::nullopt : std::optional<Json>(value); }
-    inline Json Nullable(const std::optional<Json>& value) { return value.value_or(Json{}); }
+    inline std::optional<Json> Optional(JsonValue value)
+    { return value.Type() == json::Kind::Null ? std::nullopt : std::optional<Json>(json::Clone(value)); }
+    inline json::Seed Nullable(const std::optional<Json>& value)
+    { return value ? json::Seed(value->Root()) : json::Seed{}; }
     inline std::optional<Json> ReadState(const fs::path& path, std::string_view installation, Component component)
     {
         RejectReparseChain(path);
@@ -30,7 +31,7 @@ namespace uvsr::launcher
             {"version", Member(marker, "version")}, {"executableSha256", Member(marker, "executableSha256")},
             {"desktopShortcut", JBool(desktop)}, {"installedUtc", Member(marker, "installedUtc")}});
     }
-    inline void SameLauncherIdentity(const Json& a, const Json& b)
+    inline void SameLauncherIdentity(JsonValue a, JsonValue b)
     {
         Require(Number(a, "releaseSequence") == Number(b, "releaseSequence") && Text(a, "version") == Text(b, "version") &&
             HashEqual(Text(a, "executableSha256"), Text(b, "executableSha256")), "Conflicting launcher files reuse the same release sequence.");

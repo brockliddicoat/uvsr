@@ -127,7 +127,8 @@ bindings("" "" c_Probe=cb0 g_Deferred=cb1 g_GBuffer=cb2
     t_Geometry=t8 t_Instance=t9 t_Materials=t10 u_Output=u0)
 require("row_major float4x4 matWorldToView" "row_major float3x4 transform")
 set(dump "${probe_ps}")
-require("POS[ ]+0[ ]+xyz" "PREV_POS[ ]+0[ ]+xyz" "TEXCOORD[ ]+0[ ]+xy"
+reject("PREV_POS")
+require("POS[ ]+0[ ]+xyz" "TEXCOORD[ ]+0[ ]+xy"
     "NORMAL[ ]+0[ ]+xyz" "TANGENT[ ]+0[ ]+xyzw"
     "NORMAL[ ]+0[^\r\n]*centroid" "TANGENT[ ]+0[^\r\n]*centroid")
 
@@ -145,6 +146,21 @@ bindings(cbuffer "" c_Readback=cb0)
 bindings(u32 "2d[ ]" t_Source=t0)
 bindings(u32 "buf[ ]" u_Destination=u0)
 
+reflect(renderer_skinning_cs "")
+size(g_Const 60)
+bindings(cbuffer "" g_Const=cb0)
+bindings("" "" t_VertexBuffer=t0 t_JointMatrices=t1 u_VertexBuffer=u0)
+members(vertexCount=0 flags=4 inputPosition=8 inputNormal=12 inputTangent=16 inputUV0=20
+    inputUV1=24 inputJoints=28 inputWeights=32 outputPosition=36 outputPrevious=40
+    outputNormal=44 outputTangent=48 outputUV0=52 outputUV1=56)
+threads(256 1 1)
+reflect(renderer_imgui_vertex "")
+size(g_Const 8)
+members(invDisplaySize=0)
+bindings(cbuffer "" g_Const=cb0)
+reflect(renderer_imgui_pixel "")
+bindings("" "" texture0=t0 sampler0=s0)
+
 foreach(shader auto_exposure_histogram_cs auto_exposure_resolve_cs)
     reflect("${shader}" "")
     size(c_AutoExposure 48)
@@ -160,6 +176,13 @@ foreach(shader auto_exposure_histogram_cs auto_exposure_resolve_cs)
         bindings(f32 "buf[ ]" u_Exposure=u0)
         threads(1 1 1)
     endif()
+endforeach()
+foreach(shader lighting_accumulation_cs lighting_accumulation_prepare_cs)
+    reflect("${shader}" "")
+    size(c_LightingAccumulation 16)
+    members(extent=0 resetHistory=8 padding=12)
+    bindings(cbuffer "" c_LightingAccumulation=cb0)
+    threads(8 8 1)
 endforeach()
 foreach(unity 0 1)
     foreach(lut 0 1)
@@ -227,8 +250,15 @@ require("t_RayMaterialBuffers[^\r\n]*t0,space1unbounded"
     "t_RayMaterialTextures[^\r\n]*t0,space2unbounded" "rayQuery_TraceRayInline" "rayQuery_Proceed")
 threads(8 8 1)
 
+reflect(image_based_lighting_background_ps "")
+size(c_Background 80)
+members(matClipToTranslatedWorld=0 radianceScale=64 padding=68)
+bindings("" "" c_Background=cb0 t_Radiance=t0 s_Radiance=s0)
+
 reflect(fast_approximate_aa_ps "")
 size(FastApproximateAaConstants 32)
+members(g_ReciprocalSourceSize=0 g_EdgeSharpness=8 g_EdgeThreshold=12
+    g_DarkEdgeThreshold=16 g_Padding=20)
 bindings("" "" FastApproximateAaConstants=cb0 s_LinearClamp=s0 t_DisplayLinear=t0)
 require("SV_Position[^\r\n]*float" "UV[^\r\n]*float" "SV_Target[^\r\n]*float"
     "dx\\.op\\.dot3" "dx\\.op\\.unary\\.f32\\(i32 24" "dx\\.op\\.storeOutput\\.f32")

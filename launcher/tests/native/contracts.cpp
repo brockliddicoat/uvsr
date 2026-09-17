@@ -118,7 +118,7 @@ namespace
     {
         Fixture f; f.Package(); auto envelope = ParseJson(f.signing.Sign(f.renderer));
         auto bytes = DecodeBase64(Text(envelope,"payloadBase64")); std::string payload(bytes.begin(),bytes.end());
-        auto changed = envelope; auto signature = Text(changed,"signatureBase64"); signature[0] = signature[0] == 'A' ? 'B' : 'A'; Set(changed,"signatureBase64",JString(signature));
+        auto changed = Clone(envelope); std::string signature(Text(changed,"signatureBase64")); signature[0] = signature[0] == 'A' ? 'B' : 'A'; Set(changed,"signatureBase64",JString(signature));
         Throws([&] { VerifyFeed(Serialize(changed), Component::Renderer, f.signing.publicKey,"test-key"); });
         for (const auto& bad : {"{\"schemaVersion\":1," + payload.substr(1), "{\"unknown\":true," + payload.substr(1)})
             Throws([&] { VerifyFeed(f.signing.SignPayload(bad, Component::Renderer), Component::Renderer, f.signing.publicKey,"test-key"); });
@@ -126,6 +126,36 @@ namespace
         Throws([&] { VerifyFeed(f.signing.Sign(invalid), Component::Renderer, f.signing.publicKey,"test-key"); });
         invalid = f.renderer; invalid.hash = std::string(64,'F');
         Throws([&] { VerifyFeed(f.signing.Sign(invalid), Component::Renderer, f.signing.publicKey,"test-key"); });
+    }
+    void Records()
+    {
+        Fixture f;
+        const auto path = f.root / L"record-\u03b2.json";
+        auto record = JObject({{"phase", JString(std::string("prepared"))}, {"previous", Json{}},
+            {"sequence", JNumber(INT64_C(9007199254740993))}, {"values", JArray()}});
+        WriteRecord(path, record);
+        const auto original = Serialize(record) + "\n";
+        Require(original == "{\"phase\":\"prepared\",\"previous\":null,\"sequence\":9007199254740993,\"values\":[]}\n" &&
+            ReadFile(path, original.size()) == original, "record bytes, order, null or exact integer changed");
+        auto snapshot = Clone(record);
+        Set(record, "phase", JString("activated"));
+        Require(Text(snapshot, "phase") == "prepared" && Text(record, "phase") == "activated",
+            "record mutation changed an independent rollback snapshot");
+        const auto changed = Serialize(record);
+        Throws([&] { Set(record, "missing", JNumber(2)); });
+        Require(Serialize(record) == changed && ReadFile(path, original.size()) == original,
+            "failed record mutation changed memory or durable bytes");
+        const auto loaded = ReadRecord(path, original.size());
+        Require(Serialize(loaded) + "\n" == original, "record round trip changed exact serialized bytes");
+        Throws([&] { (void)ReadRecord(path, original.size() - 1); });
+        WriteAtomic(path, std::string(32, '[') + "null" + std::string(32, ']'));
+        (void)ReadRecord(path);
+        WriteAtomic(path, std::string(33, '[') + "null" + std::string(33, ']'));
+        Throws([&] { (void)ReadRecord(path); });
+        WriteAtomic(path, "{\"phase\":\"prepared\",\"phase\":\"activated\"}");
+        Throws([&] { (void)ReadRecord(path); });
+        WriteRecord(path, snapshot);
+        Require(ReadFile(path, original.size()) == original, "record retry did not restore the exact prior bytes");
     }
     void Lifecycle()
     {
@@ -317,6 +347,7 @@ int wmain(int argc, wchar_t** argv)
             {"signed launcher feed and canonical bytes", [] { FeedProof(Component::Launcher); }},
             {"signed renderer feed", [] { FeedProof(Component::Renderer); }},
             {"tampering, duplicates, unknown fields and unsafe numbers", Tamper},
+            {"record bounds, depth, copies, replacement and exact retry bytes", Records},
             {"sequence reuse and downgrade rejection", [] { Fixture f; f.Package(); auto i=f.Make(); i.Execute(Operation::Install,true,{},{}); auto state=i.Inspect().state; auto feed=f.renderer; feed.hash=std::string(64,'c'); Throws([&]{Classify(state,true,feed);}); feed=f.renderer; --feed.sequence; Require(Classify(state,true,feed)==UpdateState::Current,"older feed classified as update"); }},
             {"install update repair and current classification", [] { Fixture f; f.Package(); Require(Classify({},true,f.renderer)==UpdateState::NotInstalled,"fresh classification"); auto i=f.Make(); i.Execute(Operation::Install,true,{},{}); auto state=i.Inspect().state; Require(Classify(state,true,f.renderer)==UpdateState::Current && Classify(state,false,f.renderer)==UpdateState::RepairNeeded,"installed classification"); auto feed=f.renderer; ++feed.sequence; Require(Classify(state,true,feed)==UpdateState::UpdateAvailable,"update classification"); }},
             {"manifest and PE bind signed identity", [] { Fixture f; f.Package(); ValidatePackage(f.root / "package-16",&f.renderer); auto feed=f.renderer; ++feed.sequence; Throws([&]{ValidatePackage(f.root / "package-16",&feed);}); }},

@@ -91,7 +91,7 @@ namespace uvsr::launcher
                     StrongTag(Text(state, "entityTag")) && length > 0 && uint64_t(length) <= maximum, "A saved download cannot be resumed.");
                 auto size = fs::file_size(partial);
                 Require(size <= uint64_t(length), "The saved download exceeds its declared length.");
-                return Resume{Text(state, "entityTag"), uint64_t(length), size};
+                return Resume{std::string(Text(state, "entityTag")), uint64_t(length), size};
             }
             catch (const std::exception&) { return {}; }
         }
@@ -196,8 +196,8 @@ namespace uvsr::launcher
                         if (StrongTag(tag) && total)
                         {
                             resume = Resume{tag, *total, 0};
-                            WriteRecord(record, JObject({{"schemaVersion", JNumber(1)}, {"source", JString(std::string(source))},
-                                {"expectedSha256", JString(std::string(expectedHash.value_or("")))}, {"entityTag", JString(tag)}, {"completeLength", JNumber(int64_t(*total))}}));
+                            WriteRecord(record, JObject({{"schemaVersion", JNumber(1)}, {"source", JString(source)},
+                                {"expectedSha256", JString(expectedHash.value_or(""))}, {"entityTag", JString(tag)}, {"completeLength", JNumber(int64_t(*total))}}));
                         }
                         else { RejectReparseChain(record); fs::remove(record); }
                     }

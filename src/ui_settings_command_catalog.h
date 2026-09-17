@@ -3,7 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <string>
+#include "settings_metadata_text.h"
 #include <string_view>
 
 namespace uvsr
@@ -335,10 +335,10 @@ namespace uvsr
 
     [[nodiscard]] bool ValidateCanonicalSettingsSchema(
         const UiSettingsCatalog& definitions = UiSettingsCommandCatalog) noexcept;
-    [[nodiscard]] std::string FormatUiSettingsMetadataFloat(float value);
+    [[nodiscard]] SettingsMetadataText FormatUiSettingsMetadataFloat(float value) noexcept;
     [[nodiscard]] std::string_view UiSettingsDefaultPolicyName(UiSettingsDefaultPolicy policy) noexcept;
-    [[nodiscard]] std::string FormatUiSettingsDomain(const UiSettingsCommandDefinition& definition);
-    [[nodiscard]] std::string FormatUiSettingsTokenLabel(SettingId id, std::size_t tokenIndex);
-    [[nodiscard]] std::string FormatUiSettingsDefaultAnchor(const UiSettingsCommandDefinition& definition);
-    [[nodiscard]] std::string FormatUiSettingsDefault(const UiSettingsCommandDefinition& definition);
+    [[nodiscard]] SettingsMetadataText FormatUiSettingsDomain(const UiSettingsCommandDefinition& definition) noexcept;
+    [[nodiscard]] SettingsMetadataText FormatUiSettingsTokenLabel(SettingId id, std::size_t tokenIndex) noexcept;
+    [[nodiscard]] SettingsMetadataText FormatUiSettingsDefaultAnchor(const UiSettingsCommandDefinition& definition) noexcept;
+    [[nodiscard]] SettingsMetadataText FormatUiSettingsDefault(const UiSettingsCommandDefinition& definition) noexcept;
 }

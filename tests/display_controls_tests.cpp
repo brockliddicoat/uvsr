@@ -1,22 +1,29 @@
 #include "fast_approximate_aa_options.h"
-#include "fast_approximate_aa_contract.h"
+#include "fast_approximate_aa_source_nvrhi.h"
 #include "display_sync_test.h"
 #include "auto_exposure.h"
 #include "pixel_zoom.h"
 #include "pixel_zoom_mapping.h"
 #include "tone_mapping_settings.h"
 #include "color_lut.h"
+#include "file_bytes.h"
+#include "settings_snapshot_storage.h"
 
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <cfenv>
+#include <cstring>
+#include <string>
+#include <type_traits>
 #include <iostream>
 #include <limits>
 #include <string_view>
 #include <utility>
-#include <fstream>
 #include <filesystem>
-#include <sstream>
+
+bool TestWindowsPathTextOwnership() noexcept;
+bool TestUiLightDefaultsOwnership() noexcept;
 
 namespace
 {
@@ -30,9 +37,93 @@ namespace
     }
     bool Near(float a, float b) { return std::abs(a - b) < 1e-6f; }
 
+    void CheckLutOwnership()
+    {
+        using namespace uvsr;
+        static_assert(sizeof(ColorLutValue) == 16);
+        static_assert(!std::is_copy_constructible_v<ColorLutData> && !std::is_copy_assignable_v<ColorLutData>);
+        static_assert(std::is_nothrow_move_constructible_v<ColorLutData> && std::is_nothrow_move_assignable_v<ColorLutData>);
+        size_t checks = 0;
+        const auto check = [&](bool value, const char* message) { ++checks; Require(value, message); };
+        const std::string rows = "0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+        const std::string identity = "LUT_3D_SIZE 2\n" + rows;
+        ColorLutData retained;
+        SettingsSnapshotError error;
+        check(ReadColorLut(identity, retained, error), "LUT owner fixture must parse");
+        const auto before = retained.Values();
+        ColorLutValue prior[8]; std::memcpy(prior, before.data, sizeof(prior));
+        for (size_t failure : {size_t(0), size_t(1)})
+        {
+            error = {SettingsSnapshotErrorCode::Catalog, 91, 92, "prior failure", {}};
+            FailColorLutAllocationAfter(failure);
+            const bool parsed = ReadColorLut(identity, retained, error);
+            ClearColorLutAllocationFailure();
+            check(!parsed && error.code == SettingsSnapshotErrorCode::OutOfMemory && error.nativeCode == 0 &&
+                error.cleanupCode == 0 && !error.detail.IsValid(), "table and locale allocation failures must replace stale metadata");
+            check(error.MessageView() == (failure == 0 ? "Cannot allocate film LUT table" : "Cannot allocate film LUT numeric locale"),
+                "allocation failures must identify their owner");
+            check(retained.Values().data == before.data && retained.Size() == 2 && retained.Values().count == 8 &&
+                std::memcmp(retained.Values().data, prior, sizeof(prior)) == 0,
+                "allocation failure must preserve every prior RGBA byte and view");
+        }
+        FailColorLutAllocationAfter(2);
+        check(ReadColorLut(identity, retained, error), "a complete LUT needs only its table and numeric locale allocations");
+        ClearColorLutAllocationFailure();
+        for (size_t failure : {size_t(0), size_t(1)})
+        {
+            const auto* pointer = retained.Values().data;
+            FailColorLutAllocationAfter(failure);
+            const bool parsed = ReadColorLut("DOMAIN_MIN -1 -2 -3\n" + identity, retained, error);
+            ClearColorLutAllocationFailure();
+            check(!parsed && error.code == SettingsSnapshotErrorCode::OutOfMemory && retained.Values().data == pointer &&
+                error.MessageView() == (failure == 0 ? "Cannot allocate film LUT numeric locale" : "Cannot allocate film LUT table"),
+                "domain headers before size must retain their allocation and publication order");
+        }
+        const std::string longNumber = "0x1." + std::string(8192, '0') + "1p0";
+        const std::string longInput = "LUT_3D_SIZE 2\n" + longNumber + " 0 0\n" + rows.substr(rows.find('\n') + 1);
+        const int priorRounding = std::fegetround();
+        check(std::fesetround(FE_UPWARD) == 0, "directed-rounding fixture must initialize");
+        FailColorLutAllocationAfter(2);
+        const bool parsed = ReadColorLut(longInput, retained, error);
+        ClearColorLutAllocationFailure();
+        check(std::fesetround(priorRounding) == 0, "directed-rounding fixture must restore its caller");
+        uint32_t bits = 0; std::memcpy(&bits, &retained.Values().data[0][0], sizeof(bits));
+        check(parsed && bits == 0x3f800001u && error.code == SettingsSnapshotErrorCode::None,
+            "long discarded hex tails must preserve upward rounding without another allocation");
+        const auto* pointer = retained.Values().data;
+        ColorLutData moved(std::move(retained));
+        check(moved.Values().data == pointer && moved.Values().count == 8 && moved.Size() == 2,
+            "move construction must transfer the complete table without allocation");
+        check(retained.Values().data == nullptr && retained.Values().count == 0 && retained.Size() == 0 &&
+            retained.DomainMin() == std::array<float, 3>{0, 0, 0} && retained.DomainMax() == std::array<float, 3>{1, 1, 1},
+            "move construction must reset the source to a valid empty owner");
+        check(ReadColorLut(identity, retained, error), "move assignment destination must already own a table");
+        retained = std::move(moved);
+        check(retained.Values().data == pointer && moved.Values().data == nullptr && moved.Values().count == 0 &&
+            moved.Size() == 0 && moved.DomainMax() == std::array<float, 3>{1, 1, 1},
+            "move assignment must release the destination and empty the source");
+        auto& alias = retained; retained = std::move(alias);
+        check(retained.Values().data == pointer && retained.Values().count == 8, "self move must preserve the table");
+        FailColorLutAllocationAfter(0);
+        check(!ReadColorLut("LUT_3D_SIZE 129\n", retained, error) && error.code == SettingsSnapshotErrorCode::InvalidInput,
+            "size rejection must precede allocation");
+        check(!ReadColorLut(identity, retained, error) && error.code == SettingsSnapshotErrorCode::OutOfMemory,
+            "invalid size must leave the allocation failure unconsumed");
+        ClearColorLutAllocationFailure();
+        check(retained.Values().data == pointer, "late checks must preserve the published table");
+        retained.Clear();
+        check(retained.Size() == 0 && retained.Values().data == nullptr && retained.Values().count == 0 &&
+            retained.DomainMin() == std::array<float, 3>{0, 0, 0} && retained.DomainMax() == std::array<float, 3>{1, 1, 1},
+            "clear must restore a reusable empty owner");
+        std::cout << "LUT ownership: " << checks << " assertions including fixture checks\n";
+    }
+
     void CheckToneMapping(const std::filesystem::path& directory)
     {
         using namespace uvsr;
+        CheckLutOwnership();
+        Require(TestWindowsPathTextOwnership(), "runtime path ownership checks failed");
+        Require(TestUiLightDefaultsOwnership(), "light default ownership checks failed");
         ToneMappingSettings settings;
         Require(!settings.enabled, "the tonemapper must default off");
         Require(FindToneMappingPreset(settings) == 0, "neutral tone controls must select Base");
@@ -45,18 +136,30 @@ namespace
                 "each retained grade must remain selectable");
         for (ToneMappingLut lut : { ToneMappingLut::Print2383, ToneMappingLut::Portra400, ToneMappingLut::Ektar100 })
         {
-            std::ifstream stream(directory / ToneMappingLutFilename(lut));
+            FileBytes bytes;
+            FileReadResult failure;
+            Require(ReadFileBytes((directory / ToneMappingLutFilename(lut)).c_str(), uint64_t(PTRDIFF_MAX) - 1, bytes, failure),
+                "bundled film LUT bytes must be readable");
+            std::string_view text(bytes.Data(), bytes.Size());
+            text = text.substr(0, text.find('\x1a'));
             ColorLutData data;
-            std::string error;
-            Require(ReadColorLut(stream, data, error) && data.size == 17 && data.values.size() == 4913,
+            SettingsSnapshotError error;
+            Require(ReadColorLut(text, data, error) && data.Size() == 17 && data.Values().count == 4913 &&
+                error.code == SettingsSnapshotErrorCode::None && error.nativeCode == 0 && error.cleanupCode == 0 &&
+                error.MessageView().empty(),
                 "each bundled film LUT must contain its complete 17-cubed table");
         }
         const std::string identity = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
         ColorLutData retained;
-        std::string error;
-        std::istringstream valid(identity);
-        Require(ReadColorLut(valid, retained, error) && retained.values[1][0] == 1.f &&
-                retained.values[2][1] == 1.f && retained.values[4][2] == 1.f,
+        SettingsSnapshotError error{SettingsSnapshotErrorCode::Catalog, 91, 92, "prior failure", {}};
+        error.detail = json::EncodedText([](json::OutputWriter& writer, const void*) noexcept {
+            return writer.Raw("prior owned diagnostic");
+        }, nullptr);
+        Require(error.detail.IsValid(), "prior diagnostic fixture must own text");
+        Require(ReadColorLut(identity, retained, error) && retained.Values().data[1][0] == 1.f &&
+                retained.Values().data[2][1] == 1.f && retained.Values().data[4][2] == 1.f &&
+                error.code == SettingsSnapshotErrorCode::None && error.nativeCode == 0 && error.cleanupCode == 0 &&
+                error.MessageView().empty() && !error.detail.IsValid(),
             "cube order must remain red-fastest for the GPU texture");
         for (const std::string& invalid : { std::string("LUT_3D_SIZE 129\n"),
                 std::string("LUT_3D_SIZE 2\n0 0 0\n"), identity + "0 0 0\n",
@@ -65,9 +168,11 @@ namespace
                 std::string("LUT_1D_SIZE 2\n") + identity,
                 std::string("LUT_3D_SIZE 2\n") + identity })
         {
-            std::istringstream stream(invalid);
-            Require(!ReadColorLut(stream, retained, error) && !error.empty() &&
-                    retained.size == 2 && retained.values.size() == 8 && retained.values[7][2] == 1.f,
+            error = {SettingsSnapshotErrorCode::Catalog, 91, 92, "prior failure", {}};
+            Require(!ReadColorLut(invalid, retained, error) && !error.MessageView().empty() &&
+                    error.code == SettingsSnapshotErrorCode::InvalidInput && error.nativeCode == 0 && error.cleanupCode == 0 &&
+                    !error.detail.IsValid() &&
+                    retained.Size() == 2 && retained.Values().count == 8 && retained.Values().data[7][2] == 1.f,
                 "rejected LUT data must leave the previous complete table unchanged");
         }
     }

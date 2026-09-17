@@ -1,4 +1,6 @@
 #include "scene_catalog.h"
+#include "settings_snapshot_storage.h"
+#include <vector>
 #include "scene_light_names.h"
 #include "scene_loading.h"
 #include "renderer_scene_load_worker.h"
@@ -6,17 +8,19 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
-#include <future>
 #include <iostream>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
-#include <thread>
 #include <utility>
+
+void TestRendererSceneLoadWorker();
+bool TestImageBasedLightingOwnership(const wchar_t* directory);
+bool TestSceneHistoryOwnership();
+void TestSceneCatalogOwnership(const std::filesystem::path& root);
 
 using namespace uvsr;
 
@@ -26,6 +30,31 @@ namespace
     {
         if (!condition)
             throw std::runtime_error(message);
+    }
+
+    SceneCatalog BuildCatalog(const std::filesystem::path& root, const std::vector<std::string>& files)
+    {
+        std::vector<std::string_view> views(files.begin(), files.end());
+        SceneCatalog catalog;
+        SettingsSnapshotError error;
+        Require(BuildSceneCatalog(root.native(), {views.data(), views.size()}, catalog, error), error.Message());
+        return catalog;
+    }
+
+    const SceneCatalogEntry* FindCatalog(const SceneCatalog& catalog, std::string_view file)
+    {
+        const SceneCatalogEntry* entry = nullptr;
+        SettingsSnapshotError error;
+        Require(FindSceneCatalogEntry(catalog, file, entry, error), error.Message());
+        return entry;
+    }
+
+    std::string DisplayName(const std::filesystem::path& root, const std::filesystem::path& file)
+    {
+        json::EncodedText text;
+        SettingsSnapshotError error;
+        Require(MakeSceneDisplayName(root.native(), file.native(), text, error), error.Message());
+        return std::string(text.Data(), text.Size());
     }
 
     void CheckCatalog(const std::filesystem::path& root)
@@ -49,141 +78,131 @@ namespace
         std::vector<std::string> discovered{ part.generic_string(), alternate.generic_string(),
             detail.generic_string(), standalone.generic_string(), main.generic_string(),
             fallback.generic_string(), part.generic_string() };
-        const auto catalog = BuildSceneCatalog(root, discovered);
-        Require(catalog.size() == 4, "shared/nested components or duplicate discovery leaked into the picker");
-        const auto* entry = FindSceneCatalogEntry(catalog, main.generic_string());
+        const auto catalog = BuildCatalog(root, discovered);
+        Require(catalog.Count() == 4, "shared/nested components or duplicate discovery leaked into the picker");
+        const auto* entry = FindCatalog(catalog, main.generic_string());
         Require(entry && entry->DisplayName == "Main" && entry->InitialCamera, "named descriptor lost its camera");
+        Require(entry->CommandName == "room/main.scene.json" && entry->FileName == main.generic_string(),
+            "friendly scene metadata changed its command name or runtime path");
         const auto& camera = *entry->InitialCamera;
         Require(camera.Position == std::array<float, 3>{ 1, 2, 3 } &&
             camera.Direction == std::array<float, 3>{ 0, 0, -1 } &&
             camera.Up == std::array<float, 3>{ 0, 1, 0 } && camera.VerticalFovDegrees == 55,
             "descriptor camera normalization changed its pose");
-        const auto* invalid = FindSceneCatalogEntry(catalog, fallback.generic_string());
+        const auto* invalid = FindCatalog(catalog, fallback.generic_string());
         Require(invalid && invalid->DisplayName == "room/fallback.scene.json" && !invalid->InitialCamera,
             "blank name fallback or overflow-prone parallel camera rejection failed");
-        Require(FindSceneCatalogEntry(catalog, alternate.generic_string()) &&
-            FindSceneCatalogEntry(catalog, standalone.generic_string()) &&
-            !FindSceneCatalogEntry(catalog, part.generic_string()) &&
-            !FindSceneCatalogEntry(catalog, detail.generic_string()), "catalog membership changed");
+        Require(FindCatalog(catalog, alternate.generic_string()) &&
+            FindCatalog(catalog, standalone.generic_string()) &&
+            !FindCatalog(catalog, part.generic_string()) &&
+            !FindCatalog(catalog, detail.generic_string()), "catalog membership changed");
         std::reverse(discovered.begin(), discovered.end());
-        const auto reversed = BuildSceneCatalog(root, discovered);
-        Require(catalog.size() == reversed.size(), "discovery order changed catalog size");
-        for (size_t i = 0; i < catalog.size(); ++i)
-            Require(catalog[i].DisplayName == reversed[i].DisplayName && catalog[i].FileName == reversed[i].FileName,
+        const auto reversed = BuildCatalog(root, discovered);
+        Require(catalog.Count() == reversed.Count(), "discovery order changed catalog size");
+        for (size_t i = 0; i < catalog.Count(); ++i)
+            Require(catalog[i].DisplayName == reversed[i].DisplayName && catalog[i].FileName == reversed[i].FileName &&
+                catalog[i].CommandName == reversed[i].CommandName &&
+                catalog[i].CommandName == DisplayName(root, catalog[i].FileName),
                 "filesystem enumeration changed picker order");
         const auto external = root.parent_path() / (root.filename().string() + "_backup") / "external.glb";
-        Require(MakeSceneDisplayName(root, standalone) == "standalone.glb" &&
-            MakeSceneDisplayName(root.generic_string() + "/", main) == "room/main.scene.json" &&
-            MakeSceneDisplayName(root, external) == external.generic_string(), "scene path boundary changed");
+        Require(DisplayName(root, standalone) == "standalone.glb" &&
+            DisplayName(root.generic_string() + "/", main) == "room/main.scene.json" &&
+            DisplayName(root, external) == external.generic_string(), "scene path boundary changed");
 #ifdef _WIN32
         std::string uppercase = main.generic_string();
         std::transform(uppercase.begin(), uppercase.end(), uppercase.begin(),
             [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-        Require(FindSceneCatalogEntry(catalog, uppercase), "Windows scene lookup became case sensitive");
+        Require(FindCatalog(catalog, uppercase), "Windows scene lookup became case sensitive");
 #endif
         write(main, R"({"displayName":"Main","displayName":"duplicate","models":["parts/model.glb"]})");
-        const auto malformed = BuildSceneCatalog(root, { main.generic_string(), part.generic_string() });
-        const auto* rejected = FindSceneCatalogEntry(malformed, main.generic_string());
-        Require(malformed.size() == 2 && rejected && rejected->DisplayName == "room/main.scene.json" &&
+        const auto malformed = BuildCatalog(root, { main.generic_string(), part.generic_string() });
+        const auto* rejected = FindCatalog(malformed, main.generic_string());
+        Require(malformed.Count() == 2 && rejected && rejected->DisplayName == "room/main.scene.json" &&
             !rejected->InitialCamera, "malformed descriptor hid a component or published metadata");
         for (const auto& names : { std::pair{ "HDRI_SKY", "hdri_sky_1" }, { "HdRi_SkY_1", "hdri_sky_1" },
                  { "SUN", "sun_1" }, { "Sun_1", "sun_1" }, { "lamp_light_1st_floor_12", "lamp_light_1st_floor_12" } })
-            Require(NormalizeSceneLightName(names.first) == names.second, "scene light identity changed");
+        {
+            const std::string_view input(names.first);
+            const auto normalized = NormalizeSceneLightName({input.data(), input.size()});
+            Require(std::string_view(normalized.data, normalized.count) == names.second, "scene light identity changed");
+        }
     }
 
-    void CheckWorker()
+    struct RetirementFixture
     {
-        using State = RendererSceneLoadWorkerState;
-        RendererSceneLoadWorker worker;
-        Require(!worker.Start({}) && worker.GetState() == State::Idle, "empty task changed the worker");
-        int published = 0;
-        Require(worker.Start([&] { published = 42; return true; }), "scene task did not start");
-        while (worker.GetState() == State::Running)
-            std::this_thread::yield();
-        Require(worker.GetState() == State::Succeeded && published == 42,
-            "terminal state did not publish the CPU handoff before Join");
-        Require(!worker.Start([] { return true; }) && worker.Join(), "unjoined task was replaced");
-        Require(worker.Start([] { return false; }) && !worker.Join() &&
-            worker.GetState() == State::Failed && !worker.GetException(),
-            "false task result lost failure or invented an exception");
-        Require(worker.Start([]() -> bool { throw std::runtime_error("scene import failed"); }) && !worker.Join(),
-            "throwing task succeeded");
-        bool diagnosticPreserved = false;
-        if (const auto failure = worker.GetException())
+        int arms = 0, polls = 0, waits = 0;
+        bool armSucceeds = true, idleSucceeds = true, pollFails = false;
+        unsigned pendingPolls = 1;
+        static bool Arm(void* context)
         {
-            try { std::rethrow_exception(failure); }
-            catch (const std::runtime_error& error) { diagnosticPreserved = std::string(error.what()) == "scene import failed"; }
-            catch (...) {}
+            auto& self = *static_cast<RetirementFixture*>(context);
+            ++self.arms;
+            return self.armSucceeds;
         }
-        Require(diagnosticPreserved, "scene import exception type or diagnostic changed");
-        worker.Reset();
-        Require(worker.GetState() == State::Idle && !worker.GetException(), "reset retained terminal state");
-
-        std::promise<void> entered, release;
-        const auto released = release.get_future().share();
-        Require(worker.Start([&entered, released] { entered.set_value(); released.wait(); return true; }),
-            "blocking task did not start");
-        entered.get_future().wait();
-        const bool refusedReplacement = worker.GetState() == State::Running && !worker.Start([] { return true; });
-        release.set_value();
-        Require(worker.Join() && refusedReplacement, "concurrent task replaced the active loader");
-        std::atomic_bool finished = false;
+        static RendererSceneQueryStatus Poll(void* context)
         {
-            RendererSceneLoadWorker joining;
-            Require(joining.Start([&] { finished.store(true); return true; }), "destructor task did not start");
+            auto& self = *static_cast<RetirementFixture*>(context);
+            ++self.polls;
+            if (self.pollFails)
+                return RendererSceneQueryStatus::Failed;
+            return unsigned(self.polls) <= self.pendingPolls
+                ? RendererSceneQueryStatus::Pending : RendererSceneQueryStatus::Complete;
         }
-        Require(finished.load(), "worker destruction returned before its task");
-    }
+        static bool Wait(void* context)
+        {
+            auto& self = *static_cast<RetirementFixture*>(context);
+            ++self.waits;
+            return self.idleSucceeds;
+        }
+        RendererSceneRetirementOperations Operations()
+        {
+            return {this, Arm, Poll, Wait};
+        }
+    };
 
     void CheckRetirement()
     {
         using Status = RendererSceneRetirementStatus;
-        using Query = RendererSceneQueryStatus;
-        RendererSceneRetirement invalid(nullptr);
+        RendererSceneRetirement invalid;
         Require(!invalid.IsValid() && !invalid.Begin() && invalid.Poll() == Status::Idle &&
-            !invalid.Consume() && !invalid.UsedBlockingFallback(), "null device armed scene retirement");
-        int arms = 0, polls = 0, waits = 0;
-        RendererSceneRetirement normal({
-            [&] { ++arms; return true; },
-            [&] { return ++polls == 1 ? Query::Pending : Query::Complete; },
-            [&] { ++waits; return true; } });
-        Require(normal.Begin() && arms == 0 && !normal.Begin() && !normal.Consume(),
+            !invalid.Consume() && !invalid.UsedBlockingFallback(), "empty operations armed retirement");
+        RetirementFixture events;
+        RendererSceneRetirement normal(events.Operations());
+        Require(normal.Begin() && events.arms == 0 && !normal.Begin() && !normal.Consume(),
             "retirement signaled before render submissions or released an unproven scene");
-        Require(normal.Poll() == Status::Pending && arms == 1 && polls == 0 &&
-            normal.Poll() == Status::Pending && polls == 1 && !normal.Consume(),
+        Require(normal.Poll() == Status::Pending && events.arms == 1 && events.polls == 0 &&
+            normal.Poll() == Status::Pending && events.polls == 1 && !normal.Consume(),
             "retirement lost its arm-before-query boundary");
-        Require(normal.Poll() == Status::Ready && polls == 2 && waits == 0 &&
-            normal.Poll() == Status::Ready && polls == 2 && normal.Consume() && !normal.Consume(),
+        Require(normal.Poll() == Status::Ready && events.polls == 2 && events.waits == 0 &&
+            normal.Poll() == Status::Ready && events.polls == 2 && normal.Consume() && !normal.Consume(),
             "completed query was not published and consumed exactly once");
 
-        for (const bool armSucceeds : { false, true })
-        for (const bool idleSucceeds : { false, true })
+        for (unsigned configuration = 0; configuration < 4; ++configuration)
         {
-            int fallbackWaits = 0;
-            bool idle = idleSucceeds;
-            RendererSceneRetirement fallback({
-                [=] { return armSucceeds; }, [] { return Query::Failed; },
-                [&] { ++fallbackWaits; return idle; } });
+            RetirementFixture fallbackEvents;
+            fallbackEvents.armSucceeds = (configuration & 1) != 0;
+            fallbackEvents.idleSucceeds = (configuration & 2) != 0;
+            fallbackEvents.pollFails = true;
+            RendererSceneRetirement fallback(fallbackEvents.Operations());
             Require(fallback.Begin(), "fallback retirement did not start");
-            if (armSucceeds)
+            if (fallbackEvents.armSucceeds)
                 Require(fallback.Poll() == Status::Pending, "query failure bypassed the publication boundary");
-            Require(fallback.Poll() == (idleSucceeds ? Status::Ready : Status::Failed) &&
-                fallback.UsedBlockingFallback() && fallbackWaits == 1, "query failure lost its one idle fallback");
-            if (!idleSucceeds)
+            Require(fallback.Poll() == (fallbackEvents.idleSucceeds ? Status::Ready : Status::Failed) &&
+                fallback.UsedBlockingFallback() && fallbackEvents.waits == 1, "query failure lost its one idle fallback");
+            if (!fallbackEvents.idleSucceeds)
             {
                 Require(!fallback.Consume(), "failed idle proof released scene ownership");
-                idle = true;
-                Require(fallback.CompleteBlocking() == Status::Ready && fallbackWaits == 2,
+                fallbackEvents.idleSucceeds = true;
+                Require(fallback.CompleteBlocking() == Status::Ready && fallbackEvents.waits == 2,
                     "shutdown recovery did not retry the retained scene");
             }
             Require(fallback.Consume(), "proven idle scene was not consumable");
         }
-        int shutdownWaits = 0;
-        RendererSceneRetirement shutdown({
-            [] { return true; }, [] { return Query::Pending; }, [&] { ++shutdownWaits; return true; } });
+        RetirementFixture shutdownEvents;
+        RendererSceneRetirement shutdown(shutdownEvents.Operations());
         Require(shutdown.Begin() && shutdown.Poll() == Status::Pending &&
             shutdown.CompleteBlocking() == Status::Ready && shutdown.UsedBlockingFallback() &&
-            shutdownWaits == 1 && shutdown.Consume(), "shutdown did not complete pending retirement");
+            shutdownEvents.waits == 1 && shutdown.Consume(), "shutdown did not complete pending retirement");
     }
 
     void CheckLoadingHistory()
@@ -208,34 +227,37 @@ namespace
             Require(overflow.totalMilliseconds == 5 && overflow.completedLoadCount == 1, "history saturation overflowed");
         }
         SceneLoadTimingDatabase database;
+        SettingsSnapshotError error;
         database.allScenes = history;
         for (size_t i = 0; i < MaximumSceneLoadTimingEntries + 32; ++i)
-            Require(RecordBoundedSceneLoadDuration(database.byScene, "scene-" + std::to_string(i), 20) &&
-                database.byScene.size() <= MaximumSceneLoadTimingEntries, "history escaped its persistence bound");
-        std::ostringstream bounded;
-        Require(WriteSceneLoadTimingDatabase(bounded, database), "bounded history became unserializable");
-        database.byScene.clear();
+            Require(database.Record("scene-" + std::to_string(i), 20, error) &&
+                database.Count() <= MaximumSceneLoadTimingEntries, "history escaped its persistence bound");
+        json::EncodedText bounded;
+        Require(WriteSceneLoadTimingDatabase(database, bounded, error), "bounded history became unserializable");
+        database.Clear();
+        database.allScenes = history;
         for (size_t i = 0; i < MaximumSceneLoadTimingEntries - 2; ++i)
-            database.byScene.emplace("retained-" + std::to_string(i), SceneLoadTimingHistory{ 1000, 10 });
+            for (size_t sample = 0; sample < 10; ++sample)
+                Require(database.Record("retained-" + std::to_string(i), 100, error), error.Message());
         for (const auto* key : { "evict-a", "evict-b" })
-            database.byScene.emplace(key, SceneLoadTimingHistory{ 20, 1 });
-        Require(RecordBoundedSceneLoadDuration(database.byScene, "replacement", 40) &&
-            database.byScene.count("evict-a") == 0 && database.byScene.count("evict-b") == 1,
+            Require(database.Record(key, 20, error), error.Message());
+        Require(database.Record("replacement", 40, error) && !database.Find("evict-a") && database.Find("evict-b"),
             "history eviction lost deterministic tie breaking");
-        Require(RecordBoundedSceneLoadDuration(database.byScene, "evict-b", 40) &&
-            database.byScene.at("evict-b").completedLoadCount == 2 &&
-            !RecordBoundedSceneLoadDuration(database.byScene, "", 20) &&
-            database.byScene.size() == MaximumSceneLoadTimingEntries, "history update evicted or accepted an invalid key");
-        database.byScene = { { "media/room interior.gltf", { 400, 2 } }, { "C:/external/scene.gltf", { 200, 1 } } };
-        std::ostringstream output;
-        Require(WriteSceneLoadTimingDatabase(output, database) &&
-            output.str().find("C:/external/scene.gltf") < output.str().find("media/room interior.gltf"),
+        Require(database.Record("evict-b", 40, error) && database.Find("evict-b")->completedLoadCount == 2 &&
+            !database.Record("", 20, error) && database.Count() == MaximumSceneLoadTimingEntries,
+            "history update evicted or accepted an invalid key");
+        Require(ReadSceneLoadTimingDatabase(
+            "UVSR_SCENE_LOAD_HISTORY 1\nall 600 3\nscene \"media/room interior.gltf\" 400 2\nscene \"C:/external/scene.gltf\" 200 1\n",
+            database, error), "history roundtrip seed failed");
+        json::EncodedText output;
+        Require(WriteSceneLoadTimingDatabase(database, output, error), error.Message());
+        const std::string_view serialized(output.Data(), output.Size());
+        Require(serialized.find("C:/external/scene.gltf") < serialized.find("media/room interior.gltf"),
             "history serialization order changed");
         SceneLoadTimingDatabase restored;
-        std::istringstream input(output.str());
-        Require(ReadSceneLoadTimingDatabase(input, restored) && restored.allScenes.totalMilliseconds == 600 &&
-            restored.allScenes.completedLoadCount == 3 && restored.byScene.size() == 2 &&
-            restored.byScene.at("media/room interior.gltf").completedLoadCount == 2, "history roundtrip lost state");
+        Require(ReadSceneLoadTimingDatabase(serialized, restored, error) && restored.allScenes.totalMilliseconds == 600 &&
+            restored.allScenes.completedLoadCount == 3 && restored.Count() == 2 &&
+            restored.Find("media/room interior.gltf")->completedLoadCount == 2, "history roundtrip lost state");
         for (const auto* invalid : {
                  "UVSR_SCENE_LOAD_HISTORY 2\nall 1 1\n",
                  "UVSR_SCENE_LOAD_HISTORY 1\nall 1 0\n",
@@ -244,9 +266,8 @@ namespace
                  "UVSR_SCENE_LOAD_HISTORY 1\nall 1 1\nscene \"overflow\" 1 4294967296\n",
                  "UVSR_SCENE_LOAD_HISTORY 1\nall 1 1\nunknown 1 1\n" })
         {
-            std::istringstream malformed(invalid);
-            Require(!ReadSceneLoadTimingDatabase(malformed, restored) &&
-                restored.allScenes.totalMilliseconds == 600 && restored.byScene.size() == 2,
+            Require(!ReadSceneLoadTimingDatabase(invalid, restored, error) &&
+                restored.allScenes.totalMilliseconds == 600 && restored.Count() == 2,
                 "malformed history was accepted or replaced published state");
         }
     }
@@ -258,9 +279,13 @@ int main(int argc, char** argv)
     {
         Require(argc == 2, "expected a scratch directory");
         CheckCatalog(std::filesystem::absolute(std::filesystem::u8path(argv[1])) / "catalog");
-        CheckWorker();
+        TestSceneCatalogOwnership(std::filesystem::absolute(std::filesystem::u8path(argv[1])) / "ownership");
+        TestRendererSceneLoadWorker();
+        Require(TestImageBasedLightingOwnership((std::filesystem::absolute(std::filesystem::u8path(argv[1])) / "ibl").c_str()),
+            "IBL ownership checks failed");
         CheckRetirement();
         CheckLoadingHistory();
+        Require(TestSceneHistoryOwnership(), "history ownership checks failed");
         std::cout << "scene acceptance passed\n";
         return 0;
     }

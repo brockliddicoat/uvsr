@@ -1,32 +1,9 @@
 #pragma once
 
-#include <cstdint>
-
-namespace nvrhi
-{
-    class ITexture;
-}
-
-namespace donut::engine
-{
-    class Light;
-}
+#include "renderer_scene.h"
 
 namespace uvsr
 {
-
-
-    // frame-local visibility for one exact light; incomplete values are neutral.
-    struct DirectLightVisibility
-    {
-        nvrhi::ITexture* texture = nullptr;
-        const donut::engine::Light* light = nullptr;
-        [[nodiscard]] constexpr bool IsComplete() const
-        {
-            return texture != nullptr && light != nullptr;
-        }
-    };
-
     struct DirectLightVisibilityTextureProperties
     {
         uint32_t width = 0u;
@@ -38,14 +15,6 @@ namespace uvsr
         bool r8Unorm = false;
         bool texture2D = false;
         bool shaderResource = false;
-    };
-
-    // Slot zero belongs to the finite flashlight producer. Slot one belongs
-    // to the primary directional sun. Either slot may be absent.
-    struct DirectLightVisibilities
-    {
-        DirectLightVisibility flashlight;
-        DirectLightVisibility sun;
     };
 
     [[nodiscard]] constexpr bool IsDirectLightVisibilityTextureCompatible(
@@ -62,13 +31,6 @@ namespace uvsr
             properties.shaderResource;
     }
 
-    [[nodiscard]] constexpr bool TargetsDirectLight(
-        const DirectLightVisibility& visibility,
-        const donut::engine::Light* light)
-    {
-        return visibility.IsComplete() && visibility.light == light;
-    }
-
     [[nodiscard]] constexpr float ClampDirectLightVisibility(float visibility)
     {
         return visibility < 0.f
@@ -79,11 +41,11 @@ namespace uvsr
     [[nodiscard]] constexpr float ComposeDirectLightVisibility(
         float accumulatedVisibility,
         float producerVisibility,
-        bool pointerIdenticalLight)
+        bool sameLight)
     {
         const float accumulated = ClampDirectLightVisibility(
             accumulatedVisibility);
-        return pointerIdenticalLight
+        return sameLight
             ? (accumulated < ClampDirectLightVisibility(producerVisibility)
                 ? accumulated
                 : ClampDirectLightVisibility(producerVisibility))

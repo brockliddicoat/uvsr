@@ -1,9 +1,18 @@
-#include "renderer_shader_factory.h"
-#include "shader_blob.h"
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+
+#include "renderer_shader_factory_nvrhi.h"
+#include "shader_blob_fixture.h"
 
 #include <process.h>
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -12,7 +21,6 @@
 #include <optional>
 #include <set>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -21,16 +29,13 @@ namespace uvsr
 {
     struct RendererShaderFactoryTestAccess
     {
-        static auto Path(const fs::path& root, const char* file, const char* entry)
-        {
-            return RendererShaderFactory::ResolveBlobPath(root, file, entry);
-        }
         static std::optional<std::string> Select(RendererShaderFactory& factory,
-            const char* file, const char* entry, const std::vector<RendererShaderMacro>* macros = nullptr)
+            const char* file, const char* entry, ArrayView<const shader_blob::Constant> macros = {})
         {
-            const auto value = factory.SelectBytecode(file, entry, macros);
-            return value ? std::optional<std::string>(
-                std::string(static_cast<const char*>(value->data), value->size)) : std::nullopt;
+            const void* bytes = nullptr;
+            size_t size = 0;
+            if (!factory.SelectBytecode(file, entry, macros, bytes, size)) return std::nullopt;
+            return std::string(static_cast<const char*>(bytes), size);
         }
     };
 }
@@ -44,12 +49,16 @@ namespace
 
     void Require(bool condition, const std::string& message)
     {
-        if (!condition) throw std::runtime_error(message);
+        if (!condition)
+        {
+            std::cerr << "shader contract failed: " << message << '\n';
+            std::exit(1);
+        }
     }
     std::string Read(const fs::path& path)
     {
         std::ifstream stream(path, std::ios::binary);
-        Require(bool(stream), "cannot read " + path.string());
+        Require(bool(stream), "cannot read " + path.u8string());
         return { std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>() };
     }
     void Write(const fs::path& path, const std::string& value)
@@ -57,15 +66,86 @@ namespace
         fs::create_directories(path.parent_path());
         std::ofstream stream(path, std::ios::binary | std::ios::trunc);
         stream.write(value.data(), static_cast<std::streamsize>(value.size()));
-        Require(bool(stream), "cannot write fixture " + path.string());
+        Require(bool(stream), "cannot write fixture " + path.u8string());
     }
-    bool Run(const fs::path& executable, std::vector<std::string> arguments)
+    void AppendArgument(std::wstring& command, const std::wstring& argument)
     {
-        arguments.insert(arguments.begin(), executable.string());
-        std::vector<const char*> raw;
-        for (const auto& argument : arguments) raw.push_back(argument.c_str());
-        raw.push_back(nullptr);
-        return _spawnv(_P_WAIT, executable.string().c_str(), raw.data()) == 0;
+        if (!command.empty()) command += L' ';
+        command += L'"';
+        size_t slashes = 0;
+        for (wchar_t character : argument)
+        {
+            if (character == L'\\') { ++slashes; continue; }
+            command.append(character == L'"' ? slashes * 2 + 1 : slashes, L'\\');
+            slashes = 0;
+            command += character;
+        }
+        command.append(slashes * 2, L'\\');
+        command += L'"';
+    }
+    bool Run(const fs::path& executable, const std::vector<std::string>& arguments,
+        const fs::path& diagnosticPath = {}, const fs::path& occupiedOutput = {})
+    {
+        std::wstring command;
+        AppendArgument(command, executable.native());
+        for (const auto& argument : arguments) AppendArgument(command, fs::u8path(argument).native());
+        Require(command.size() < 32767, "builder fixture command line is too large");
+        SECURITY_ATTRIBUTES security{sizeof(security), nullptr, TRUE};
+        const HANDLE input = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            &security, OPEN_EXISTING, 0, nullptr);
+        Require(input != INVALID_HANDLE_VALUE, "cannot open builder fixture input");
+        const bool capture = !diagnosticPath.empty();
+        const HANDLE diagnostic = capture ? CreateFileW(diagnosticPath.c_str(), GENERIC_WRITE,
+            FILE_SHARE_READ, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr) : GetStdHandle(STD_ERROR_HANDLE);
+        Require(diagnostic != INVALID_HANDLE_VALUE && diagnostic, "cannot open builder fixture diagnostics");
+        STARTUPINFOW startup{};
+        startup.cb = sizeof(startup);
+        startup.dwFlags = STARTF_USESTDHANDLES;
+        startup.hStdInput = input;
+        startup.hStdOutput = capture ? diagnostic : GetStdHandle(STD_OUTPUT_HANDLE);
+        startup.hStdError = diagnostic;
+        PROCESS_INFORMATION process{};
+        const DWORD flags = CREATE_NO_WINDOW | (occupiedOutput.empty() ? 0 : CREATE_SUSPENDED);
+        const bool started = CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr,
+            TRUE, flags, nullptr, nullptr, &startup, &process) != FALSE;
+        DWORD wait = WAIT_FAILED;
+        DWORD status = 1;
+        bool readStatus = false;
+        bool reserved = occupiedOutput.empty();
+        bool reservationIntact = true;
+        std::wstring reservation;
+        if (started)
+        {
+            if (!occupiedOutput.empty())
+            {
+                reservation = occupiedOutput.native() + L".tmp-" + std::to_wstring(process.dwProcessId);
+                const HANDLE file = CreateFileW(reservation.c_str(), GENERIC_WRITE, 0,
+                    nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+                reserved = file != INVALID_HANDLE_VALUE;
+                if (reserved) CloseHandle(file);
+                if (reserved) ResumeThread(process.hThread);
+                else TerminateProcess(process.hProcess, 1);
+            }
+            CloseHandle(process.hThread);
+            wait = WaitForSingleObject(process.hProcess, 30000);
+            if (wait != WAIT_OBJECT_0)
+            {
+                TerminateProcess(process.hProcess, 1);
+                WaitForSingleObject(process.hProcess, 5000);
+            }
+            readStatus = GetExitCodeProcess(process.hProcess, &status) != FALSE;
+            CloseHandle(process.hProcess);
+            if (reserved && !reservation.empty())
+            {
+                reservationIntact = GetFileAttributesW(reservation.c_str()) != INVALID_FILE_ATTRIBUTES;
+                if (reservationIntact) DeleteFileW(reservation.c_str());
+            }
+        }
+        CloseHandle(input);
+        if (capture) CloseHandle(diagnostic);
+        Require(started && wait == WAIT_OBJECT_0 && readStatus, "builder fixture child did not complete");
+        Require(reserved && reservationIntact, "builder deleted a temporary name owned by another writer");
+        return status == 0;
     }
     std::optional<std::string> Select(const std::string& bytes, const std::string& key)
     {
@@ -102,23 +182,23 @@ namespace
                 const auto tab = line.find('\t');
                 Require(tab != std::string::npos && line.find('\t', tab + 1) == std::string::npos,
                     "malformed compiled shader catalog");
-                const fs::path object = line.substr(tab + 1);
+                const fs::path object = fs::u8path(line.substr(tab + 1));
                 auto relative = fs::relative(object, root / "objects");
-                const auto stem = relative.stem().string();
+                const auto stem = relative.stem().u8string();
                 const auto hash = stem.rfind('.');
                 Require(hash != std::string::npos, "compiled shader lacks task identity");
                 relative.replace_filename(stem.substr(0, hash));
-                catalog[relative.generic_string()].push_back({ line.substr(0, tab), object });
+                catalog[relative.generic_u8string()].push_back({ line.substr(0, tab), object });
             }
         }
         Require(!catalog.empty(), "compiled shader catalog is empty");
         return catalog;
     }
 
-    void CheckBundle(const fs::path& inventory, const fs::path& framework,
-        const fs::path& application, const fs::path& runtime)
+    void CheckBundle(const fs::path& inventory, const fs::path& application,
+        const fs::path& runtime)
     {
-        const auto appCatalog = ReadCatalog(application), frameworkCatalog = ReadCatalog(framework);
+        const auto appCatalog = ReadCatalog(application);
         const std::map<std::string, size_t> retained = {
             { "agx_tonemapping_ps", 4 },
             { "auto_exposure_histogram_cs", 1 },
@@ -144,6 +224,9 @@ namespace
             { "renderer_fullscreen_vs", 2 },
             { "renderer_gbuffer_vs_buffer_loads", 1 },
             { "renderer_pixel_readback_cs", 1 },
+            { "renderer_skinning_cs", 1 },
+            { "renderer_imgui_vertex", 1 },
+            { "renderer_imgui_pixel", 1 },
         };
         Require(appCatalog.size() == retained.size(), "retained shader family set changed");
         for (const auto& [family, count] : retained)
@@ -173,20 +256,18 @@ namespace
             previous = line;
             const std::string relative = line.substr(12);
             const fs::path path(relative);
-            Require(path.extension() == ".bin" && path.lexically_normal().generic_string() == relative,
+            Require(path.extension() == ".bin" && path.lexically_normal().generic_u8string() == relative,
                 "unsafe shader inventory path");
             for (const auto& part : path)
                 Require(part != ".." && part != ".", "shader inventory escapes its root");
-            const bool app = relative.rfind("uvsr/dxil/", 0) == 0;
-            Require(app || relative.rfind("framework/dxil/", 0) == 0, "unknown shader owner");
-            const std::string family = relative.substr(app ? 10 : 15, relative.size() - (app ? 10 : 15) - 4);
-            const auto& catalog = app ? appCatalog : frameworkCatalog;
-            Require(catalog.count(family) != 0, "staged family has no compiled catalog: " + family);
-            const auto bytes = Read((app ? application : framework) / "dxil" / (family + ".bin"));
+            Require(relative.rfind("uvsr/dxil/", 0) == 0, "unknown shader owner");
+            const std::string family = relative.substr(10, relative.size() - 14);
+            Require(appCatalog.count(family) != 0, "staged family has no compiled catalog: " + family);
+            const auto bytes = Read(application / "dxil" / (family + ".bin"));
             Require(!bytes.empty() && bytes == Read(runtime / path),
                 "runtime shader differs from compiled family: " + relative);
             std::set<std::string> keys;
-            for (const auto& row : catalog.at(family))
+            for (const auto& row : appCatalog.at(family))
             {
                 Require(keys.insert(row.key).second, "duplicate compiled permutation");
                 Require(Select(bytes, row.key) == Read(row.object),
@@ -198,31 +279,28 @@ namespace
                 Require(std::set<std::string>(packedKeys.begin(), packedKeys.end()) == keys &&
                     packedKeys.size() == keys.size(), "blob contains missing or extra permutations");
             expected.insert(relative);
-            if (app) packagedAppFamilies.insert(family);
+            packagedAppFamilies.insert(family);
         }
-        Require(expected.size() == 33 && packagedAppFamilies.size() == retained.size(),
+        Require(expected.size() == 27 && packagedAppFamilies.size() == retained.size(),
             "package omitted a retained shader family");
         for (const auto& entry : fs::recursive_directory_iterator(runtime))
         {
             Require(!entry.is_symlink(), "shader package contains a link");
             if (entry.is_directory()) continue;
             Require(entry.is_regular_file(), "shader package contains a non-file");
-            actual.insert(fs::relative(entry.path(), runtime).generic_string());
+            actual.insert(fs::relative(entry.path(), runtime).generic_u8string());
         }
         Require(actual == expected, "runtime shader tree differs from exact inventory");
     }
 
     void CheckFactory(const fs::path& root)
     {
-        Require(Access::Path(root, "uvsr/path_tracing_cs.hlsl", "main") == root / "path_tracing_cs.bin" &&
-            Access::Path(root, "uvsr/sky.hlsl", "Generate") == root / "sky_Generate.bin",
-            "factory entry naming changed");
+        RendererShaderFactory factory(nullptr, root.c_str());
         for (const char* file : { "", "framework/a.hlsl", "uvsr/../a.hlsl", "uvsr/./a.hlsl",
-                "uvsr\\a.hlsl", "C:/a.hlsl", "uvsr/a.bin", "uvsr/passes/a.hlsl" })
-            Require(!Access::Path(root, file, "main"), "factory accepted unsafe shader path");
+                "uvsr\\a.hlsl", "C:/a.hlsl", "uvsr/a.bin", "uvsr/passes/a.hlsl", "uvsr/C:a.hlsl" })
+            Require(!Access::Select(factory, file, "main"), "factory accepted unsafe shader path");
         for (const char* entry : { "", "../entry" })
-            Require(!Access::Path(root, "uvsr/a.hlsl", entry), "factory accepted unsafe entry");
-        RendererShaderFactory factory(nullptr, root);
+            Require(!Access::Select(factory, "uvsr/a.hlsl", entry), "factory accepted unsafe entry");
         const std::string first = "first", second = "second";
         Write(root / "cache.bin", first);
         Require(Access::Select(factory, "uvsr/cache.hlsl", "main") == first, "initial factory load failed");
@@ -242,13 +320,13 @@ namespace
             shader_blob::write_permutation(packed, "ALPHA=2 BETA=1", second.data(), second.size()),
             "packed fixture creation failed");
         Write(root / "packed.bin", packed.str());
-        std::vector<RendererShaderMacro> macros = { { "BETA", "2" }, { "ALPHA", "1" } };
-        Require(Access::Select(factory, "uvsr/packed.hlsl", "main", &macros) == first &&
-            !Access::Select(factory, "uvsr/cache.hlsl", "main", &macros), "factory macro selection changed");
-        macros[0].definition = "9";
-        Require(!Access::Select(factory, "uvsr/packed.hlsl", "main", &macros),
+        shader_blob::Constant macros[] = { { "BETA", "2" }, { "ALPHA", "1" } };
+        Require(Access::Select(factory, "uvsr/packed.hlsl", "main", macros) == first &&
+            !Access::Select(factory, "uvsr/cache.hlsl", "main", macros), "factory macro selection changed");
+        macros[0].value = "9";
+        Require(!Access::Select(factory, "uvsr/packed.hlsl", "main", macros),
             "factory accepted a missing permutation");
-        Require(!factory.CreateShader("uvsr/cache.hlsl", "main", nullptr, nvrhi::ShaderType::Compute),
+        Require(!factory.CreateShader("uvsr/cache.hlsl", "main", {}, nvrhi::ShaderType::Compute),
             "factory without a device created a GPU shader");
         std::ostringstream one(std::ios::binary | std::ios::out);
         Require(shader_blob::write_header(one) &&
@@ -281,9 +359,9 @@ namespace
         Write(includes / "nested.hlsli", "#include \"cycle.hlsli\"\n");
         Write(includes / "cycle.hlsli", "#include \"nested.hlsli\"\n");
         const auto object = root / "object.dxil", depfile = root / "object.d";
-        const std::vector<std::string> scan = { "--scan-dependencies", "--source", source.string(),
-            "--target", object.string(), "--depfile", depfile.string(),
-            "--include-directory", includes.string() };
+        const std::vector<std::string> scan = { "--scan-dependencies", "--source", source.u8string(),
+            "--target", object.u8string(), "--depfile", depfile.u8string(),
+            "--include-directory", includes.u8string() };
         Require(Run(builder, scan), "recursive dependency scan failed");
         const auto dependencies = Read(depfile);
         for (const char* name : { "main.hlsl", "local.hlsli", "conditional.hlsli", "nested.hlsli", "cycle.hlsli" })
@@ -297,9 +375,9 @@ namespace
         Write(object, "first");
         Write(root / "second.dxil", "second");
         const auto catalog = root / "catalog.txt", output = root / "family.bin";
-        const auto firstRow = "MODE=0\t" + object.generic_string() + "\n";
-        const auto secondRow = "MODE=1\t" + (root / "second.dxil").generic_string() + "\n";
-        const std::vector<std::string> pack = { "--output", output.string(), "--catalog", catalog.string() };
+        const auto firstRow = "MODE=0\t" + object.generic_u8string() + "\n";
+        const auto secondRow = "MODE=1\t" + (root / "second.dxil").generic_u8string() + "\n";
+        const std::vector<std::string> pack = { "--output", output.u8string(), "--catalog", catalog.u8string() };
         Write(catalog, firstRow + secondRow);
         Require(Run(builder, pack), "builder could not pack catalog");
         const auto bytes = Read(output);
@@ -312,37 +390,163 @@ namespace
             fs::last_write_time(output) == outputTime, "equivalent compilation changed blob identity");
         Write(root / "empty.dxil", "");
         for (const auto& invalid : { std::string{}, std::string{"bad row\n"}, firstRow + firstRow,
-                "\t" + object.generic_string() + "\n" + secondRow,
-                "MODE=0\t" + (root / "missing.dxil").generic_string() + "\n",
-                "MODE=0\t" + (root / "empty.dxil").generic_string() + "\n" })
+                "\t" + object.generic_u8string() + "\n" + secondRow,
+                "MODE=0\t" + (root / "missing.dxil").generic_u8string() + "\n",
+                "MODE=0\t" + (root / "empty.dxil").generic_u8string() + "\n" })
         {
             Write(catalog, invalid);
             Require(!Run(builder, pack) && Read(output) == bytes &&
                 fs::last_write_time(output) == outputTime, "failed pack replaced the published blob");
         }
-        Write(catalog, "\t" + object.generic_string() + "\n");
+        Write(catalog, "\t" + object.generic_u8string() + "\n");
         Require(Run(builder, pack) && Read(output) == Read(object), "default family was not raw DXIL");
         Require(!Run(builder, { "--output" }) && !Run(builder, { "--unknown", "value" }),
             "builder accepted a malformed invocation");
     }
+
+    void CheckNoTemporary(const fs::path& output)
+    {
+        const auto prefix = output.filename().u8string() + ".tmp-";
+        for (const auto& item : fs::directory_iterator(output.parent_path()))
+            Require(item.path().filename().u8string().rfind(prefix, 0) != 0,
+                "builder retained an owned temporary after failure");
+    }
+
+    void CheckAllocationFailures(const fs::path& builder, const std::vector<std::string>& arguments,
+        const fs::path& output, const fs::path& diagnostic)
+    {
+        Require(Run(builder, arguments, diagnostic), "allocation fixture baseline failed");
+        const auto expected = Read(output);
+        const auto oldTime = fs::file_time_type::clock::now() - std::chrono::hours(24);
+        fs::last_write_time(output, oldTime);
+        const auto stamp = fs::last_write_time(output);
+        unsigned completed = 0;
+        for (unsigned failure = 1; failure <= 512; ++failure)
+        {
+            const auto value = std::to_string(failure);
+            Require(SetEnvironmentVariableA("UVSR_SHADER_TOOL_FAIL_ALLOCATION", value.c_str()) != FALSE,
+                "cannot set allocation fixture");
+            const bool succeeded = Run(builder, arguments, diagnostic);
+            Require(SetEnvironmentVariableA("UVSR_SHADER_TOOL_FAIL_ALLOCATION", nullptr) != FALSE,
+                "cannot clear allocation fixture");
+            Require(Read(output) == expected && fs::last_write_time(output) == stamp,
+                "allocation failure changed the previous output or its timestamp");
+            CheckNoTemporary(output);
+            if (succeeded) { completed = failure; break; }
+            Require(Read(diagnostic).find("out of memory") != std::string::npos,
+                "allocation failure lost its readable diagnostic");
+        }
+        Require(completed > 1, "allocation fixture did not cover failures and a successful retry");
+        std::cout << "shader builder allocation failures verified: " << completed - 1 << '\n';
+    }
+
+    void CheckBuilderFailures(const fs::path& builder, const fs::path& root)
+    {
+        const auto diagnostic = root / "diagnostic.txt";
+        const auto object = root / "object.dxil";
+        const auto catalog = root / "catalog.txt";
+        const auto output = root / "family.bin";
+        const std::vector<std::string> pack{"--output", output.u8string(), "--catalog", catalog.u8string()};
+        Write(object, "abcdefghijklmnopqrstuv");
+        Write(catalog, "\t" + object.generic_u8string() + "\n");
+        const auto header = root / "family.h";
+        auto headerArguments = pack;
+        headerArguments[1] = header.u8string();
+        headerArguments.insert(headerArguments.end(), {"--header-symbol", "KnownFixture"});
+        Require(Run(builder, headerArguments, diagnostic), "header fixture failed");
+        const std::string expectedHeader = "// Generated by uvsr_shader_blob_builder.\n"
+            "const uint8_t KnownFixture[] = {\n"
+            "    97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116,\n"
+            "    117, 118\n};\n";
+        Require(Read(header) == expectedHeader, "streamed header array differs from the known byte format");
+        headerArguments.back() = "invalid-symbol";
+        Require(!Run(builder, headerArguments, diagnostic) && Read(header) == expectedHeader &&
+            Read(diagnostic).find("invalid shader header symbol") != std::string::npos,
+            "invalid header symbol changed the previous header or lost its diagnostic");
+
+        CheckAllocationFailures(builder, pack, output, diagnostic);
+        const auto original = Read(output);
+        const auto stamp = fs::last_write_time(output);
+        Write(object, "changed bytes requiring replacement");
+        Require(!Run(builder, pack, diagnostic, output) && Read(output) == original &&
+            fs::last_write_time(output) == stamp && Read(diagnostic).find("cannot create") != std::string::npos,
+            "temporary name collision changed the published shader or lost its diagnostic");
+        const HANDLE held = CreateFileW(output.c_str(), GENERIC_READ, FILE_SHARE_READ,
+            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        Require(held != INVALID_HANDLE_VALUE, "cannot hold published shader for the replacement failure");
+        const bool published = Run(builder, pack, diagnostic);
+        CloseHandle(held);
+        Require(!published && Read(output) == original && fs::last_write_time(output) == stamp &&
+            Read(diagnostic).find("cannot publish") != std::string::npos,
+            "failed native replacement lost the previous shader or its diagnostic");
+        CheckNoTemporary(output);
+        Require(Run(builder, pack, diagnostic) && Read(output) == Read(object),
+            "failed native replacement was not retryable");
+
+        const auto unicode = root / fs::u8path(u8"unicode #$ \u03bb");
+        const auto source = unicode / "main.hlsl";
+        const auto child = unicode / fs::u8path(u8"child #$ \u03bb.hlsli");
+        const auto depfile = unicode / "object.d";
+        const std::vector<std::string> scan{"--scan-dependencies", "--source", source.u8string(),
+            "--target", (unicode / "object #$.dxil").u8string(), "--depfile", depfile.u8string()};
+        Write(source, u8"#include \"child #$ \u03bb.hlsli\"\n");
+        Write(child, "#include \"main.hlsl\"\n");
+        Require(Run(builder, scan, diagnostic), "Unicode dependency fixture failed");
+        const auto dependencies = Read(depfile);
+        Require(dependencies.find(u8"\u03bb") != std::string::npos &&
+            dependencies.find("\\#$$") != std::string::npos &&
+            std::count(dependencies.begin(), dependencies.end(), '\n') == 3,
+            "Unicode paths, depfile escaping or cycle suppression changed");
+        CheckAllocationFailures(builder, scan, depfile, diagnostic);
+        const auto depStamp = fs::last_write_time(depfile);
+        for (const auto& invalid : {std::string("#include VARIABLE\n"), std::string("#include \"\"\n"),
+                std::string("#include <unfinished\n"), std::string("#include < >\n#include VARIABLE\n")})
+        {
+            Write(source, invalid);
+            Require(!Run(builder, scan, diagnostic) && Read(depfile) == dependencies &&
+                fs::last_write_time(depfile) == depStamp &&
+                Read(diagnostic).find(source.generic_u8string()) != std::string::npos,
+                "invalid include changed the published dependency file or lost its path");
+            CheckNoTemporary(depfile);
+        }
+        Write(source, "#include \"\xff.hlsli\"\n");
+        Require(!Run(builder, scan, diagnostic) && Read(depfile) == dependencies &&
+            Read(diagnostic).find("invalid UTF-8 path") != std::string::npos,
+            "invalid UTF-8 include was accepted or lost its diagnostic");
+        Write(source, "#include \"unresolved_native_header.h\"\n");
+        Require(Run(builder, scan, diagnostic) && Read(depfile).find("unresolved_native_header") == std::string::npos,
+            "the scanner replaced DXC's unresolved-include authority");
+
+        constexpr unsigned Depth = 8192;
+        const auto deep = root / "deep";
+        for (unsigned index = 0; index < Depth; ++index)
+        {
+            const auto next = (index + 1) % Depth;
+            Write(deep / ("part-" + std::to_string(index) + ".hlsli"),
+                "#include \"part-" + std::to_string(next) + ".hlsli\"\n");
+        }
+        const auto deepDepfile = deep / "deep.d";
+        Require(Run(builder, {"--scan-dependencies", "--source", (deep / "part-0.hlsli").u8string(),
+            "--target", (deep / "deep.dxil").u8string(), "--depfile", deepDepfile.u8string()}, diagnostic),
+            "the deep include chain did not finish iteratively");
+        const auto deepText = Read(deepDepfile);
+        Require(std::count(deepText.begin(), deepText.end(), '\n') == Depth + 1 &&
+            deepText.find("part-8191.hlsli") != std::string::npos,
+            "the deep dependency walk omitted nodes or repeated a cycle");
+    }
 }
 
-int main(int argc, char** argv)
+int wmain(int argc, wchar_t** argv)
 {
-    try
-    {
-        Require(argc == 7, "expected inventory, framework, application, runtime, builder and scratch paths");
-        const fs::path scratch = fs::absolute(argv[6]) /
-            ("shader-suite-" + std::to_string(_getpid()) + "-" +
-                std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-        CheckBundle(argv[1], argv[2], argv[3], argv[4]);
-        CheckFactory(scratch / "factory");
-        CheckBuilder(argv[5], scratch / "builder");
-        return 0;
-    }
-    catch (const std::exception& error)
-    {
-        std::cerr << "shader contract failed: " << error.what() << '\n';
-        return 1;
-    }
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    SetEnvironmentVariableA("UVSR_SHADER_TOOL_FAIL_ALLOCATION", nullptr);
+    Require(argc == 6, "expected inventory, application, runtime, builder and scratch paths");
+    const fs::path scratch = fs::absolute(argv[5]) /
+        ("shader-suite-" + std::to_string(_getpid()) + "-" +
+            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    CheckBundle(argv[1], argv[2], argv[3]);
+    CheckFactory(scratch / "factory");
+    CheckBuilder(argv[4], scratch / "builder");
+    CheckBuilderFailures(argv[4], scratch / "builder-failures");
+    return 0;
 }

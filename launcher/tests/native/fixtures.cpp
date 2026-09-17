@@ -39,14 +39,15 @@ namespace test
     }
     std::string SigningKey::Sign(const Feed& feed, bool canonical) const
     {
-        auto payload = JObject({{"schemaVersion", JNumber(feed.component == Component::Launcher ? 2 : 1)}, {"productId", JString(ProductId)},
-            {"channel", JString("stable")}, {"releaseSequence", JNumber(feed.sequence)}});
-        if (feed.component == Component::Launcher) payload.object.emplace_back("version", JString(feed.version));
-        payload.object.emplace_back("sourceCommit", JString(feed.commit));
-        if (feed.component == Component::Renderer)
-        { payload.object.emplace_back("settingsHash", JString(feed.settingsHash)); payload.object.emplace_back("engineVersion", JString(feed.version)); }
-        payload.object.emplace_back("artifact", JObject({{"name", JString(feed.component == Component::Launcher ? LauncherName : ArchiveName)},
-            {"size", JNumber(int64_t(feed.size))}, {"sha256", JString(feed.hash)}}));
+        const auto artifact = JObject({{"name", JString(feed.component == Component::Launcher ? LauncherName : ArchiveName)},
+            {"size", JNumber(int64_t(feed.size))}, {"sha256", JString(feed.hash)}});
+        const auto payload = feed.component == Component::Launcher ?
+            JObject({{"schemaVersion", JNumber(2)}, {"productId", JString(ProductId)}, {"channel", JString("stable")},
+                {"releaseSequence", JNumber(feed.sequence)}, {"version", JString(feed.version)},
+                {"sourceCommit", JString(feed.commit)}, {"artifact", artifact}}) :
+            JObject({{"schemaVersion", JNumber(1)}, {"productId", JString(ProductId)}, {"channel", JString("stable")},
+                {"releaseSequence", JNumber(feed.sequence)}, {"sourceCommit", JString(feed.commit)},
+                {"settingsHash", JString(feed.settingsHash)}, {"engineVersion", JString(feed.version)}, {"artifact", artifact}});
         return SignPayload(Serialize(payload) + (canonical ? "\n" : ""), feed.component);
     }
     void Zip(const fs::path& root, const fs::path& destination, std::optional<std::string> badPath, bool deflate)
@@ -90,15 +91,15 @@ namespace test
             WriteAtomic(root / "bin/shaders/uvsr/dxil" / (std::string(name) + ".bin"), name);
         if (legacy) for (const auto name : {"Andrew-Helmer-Stochastic-Generation-MIT.txt", "Microsoft-DirectX-Graphics-Samples.txt"})
             WriteAtomic(root / "bin/licenses" / name, name);
-        Json files; files.kind = Json::Kind::Array;
+        Json files = JArray();
         for (const auto& entry : fs::recursive_directory_iterator(root)) if (entry.is_regular_file() && entry.path().filename() != PackageName)
-            files.array.push_back(JObject({{"relativePath", JString(Utf8(entry.path().lexically_relative(root).generic_wstring()))},
+            Append(files, JObject({{"relativePath", JString(Utf8(entry.path().lexically_relative(root).generic_wstring()))},
                 {"size", JNumber(int64_t(entry.file_size()))}, {"sha256", JString(HashFile(entry.path()))}}));
         auto manifest = JObject({{"schemaVersion", JNumber(1)}, {"productId", JString(ProductId)}, {"production", JBool(true)}, {"configuration", JString("Release")},
             {"releaseSequence", JNumber(sequence)}, {"sourceCommit", JString(Commit)}, {"settingsHash", Member(settings,"settingsHash")}, {"engineVersion", Member(settings,"engineVersion")},
             {"executableSha256", JString(HashFile(root / "bin/uvsr-engine.exe"))}, {"files", files}});
         WriteRecord(root / PackageName, manifest);
-        return {Component::Renderer, sequence, Commit, Text(settings,"engineVersion"), Text(settings,"settingsHash"), std::string(64,'a'), 1};
+        return {Component::Renderer, sequence, Commit, std::string(Text(settings,"engineVersion")), std::string(Text(settings,"settingsHash")), std::string(64,'a'), 1};
     }
     Json InstallOldLauncher(const Paths& paths, std::string_view owner, bool oldName)
     {

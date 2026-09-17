@@ -1,0 +1,248 @@
+#include "fast_approximate_aa_nvrhi.h"
+#include "fast_approximate_aa_source_nvrhi.h"
+#include "renderer_common_passes_nvrhi.h"
+#include "renderer_log.h"
+#include "renderer_shader_factory_nvrhi.h"
+
+#include "renderer_gpu_scalar.h"
+#include "renderer_view_nvrhi.h"
+
+namespace
+{
+    struct alignas(16) FastApproximateAaConstants
+    {
+        uvsr::gpu_contract::Float2 reciprocalSourceSize;
+        float edgeSharpness =
+            uvsr::FastApproximateAaDefaultEdgeSharpness;
+        float edgeThreshold =
+            uvsr::FastApproximateAaDefaultEdgeThreshold;
+
+        float darkEdgeThreshold =
+            uvsr::FastApproximateAaDefaultDarkEdgeThreshold;
+        uvsr::gpu_contract::Float3 padding{};
+    };
+
+    static_assert(sizeof(FastApproximateAaConstants) == 32u);
+    static_assert(offsetof(FastApproximateAaConstants, reciprocalSourceSize) == 0u);
+    static_assert(offsetof(FastApproximateAaConstants, edgeSharpness) == 8u);
+    static_assert(offsetof(FastApproximateAaConstants, edgeThreshold) == 12u);
+    static_assert(offsetof(FastApproximateAaConstants, darkEdgeThreshold) == 16u);
+    static_assert(offsetof(FastApproximateAaConstants, padding) == 20u);
+}
+
+namespace uvsr
+{
+    FastApproximateAAPass::FastApproximateAAPass(
+        nvrhi::IDevice* device,
+        RendererShaderFactory* shaderFactory,
+        RendererCommonPasses* commonPasses,
+        nvrhi::ITexture* sourceColor)
+        : m_Device(device)
+        , m_CommonPasses(commonPasses)
+    {
+        if (!device || !shaderFactory || !commonPasses || !sourceColor)
+            return;
+
+        const nvrhi::TextureDesc& sourceDesc = sourceColor->getDesc();
+        if (!IsFastApproximateAaSourceCompatible(
+                sourceDesc,
+                sourceDesc.width,
+                sourceDesc.height,
+                true))
+        {
+            log::error(
+                "Fast Approximate AA requires UVSR's single-sample "
+                "RGBA16F display-linear target");
+            return;
+        }
+
+        m_Width = sourceDesc.width;
+        m_Height = sourceDesc.height;
+        m_PixelShader = shaderFactory->CreateShader(
+            "uvsr/fast_approximate_aa_ps.hlsl",
+            "main",
+            {},
+            nvrhi::ShaderType::Pixel);
+
+        nvrhi::TextureDesc outputDesc;
+        outputDesc.width = m_Width;
+        outputDesc.height = m_Height;
+        outputDesc.dimension = nvrhi::TextureDimension::Texture2D;
+        outputDesc.mipLevels = 1u;
+        outputDesc.format = FastApproximateAaColorFormat;
+        outputDesc.isRenderTarget = true;
+        outputDesc.initialState = nvrhi::ResourceStates::ShaderResource;
+        outputDesc.keepInitialState = true;
+        outputDesc.debugName = "Fast Approximate AA/Output Color";
+        m_OutputColor = device->createTexture(outputDesc);
+        m_OutputFramebuffer = device->createFramebuffer(
+            nvrhi::FramebufferDesc().addColorAttachment(m_OutputColor));
+
+        nvrhi::BufferDesc constantBufferDesc;
+        constantBufferDesc.byteSize = sizeof(FastApproximateAaConstants);
+        constantBufferDesc.debugName = "Fast Approximate AA Constants";
+        constantBufferDesc.isConstantBuffer = true;
+        constantBufferDesc.isVolatile = true;
+        constantBufferDesc.maxVersions =
+            RendererMaxConstantBufferVersions;
+        m_ConstantBuffer = device->createBuffer(constantBufferDesc);
+
+        nvrhi::BindingLayoutDesc layoutDesc;
+        layoutDesc.visibility = nvrhi::ShaderType::Pixel;
+        layoutDesc.bindings = {
+            nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+            nvrhi::BindingLayoutItem::Texture_SRV(0),
+            nvrhi::BindingLayoutItem::Sampler(0)
+        };
+        m_BindingLayout = device->createBindingLayout(layoutDesc);
+        RebuildBindingSet(sourceColor);
+
+        if (!m_OutputFramebuffer || !m_BindingLayout)
+            return;
+
+        nvrhi::GraphicsPipelineDesc pipelineDesc;
+        pipelineDesc.primType = nvrhi::PrimitiveType::TriangleStrip;
+        pipelineDesc.VS = commonPasses->FullscreenVertexShader();
+        pipelineDesc.PS = m_PixelShader;
+        pipelineDesc.bindingLayouts = { m_BindingLayout };
+        pipelineDesc.renderState.rasterState.setCullNone();
+        pipelineDesc.renderState.depthStencilState.depthTestEnable = false;
+        pipelineDesc.renderState.depthStencilState.stencilEnable = false;
+        m_Pipeline = device->createGraphicsPipeline(
+            pipelineDesc,
+            m_OutputFramebuffer->getFramebufferInfo());
+    }
+
+    bool FastApproximateAAPass::IsCompatibleSource(
+        nvrhi::ITexture* sourceColor) const
+    {
+        if (!sourceColor)
+            return false;
+        const nvrhi::TextureDesc& sourceDesc = sourceColor->getDesc();
+        return IsFastApproximateAaSourceCompatible(
+            sourceDesc,
+            m_Width,
+            m_Height,
+            sourceColor != m_OutputColor.Get());
+    }
+
+    void FastApproximateAAPass::RebuildBindingSet(
+        nvrhi::ITexture* sourceColor)
+    {
+        if (!IsCompatibleSource(sourceColor))
+        {
+            // Do not pin a replaced render target or leave an apparently
+            // valid binding alive after an incompatible source update.
+            m_BindingSet = nullptr;
+            m_BoundSource = nullptr;
+            return;
+        }
+        if (sourceColor == m_BoundSource ||
+            !m_BindingLayout ||
+            !m_ConstantBuffer ||
+            !m_CommonPasses)
+        {
+            return;
+        }
+
+        nvrhi::BindingSetDesc setDesc;
+        setDesc.bindings = {
+            nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
+            nvrhi::BindingSetItem::Texture_SRV(0, sourceColor),
+            nvrhi::BindingSetItem::Sampler(
+                0, m_CommonPasses->LinearClampSampler())
+        };
+        m_BindingSet = m_Device->createBindingSet(
+            setDesc, m_BindingLayout);
+        m_BoundSource = m_BindingSet ? sourceColor : nullptr;
+    }
+
+    void FastApproximateAAPass::UpdateSourceColor(
+        nvrhi::ITexture* sourceColor)
+    {
+        RebuildBindingSet(sourceColor);
+    }
+
+    bool FastApproximateAAPass::IsValid() const
+    {
+        return m_Device &&
+            m_CommonPasses &&
+            m_OutputColor &&
+            m_OutputFramebuffer &&
+            m_PixelShader &&
+            m_ConstantBuffer &&
+            m_BindingLayout &&
+            m_BindingSet &&
+            m_Pipeline;
+    }
+
+    nvrhi::ITexture* FastApproximateAAPass::Render(
+        nvrhi::ICommandList* commandList,
+        const RendererView& frameView,
+        nvrhi::ITexture* sourceColor,
+        const ResolvedAntiAliasingSettings& settings)
+    {
+        if (!commandList ||
+            !settings.fastApproximateEnabled ||
+            !IsValid() ||
+            !IsCompatibleSource(sourceColor))
+        {
+            return sourceColor;
+        }
+
+        const RendererView* view = &frameView;
+        if (!view->valid)
+            return sourceColor;
+        
+        const RendererViewExtent extent = view->extent;
+        const FastApproximateAaViewContract viewContract = {
+            1u,
+            true,
+            0u,
+            1u,
+            0u,
+            1u,
+            extent.minX,
+            extent.minY,
+            extent.maxX,
+            extent.maxY
+        };
+        if (!IsFastApproximateAaFullImageView(
+                viewContract, m_Width, m_Height))
+        {
+            // The owned output framebuffer represents one complete 2D image.
+            // Fail closed instead of returning partly stale multi-view data.
+            return sourceColor;
+        }
+
+        RebuildBindingSet(sourceColor);
+        if (!m_BindingSet)
+            return sourceColor;
+
+        FastApproximateAaConstants constants{};
+        constants.reciprocalSourceSize = {
+            1.f / float(m_Width),
+            1.f / float(m_Height) };
+        constants.edgeSharpness = settings.fastApproximateEdgeSharpness;
+        constants.edgeThreshold = settings.fastApproximateEdgeThreshold;
+        constants.darkEdgeThreshold =
+            settings.fastApproximateDarkEdgeThreshold;
+
+        commandList->beginMarker("Fast Approximate AA");
+        commandList->writeBuffer(
+            m_ConstantBuffer, &constants, sizeof(constants));
+        nvrhi::GraphicsState state;
+        state.pipeline = m_Pipeline;
+        state.framebuffer = m_OutputFramebuffer;
+        state.bindings = { m_BindingSet };
+        state.viewport = RendererViewportNvrhi(*view);
+        commandList->setGraphicsState(state);
+
+        nvrhi::DrawArguments arguments;
+        arguments.instanceCount = 1u;
+        arguments.vertexCount = 4u;
+        commandList->draw(arguments);
+        commandList->endMarker();
+        return m_OutputColor;
+    }
+}

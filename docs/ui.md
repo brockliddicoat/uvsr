@@ -14,5 +14,17 @@ compatibility. hide unavailable controls without clearing stored values. test
 interaction and inspect the exact candidate at representative viewport sizes and
 DPI scales. source checks alone do not prove appearance.
 
+drawing owns a two-level settings-tree stack, matching FXAA and FXAA Tuning.
+checked slider formats use the longest retained control format as their bound.
+performance text publishes complete snapshots within the existing formatter limits.
+texture labels borrow the published scene only through synchronous drawing;
+material edits preserve that string storage. the 25/117-code-point labels retain
+ImGui's decoder and the former embedded-NUL display boundary.
+
+material names borrow scene text while drawing. clipped labels and hovered tooltip
+text use checked temporary storage, keeping the compiled ImGui tooltip rules.
+startup snapshot codes have checked ownership through their terminal log; failure
+to retain a code closes startup before staging begins.
+
 legacy skins live in [compressed recovery material](postmortem/archive/legacy-ui-skins.zip).
 leave it out of routine context and extract it only for requested recovery.

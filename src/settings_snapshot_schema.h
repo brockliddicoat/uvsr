@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui_settings_command_catalog.h"
+#include "json_output.h"
 
 #include <algorithm>
 #include <array>
@@ -12,7 +13,7 @@
 
 namespace uvsr
 {
-    [[nodiscard]] std::string BuildSettingsContractJson();
+    [[nodiscard]] json::EncodedText BuildSettingsContractJson() noexcept;
 
     struct SettingsSnapshotSchemaFingerprint
     {

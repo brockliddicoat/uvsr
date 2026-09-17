@@ -1,13 +1,18 @@
 #pragma once
 
-#include <optional>
-#include <string>
+#include "json_output.h"
 
 namespace uvsr
 {
-    [[nodiscard]] std::string BuildIdentityJson();
+    [[nodiscard]] json::EncodedText BuildIdentityJson() noexcept;
 
-    [[nodiscard]] std::optional<int> TryRunEngineDiagnosticCommand(
+    struct EngineDiagnosticCommandResult
+    {
+        bool handled = false;
+        int exitCode = 0;
+    };
+
+    [[nodiscard]] EngineDiagnosticCommandResult TryRunEngineDiagnosticCommand(
         int argumentCount,
-        const char* const* arguments);
+        const char* const* arguments) noexcept;
 }

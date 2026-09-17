@@ -1,20 +1,9 @@
 #pragma once
 
-#include <nvrhi/nvrhi.h>
-
 #include <cstdint>
-#include <memory>
-
-namespace donut::engine
-{
-    class ICompositeView;
-}
 
 namespace uvsr
 {
-    class RendererCommonPasses;
-    class RendererShaderFactory;
-
     enum class ImageBasedLightingBackgroundRenderStatus : std::uint8_t
     {
         Failed,
@@ -64,38 +53,4 @@ namespace uvsr
         };
     }
 
-    class ImageBasedLightingBackgroundPass
-    {
-    public:
-        ImageBasedLightingBackgroundPass(
-            nvrhi::IDevice* device,
-            const std::shared_ptr<RendererShaderFactory>&
-                shaderFactory,
-            const std::shared_ptr<RendererCommonPasses>&
-                commonPasses,
-            nvrhi::FramebufferHandle framebuffer,
-            const donut::engine::ICompositeView& compositeView,
-            nvrhi::ITexture* radianceCube);
-
-        [[nodiscard]] bool IsValid() const noexcept
-        {
-            return m_Framebuffer && m_PixelShader && m_ConstantBuffer &&
-                m_BindingLayout && m_BindingSet && m_Pipeline;
-        }
-
-        [[nodiscard]] ImageBasedLightingBackgroundRenderResult Render(
-            nvrhi::ICommandList* commandList,
-            const donut::engine::ICompositeView& compositeView,
-            float radianceScale);
-
-    private:
-        nvrhi::ShaderHandle m_PixelShader;
-        nvrhi::BufferHandle m_ConstantBuffer;
-        nvrhi::BindingLayoutHandle m_BindingLayout;
-        nvrhi::BindingSetHandle m_BindingSet;
-        nvrhi::GraphicsPipelineHandle m_Pipeline;
-        std::shared_ptr<RendererCommonPasses> m_CommonPasses;
-        nvrhi::FramebufferHandle m_Framebuffer;
-        bool m_ReverseDepth = true;
-    };
 }

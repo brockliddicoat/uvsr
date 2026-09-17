@@ -23,135 +23,10 @@
 #ifndef UVSR_RENDERER_GPU_CONTRACT_H
 #define UVSR_RENDERER_GPU_CONTRACT_H
 
-#ifdef __cplusplus
-#include <cstddef>
-#include <cstdint>
+#include "renderer_view_contract.h"
 
-namespace uvsr::gpu_contract
-{
-    struct Float2
-    {
-        float x;
-        float y;
-    };
-
-    struct Float3
-    {
-        float x;
-        float y;
-        float z;
-    };
-
-    struct Float4
-    {
-        float x;
-        float y;
-        float z;
-        float w;
-    };
-
-    struct Int2
-    {
-        std::int32_t x;
-        std::int32_t y;
-    };
-
-    struct Int4
-    {
-        std::int32_t values[4];
-
-        constexpr std::int32_t& operator[](std::size_t index)
-        {
-            return values[index];
-        }
-
-        constexpr const std::int32_t& operator[](std::size_t index) const
-        {
-            return values[index];
-        }
-    };
-
-    struct Uint2
-    {
-        std::uint32_t x;
-        std::uint32_t y;
-    };
-
-    struct Uint3
-    {
-        std::uint32_t x;
-        std::uint32_t y;
-        std::uint32_t z;
-    };
-
-    struct Uint4
-    {
-        std::uint32_t x;
-        std::uint32_t y;
-        std::uint32_t z;
-        std::uint32_t w;
-    };
-
-    struct Float3x4
-    {
-        float values[12];
-    };
-
-    struct Float4x4
-    {
-        float values[16];
-    };
-}
-
-#define UVSR_GPU_FLOAT2 uvsr::gpu_contract::Float2
-#define UVSR_GPU_FLOAT3 uvsr::gpu_contract::Float3
-#define UVSR_GPU_FLOAT4 uvsr::gpu_contract::Float4
-#define UVSR_GPU_FLOAT3X4 uvsr::gpu_contract::Float3x4
-#define UVSR_GPU_FLOAT4X4 uvsr::gpu_contract::Float4x4
-#define UVSR_GPU_INT2 uvsr::gpu_contract::Int2
-#define UVSR_GPU_INT4 uvsr::gpu_contract::Int4
-#define UVSR_GPU_UINT std::uint32_t
-#define UVSR_GPU_UINT2 uvsr::gpu_contract::Uint2
-#define UVSR_GPU_UINT3 uvsr::gpu_contract::Uint3
-#define UVSR_GPU_UINT4 uvsr::gpu_contract::Uint4
-#else
-#define UVSR_GPU_FLOAT2 float2
-#define UVSR_GPU_FLOAT3 float3
-#define UVSR_GPU_FLOAT4 float4
-#define UVSR_GPU_FLOAT3X4 float3x4
-#define UVSR_GPU_FLOAT4X4 float4x4
-#define UVSR_GPU_INT2 int2
-#define UVSR_GPU_INT4 int4
-#define UVSR_GPU_UINT uint
-#define UVSR_GPU_UINT2 uint2
-#define UVSR_GPU_UINT3 uint3
-#define UVSR_GPU_UINT4 uint4
-#endif
-
-struct PlanarViewConstants
-{
-    UVSR_GPU_FLOAT4X4 matWorldToView;
-    UVSR_GPU_FLOAT4X4 matViewToClip;
-    UVSR_GPU_FLOAT4X4 matWorldToClip;
-    UVSR_GPU_FLOAT4X4 matClipToView;
-    UVSR_GPU_FLOAT4X4 matViewToWorld;
-    UVSR_GPU_FLOAT4X4 matClipToWorld;
-
-    UVSR_GPU_FLOAT4X4 matViewToClipNoOffset;
-    UVSR_GPU_FLOAT4X4 matWorldToClipNoOffset;
-    UVSR_GPU_FLOAT4X4 matClipToViewNoOffset;
-    UVSR_GPU_FLOAT4X4 matClipToWorldNoOffset;
-
-    UVSR_GPU_FLOAT2 viewportOrigin;
-    UVSR_GPU_FLOAT2 viewportSize;
-    UVSR_GPU_FLOAT2 viewportSizeInv;
-    UVSR_GPU_FLOAT2 pixelOffset;
-    UVSR_GPU_FLOAT2 clipToWindowScale;
-    UVSR_GPU_FLOAT2 clipToWindowBias;
-    UVSR_GPU_FLOAT2 windowToClipScale;
-    UVSR_GPU_FLOAT2 windowToClipBias;
-    UVSR_GPU_FLOAT4 cameraDirectionOrPosition;
-};
+// full-width IDs keep 65535 available; no-hit is outside nonnegative scene indices.
+static const UVSR_GPU_UINT RendererInvalidPickId = 0xffffffffu;
 
 static const int MaterialDomain_Opaque = 0;
 static const int MaterialDomain_AlphaTested = 1;
@@ -210,6 +85,14 @@ struct MaterialConstants
     float hairCuticleAngle;
     UVSR_GPU_FLOAT3 hairDiffuseReflectionTint;
     float hairDiffuseReflectionWeight;
+};
+
+// one material allocation serves structured ray reads and aligned raster CB ranges.
+// active MaterialConstants fields retain their existing offsets and 208-byte size.
+struct RendererMaterialTableEntry
+{
+    MaterialConstants material;
+    UVSR_GPU_UINT4 padding[3];
 };
 
 struct GeometryData
@@ -313,7 +196,7 @@ struct LightProbeConstants
 
 struct DeferredLightingConstants
 {
-    PlanarViewConstants view;
+    RendererViewConstants view;
     UVSR_GPU_FLOAT2 shadowMapTextureSize;
     int enableAmbientOcclusion;
     int padding;
@@ -350,8 +233,7 @@ struct DeferredLightingConstants
 
 struct GBufferFillConstants
 {
-    PlanarViewConstants view;
-    PlanarViewConstants viewPrev;
+    RendererViewConstants view;
 };
 
 struct GBufferPushConstants
@@ -359,7 +241,6 @@ struct GBufferPushConstants
     UVSR_GPU_UINT startInstanceLocation;
     UVSR_GPU_UINT startVertexLocation;
     UVSR_GPU_UINT positionOffset;
-    UVSR_GPU_UINT prevPositionOffset;
     UVSR_GPU_UINT texCoordOffset;
     UVSR_GPU_UINT normalOffset;
     UVSR_GPU_UINT tangentOffset;
@@ -376,7 +257,6 @@ struct GBufferPushConstants
 struct SceneVertex
 {
     UVSR_GPU_FLOAT3 pos UVSR_GPU_SEMANTIC(POS);
-    UVSR_GPU_FLOAT3 prevPos UVSR_GPU_SEMANTIC(PREV_POS);
     UVSR_GPU_FLOAT2 texCoord UVSR_GPU_SEMANTIC(TEXCOORD);
     UVSR_GPU_CENTROID UVSR_GPU_FLOAT3 normal UVSR_GPU_SEMANTIC(NORMAL);
     UVSR_GPU_CENTROID UVSR_GPU_FLOAT4 tangent UVSR_GPU_SEMANTIC(TANGENT);

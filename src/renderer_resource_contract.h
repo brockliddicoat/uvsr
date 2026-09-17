@@ -1,9 +1,11 @@
 #pragma once
 
-#include <utility>
+#include <stdint.h>
 
 namespace uvsr
 {
+    inline constexpr uint32_t RendererMaxConstantBufferVersions = 16u;
+
     class RendererResourceCreationSequence
     {
     public:
@@ -12,7 +14,7 @@ namespace uvsr
         {
             if (!m_Valid)
                 return false;
-            m_Valid = bool(std::forward<Create>(create)());
+            m_Valid = bool(static_cast<Create&&>(create)());
             return m_Valid;
         }
 
@@ -83,24 +85,6 @@ namespace uvsr
 
     private:
         bool m_Failed = false;
-    };
-
-    struct RendererPixelReadbackInitializationContract
-    {
-        bool device = false;
-        bool shader = false;
-        bool intermediateBuffer = false;
-        bool readbackBuffer = false;
-        bool constantBuffer = false;
-        bool bindingLayout = false;
-        bool bindingSet = false;
-        bool pipeline = false;
-
-        [[nodiscard]] constexpr bool IsComplete() const noexcept
-        {
-            return device && shader && intermediateBuffer && readbackBuffer &&
-                constantBuffer && bindingLayout && bindingSet && pipeline;
-        }
     };
 
 }

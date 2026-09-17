@@ -36,7 +36,6 @@ namespace
 
 UIRenderer::~UIRenderer()
 {
-    GetDeviceManager()->m_callbacks.beforePresent = nullptr;
     if (m_PresentationWaitTimer)
         CloseHandle(m_PresentationWaitTimer);
 }

@@ -1,277 +1,275 @@
+#include "retained_scene_paths.h"
 #include "uvsr_ui_internal.h"
-#include "windows_executable_path.h"
-
-auto UIRenderer::FormatFrontEllipsisUtf8(
-        std::string_view source,
-        size_t maximumCodePoints) -> FrontEllipsisText {
-        const char* const begin = source.data();
-        const char* cursor = begin;
-        const char* const end = begin + source.size();
-        size_t codePointCount = 0;
-        while (cursor < end && codePointCount < maximumCodePoints)
-        {
-            unsigned int codePoint = 0;
-            const int byteCount = ImTextCharFromUtf8(
-                &codePoint,
-                cursor,
-                end);
-            cursor += byteCount > 0 ? byteCount : 1;
-            ++codePointCount;
-        }
-
-        FrontEllipsisText result;
-        result.truncated = cursor < end;
-        result.display.assign(begin, cursor);
-        if (result.truncated)
-            result.display += "...";
-        return result;
-    }
-
-auto UIRenderer::GetSceneLoadTimingDatabasePath() -> std::filesystem::path {
+#include "file_bytes.h"
+#include "file_write.h"
+#include <cstdlib>
+#include <new>
 #if defined(UVSR_BUILD_TESTING)
-        return GetExecutableDirectoryWide() / "state" / "scene-load-history-v1.txt";
+#include "retained_runtime_json.h"
+#include <cstdio>
+#endif
+
+auto UIRenderer::GetSceneLoadTimingDatabasePath(
+        WindowsPath& output, WindowsPathResult& result) noexcept -> bool {
+        result = {};
+#if defined(UVSR_BUILD_TESTING)
+        WindowsPath directory;
+        if (!GetExecutableDirectoryWide(directory, result))
+            return false;
+        return JoinWindowsRelativePath(directory.Data(), L"state\\scene-load-history-v1.txt", output, result);
 #else
         const wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA");
         if (!localAppData || localAppData[0] == L'\0')
-            return {};
-        return std::filesystem::path(localAppData) /
-            L"UVSR" / L"scene-load-history-v1.txt";
+            return false;
+        return JoinWindowsRelativePath(localAppData, L"UVSR\\scene-load-history-v1.txt", output, result);
 #endif
     }
 
 auto UIRenderer::LoadSceneLoadTimingDatabase() -> void {
-        const std::filesystem::path path =
-            GetSceneLoadTimingDatabasePath();
-        if (path.empty())
-            return;
-
-        std::ifstream input(path, std::ios::binary);
-        if (!input.is_open())
-            return;
-
-        if (!ReadSceneLoadTimingDatabase(input, m_SceneLoadTiming))
+        WindowsPath path;
+        WindowsPathResult pathResult;
+        if (!GetSceneLoadTimingDatabasePath(path, pathResult))
         {
-    uvsr::log::warning(
-                "Ignoring invalid scene loading history at %s",
-                path.generic_string().c_str());
+            if (pathResult.error != WindowsPathError::None)
+                uvsr::log::warning("Could not resolve scene loading history path (error %u, Win32 %u)",
+                    unsigned(pathResult.error), pathResult.nativeCode);
             return;
         }
+        FileBytes input;
+        FileReadResult readResult;
+        // the original stream accepts arbitrarily long inter-token whitespace.
+        // storage exhaustion remains a checked read failure, not a new format cap.
+        if (!ReadFileBytes(path.Data(), UINT64_MAX, input, readResult))
+        {
+            if (readResult.error != FileReadError::Missing && readResult.error != FileReadError::Open)
+                uvsr::log::warning("Could not read scene loading history at %ls (error %u, Win32 %u)",
+                    path.Data(), unsigned(readResult.error), readResult.systemCode);
+            return;
+        }
+        SettingsSnapshotError error;
+        if (!ReadSceneLoadTimingDatabase({input.Data(), input.Size()}, m_SceneLoadTiming, error))
+            uvsr::log::warning("Ignoring invalid scene loading history at %ls: %s", path.Data(), error.Message());
     }
 
 auto UIRenderer::SaveSceneLoadTimingDatabase() const -> void {
-        const std::filesystem::path path =
-            GetSceneLoadTimingDatabasePath();
-        if (path.empty())
-            return;
-
-        std::error_code error;
-        std::filesystem::create_directories(
-            path.parent_path(),
-            error);
-        if (error)
+        WindowsPath path;
+        WindowsPathResult pathResult;
+        if (!GetSceneLoadTimingDatabasePath(path, pathResult))
         {
-            uvsr::log::warning(
-                "Could not create scene loading history directory: %s",
-                error.message().c_str());
+            if (pathResult.error != WindowsPathError::None)
+                uvsr::log::warning("Could not resolve scene loading history path (error %u, Win32 %u)",
+                    unsigned(pathResult.error), pathResult.nativeCode);
             return;
         }
-
-        std::filesystem::path temporaryPath = path;
-        temporaryPath += L".tmp";
-        std::ofstream output(
-            temporaryPath,
-            std::ios::binary | std::ios::trunc);
-        const bool serialized = output.is_open() &&
-            WriteSceneLoadTimingDatabase(output, m_SceneLoadTiming);
-        output.flush();
-        const bool flushed = output.good();
-        output.close();
-        if (!serialized || !flushed)
+        json::EncodedText text;
+        SettingsSnapshotError error;
+        if (!WriteSceneLoadTimingDatabase(m_SceneLoadTiming, text, error))
         {
-            uvsr::log::warning(
-                "Could not write scene loading history at %s",
-                temporaryPath.generic_string().c_str());
+            uvsr::log::warning("Could not write scene loading history at %ls: %s", path.Data(), error.Message());
             return;
         }
-
-        if (!MoveFileExW(
-                temporaryPath.c_str(),
-                path.c_str(),
-                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-        {
-            uvsr::log::warning(
-                "Could not publish scene loading history (Win32 error %lu)",
-                GetLastError());
-        }
-    }
-
-auto UIRenderer::GetWindowsFontsDirectory() -> std::filesystem::path {
-        std::vector<wchar_t> buffer(MAX_PATH);
-        for (int attempt = 0; attempt < 2; ++attempt)
-        {
-            const UINT length = GetWindowsDirectoryW(
-                buffer.data(),
-                static_cast<UINT>(buffer.size()));
-            if (length == 0u)
-                return {};
-            if (length < buffer.size())
-            {
-                return std::filesystem::path(
-                    std::wstring(buffer.data(), length)) / L"Fonts";
-            }
-            buffer.resize(static_cast<std::size_t>(length) + 1u);
-        }
-        return {};
+        const FileWriteSpan span{text.Data(), text.Size()};
+        FileWriteResult result;
+        if (!WriteFileBytesAtomically(path.Data(), &span, 1, result))
+            uvsr::log::warning("Could not save scene loading history at %ls (error %u, Win32 %u, cleanup %u)",
+                path.Data(), unsigned(result.error), result.systemCode, result.cleanupCode);
     }
 
 UIRenderer::UIRenderer(
         DeviceManager* deviceManager,
-        std::shared_ptr<UvsrSceneViewer> app,
+        UvsrSceneViewer* app,
         UIData& ui,
-        std::string startupSettingsSnapshotCode)
-        : ImGui_Renderer(deviceManager)
+        std::string_view startupSettingsSnapshotCode) noexcept
+        : IRenderPass(deviceManager)
         , m_app(app)
+        , m_SettingsSnapshots(
+#if defined(UVSR_BUILD_TESTING)
+            SettingsSnapshotCatalogLocation::ExecutableState
+#else
+            SettingsSnapshotCatalogLocation::Installed
+#endif
+        )
         , m_StartupSettingsSnapshotCode(
-            std::move(startupSettingsSnapshotCode))
-        , m_ui(ui) {
-        NativeFileSystem windowsFileSystem;
-        const auto directory = GetWindowsFontsDirectory();
-        try
-        {
-            m_UiBodyFont = CreateFontFromFile(windowsFileSystem, directory / L"seguisb.ttf", 16.f);
-            m_UiHeaderFont = CreateFontFromFile(windowsFileSystem, directory / L"segoeuib.ttf", 16.f);
-            if (!m_UiBodyFont || !m_UiHeaderFont ||
-                !m_UiBodyFont->HasFontData() || !m_UiHeaderFont->HasFontData())
-                throw std::runtime_error("font data is unavailable");
-        }
-        catch (const std::exception& error)
-        {
-            throw RequiredUiFontStartupError(std::string("UVSR requires Windows Segoe UI Semibold and Bold. ") +
-                "Restore seguisb.ttf and segoeuib.ttf in Windows Fonts, then restart UVSR. " + error.what());
-        }
-
-        ImGui::GetIO().IniFilename = nullptr;
-        LoadSceneLoadTimingDatabase();
-        m_PresentationWaitTimer = CreateWaitableTimerExW(nullptr, nullptr,
-            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE);
-        GetDeviceManager()->m_callbacks.beforePresent =
-            [this](donut::app::DeviceManager&, uint32_t) { PacePresentation(); };
-    }
+            startupSettingsSnapshotCode)
+        , m_ui(ui) {}
 
 auto UIRenderer::Animate(float elapsedTimeSeconds) -> void {
         AdvanceDisplayPresentation(elapsedTimeSeconds);
-        if (m_RequiredFontsReady)
+        if (!m_UiGpuReady) return;
+        m_UiContext.CloseFrame();
+        float scaleX, scaleY;
+        GetDeviceManager()->GetDPIScaleInfo(scaleX, scaleY);
+        const bool explicitScaling = GetDeviceManager()->GetDeviceParams().supportExplicitDisplayScaling;
+        if (!m_UiContext.EnsureFonts(explicitScaling ? scaleX : 1.f) || !m_UiGpu.UpdateFontTexture())
         {
-            ImGui_Renderer::Animate(elapsedTimeSeconds);
+            if (!m_RequiredFontsReady)
+            {
+                m_RequiredFontFailure = "UVSR could not initialize its required UI font atlas. "
+                    "Reinstall UVSR with UVSR Launcher.";
+                return;
+            }
+            uvsr::log::error("UVSR could not update its UI font atlas.");
+            GetDeviceManager()->ReportRenderDisposition(RendererRenderDisposition::Failed);
             return;
         }
-
-        try
+        m_RequiredFontsReady = true;
+        int width, height;
+        GetDeviceManager()->GetWindowDimensions(width, height);
+        if (!m_UiContext.BeginFrame(width, height, scaleX, scaleY, elapsedTimeSeconds, explicitScaling))
         {
-            ImGui_Renderer::Animate(elapsedTimeSeconds);
-            if (!m_UiBodyFont->GetScaledFont() || !m_UiHeaderFont->GetScaledFont())
-                throw RequiredUiFontStartupError("UVSR could not initialize its Segoe UI fonts.");
-            m_RequiredFontsReady = true;
-        }
-        catch (const RequiredUiFontStartupError&)
-        {
-            throw;
-        }
-        catch (const std::exception& error)
-        {
-            throw RequiredUiFontStartupError(
-                std::string("UVSR could not initialize its required UI font ") +
-                "atlas: " + error.what() +
-                ". Reinstall UVSR with UVSR Launcher.");
+            uvsr::log::error("UVSR could not start its UI frame.");
+            GetDeviceManager()->ReportRenderDisposition(RendererRenderDisposition::Failed);
         }
     }
 
-auto UIRenderer::Init(std::shared_ptr<ShaderFactory> shaderFactory) -> bool {
-        if (!ImGui_Renderer::Init(shaderFactory))
+auto UIRenderer::Init(const uvsr::RendererNvrhiMessageCallback& messages, SettingsSnapshotError& error) -> bool {
+        error = {};
+        if (!m_app || m_UiGpuReady || !GetDeviceManager() || !GetDevice() ||
+            !m_app->GetRendererShaderFactory() || !m_app->GetRendererCommonPasses() ||
+            !m_app->GetRendererCommonPasses()->IsValid())
+        {
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "Invalid UI initialization state.", {}};
             return false;
-
-        m_PixelZoomPass = std::make_unique<PixelZoomPass>(
-            GetDevice(),
-            m_app->GetRendererShaderFactory(),
-            m_app->GetRendererCommonPasses());
+        }
+        if (!m_UiContext.LoadWindowsFonts())
+        {
+            m_RequiredFontFailure = "UVSR requires Windows Segoe UI Semibold and Bold. "
+                "Restore seguisb.ttf and segoeuib.ttf in Windows Fonts, then restart UVSR. font data is unavailable";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, m_RequiredFontFailure, {}};
+            return false;
+        }
+        LoadSceneLoadTimingDatabase();
+        m_PresentationWaitTimer = CreateWaitableTimerExW(nullptr, nullptr,
+            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_MODIFY_STATE | SYNCHRONIZE);
+        if (!m_UiGpu.Init(GetDevice(), *m_app->GetRendererShaderFactory(), &messages))
+        {
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "Could not initialize UI graphics resources.", {}};
+            return false;
+        }
+        m_PixelZoomPass.reset(new (std::nothrow) PixelZoomPass(
+            GetDevice(), m_app->GetRendererShaderFactory(), m_app->GetRendererCommonPasses()));
+        if (!m_PixelZoomPass)
+        {
+            error = {SettingsSnapshotErrorCode::OutOfMemory, 0, 0, "Could not allocate pixel zoom resources.", {}};
+            return false;
+        }
+        m_UiGpuReady = true;
         return true;
     }
 
 #if defined(UVSR_BUILD_TESTING)
-bool UIRenderer::SelectRuntimeDiagnostic(SettingId id, const std::string& selector,
-    const char* emptyError, const char* failurePrefix, std::string& error)
+bool UIRenderer::SelectRuntimeDiagnostic(SettingId id, const UiSettingsValue& selector,
+    const char* emptyError, const char* failurePrefix, SettingsSnapshotError& error)
 {
-    std::string selectionError;
-    if (!selector.empty() && (ApplySettingValue(id, UiSettingsValue::Selector(selector), selectionError) ||
-        selectionError.rfind("No change: ", 0u) == 0u))
+    SettingsSnapshotError selectionError;
+    if (!selector.Text().empty() && (ApplySettingValue(id, selector, selectionError) ||
+        selectionError.MessageView().rfind("No change: ", 0u) == 0u))
         return true;
-    error = selector.empty() ? emptyError : std::string(failurePrefix) + selectionError;
+    error = selector.Text().empty()
+        ? SettingsSnapshotError{SettingsSnapshotErrorCode::InvalidInput, 0, 0, emptyError, {}}
+        : ComposeSettingsSnapshotError({failurePrefix, selectionError.MessageView()},
+            selectionError.code == SettingsSnapshotErrorCode::None ? SettingsSnapshotErrorCode::InvalidInput : selectionError.code,
+            selectionError.nativeCode, selectionError.cleanupCode);
     return false;
 }
 
 auto UIRenderer::ChangeRuntimeDiagnosticMaterial(
-        std::string& error) -> bool {
-        const std::shared_ptr<Scene> scene = m_app->GetScene();
-        if (!scene || !scene->GetSceneGraph())
+        SettingsSnapshotError& error) -> bool {
+        const auto scene = m_app->GetSceneView();
+        if (!scene.generation)
         {
-            error = "no loaded scene provides a material to change";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "no loaded scene provides a material to change", {}};
             return false;
         }
-        const auto& materials = scene->GetSceneGraph()->GetMaterials();
-        auto selected = std::find_if(
-            materials.begin(), materials.end(),
-            [](const std::shared_ptr<Material>& material)
-            {
-                return bool(material) &&
-                    material->materialID >= 0 &&
-                    std::isfinite(material->normalTextureScale);
-            });
-        if (selected == materials.end())
+        // the image fixture edits the same authored surface in every run.
+        static constexpr char MaterialName[] =
+            "MASTER_Interior_01_Floor_Tile_Hexagonal_BLENDSHADER";
+        RendererSceneHandle selected;
+        for (uint32_t index = 0; index < scene.materials.count; ++index)
         {
-            error = "the loaded scene has no finite editable material";
+            const auto text = RendererSceneText(scene, scene.materials.data[index].name);
+            if (std::string_view(text.count ? text.data : "", text.count) != MaterialName)
+                continue;
+            if (selected)
+            {
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "the diagnostic material name is ambiguous", {}};
+                return false;
+            }
+            selected = {scene.generation, index};
+        }
+        const auto* material = FindRendererSceneMaterial(scene, selected);
+        if (!material || material->selectionId == InvalidSceneIndex ||
+            !m_app->IsSceneTextureReady(material->values.textures[uint32_t(RendererSceneMaterialTextureSlot::Normal)]) ||
+            !std::isfinite(material->values.normalTextureScale))
+        {
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "the diagnostic floor material is missing or invalid", {}};
             return false;
         }
 
-        const std::string selector = FormatSettingsSnapshotMaterialToken(
-            false,
-            static_cast<std::uint32_t>((*selected)->materialID));
+        const std::uint32_t materialId =
+            material->selectionId;
+        UiSettingsValue selector;
+        SettingsSnapshotError selectorError;
+        if (!FormatSettingsSnapshotMaterialToken(false, materialId, selector, selectorError))
+        {
+            error = ComposeSettingsSnapshotError({"could not select the diagnostic material: ", selectorError.MessageView()},
+                selectorError.code, selectorError.nativeCode, selectorError.cleanupCode);
+            return false;
+        }
         if (!SelectRuntimeDiagnostic(SettingId::MaterialSelected, selector,
             "the diagnostic material has no canonical selector", "could not select the diagnostic material: ", error))
             return false;
-        const float replacement =
-            (*selected)->normalTextureScale >= 0.f ? -1.f : 1.f;
-        return ApplySettingValue(
-            SettingId::MaterialSelectedNormalScale,
-            UiSettingsValue::Float(replacement), error);
+        const float before = material->values.normalTextureScale;
+        const float replacement = before >= 0.f ? -1.f : 1.f;
+        if (!ApplySettingValue(SettingId::MaterialSelectedNormalScale,
+                UiSettingsValue::Float(replacement), error))
+            return false;
+        material = m_app->GetSceneMaterial(selected);
+        if (m_ui.SelectedMaterial != selected || !material || material->selectionId != materialId ||
+            material->values.normalTextureScale != replacement)
+        {
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "the diagnostic material command did not edit its resolved target", {}};
+            return false;
+        }
+        std::fprintf(stdout, "{\"event\":\"material-action\",\"name\":\"%s\","
+            "\"id\":%u,\"before\":%.9g,\"after\":%.9g}\n",
+            MaterialName, materialId, before, replacement);
+        std::fflush(stdout);
+        return true;
     }
 #endif
 
 #if defined(UVSR_BUILD_TESTING)
 auto UIRenderer::ChangeRuntimeDiagnosticLight(
-        std::string& error) -> bool {
-        const std::shared_ptr<DirectionalLight> light =
-            m_app->GetPrimaryDirectionalLight();
-        if (!light || m_app->IsFlashlight(light) ||
-            !std::isfinite(light->angularSize))
+        SettingsSnapshotError& error) -> bool {
+        const auto light = m_app->GetPrimaryDirectionalLight();
+        const auto* record = m_app->GetSceneLight(light);
+        if (!record || m_app->IsFlashlight(light) || !std::isfinite(record->values.angularSize))
         {
-            error = "the loaded scene has no finite directional light";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "the loaded scene has no finite directional light", {}};
             return false;
         }
 
-        const auto& lights = m_app->GetEditableLights();
-        const auto selected = std::find(lights.begin(), lights.end(), light);
-        if (selected == lights.end())
+        const auto lights = m_app->GetEditableLights();
+        const auto selected = lights.Ordinal(light);
+        if (selected == InvalidSceneIndex)
         {
-            error = "the diagnostic directional light is not editable";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "the diagnostic directional light is not editable", {}};
             return false;
         }
-        const std::string selector = FormatSettingsSnapshotLightToken(
-            static_cast<std::size_t>(std::distance(lights.begin(), selected)),
-            light->GetName());
+        UiSettingsValue selector;
+        SettingsSnapshotError selectorError;
+        if (!AcceptFormattedSelector(FormatSettingsSnapshotLightToken(
+                selected, m_app->GetSceneLightNameView(light), selector, selectorError), selector, selectorError))
+        {
+            error = ComposeSettingsSnapshotError({"could not select the diagnostic directional light: ", selectorError.MessageView()},
+                selectorError.code, selectorError.nativeCode, selectorError.cleanupCode);
+            return false;
+        }
         if (!SelectRuntimeDiagnostic(SettingId::LightSelected, selector,
             "the diagnostic directional light has no canonical selector", "could not select the diagnostic directional light: ", error))
             return false;
-        const float replacement = light->angularSize < 10.f ? 20.f : 0.f;
+        const float replacement = record->values.angularSize < 10.f ? 20.f : 0.f;
         return ApplySettingValue(
             SettingId::LightSelectedAngularSize,
             UiSettingsValue::Float(replacement), error);
@@ -280,30 +278,30 @@ auto UIRenderer::ChangeRuntimeDiagnosticLight(
 
 #if defined(UVSR_BUILD_TESTING)
 auto UIRenderer::SelectRuntimeDiagnosticFlashlight(
-        std::string& error) -> bool {
-        const auto flashlight = std::find_if(
-            m_app->GetEditableLights().begin(),
-            m_app->GetEditableLights().end(),
-            [this](const std::shared_ptr<Light>& light)
-            {
-                return m_app->IsFlashlight(light);
-            });
-        if (flashlight == m_app->GetEditableLights().end())
+        SettingsSnapshotError& error) -> bool {
+        const auto lights = m_app->GetEditableLights();
+        const auto flashlight = lights.At(0);
+        if (!m_app->IsFlashlight(flashlight))
         {
-            error = "the loaded scene has no retained flashlight";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "the loaded scene has no retained flashlight", {}};
             return false;
         }
 
-        const std::string selector = FormatSettingsSnapshotLightToken(
-            static_cast<std::size_t>(std::distance(
-                m_app->GetEditableLights().begin(), flashlight)),
-            (*flashlight)->GetName());
+        UiSettingsValue selector;
+        SettingsSnapshotError selectorError;
+        if (!AcceptFormattedSelector(FormatSettingsSnapshotLightToken(
+                0, m_app->GetSceneLightNameView(flashlight), selector, selectorError), selector, selectorError))
+        {
+            error = ComposeSettingsSnapshotError({"could not select the retained flashlight: ", selectorError.MessageView()},
+                selectorError.code, selectorError.nativeCode, selectorError.cleanupCode);
+            return false;
+        }
         return SelectRuntimeDiagnostic(SettingId::LightSelected, selector,
             "the retained flashlight has no canonical selector", "could not select the retained flashlight: ", error);
     }
 
 auto UIRenderer::ToggleRuntimeDiagnosticFlashlight(
-        std::string& error) -> bool {
+        SettingsSnapshotError& error) -> bool {
         if (!SelectRuntimeDiagnosticFlashlight(error))
             return false;
         return ApplySettingValue(
@@ -319,20 +317,47 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
         if (m_RetainedRuntimeStartup.time_since_epoch().count() == 0)
             m_RetainedRuntimeStartup = now;
 
+        const auto writeRecord = [](FILE* stream,
+            const json::EncodedText& record, bool flush) noexcept
+        {
+            if (!record.IsValid() || std::ferror(stream)) return false;
+            // one stdio call keeps the record and newline under the same stream lock.
+            const int written = std::fprintf(stream, "%s\n", record.Data());
+            if (written < 0 || static_cast<size_t>(written) != record.Size() + 1)
+                return false;
+            return (!flush || std::fflush(stream) == 0) && std::ferror(stream) == 0;
+        };
+        const auto outputFailure = [&](const char* message)
+        {
+            m_RetainedRuntimePathReselectionPending = false;
+            // do not allocate another error record after output failure.
+            if (m_RetainedRuntimeDiagnostic)
+                (void)m_RetainedRuntimeDiagnostic->Abort({}, now);
+            std::fprintf(stderr, "%s\n", message);
+            std::fflush(stderr);
+            g_VerifyRetainedRuntimeResult = 1;
+            glfwSetWindowShouldClose(GetDeviceManager()->GetWindow(), GLFW_TRUE);
+        };
+
         const auto finish = [&](const RetainedRuntimeDirective& directive)
         {
             m_RetainedRuntimePathReselectionPending = false;
             const bool passed =
                 directive.kind == RetainedRuntimeDirectiveKind::FinishPass;
-            const std::string caseName = directive.runtimeCase
-                ? directive.runtimeCase->name
+            const std::string_view caseName = directive.runtimeCase
+                ? std::string_view(directive.runtimeCase->name.View())
                 : "startup";
             if (!passed)
             {
-                const std::string failure =
-                    BuildRetainedRuntimeFailureJson(
-                        caseName, directive.payload);
-                std::fprintf(stderr, "%s\n", failure.c_str());
+                const json::EncodedText failure =
+                    directive.semanticFailure.Passed()
+                        ? EncodeRetainedRuntimeMessageJson(caseName, directive.failure)
+                        : EncodeRetainedRuntimeSemanticFailureJson(caseName, directive.semanticFailure);
+                if (!writeRecord(stderr, failure, false))
+                {
+                    outputFailure("retained runtime failure record output failed");
+                    return;
+                }
             }
             const size_t passedCases = m_RetainedRuntimeDiagnostic
                 ? m_RetainedRuntimeDiagnostic->PassedCaseCount()
@@ -347,15 +372,17 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
                 : static_cast<long long>(
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         now - m_RetainedRuntimeStartup).count());
-            const std::string summary = BuildRetainedRuntimeSummaryJson(
+            const json::EncodedText summary = EncodeRetainedRuntimeSummaryJson(
                 m_RetainedRuntimeProvenance,
                 passed,
                 passedCases,
                 totalCases,
                 elapsedMilliseconds);
-            std::fprintf(
-                passed ? stdout : stderr, "%s\n", summary.c_str());
-            std::fflush(passed ? stdout : stderr);
+            if (!writeRecord(passed ? stdout : stderr, summary, true))
+            {
+                outputFailure("retained runtime summary record output failed");
+                return;
+            }
             g_VerifyRetainedRuntimeResult = passed ? 0 : 1;
             glfwSetWindowShouldClose(
                 GetDeviceManager()->GetWindow(),
@@ -368,7 +395,7 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
             {
                 RetainedRuntimeDirective failure;
                 failure.kind = RetainedRuntimeDirectiveKind::FinishFail;
-                failure.payload = "default scene startup exceeded 3 minutes";
+                failure.failure = "default scene startup exceeded 3 minutes";
                 finish(failure);
                 return;
             }
@@ -378,141 +405,90 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
             {
                 RetainedRuntimeDirective failure;
                 failure.kind = RetainedRuntimeDirectiveKind::FinishFail;
-                failure.payload = "default scene did not finish loading";
+                failure.failure = "default scene did not finish loading";
                 finish(failure);
                 return;
             }
 
-            const auto& lights = m_app->GetEditableLights();
-            const auto flashlight = std::find_if(
-                lights.begin(), lights.end(),
-                [this](const std::shared_ptr<Light>& light)
-                {
-                    return m_app->IsFlashlight(light);
-                });
-            if (flashlight == lights.end())
+            const auto lights = m_app->GetEditableLights();
+            const auto flashlight = lights.At(0);
+            if (!m_app->IsFlashlight(flashlight))
             {
                 RetainedRuntimeDirective failure;
                 failure.kind = RetainedRuntimeDirectiveKind::FinishFail;
-                failure.payload = "retained flashlight is unavailable";
+                failure.failure = "retained flashlight is unavailable";
                 finish(failure);
                 return;
             }
-            const std::string selector = FormatSettingsSnapshotLightToken(
-                static_cast<std::size_t>(
-                    std::distance(lights.begin(), flashlight)),
-                (*flashlight)->GetName());
-            std::string selectionError;
-            if (!SelectRuntimeDiagnostic(SettingId::LightSelected, selector,
+            UiSettingsValue selector;
+            SettingsSnapshotError selectorError;
+            const bool prepared = AcceptFormattedSelector(FormatSettingsSnapshotLightToken(
+                0, m_app->GetSceneLightNameView(flashlight), selector, selectorError), selector, selectorError);
+            SettingsSnapshotError selectionError;
+            if (!prepared) selectionError = ComposeSettingsSnapshotError({"could not select retained flashlight: ", selectorError.MessageView()},
+                selectorError.code, selectorError.nativeCode, selectorError.cleanupCode);
+            if (!prepared || !SelectRuntimeDiagnostic(SettingId::LightSelected, selector,
                 "retained flashlight has no canonical selector", "could not select retained flashlight: ", selectionError))
             {
                 RetainedRuntimeDirective failure;
                 failure.kind = RetainedRuntimeDirectiveKind::FinishFail;
-                failure.payload = std::move(selectionError);
+                failure.failure = selectionError.MessageView();
                 finish(failure);
                 return;
             }
 
-            m_RetainedRuntimeProvenance.settingsHash =
-                GetBuiltSettingsNumberHash();
-            m_RetainedRuntimeProvenance.engineVersion =
-                GetBuiltEngineVersion();
-            m_RetainedRuntimeProvenance.sourceCommit =
-                GetBuiltSourceCommit();
-            m_RetainedRuntimeProvenance.sourceIdentity =
-                GetBuiltSourceIdentity();
-            m_RetainedRuntimeProvenance.sourceClean =
-                IsBuiltSourceTreeClean();
-            m_RetainedRuntimeProvenance.production =
-                IsBuiltProduction();
-            m_RetainedRuntimeProvenance.configuration =
-                GetBuiltConfiguration();
-            m_RetainedRuntimeProvenance.debugLayerRequested =
-                g_RuntimeDebugValidationRequested;
-            m_RetainedRuntimeProvenance.nvrhiValidationRequested =
-                g_RuntimeDebugValidationRequested;
-            m_RetainedRuntimeProvenance.executablePath =
-                (GetExecutableDirectoryWide() / "uvsr-engine.exe").u8string();
-            const char* packagePath = std::getenv(
-                "UVSR_RUNTIME_PACKAGE_PATH");
-            const char* executableSha256 = std::getenv(
-                "UVSR_RUNTIME_ENGINE_SHA256");
-            if (packagePath)
-            {
-                m_RetainedRuntimeProvenance.packagePath = packagePath;
-            }
-            if (executableSha256)
-            {
-                m_RetainedRuntimeProvenance.executableSha256 =
-                    executableSha256;
-            }
-            const bool canonicalSha256 =
-                m_RetainedRuntimeProvenance.executableSha256.size() == 64u &&
-                std::all_of(
-                    m_RetainedRuntimeProvenance.executableSha256.begin(),
-                    m_RetainedRuntimeProvenance.executableSha256.end(),
-                    [](unsigned char character)
-                    {
-                        return (character >= '0' && character <= '9') ||
-                            (character >= 'a' && character <= 'f');
-                    });
-            const std::filesystem::path declaredPackage =
-                std::filesystem::u8path(
-                    m_RetainedRuntimeProvenance.packagePath);
-            std::error_code packageError;
-            const bool executableMatchesPackage =
-                declaredPackage.is_absolute() &&
-                std::filesystem::equivalent(
-                    declaredPackage / "bin/uvsr-engine.exe",
-                    std::filesystem::u8path(
-                        m_RetainedRuntimeProvenance.executablePath),
-                    packageError) &&
-                !packageError;
-            if (!g_RuntimeDebugValidationRequested ||
-                !canonicalSha256 || !executableMatchesPackage)
+            RetainedRuntimeMessage provenanceFailure;
+            if (!PrepareRetainedRuntimeProvenance(m_RetainedRuntimeProvenance,
+                g_RuntimeDebugValidationRequested, provenanceFailure))
             {
                 RetainedRuntimeDirective failure;
                 failure.kind = RetainedRuntimeDirectiveKind::FinishFail;
-                failure.payload =
-                    !g_RuntimeDebugValidationRequested
-                        ? "retained runtime verification requires -debug"
-                        : !canonicalSha256
-                            ? "UVSR_RUNTIME_ENGINE_SHA256 must be 64 lowercase hexadecimal characters"
-                            : "UVSR_RUNTIME_PACKAGE_PATH must be the absolute package root containing this bin/uvsr-engine.exe";
+                failure.failure = provenanceFailure;
                 finish(failure);
                 return;
             }
 
-            const std::vector<SceneCatalogEntry>& scenes =
-                m_app->GetAvailableScenes();
-            const SceneCatalogEntry* bistroEntry = FindSceneCatalogEntry(
-                scenes,
-                (m_app->GetSceneDir() /
-                    "bistro_interior_retextured/"
-                    "bistro_interior_retextured.scene.json")
-                    .lexically_normal().generic_string());
-            const SceneCatalogEntry* sanMiguelEntry = FindSceneCatalogEntry(
-                scenes,
-                (m_app->GetSceneDir() /
-                    "san_miguel_retextured/"
-                    "san_miguel_retextured.scene.json")
-                    .lexically_normal().generic_string());
-            const std::string bistroScene = bistroEntry
-                ? FormatSettingsSnapshotSceneToken(
-                    MakeSceneDisplayName(
-                        m_app->GetSceneDir(), bistroEntry->FileName))
-                : std::string{};
-            const std::string sanMiguelScene = sanMiguelEntry
-                ? FormatSettingsSnapshotSceneToken(
-                    MakeSceneDisplayName(
-                        m_app->GetSceneDir(), sanMiguelEntry->FileName))
-                : std::string{};
-            if (bistroScene.empty() || sanMiguelScene.empty())
+            const SceneCatalog& scenes = m_app->GetAvailableScenes();
+            const SceneCatalogEntry* bistroEntry = nullptr;
+            const SceneCatalogEntry* sanMiguelEntry = nullptr;
+            SettingsSnapshotError valueError;
+            if (!FindRetainedScene(scenes, m_app->GetSceneDir().data(), 0, bistroEntry, valueError) ||
+                !FindRetainedScene(scenes, m_app->GetSceneDir().data(), 1, sanMiguelEntry, valueError))
             {
                 RetainedRuntimeDirective failure;
                 failure.kind = RetainedRuntimeDirectiveKind::FinishFail;
-                failure.payload =
+                failure.failure = valueError.MessageView();
+                finish(failure);
+                return;
+            }
+            UiSettingsValue bistroScene, sanMiguelScene;
+            if ((bistroEntry && !AcceptFormattedSelector(FormatSettingsSnapshotSceneToken(
+                    bistroEntry->CommandName, bistroScene, valueError), bistroScene, valueError)) ||
+                (sanMiguelEntry && !AcceptFormattedSelector(FormatSettingsSnapshotSceneToken(
+                    sanMiguelEntry->CommandName, sanMiguelScene, valueError), sanMiguelScene, valueError)))
+            {
+                RetainedRuntimeDirective failure;
+                failure.kind = RetainedRuntimeDirectiveKind::FinishFail;
+                failure.failure = valueError.MessageView();
+                finish(failure);
+                return;
+            }
+            if (bistroScene.Text().empty() || sanMiguelScene.Text().empty())
+            {
+                RetainedRuntimeDirective failure;
+                failure.kind = RetainedRuntimeDirectiveKind::FinishFail;
+                failure.failure =
                     "retained Bistro or San Miguel scene is absent";
+                finish(failure);
+                return;
+            }
+
+            RetainedRuntimeCases cases;
+            if (!uvsr::BuildRetainedRuntimeCases(bistroScene.Text(), sanMiguelScene.Text(), cases, valueError))
+            {
+                RetainedRuntimeDirective failure;
+                failure.kind = RetainedRuntimeDirectiveKind::FinishFail;
+                failure.failure = valueError.MessageView();
                 finish(failure);
                 return;
             }
@@ -524,20 +500,27 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
                 &m_RetainedRuntimeBaselineWidth,
                 &m_RetainedRuntimeBaselineHeight);
 
-            std::vector<RetainedRuntimeCase> cases =
-                uvsr::BuildRetainedRuntimeCases(
-                    bistroScene, sanMiguelScene);
-            m_RetainedRuntimeDiagnostic =
-                std::make_unique<RetainedRuntimeDiagnosticState>(
-                    std::move(cases),
-                    m_RetainedRuntimeStartup);
-            const std::string startRecord = BuildRetainedRuntimeStartJson(
+            m_RetainedRuntimeDiagnostic.reset(new (std::nothrow) RetainedRuntimeDiagnosticState(
+                std::move(cases), m_RetainedRuntimeStartup));
+            if (!m_RetainedRuntimeDiagnostic)
+            {
+                RetainedRuntimeDirective failure;
+                failure.kind = RetainedRuntimeDirectiveKind::FinishFail;
+                failure.failure = "UVSR could not allocate retained runtime state.";
+                finish(failure);
+                return;
+            }
+            const json::EncodedText startRecord = EncodeRetainedRuntimeStartJson(
                 m_RetainedRuntimeProvenance,
                 m_RetainedRuntimeDiagnostic->TotalCaseCount());
-            std::fprintf(stdout, "%s\n", startRecord.c_str());
-            std::fflush(stdout);
+            if (!writeRecord(stdout, startRecord, true))
+            {
+                outputFailure("retained runtime start record output failed");
+                return;
+            }
         }
 
+        // every path that mutates these text owners returns before using telemetry again.
         RetainedRuntimeTelemetry telemetry;
         telemetry.sceneBusy = m_app->IsSceneBusy();
         telemetry.sceneLoaded = m_app->IsSceneLoaded();
@@ -563,6 +546,8 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
         telemetry.globalNoiseAccumulateSamples = m_ui.AccumulateSamples;
         telemetry.pathHistoryCount =
             m_app->GetPathTracingCenterPixelAcceptedSampleCount();
+        telemetry.pathHistoryGeneration =
+            m_app->GetPathTracingHistoryGeneration();
         telemetry.directionalVisibilityDispatched =
             m_app->DidDispatchDirectionalRayVisibilityThisFrame();
         telemetry.skyVisibilityDispatched =
@@ -589,10 +574,12 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
         }
         telemetry.lastAppliedAction = m_LastRetainedRuntimeAction;
         telemetry.output = m_app->ConsumeRuntimeOutputEvidence();
+        if (telemetry.output)
+            telemetry.storage = m_app->CaptureRetainedRuntimeStorage();
         if (m_RetainedRuntimeDiagnostic->RequiresSettingsSnapshot())
         {
-            RefreshSettingsSnapshot();
-            telemetry.settingsSnapshot = m_SettingsSnapshots.Canonical();
+            if (RefreshSettingsSnapshot())
+                telemetry.settingsSnapshot = m_SettingsSnapshots.Canonical();
         }
 
         if (m_RetainedRuntimePrerequisiteRestore)
@@ -617,14 +604,14 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
             }
             if (--m_RetainedRuntimePrerequisiteFrames != 0)
                 return;
-            std::string error;
+            SettingsSnapshotError error;
             if (!ApplySettingValue(id, m_RetainedRuntimePrerequisiteRestore->value, error))
             {
-                finish(m_RetainedRuntimeDiagnostic->Abort("prerequisite restore failed: " + error, now));
+                finish(m_RetainedRuntimeDiagnostic->Abort({"prerequisite restore failed: ", error.MessageView()}, now));
                 return;
             }
             std::fprintf(stdout, "{\"event\":\"prerequisite-cycle\",\"setting\":\"%s\",\"inactiveFrames\":3}\n",
-                std::string(SettingName(id)).c_str());
+                SettingName(id).data());
             m_RetainedRuntimePrerequisiteRestore.reset();
             m_LastRetainedRuntimeAction = RetainedRuntimeAction::CyclePrerequisite;
             return;
@@ -659,10 +646,10 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
                 directive.stableGpuFrameMilliseconds;
             telemetry.gpuFrameTimingAvailable = true;
         }
-        const auto abort = [&](std::string message)
+        const auto abort = [&](RetainedRuntimeMessage message)
         {
             finish(m_RetainedRuntimeDiagnostic->Abort(
-                std::move(message), now));
+                message, now));
         };
         const auto restoreBaseline = [&]()
         {
@@ -687,16 +674,16 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
             // inherits state from the preceding matrix row.
             m_LastRetainedRuntimeAction = RetainedRuntimeAction::None;
             m_RetainedRuntimePathReselectionPending = false;
-            std::string resetError;
+            SettingsSnapshotError resetError;
             if (!ResetAllSettingsToFactoryDefaults(resetError))
             {
-                abort("factory reset failed: " + resetError);
+                abort({"factory reset failed: ", resetError.MessageView()});
                 return;
             }
             restoreBaseline();
             if (!SelectRuntimeDiagnosticFlashlight(resetError))
             {
-                abort("baseline flashlight selection failed: " + resetError);
+                abort({"baseline flashlight selection failed: ", resetError.MessageView()});
                 return;
             }
             for (const RetainedRuntimeCase::Setting& setting :
@@ -705,25 +692,22 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
                 if (setting.id == directive.runtimeCase->actionSettingId ||
                     setting.id == SettingId::SceneCurrent)
                     continue;
-                std::string error;
+                SettingsSnapshotError error;
                 if (!ApplySettingValue(setting.id, setting.value, error))
                 {
-                    abort("SET " + std::string(SettingName(setting.id)) +
-                        " failed: " + error);
+                    abort({"SET ", SettingName(setting.id), " failed: ", error.MessageView()});
                     return;
                 }
             }
             if (directive.runtimeCase->actionSettingId != SettingId::Invalid)
             {
-                std::string error;
+                SettingsSnapshotError error;
                 if (!ApplySettingValue(
                         directive.runtimeCase->actionSettingId,
                         directive.runtimeCase->actionBaselineValue,
                         error))
                 {
-                    abort("baseline SET " + std::string(SettingName(
-                        directive.runtimeCase->actionSettingId)) +
-                        " failed: " + error);
+                    abort({"baseline SET ", SettingName(directive.runtimeCase->actionSettingId), " failed: ", error.MessageView()});
                     return;
                 }
             }
@@ -734,10 +718,10 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
                 if (setting.id != SettingId::SceneCurrent ||
                     setting.id == directive.runtimeCase->actionSettingId)
                     continue;
-                std::string error;
+                SettingsSnapshotError error;
                 if (!ApplySettingValue(setting.id, setting.value, error))
                 {
-                    abort("SET scene.current failed: " + error);
+                    abort({"SET scene.current failed: ", error.MessageView()});
                     return;
                 }
             }
@@ -757,14 +741,17 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
                 abort("state advanced without phase-specific output evidence");
                 return;
             }
-            const std::string captureRecord =
-                BuildRetainedRuntimeCaptureJson(
+            const json::EncodedText captureRecord =
+                EncodeRetainedRuntimeCaptureJson(
                     directive.caseIndex,
                     *directive.runtimeCase,
-                    directive.payload,
+                    directive.captureLabel,
                     telemetry);
-            std::fprintf(stdout, "%s\n", captureRecord.c_str());
-            std::fflush(stdout);
+            if (!writeRecord(stdout, captureRecord, true))
+            {
+                outputFailure("retained runtime capture record output failed");
+                return;
+            }
             switch (directive.action)
             {
             case RetainedRuntimeAction::NudgeCamera:
@@ -793,24 +780,23 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
                 {
                     restoreBaseline();
                 }
-                std::string error;
+                SettingsSnapshotError error;
                 const UiSettingsCommandDefinition* definition =
                     FindSettingsCommandDefinition(directive.actionSettingId);
                 if (definition && definition->availability ==
                         UiSettingsAvailability::SelectedFlashlight &&
                     !SelectRuntimeDiagnosticFlashlight(error))
                 {
-                    abort("action flashlight selection failed: " + error);
+                    abort({"action flashlight selection failed: ", error.MessageView()});
                     return;
                 }
                 if (directive.actionSettingId == SettingId::Invalid ||
                     !ApplySettingValue(
                         directive.actionSettingId,
-                        directive.actionValue,
+                        directive.runtimeCase->actionValue,
                         error))
                 {
-                    abort("action SET " + std::string(SettingName(
-                        directive.actionSettingId)) + " failed: " + error);
+                    abort({"action SET ", SettingName(directive.actionSettingId), " failed: ", error.MessageView()});
                     return;
                 }
                 break;
@@ -818,10 +804,10 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
 
             case RetainedRuntimeAction::ChangeMaterial:
             {
-                std::string error;
+                SettingsSnapshotError error;
                 if (!ChangeRuntimeDiagnosticMaterial(error))
                 {
-                    abort("material action failed: " + error);
+                    abort({"material action failed: ", error.MessageView()});
                     return;
                 }
                 break;
@@ -829,10 +815,10 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
 
             case RetainedRuntimeAction::ChangeLight:
             {
-                std::string error;
+                SettingsSnapshotError error;
                 if (!ChangeRuntimeDiagnosticLight(error))
                 {
-                    abort("light action failed: " + error);
+                    abort({"light action failed: ", error.MessageView()});
                     return;
                 }
                 break;
@@ -840,10 +826,10 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
 
             case RetainedRuntimeAction::ToggleFlashlight:
             {
-                std::string error;
+                SettingsSnapshotError error;
                 if (!ToggleRuntimeDiagnosticFlashlight(error))
                 {
-                    abort("flashlight action failed: " + error);
+                    abort({"flashlight action failed: ", error.MessageView()});
                     return;
                 }
                 break;
@@ -861,14 +847,21 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
 
             case RetainedRuntimeAction::CyclePrerequisite:
             {
-                std::string error;
-                if (!ApplySettingValue(directive.actionSettingId, directive.actionValue, error))
+                SettingsSnapshotError error;
+                RetainedRuntimeCase::Setting restore;
+                restore.id = directive.actionSettingId;
+                SettingsSnapshotError valueError;
+                if (!directive.runtimeCase->actionBaselineValue.CloneTo(restore.value, valueError))
                 {
-                    abort("prerequisite disable failed: " + error);
+                    abort({"prerequisite restore preparation failed: ", valueError.MessageView()});
                     return;
                 }
-                m_RetainedRuntimePrerequisiteRestore = RetainedRuntimeCase::Setting{
-                    directive.actionSettingId, directive.runtimeCase->actionBaselineValue };
+                if (!ApplySettingValue(directive.actionSettingId, directive.runtimeCase->actionValue, error))
+                {
+                    abort({"prerequisite disable failed: ", error.MessageView()});
+                    return;
+                }
+                m_RetainedRuntimePrerequisiteRestore = std::move(restore);
                 m_RetainedRuntimePrerequisiteFrames = 3;
                 return;
             }
@@ -883,9 +876,9 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
 
         case RetainedRuntimeDirectiveKind::ResetSettings:
         {
-            std::string error;
+            SettingsSnapshotError error;
             if (!ResetAllSettingsToFactoryDefaults(error))
-                abort("factory reset failed: " + error);
+                abort({"factory reset failed: ", error.MessageView()});
             return;
         }
 
@@ -893,15 +886,14 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
         {
             const SettingsSnapshotTransactionStep step =
                 m_SettingsSnapshots.BeginApplyCanonicalStaged(
-                    directive.payload,
+                    directive.snapshot,
                     MakeSettingsSnapshotRuntimeAccess());
             if (step.progress !=
                 SettingsSnapshotTransactionProgress::Succeeded)
             {
-                abort(step.result.error.empty()
-                    ? "runtime snapshot restore unexpectedly requires "
-                        "staged continuation"
-                    : step.result.error);
+                abort(step.result.error.MessageView().empty()
+                    ? std::string_view("runtime snapshot restore unexpectedly requires staged continuation")
+                    : step.result.error.MessageView());
             }
             return;
         }
@@ -912,9 +904,9 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
                 abort("state requested output for an empty case");
                 return;
             }
-            m_app->RequestRuntimeOutputEvidence(
-                directive.caseIndex,
-                directive.runtimeCase->name + "-" + directive.payload);
+            if (!m_app->RequestRuntimeOutputEvidence(directive.caseIndex,
+                    directive.runtimeCase->name.View(), directive.captureLabel))
+                abort("runtime capture path preparation failed");
             return;
 
         case RetainedRuntimeDirectiveKind::ReportCasePass:
@@ -924,12 +916,15 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
                 abort("state reported a case without output evidence");
                 return;
             }
-            const std::string caseRecord = BuildRetainedRuntimeCaseJson(
+            const json::EncodedText caseRecord = EncodeRetainedRuntimeCaseJson(
                 directive.caseIndex,
                 *directive.runtimeCase,
                 telemetry);
-            std::fprintf(stdout, "%s\n", caseRecord.c_str());
-            std::fflush(stdout);
+            if (!writeRecord(stdout, caseRecord, true))
+            {
+                outputFailure("retained runtime case record output failed");
+                return;
+            }
             return;
         }
 
@@ -942,7 +937,7 @@ auto UIRenderer::DriveRetainedRuntimeDiagnostic() -> void {
 #endif
 
 auto UIRenderer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
-        if (!imgui_nvrhi)
+        if (!m_UiGpuReady || !m_UiContext.FrameOpened())
             return;
 #if defined(UVSR_BUILD_TESTING)
         if (g_VerifyRetainedRuntimeRequested)
@@ -995,7 +990,7 @@ auto UIRenderer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
                 m_SettingsPanelMarginPixels, m_ui.PixelZoom);
             const char* zoomAreaLabel =
                 GetPixelZoomAreaLabel(m_ui.PixelZoom);
-            ImFont* zoomLabelFont = m_UiBodyFont->GetScaledFont();
+            ImFont* zoomLabelFont = m_UiContext.BodyFont();
             ImGui::PushFont(zoomLabelFont);
             const ImVec2 zoomAreaLabelSize =
                 ImGui::CalcTextSize(zoomAreaLabel);
@@ -1034,7 +1029,7 @@ auto UIRenderer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
                 IM_COL32(255, 255, 255, 230),
                 zoomAreaLabel);
         }
-        ImGui::Render();
+        m_UiContext.Render();
         if (pixelZoomEnabled && m_PixelZoomPass)
             m_PixelZoomPass->Capture(framebuffer);
         if (pixelZoomEnabled && m_PixelZoomPass)
@@ -1045,43 +1040,23 @@ auto UIRenderer::Render(nvrhi::IFramebuffer* framebuffer) -> void {
                 m_SettingsPanelMarginPixels,
                 ImGui::GetStyle().WindowRounding);
         }
-        nvrhi::IFramebuffer* uiFramebuffer = framebuffer;
-        if (framebuffer->getFramebufferInfo().colorFormats[0] ==
-                nvrhi::Format::SRGBA8_UNORM)
+        if (!m_UiGpu.Render(framebuffer))
         {
-            // stock ImGui colors are display-encoded; use an unorm view.
-            auto& uiView = m_UiFramebuffers[framebuffer];
-            if (!uiView)
-            {
-                auto desc = framebuffer->getDesc();
-                desc.colorAttachments[0].format = nvrhi::Format::RGBA8_UNORM;
-                uiView = GetDevice()->createFramebuffer(desc);
-            }
-            if (uiView)
-                uiFramebuffer = uiView;
+            uvsr::log::error("UVSR could not render its UI.");
+            GetDeviceManager()->ReportRenderDisposition(RendererRenderDisposition::Failed);
         }
-        const auto uiFormat = uiFramebuffer->getFramebufferInfo().colorFormats[0];
-        if (m_UiFramebufferFormat != uiFormat)
-        {
-            imgui_nvrhi->backbufferResizing();
-            m_UiFramebufferFormat = uiFormat;
-        }
-        imgui_nvrhi->render(uiFramebuffer);
-        m_imguiFrameOpened = false;
     }
 
 auto UIRenderer::BackBufferResizing() -> void {
-        m_UiFramebuffers.clear();
-        m_UiFramebufferFormat = nvrhi::Format::UNKNOWN;
         if (m_PixelZoomPass)
             m_PixelZoomPass->BackBufferResizing();
-        ImGui_Renderer::BackBufferResizing();
+        m_UiGpu.BackBufferResizing();
     }
 
 auto UIRenderer::DisplayScaleChanged(
         float scaleX,
         float scaleY) -> void {
-        ImGui_Renderer::DisplayScaleChanged(scaleX, scaleY);
+        m_UiContext.DisplayScaleChanged(scaleX, GetDeviceManager()->GetDeviceParams().supportExplicitDisplayScaling);
         m_UiDisplayScale = std::clamp(
             scaleX,
             UiMinimumDisplayScale,
@@ -1093,8 +1068,7 @@ auto UIRenderer::KeyboardUpdate(
         int scancode,
         int action,
         int mods) -> bool {
-        const bool captured = ImGui_Renderer::KeyboardUpdate(
-            key, scancode, action, mods);
+        const bool captured = RendererUiKeyboard(GetDeviceManager()->GetWindow(), key, action);
         if (key == GLFW_KEY_F8 && action == GLFW_PRESS && !ImGui::GetIO().WantTextInput)
         {
             SetDisplaySyncTestActive(!m_ui.DisplaySyncTestActive);
@@ -1107,14 +1081,14 @@ auto UIRenderer::KeyboardUpdate(
         const auto applyShortcutSetting = [this](
             SettingId id, UiSettingsValue value)
         {
-            std::string error;
+            SettingsSnapshotError error;
             if (!ApplySettingValue(id, value, error) &&
-                error.rfind("No change: ", 0u) != 0u)
+                error.MessageView().rfind("No change: ", 0u) != 0u)
             {
                 uvsr::log::warning(
                     "Keyboard setting %s failed: %s",
-                    std::string(SettingName(id)).c_str(),
-                    error.c_str());
+                    SettingName(id).data(),
+                    error.Message());
             }
         };
         if ((key == GLFW_KEY_ESCAPE ||
@@ -1148,28 +1122,31 @@ auto UIRenderer::KeyboardUpdate(
             const UiSettingsCommandDefinition* definition =
                 FindSettingsCommandDefinition(SettingId::UiZoom);
             UiSettingsValue current;
-            std::string error;
+            SettingsSnapshotError error;
             if (!definition ||
                 !ReadSettingValue(SettingId::UiZoom, current, error) ||
                 current.kind != UiSettingsValueKind::Token)
             {
                 uvsr::log::warning(
                     "Keyboard setting %s could not read its typed value: %s",
-                    std::string(SettingName(SettingId::UiZoom)).c_str(),
-                    error.c_str());
+                    SettingName(SettingId::UiZoom).data(),
+                    error.Message());
                 return true;
             }
             const auto begin = definition->typedDomain.tokens.begin();
             const auto end = begin + definition->typedDomain.tokenCount;
-            const auto found = std::find(begin, end, current.text);
+            const auto found = std::find(begin, end, current.Text());
             const std::size_t nextIndex = found == end
                 ? 0u
                 : (static_cast<std::size_t>(std::distance(begin, found)) +
                     1u) % definition->typedDomain.tokenCount;
-            applyShortcutSetting(
-                SettingId::UiZoom,
-                UiSettingsValue::Token(std::string(
-                    definition->typedDomain.tokens[nextIndex])));
+            UiSettingsValue next;
+            SettingsSnapshotError valueError;
+            if (next.SetToken(definition->typedDomain.tokens[nextIndex], valueError))
+                applyShortcutSetting(SettingId::UiZoom, std::move(next));
+            else
+                uvsr::log::warning("Keyboard setting %s failed: %s",
+                    SettingName(SettingId::UiZoom).data(), valueError.Message());
             return true;
         }
         const bool plainMaterialEditorShortcut =
@@ -1186,3 +1163,11 @@ auto UIRenderer::KeyboardUpdate(
 
         return captured;
     }
+
+bool UIRenderer::KeyboardCharInput(unsigned int unicode, int) { return RendererUiCharacter(unicode); }
+bool UIRenderer::MousePosUpdate(double x, double y) { return RendererUiMousePosition(x, y); }
+bool UIRenderer::MouseScrollUpdate(double x, double y) { return RendererUiMouseScroll(x, y); }
+bool UIRenderer::MouseButtonUpdate(int button, int action, int)
+{
+    return RendererUiMouseButton(GetDeviceManager()->GetWindow(), button, action);
+}

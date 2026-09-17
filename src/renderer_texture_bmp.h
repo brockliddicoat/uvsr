@@ -22,33 +22,18 @@
 
 #pragma once
 
-#if !defined(UVSR_RENDERER_BMP_ENCODER_ONLY)
-#include <nvrhi/nvrhi.h>
-#endif
-
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
+#include <stddef.h>
+#include <stdint.h>
 
 namespace uvsr
 {
-#if !defined(UVSR_RENDERER_BMP_ENCODER_ONLY)
-    class RendererCommonPasses;
-#endif
-
+    // path is terminated and borrowed through synchronous close. failure can
+    // leave a partial file; this writer does not publish atomically.
     [[nodiscard]] bool WriteRendererBmp(
-        const std::filesystem::path& path,
-        std::uint32_t width,
-        std::uint32_t height,
-        std::size_t sourceRowPitch,
-        const void* rgbaPixels);
+        const wchar_t* path,
+        uint32_t width,
+        uint32_t height,
+        size_t sourceRowPitch,
+        const void* rgbaPixels) noexcept;
 
-#if !defined(UVSR_RENDERER_BMP_ENCODER_ONLY)
-    [[nodiscard]] bool SaveRendererTextureBmp(
-        nvrhi::IDevice* device,
-        RendererCommonPasses* commonPasses,
-        nvrhi::ITexture* texture,
-        nvrhi::ResourceStates textureState,
-        const std::filesystem::path& path);
-#endif
 }

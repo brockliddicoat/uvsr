@@ -4,14 +4,14 @@
 
 namespace uvsr::launcher
 {
-    void Installer::ValidateLauncher(const Json& state, std::string_view installation) const
+    void Installer::ValidateLauncher(JsonValue state, std::string_view installation) const
     {
         ValidateState(state, installation, Component::Launcher);
         const auto hash = Text(state, "executableSha256");
         const auto root = paths.Launcher(hash);
         const auto marker = ReadRecord(root / LauncherPackageName);
         const auto markerState = LauncherStateFromMarker(marker, Flag(state, "desktopShortcut"));
-        ValidateState(markerState, installation, Component::Launcher); SameLauncherIdentity(markerState, state);
+        ValidateState(markerState, installation, Component::Launcher); SameLauncherIdentity(markerState.Root(), state);
         Require(Number(marker, "executableSize") > 0 && uint64_t(Number(marker, "executableSize")) <= MaximumLauncherBytes, "The launcher package size is invalid.");
         std::set<std::string> names;
         for (const auto& entry : fs::directory_iterator(root))
@@ -30,8 +30,8 @@ namespace uvsr::launcher
         LauncherInspection inspection; std::map<int64_t, Json> identities;
         const auto remember = [&](const Json& state)
         {
-            auto [found, inserted] = identities.emplace(Number(state, "releaseSequence"), state);
-            if (!inserted) SameLauncherIdentity(found->second, state);
+            auto [found, inserted] = identities.emplace(Number(state, "releaseSequence"), Clone(state));
+            if (!inserted) SameLauncherIdentity(found->second.Root(), state.Root());
         };
         try { inspection.recorded = ReadState(paths.state / "launcher-state.json", installation, Component::Launcher); }
         catch (const std::exception& error)
@@ -39,7 +39,7 @@ namespace uvsr::launcher
         if (inspection.recorded)
         {
             remember(*inspection.recorded);
-            try { ValidateLauncher(*inspection.recorded, installation); inspection.valid = inspection.recorded; }
+            try { ValidateLauncher(*inspection.recorded, installation); inspection.valid = Clone(inspection.recorded); }
             catch (const std::exception& error) { inspection.problem = error.what(); }
         }
         RejectReparseChain(paths.LauncherVersions());
@@ -76,9 +76,9 @@ namespace uvsr::launcher
                 // repair references even when an earlier run already renamed the executable.
                 if (migrate) shell.MigrateLegacyShortcuts(installation, *candidate);
                 remember(*candidate);
-                if (!inspection.valid || Number(*candidate, "releaseSequence") > Number(*inspection.valid, "releaseSequence")) inspection.valid = candidate;
+                if (!inspection.valid || Number(*candidate, "releaseSequence") > Number(*inspection.valid, "releaseSequence")) inspection.valid = std::move(candidate);
             }
-        if (!identities.empty()) inspection.highest = identities.rbegin()->second;
+        if (!identities.empty()) inspection.highest = std::move(identities.rbegin()->second);
         return inspection;
     }
     Json Installer::StageLauncher(std::string_view installation, const fs::path& source, int64_t sequence,
@@ -88,8 +88,8 @@ namespace uvsr::launcher
         const auto hash = HashFile(source), time = UtcNow();
         const auto size = fs::file_size(source);
         Require(size > 0 && size <= MaximumLauncherBytes, "The launcher executable size is invalid.");
-        Json state = JObject({{"schemaVersion", JNumber(1)}, {"productId", JString(ProductId)}, {"installationId", JString(std::string(installation))},
-            {"releaseSequence", JNumber(sequence)}, {"version", JString(std::string(version))}, {"executableSha256", JString(hash)},
+        Json state = JObject({{"schemaVersion", JNumber(1)}, {"productId", JString(ProductId)}, {"installationId", JString(installation)},
+            {"releaseSequence", JNumber(sequence)}, {"version", JString(version)}, {"executableSha256", JString(hash)},
             {"desktopShortcut", JBool(desktop)}, {"installedUtc", JString(time)}});
         ValidateState(state, installation, Component::Launcher);
         const auto destination = paths.Launcher(hash);
@@ -101,8 +101,8 @@ namespace uvsr::launcher
         const auto executable = stage / LauncherName;
         WinCheck(CopyFileW(source.c_str(), executable.c_str(), TRUE), "Stage the native launcher");
         VerifyFile(executable, size, hash); ValidateLauncherMetadata(executable, version);
-        auto marker = JObject({{"schemaVersion", JNumber(1)}, {"productId", JString(ProductId)}, {"installationId", JString(std::string(installation))},
-            {"releaseSequence", JNumber(sequence)}, {"version", JString(std::string(version))}, {"executableSha256", JString(hash)},
+        auto marker = JObject({{"schemaVersion", JNumber(1)}, {"productId", JString(ProductId)}, {"installationId", JString(installation)},
+            {"releaseSequence", JNumber(sequence)}, {"version", JString(version)}, {"executableSha256", JString(hash)},
             {"executableSize", JNumber(int64_t(size))}, {"installedUtc", JString(time)}});
         WriteRecord(stage / LauncherPackageName, marker);
         CheckCancelled(stop);
@@ -123,27 +123,27 @@ namespace uvsr::launcher
     std::string Installer::ActivateLauncher(std::string_view installation, const Json& requested,
         const std::optional<Json>& renderer, bool continuation, const Report& report)
     {
-        Json candidate = requested; ValidateLauncher(candidate, installation);
+        Json candidate = Clone(requested); ValidateLauncher(candidate, installation);
         auto existing = InspectLauncher(installation);
         Require(!existing.unreadable, "The installed launcher state is temporarily unavailable. No activation was changed.");
         if (existing.highest)
         {
             Require(Number(candidate, "releaseSequence") >= Number(*existing.highest, "releaseSequence"), "UVSR Launcher refused to activate an older release.");
-            if (Number(candidate, "releaseSequence") == Number(*existing.highest, "releaseSequence")) SameLauncherIdentity(candidate, *existing.highest);
+            if (Number(candidate, "releaseSequence") == Number(*existing.highest, "releaseSequence")) SameLauncherIdentity(candidate.Root(), existing.highest->Root());
         }
         const auto journalPath = paths.state / "launcher-update.json";
         if (fs::exists(journalPath))
         {
             auto pending = ReadRecord(journalPath); ValidateLauncherJournal(pending, installation);
             Require(Text(pending, "phase") == "awaiting-continuation" && Flag(pending, "continueUvsrUpdate"), "An earlier launcher update must finish recovery first.");
-            SameLauncherIdentity(Member(pending, "candidateState"), candidate);
+            SameLauncherIdentity(Member(pending, "candidateState"), candidate.Root());
             Set(pending, "candidateState", candidate); WriteRecord(journalPath, pending);
             WriteRecord(paths.state / "launcher-state.json", candidate);
             shell.Apply(installation, renderer, candidate, Text(pending, "transactionId"), [&](const Progress& progress) { Log(progress.detail, report); });
-            return Text(pending, "transactionId");
+            return std::string(Text(pending, "transactionId"));
         }
         const auto transaction = Guid();
-        Json journal = JObject({{"schemaVersion", JNumber(1)}, {"productId", JString(ProductId)}, {"installationId", JString(std::string(installation))},
+        Json journal = JObject({{"schemaVersion", JNumber(1)}, {"productId", JString(ProductId)}, {"installationId", JString(installation)},
             {"transactionId", JString(transaction)}, {"phase", JString("prepared")}, {"previousState", Nullable(existing.valid)},
             {"candidateState", candidate}, {"continueUvsrUpdate", JBool(continuation)}, {"startedUtc", JString(UtcNow())}});
         WriteRecord(journalPath, journal); Checkpoint("launcher-prepared");
@@ -153,7 +153,7 @@ namespace uvsr::launcher
         Set(journal, "phase", JString("shell-committed")); WriteRecord(journalPath, journal); Checkpoint("launcher-shell-committed");
         if (continuation) { Set(journal, "phase", JString("awaiting-continuation")); WriteRecord(journalPath, journal); }
         else fs::remove(journalPath);
-        Log("Activated UVSR Launcher " + Text(candidate, "version") + ".", report);
+        Log("Activated UVSR Launcher " + std::string(Text(candidate, "version")) + ".", report);
         return transaction;
     }
     void Installer::RecoverLauncher(std::string_view installation, const std::optional<Json>& renderer, const Report& report)
@@ -162,14 +162,14 @@ namespace uvsr::launcher
         if (!fs::exists(path)) return;
         auto journal = ReadRecord(path); ValidateLauncherJournal(journal, installation);
         auto previous = Optional(Member(journal, "previousState"));
-        const Json& candidate = Member(journal, "candidateState");
+        const Json candidate = json::Clone(Member(journal, "candidateState"));
         const auto status = [&](const std::optional<Json>& state)
         {
             if (!state) return PackageStatus::Missing;
             try { ValidateLauncher(*state, installation); return PackageStatus::Valid; }
             catch (const std::exception& error) { return Unverifiable(error) ? PackageStatus::Unverifiable : PackageStatus::Invalid; }
         };
-        auto action = DecideRecovery(Text(journal, "phase"), status(previous), status(candidate));
+        auto action = DecideRecovery(Text(journal, "phase"), status(previous), status(std::optional<Json>(Clone(candidate))));
         Require(action != RecoveryAction::RetryLater, "The interrupted launcher packages are temporarily unavailable. The recovery record was preserved.");
         if (action == RecoveryAction::ClearBrokenJournal)
         {
@@ -196,7 +196,7 @@ namespace uvsr::launcher
         Require(!existing.unreadable, "The installed launcher record is temporarily unavailable. No launcher files were changed.");
         if (existing.valid && Number(*existing.valid, "releaseSequence") >= LauncherSequence)
         {
-            auto candidate = *existing.valid; Set(candidate, "desktopShortcut", JBool(desktop));
+            auto candidate = std::move(*existing.valid); Set(candidate, "desktopShortcut", JBool(desktop));
             if (!existing.recorded || Serialize(candidate) != Serialize(*existing.recorded)) ActivateLauncher(installation, candidate, renderer, false, report);
             return candidate;
         }
@@ -226,7 +226,7 @@ namespace uvsr::launcher
             (requested && *requested != Text(journal, "transactionId"))) return {};
         const auto& candidate = Member(journal, "candidateState"); ValidateLauncher(candidate, *owner);
         if (!SamePath(services.executable, paths.Launcher(Text(candidate, "executableSha256")) / LauncherName)) return {};
-        return Text(journal, "transactionId");
+        return std::string(Text(journal, "transactionId"));
     }
     void Installer::CompleteContinuation(std::string_view transaction)
     {

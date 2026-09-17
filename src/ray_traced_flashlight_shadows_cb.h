@@ -7,7 +7,7 @@
 
 struct RayTracedFlashlightShadowConstants
 {
-    PlanarViewConstants view;
+    RendererViewConstants view;
 
     UVSR_GPU_FLOAT4 lightPositionAndRange;
     UVSR_GPU_FLOAT4 lightDirectionAndEmitterRadius;

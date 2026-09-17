@@ -1,10 +1,10 @@
 #include "directional_shadow_settings.h"
 #include "gpu_capabilities.h"
-#include "lighting_surface.h"
-#include "ray_traced_sky_visibility_result.h"
+#include "lighting_surface_nvrhi.h"
+#include "ray_traced_sky_visibility_result_nvrhi.h"
 #include "ray_traced_sky_visibility_settings.h"
-#include "renderer_geometry_passes.h"
-#include "renderer_receiver_texture_contract.h"
+#include "renderer_geometry_passes_nvrhi.h"
+#include "renderer_receiver_texture_contract_nvrhi.h"
 #include "world_space_representation_contract.h"
 
 

@@ -1,3 +1,9 @@
+include_guard(GLOBAL)
+include("${CMAKE_CURRENT_LIST_DIR}/VerifyDirectDependencyState.cmake")
+include(FetchContent)
+include("${CMAKE_CURRENT_LIST_DIR}/NoCppExceptions.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/PatchedSources.cmake")
+
 FetchContent_Declare(uvsr_cgltf
     URL "https://github.com/jkuhlmann/cgltf/archive/fa3b80fa762790192c9532b63c441627416ff300.zip"
     URL_HASH "SHA256=89351D82A140337AC876E018B091F26176FCC8C227479796993CE79BE33ED8A3"
@@ -29,43 +35,16 @@ set(UVSR_STB_TREE_DIGEST
 uvsr_verify_dependency_file(
     "${uvsr_stb_SOURCE_DIR}/LICENSE"
     "BEBFE904B14301657E4E5D655C811D51FD31B97C455B9CC2D8600D6BAC6CFF63" 2510)
+set(UVSR_STB_OVERRIDE_DIR "${CMAKE_BINARY_DIR}/uvsr_stb_overrides")
+set(UVSR_STB_PATCH_FILES "${CMAKE_CURRENT_LIST_DIR}/../overrides/stb-gif-iteration.patch")
+uvsr_stage_patched_sources("${uvsr_stb_SOURCE_DIR}" "${UVSR_STB_PATCH_FILES}"
+    "${UVSR_STB_OVERRIDE_DIR}" stb_image.h)
+set(UVSR_STB_STAGE_TREE_DIGEST
+    "0a37cbe6f761813a9f6fbe7d228bfd5bc4c050ffc03e125f9debd7f815e28948")
 add_library(stb INTERFACE)
-target_include_directories(stb SYSTEM INTERFACE "${uvsr_stb_SOURCE_DIR}")
+target_include_directories(stb SYSTEM INTERFACE "${UVSR_STB_OVERRIDE_DIR}" "${uvsr_stb_SOURCE_DIR}")
 set_property(TARGET stb PROPERTY UVSR_PINNED_SOURCE "${uvsr_stb_SOURCE_DIR}")
 set(UVSR_STB_LICENSE_SOURCE "${uvsr_stb_SOURCE_DIR}/LICENSE")
-
-FetchContent_Declare(uvsr_jsoncpp
-    URL "https://github.com/open-source-parsers/jsoncpp/archive/89e2973c754a9c02a49974d839779b151e95afd6.zip"
-    URL_HASH "SHA256=02F0804596C1E18C064D890AC9497FA17D585E822FCACF07FF8A8AA0B344A7BD"
-    DOWNLOAD_EXTRACT_TIMESTAMP FALSE
-    SOURCE_SUBDIR "uvsr-no-upstream-cmake")
-FetchContent_MakeAvailable(uvsr_jsoncpp)
-set(UVSR_JSONCPP_FILE_COUNT 252)
-set(UVSR_JSONCPP_TREE_DIGEST
-    "0fca9881e1f50c15ab94d761e0651c2e9d17b4bb2fb96fe2bb1bb27fb23c3f73")
-uvsr_verify_dependency_file(
-    "${uvsr_jsoncpp_SOURCE_DIR}/LICENSE"
-    "CEC0DB5F6D7ED6B3A72647BD50AED02E13C3377FD44382B96DC2915534C042AD" 2714)
-add_library(jsoncpp_static STATIC EXCLUDE_FROM_ALL
-    "${uvsr_jsoncpp_SOURCE_DIR}/src/lib_json/json_reader.cpp"
-    "${uvsr_jsoncpp_SOURCE_DIR}/src/lib_json/json_value.cpp"
-    "${uvsr_jsoncpp_SOURCE_DIR}/src/lib_json/json_writer.cpp")
-set(UVSR_JSONCPP_COMPATIBILITY_INCLUDE
-    "${CMAKE_CURRENT_BINARY_DIR}/uvsr_jsoncpp_compatibility")
-file(GENERATE
-    OUTPUT "${UVSR_JSONCPP_COMPATIBILITY_INCLUDE}/json/json-forwards.h"
-    CONTENT "#pragma once\n#include <json/forwards.h>\n")
-set(UVSR_TRANSITIONAL_JSONCPP_ALIAS_RECORDS
-    "${UVSR_JSONCPP_COMPATIBILITY_INCLUDE}/json/json-forwards.h|58DEF6D7AB28EC0C676F4766B121802979CEA6745676BFC9BB0A209211EBCDB9")
-# Donut's v1.9.6 amalgam names this upstream header json-forwards.h.
-# Delete the alias with the transitional Donut JSON caller.
-target_include_directories(jsoncpp_static SYSTEM BEFORE PUBLIC
-    "${UVSR_JSONCPP_COMPATIBILITY_INCLUDE}"
-    "${uvsr_jsoncpp_SOURCE_DIR}/include")
-target_compile_features(jsoncpp_static PUBLIC cxx_std_11)
-set_property(TARGET jsoncpp_static PROPERTY UVSR_PINNED_SOURCE
-    "${uvsr_jsoncpp_SOURCE_DIR}")
-set(UVSR_JSONCPP_LICENSE_SOURCE "${uvsr_jsoncpp_SOURCE_DIR}/LICENSE")
 
 FetchContent_Declare(uvsr_tinyexr
     URL "https://github.com/syoyo/tinyexr/archive/58a81c36caad469aed86441cc91080f23b496ffb.zip"
@@ -111,6 +90,24 @@ set_property(TARGET glfw PROPERTY UVSR_PINNED_SOURCE
     "${uvsr_glfw_SOURCE_DIR}")
 set(UVSR_GLFW_LICENSE_SOURCE "${uvsr_glfw_SOURCE_DIR}/LICENSE.md")
 
-foreach(target cgltf stb jsoncpp_static tinyexr glfw)
+foreach(target cgltf stb tinyexr glfw)
     set_target_properties("${target}" PROPERTIES FOLDER "Direct Dependencies")
 endforeach()
+
+# one implementation serves the engine and its image/native comparison fixtures.
+add_library(uvsr_stb_image STATIC EXCLUDE_FROM_ALL
+    "${CMAKE_CURRENT_LIST_DIR}/../src/renderer_stb_image.cpp")
+target_link_libraries(uvsr_stb_image PUBLIC stb)
+uvsr_disable_cpp_exceptions(uvsr_stb_image)
+
+add_library(uvsr_tinyexr STATIC EXCLUDE_FROM_ALL "${CMAKE_CURRENT_LIST_DIR}/../src/renderer_tinyexr.cpp")
+target_link_libraries(uvsr_tinyexr PRIVATE tinyexr)
+target_compile_features(uvsr_tinyexr PRIVATE cxx_std_17)
+target_compile_definitions(uvsr_tinyexr PRIVATE NOMINMAX _CRT_SECURE_NO_WARNINGS)
+uvsr_disable_cpp_exceptions(uvsr_tinyexr)
+if(MSVC)
+    target_compile_options(uvsr_tinyexr PRIVATE /fp:precise)
+endif()
+
+
+set_target_properties(uvsr_stb_image uvsr_tinyexr PROPERTIES FOLDER "Direct Dependencies")

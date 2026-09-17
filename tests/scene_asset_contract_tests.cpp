@@ -1,5 +1,6 @@
-#include "json_document.h"
+#include "json_legacy.h"
 #include "scene_catalog.h"
+#include "settings_snapshot_storage.h"
 #include "sha256.h"
 
 #include <DirectXCollision.h>
@@ -11,6 +12,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -31,7 +33,8 @@ namespace
     namespace fs = std::filesystem;
     using namespace DirectX;
     using Json = uvsr::json::Value;
-    using Kind = Json::Kind;
+    using JsonDocument = uvsr::json::Document;
+    using Kind = uvsr::json::Kind;
 
     void Require(bool value, std::string_view message)
     {
@@ -39,29 +42,51 @@ namespace
             throw std::runtime_error(std::string(message));
     }
 
-    const Json& Member(const Json& value, std::string_view name, Kind kind)
+    std::string Hash(std::string_view input)
     {
-        const auto* member = value.Find(name);
-        Require(member && member->kind == kind, "missing or mistyped JSON field: " + std::string(name));
-        return *member;
+        uvsr::Sha256Digest digest;
+        uvsr::Sha256Result result;
+        Require(uvsr::Sha256(input.data(), input.size(), digest, result), "cannot hash audit bytes");
+        return digest.text;
     }
 
-    uint64_t Integer(const Json& value, std::string_view name)
+    std::string HashFile(const fs::path& path)
     {
-        const double number = Member(value, name, Kind::Number).number;
+        uvsr::Sha256Digest digest;
+        uvsr::Sha256Result result;
+        Require(uvsr::Sha256File(path.c_str(), digest, result), "cannot hash asset bytes");
+        return digest.text;
+    }
+
+    Json Member(Json value, std::string_view name, Kind kind)
+    {
+        const auto member = value.Find(uvsr::json::View(name));
+        Require(member.IsValid() && member.Type() == kind, "missing or mistyped JSON field: " + std::string(name));
+        return member;
+    }
+    Json Member(const JsonDocument& value, std::string_view name, Kind kind)
+    { return Member(value.Root(), name, kind); }
+
+    uint64_t Integer(Json value, std::string_view name)
+    {
+        const double number = Member(value, name, Kind::Number).Number();
         Require(number >= 0 && number <= 1e12 && std::floor(number) == number, "invalid unsigned audit value");
         return static_cast<uint64_t>(number);
     }
+    uint64_t Integer(const JsonDocument& value, std::string_view name)
+    { return Integer(value.Root(), name); }
 
-    std::string Lower(std::string value)
+    std::string Lower(std::string_view input)
     {
+        std::string value(input);
         for (char& c : value)
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         return value;
     }
 
-    std::string Relative(std::string value)
+    std::string Relative(std::string_view input)
     {
+        std::string value(input);
         const fs::path path(value);
         Require(!value.empty() && value.find_first_of(":\\;\r\n?#") == std::string::npos &&
             value.find('\0') == std::string::npos && !path.is_absolute() && !path.has_root_path() &&
@@ -120,7 +145,7 @@ namespace
             "2fdb20e180585fffe00e0bff799ed825044a8262fdc08cd3a9e5aab7cb096cdc", 287, 269, false }
     };
 
-    Json Audit(const fs::path& path, std::string_view hash)
+    JsonDocument Audit(const fs::path& path, std::string_view hash)
     {
         std::ifstream stream(path, std::ios::binary);
         Require(bool(stream), "missing historical audit: " + path.string());
@@ -128,7 +153,7 @@ namespace
         Require(!stream.bad(), "cannot read historical audit");
         // Checkout line endings vary. All other bytes of these reviewed records are immutable.
         text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
-        Require(uvsr::Sha256(text) == hash, "historical audit changed: " + path.string());
+        Require(Hash(text) == hash, "historical audit changed: " + path.string());
         return uvsr::json::Parse(text);
     }
 
@@ -143,7 +168,7 @@ namespace
                 "708c9ad36adac62d13bd61ddf47d58d2b892b9e318bd87da93ae9e55e2b5e680" }
         };
         for (const auto& [path, hash] : legal)
-            Require(uvsr::Sha256File(sourceRoot / path) == hash, "bundled source attribution or license changed");
+            Require(HashFile(sourceRoot / path) == hash, "bundled source attribution or license changed");
         const auto repository = sourceRoot.parent_path().parent_path();
         Require(!fs::exists(repository / "tools/repack_gltf_buffers.py") &&
             !fs::exists(repository / "tools/import_san_miguel.py"), "retired conversion tool was restored");
@@ -177,7 +202,7 @@ namespace
         Require(!mapFile.bad() && !expected.empty(), "runtime scene map is empty or unreadable");
         Require(Files(stagedRoot, true) == expected, "staged scene inventory differs from the runtime map");
         for (const auto& relative : expected)
-            Require(uvsr::Sha256File(sourceRoot / relative) == uvsr::Sha256File(stagedRoot / relative),
+            Require(HashFile(sourceRoot / relative) == HashFile(stagedRoot / relative),
                 "staged asset bytes differ from source: " + relative);
         Require(mappings["bin/licenses/Amazon-Lumberyard-Bistro.txt"] ==
                 "assets/scenes/bistro_interior_retextured/LICENSE.txt" &&
@@ -185,23 +210,23 @@ namespace
             "runtime package omits a retained scene license");
     }
 
-    Json CheckRepack(const fs::path& root, const Scene& scene)
+    JsonDocument CheckRepack(const fs::path& root, const Scene& scene)
     {
         const auto provenance = Audit(root / "source-provenance.json", scene.provenanceHash);
-        Require(Member(provenance, "scene", Kind::String).string == scene.directory, "provenance scene mismatch");
-        const auto report = Audit(root / "components/buffer-repack-report.json", scene.repackHash);
-        const auto& outputs = Member(report, "files", Kind::Array).array;
+        Require(uvsr::json::Borrow(Member(provenance, "scene", Kind::String).Text()) == scene.directory, "provenance scene mismatch");
+        auto report = Audit(root / "components/buffer-repack-report.json", scene.repackHash);
+        const auto& outputs = Member(report, "files", Kind::Array);
         std::set<std::string> reported;
         uint64_t bufferBytes = 0;
         size_t buffers = 0;
-        for (const auto& output : outputs)
+        for (Json output = outputs.First(); output.IsValid(); output = output.Next())
         {
-            const auto path = Relative(Member(output, "path", Kind::String).string);
+            const auto path = Relative(uvsr::json::Borrow(Member(output, "path", Kind::String).Text()));
             const auto bytes = Integer(output, "bytes");
             Require(reported.insert(path).second, "repack lists an output twice");
             Require(fs::file_size(root / "components" / path) == bytes &&
-                uvsr::Sha256File(root / "components" / path) ==
-                    Lower(Member(output, "sha256", Kind::String).string),
+                HashFile(root / "components" / path) ==
+                    Lower(uvsr::json::Borrow(Member(output, "sha256", Kind::String).Text())),
                 "repacked output differs from its audited bytes: " + path);
             if (fs::path(path).extension() == ".bin")
             {
@@ -221,8 +246,8 @@ namespace
         {
             const auto imported = Audit(root / "blender-import-report.json",
                 "21694870a8584b0854b96737b3955dc49ffe814991633a5d82798bb214911a3b");
-            Require(Member(imported, "outputGltfSha256", Kind::String).string ==
-                Member(report, "sourceContainerSha256", Kind::String).string, "Blender/repack chain is broken");
+            Require(uvsr::json::Borrow(Member(imported, "outputGltfSha256", Kind::String).Text()) ==
+                uvsr::json::Borrow(Member(report, "sourceContainerSha256", Kind::String).Text()), "Blender/repack chain is broken");
         }
         return report;
     }
@@ -378,7 +403,7 @@ namespace
         return path;
     }
 
-    void CheckGltf(const fs::path& componentRoot, const Scene& scene, const Json& report)
+    void CheckGltf(const fs::path& componentRoot, const Scene& scene, const JsonDocument& report)
     {
         cgltf_options options{};
         cgltf_data* raw = nullptr;
@@ -421,19 +446,22 @@ namespace
     }
 
     void CheckDescriptor(const fs::path& stagedRoot, const Scene& scene,
-        const std::vector<uvsr::SceneCatalogEntry>& catalog)
+        const uvsr::SceneCatalog& catalog)
     {
         const auto path = stagedRoot / scene.directory / (std::string(scene.directory) + ".scene.json");
         const auto descriptor = uvsr::json::Read(path);
         const auto model = "components/" + std::string(scene.model);
-        const auto& models = Member(descriptor, "models", Kind::Array).array;
-        const auto& graph = Member(descriptor, "graph", Kind::Array).array;
-        Require(Member(descriptor, "displayName", Kind::String).string == scene.label && models.size() == 1 &&
-            models[0].kind == Kind::String && models[0].string == model && graph.size() == 1 &&
-            Member(graph[0], "model", Kind::Number).number == 0, "descriptor lost its single model instance");
-        const auto* entry = uvsr::FindSceneCatalogEntry(catalog, path.generic_string());
-        Require(entry && entry->DisplayName == scene.label && entry->InitialCamera &&
-            !uvsr::FindSceneCatalogEntry(catalog, (path.parent_path() / model).generic_string()),
+        const auto& models = Member(descriptor, "models", Kind::Array);
+        const auto& graph = Member(descriptor, "graph", Kind::Array);
+        Require(uvsr::json::Borrow(Member(descriptor, "displayName", Kind::String).Text()) == scene.label && models.Count() == 1 &&
+            models.At(0).Type() == Kind::String && uvsr::json::Borrow(models.At(0).Text()) == model && graph.Count() == 1 &&
+            Member(graph.At(0), "model", Kind::Number).Number() == 0, "descriptor lost its single model instance");
+        const uvsr::SceneCatalogEntry* entry = nullptr;
+        const uvsr::SceneCatalogEntry* component = nullptr;
+        uvsr::SettingsSnapshotError error;
+        Require(uvsr::FindSceneCatalogEntry(catalog, path.generic_string(), entry, error) &&
+            uvsr::FindSceneCatalogEntry(catalog, (path.parent_path() / model).generic_string(), component, error), error.Message());
+        Require(entry && entry->DisplayName == scene.label && entry->InitialCamera && !component,
             "production catalog lost the descriptor or exposed its component");
         const auto& rawCamera = Member(descriptor, "initialCamera", Kind::Object);
         const auto& camera = *entry->InitialCamera;
@@ -443,13 +471,13 @@ namespace
         const std::array<std::array<float, 3>, 3> actual = { camera.Position, camera.Direction, camera.Up };
         for (size_t axis = 0; axis < expected.size(); ++axis)
         {
-            const auto& values = Member(rawCamera, expected[axis].first, Kind::Array).array;
-            Require(values.size() == 3, "camera vector has the wrong dimension");
+            const auto& values = Member(rawCamera, expected[axis].first, Kind::Array);
+            Require(values.Count() == 3, "camera vector has the wrong dimension");
             for (size_t i = 0; i < 3; ++i)
-                Require(values[i].kind == Kind::Number && std::abs(values[i].number - expected[axis].second[i]) < 1e-5 &&
+                Require(values.At(i).Type() == Kind::Number && std::abs(values.At(i).Number() - expected[axis].second[i]) < 1e-5 &&
                     std::abs(actual[axis][i] - expected[axis].second[i]) < 1e-5f, "audited camera pose changed");
         }
-        Require(std::abs(Member(rawCamera, "verticalFovDegrees", Kind::Number).number -
+        Require(std::abs(Member(rawCamera, "verticalFovDegrees", Kind::Number).Number() -
                 scene.camera.VerticalFovDegrees) < 1e-4 &&
             std::abs(camera.VerticalFovDegrees - scene.camera.VerticalFovDegrees) < 1e-4f &&
             std::abs(XMVectorGetX(XMVector3Dot(Vector(camera.Direction), Vector(camera.Up)))) < 1e-5f,
@@ -475,8 +503,11 @@ int main(int argc, char** argv)
             if (extension == ".json" || extension == ".gltf" || extension == ".glb")
                 discovered.push_back((staged / path).generic_string());
         }
-        const auto catalog = uvsr::BuildSceneCatalog(staged, discovered);
-        Require(catalog.size() == std::size(Scenes), "scene picker does not contain exactly the two retained scenes");
+        const std::vector<std::string_view> views(discovered.begin(), discovered.end());
+        uvsr::SceneCatalog catalog;
+        uvsr::SettingsSnapshotError error;
+        Require(uvsr::BuildSceneCatalog(staged.native(), {views.data(), views.size()}, catalog, error), error.Message());
+        Require(catalog.Count() == std::size(Scenes), "scene picker does not contain exactly the two retained scenes");
         for (const auto& scene : Scenes)
         {
             const auto report = CheckRepack(source / scene.directory, scene);

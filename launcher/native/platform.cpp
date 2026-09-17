@@ -82,32 +82,38 @@ namespace uvsr::launcher
             time.substr(11,2) + time.substr(14,2) + time.substr(17,2) + "-" + Guid().substr(0,8);
     }
     std::string QuoteJson(std::string_view text) { return "\"" + json::Escape(text) + "\""; }
-    Json JString(std::string text) { Json v; v.kind = Json::Kind::String; v.string = std::move(text); return v; }
-    Json JNumber(int64_t value) { Json v; v.kind = Json::Kind::Number; v.string = std::to_string(value); return v; }
-    Json JBool(bool value) { Json v; v.kind = Json::Kind::Boolean; v.boolean = value; return v; }
-    Json JObject(std::initializer_list<std::pair<std::string, Json>> values)
-    { Json v; v.kind = Json::Kind::Object; v.object = values; return v; }
-    std::string Serialize(const Json& value)
+    json::Seed JString(std::string_view text) { return json::Seed::String(json::View(text)); }
+    json::Seed JNumber(int64_t value) { return json::Seed::Integer(value); }
+    json::Seed JBool(bool value) { return json::Seed::Boolean(value); }
+    Json JObject(std::initializer_list<json::Member> values)
     {
-        if (value.kind == Json::Kind::String) return QuoteJson(value.string);
-        if (value.kind == Json::Kind::Number) return value.string;
-        if (value.kind == Json::Kind::Boolean) return value.boolean ? "true" : "false";
-        if (value.kind == Json::Kind::Null) return "null";
-        std::string result = value.kind == Json::Kind::Object ? "{" : "[";
-        bool first = true;
-        const auto append = [&](std::string text) { if (!first) result += ','; first = false; result += text; };
-        for (const auto& [name, member] : value.object) append(QuoteJson(name) + ':' + Serialize(member));
-        for (const auto& item : value.array) append(Serialize(item));
-        return result + (value.kind == Json::Kind::Object ? "}" : "]");
+        Json result; json::Error error;
+        if (!result.MakeObject(values.begin(), values.size(), error)) json::Throw(error);
+        return result;
     }
-    const std::string& Text(const Json& value, std::string_view name) { return String(Member(value, name), name); }
-    int64_t Number(const Json& value, std::string_view name) { return Integer(Member(value, name), name); }
-    bool Flag(const Json& value, std::string_view name) { return Boolean(Member(value, name), name); }
-    void Set(Json& value, std::string_view name, Json replacement)
+    Json JArray()
     {
-        for (auto& member : value.object)
-            if (member.first == name) { member.second = std::move(replacement); return; }
-        throw std::runtime_error("Missing state field " + std::string(name));
+        Json result; json::Error error;
+        if (!result.Assign(json::Seed::Array(), error)) json::Throw(error);
+        return result;
+    }
+    void Append(Json& array, json::Seed value)
+    {
+        json::Error error;
+        if (!array.Append(value, error)) json::Throw(error);
+    }
+    Json Clone(const Json& value) { return json::Clone(value.Root()); }
+    std::optional<Json> Clone(const std::optional<Json>& value)
+    { return value ? std::optional<Json>(Clone(*value)) : std::nullopt; }
+    std::string Serialize(const Json& value) { return json::Serialize(value.Root()); }
+    std::string_view Text(JsonValue value, std::string_view name) { return String(Member(value, name), name); }
+    int64_t Number(JsonValue value, std::string_view name) { return Integer(Member(value, name), name); }
+    bool Flag(JsonValue value, std::string_view name) { return Boolean(Member(value, name), name); }
+    void Set(Json& value, std::string_view name, json::Seed replacement)
+    {
+        if (!value.Root().Find(json::View(name)).IsValid()) throw json::LegacyError("Missing state field " + std::string(name));
+        json::Error error;
+        if (!value.Replace(json::View(name), replacement, error)) json::Throw(error);
     }
     void RejectReparseChain(const fs::path& input)
     {
@@ -168,13 +174,19 @@ namespace uvsr::launcher
     Json ReadRecord(const fs::path& path, uint64_t maximum)
     {
         RejectReparseChain(path);
-        Handle file(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr));
-        WinCheck(file.value != INVALID_HANDLE_VALUE, "Open state record");
-        LARGE_INTEGER size{}; WinCheck(GetFileSizeEx(file, &size), "Measure state record");
-        Require(size.QuadPart >= 0 && uint64_t(size.QuadPart) <= maximum && uint64_t(size.QuadPart) <= UINT32_MAX, "The state record exceeds its limit.");
-        std::string bytes(size_t(size.QuadPart), '\0'); DWORD count = 0;
-        WinCheck(::ReadFile(file, bytes.data(), DWORD(bytes.size()), &count, nullptr) && count == bytes.size(), "Read state record");
-        return json::Parser(bytes, 32).Parse();
+        FileBytes bytes; FileReadResult result;
+        if (!ReadFileBytes(path.c_str(), maximum < UINT32_MAX ? maximum : UINT32_MAX, bytes, result))
+        {
+            Require(result.error != FileReadError::TooLarge, "The state record exceeds its limit.");
+            const char* operation = result.error == FileReadError::Missing || result.error == FileReadError::Open ?
+                "Open state record" : result.error == FileReadError::Measure ? "Measure state record" : "Read state record";
+            const DWORD code = result.error == FileReadError::OutOfMemory ? ERROR_NOT_ENOUGH_MEMORY :
+                result.error == FileReadError::NotRegular ? ERROR_INVALID_DATA :
+                result.error == FileReadError::InvalidPath ? ERROR_INVALID_NAME : result.systemCode;
+            SetLastError(code ? code : ERROR_READ_FAULT);
+            WinCheck(FALSE, operation);
+        }
+        return json::Parse({bytes.Data(), bytes.Size()}, 32);
     }
     void WriteAtomic(const fs::path& path, std::string_view bytes)
     {
@@ -331,8 +343,8 @@ namespace uvsr::launcher
             auto marker = ReadRecord(root / OwnerName);
             RequireExactObject(marker, {"schemaVersion", "productId", "installationId"}, "owner marker");
             const auto id = Text(marker, "installationId");
-            Require(Number(marker, "schemaVersion") == 1 && Lower(Text(marker, "productId")) == ProductId && IsGuid(id), "The installation ownership record is invalid.");
-            return id;
+            Require(Number(marker, "schemaVersion") == 1 && Lower(std::string(Text(marker, "productId"))) == ProductId && IsGuid(id), "The installation ownership record is invalid.");
+            return std::string(id);
         }
     }
     std::optional<std::string> InspectOwnership(const Paths& p)
@@ -345,7 +357,7 @@ namespace uvsr::launcher
     {
         auto existing = RootOwner(root);
         Require(!existing || *existing == installation, "UVSR ownership records do not match.");
-        if (!existing) WriteRecord(root / OwnerName, JObject({{"schemaVersion", JNumber(1)}, {"productId", JString(ProductId)}, {"installationId", JString(std::string(installation))}}));
+        if (!existing) WriteRecord(root / OwnerName, JObject({{"schemaVersion", JNumber(1)}, {"productId", JString(ProductId)}, {"installationId", JString(installation)}}));
     }
     std::string EnsureOwnership(const Paths& p)
     {

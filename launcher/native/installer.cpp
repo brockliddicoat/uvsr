@@ -17,7 +17,7 @@ namespace uvsr::launcher
         }
         if (report) report({"", std::string(message), {}, true});
     }
-    void Installer::ValidateRendererState(const Json& state, std::string_view installation) const
+    void Installer::ValidateRendererState(JsonValue state, std::string_view installation) const
     {
         ValidateState(state, installation, Component::Renderer);
         const auto package = ValidatePackage(paths.Renderer(Text(state, "activeVersionId")));
@@ -40,7 +40,7 @@ namespace uvsr::launcher
             Require(snapshot.state.has_value(), "The active renderer record is missing.");
             ValidateRendererState(*snapshot.state, *snapshot.installation);
             snapshot.executable = paths.Renderer(Text(*snapshot.state, "activeVersionId")) / "bin" / EngineName;
-            snapshot.summary = "UVSR Engine " + Text(*snapshot.state, "engineVersion") + " is ready; settings " + Text(*snapshot.state, "settingsHash") + ".";
+            snapshot.summary = "UVSR Engine " + std::string(Text(*snapshot.state, "engineVersion")) + " is ready; settings " + std::string(Text(*snapshot.state, "settingsHash")) + ".";
         }
         catch (const std::exception&)
         { snapshot.damaged = true; snapshot.summary = "UVSR needs to be reinstalled before it can launch."; }
@@ -64,7 +64,7 @@ namespace uvsr::launcher
         services.platform(); OperationLock operation(Wide(lockSuffix));
         auto owner = InspectOwnership(paths); if (!owner) return;
         EnsureOwnership(paths);
-        auto snapshot = Inspect(); auto renderer = snapshot.damaged ? std::nullopt : snapshot.state;
+        auto snapshot = Inspect(); auto renderer = snapshot.damaged ? std::nullopt : Clone(snapshot.state);
         RecoverLauncher(*owner, renderer, report);
         auto launcher = EnsureLauncher(*owner, renderer, desktop, stop, report);
         RecoverRenderer(*owner, launcher, report);
@@ -75,8 +75,8 @@ namespace uvsr::launcher
         services.platform(); OperationLock operation(Wide(lockSuffix));
         const auto owner = EnsureOwnership(paths);
         auto snapshot = Inspect();
-        RecoverLauncher(owner, snapshot.damaged ? std::nullopt : snapshot.state, report);
-        try { EnsureLauncher(owner, snapshot.damaged ? std::nullopt : snapshot.state, desktop, stop, report); }
+        RecoverLauncher(owner, snapshot.damaged ? std::nullopt : Clone(snapshot.state), report);
+        try { EnsureLauncher(owner, snapshot.damaged ? std::nullopt : Clone(snapshot.state), desktop, stop, report); }
         catch (const std::exception& error) { CheckCancelled(stop); Log(std::string("Local launcher repair deferred until update selection: ") + error.what(), report); }
         snapshot = Inspect();
         Updates updates;
@@ -98,9 +98,9 @@ namespace uvsr::launcher
                 }
                 else
                 {
-                    const auto inspection = InspectLauncher(owner);
+                    auto inspection = InspectLauncher(owner);
                     Require(!inspection.unreadable, "The installed launcher identity is temporarily unavailable.");
-                    auto current = inspection.highest;
+                    auto current = std::move(inspection.highest);
                     if (!current || Number(*current, "releaseSequence") < LauncherSequence)
                         current = JObject({{"releaseSequence", JNumber(LauncherSequence)}, {"version", JString(LauncherVersion)}, {"executableSha256", JString(HashFile(services.executable))}});
                     result.current = Text(*current, "version");
@@ -125,7 +125,7 @@ namespace uvsr::launcher
     {
         services.platform(); OperationLock operation(Wide(lockSuffix));
         Require(feed.component == Component::Launcher, "The selected update is not a launcher feed.");
-        auto owner = EnsureOwnership(paths); auto snapshot = Inspect(); auto renderer = snapshot.damaged ? std::nullopt : snapshot.state;
+        auto owner = EnsureOwnership(paths); auto snapshot = Inspect(); auto renderer = snapshot.damaged ? std::nullopt : Clone(snapshot.state);
         RecoverLauncher(owner, renderer, report);
         auto inspection = InspectLauncher(owner);
         Require(!inspection.unreadable, "The installed launcher identity is unavailable.");
@@ -156,7 +156,7 @@ namespace uvsr::launcher
                 (phase == "download" || phase == "package" || phase == "activate" || phase == "shell-activation" || phase == "shell-update" || phase == "uninstall-pending"), "The interrupted renderer transaction has an invalid ownership record.");
             if (auto previous = Optional(Member(journal, "previousState"))) ValidateState(*previous, owner, Component::Renderer);
             const auto& candidate = Member(journal, "candidateVersionId");
-            Require(candidate.kind == Json::Kind::Null || (candidate.kind == Json::Kind::String && IsVersionId(candidate.string)), "The interrupted renderer candidate is invalid.");
+            Require(candidate.Type() == json::Kind::Null || (candidate.Type() == json::Kind::String && IsVersionId(json::Borrow(candidate.Text()))), "The interrupted renderer candidate is invalid.");
             (void)Text(journal, "startedUtc");
         }
     }
@@ -181,7 +181,7 @@ namespace uvsr::launcher
         catch (const std::exception& error) { if (Unverifiable(error)) throw; }
         bool keep = false;
         const auto& candidate = Member(journal, "candidateVersionId");
-        if (current && (phase == "shell-update" || (candidate.kind == Json::Kind::String && Text(*current, "activeVersionId") == candidate.string)))
+        if (current && (phase == "shell-update" || (candidate.Type() == json::Kind::String && Text(*current, "activeVersionId") == json::Borrow(candidate.Text()))))
             try { ValidateRendererState(*current, owner); shell.Apply(owner, current, launcher, Text(journal, "transactionId"), [&](const Progress& progress) { Log(progress.detail, report); }); keep = true; }
             catch (const std::exception& error) { if (Unverifiable(error)) throw; }
         if (!keep)
@@ -190,7 +190,7 @@ namespace uvsr::launcher
             bool healthy = false;
             if (previous) try { ValidateRendererState(*previous, owner); healthy = true; }
                 catch (const std::exception& error) { if (Unverifiable(error)) throw; }
-            shell.Apply(owner, healthy ? previous : std::nullopt, launcher, Text(journal, "transactionId"), [&](const Progress& progress) { Log(progress.detail, report); });
+            shell.Apply(owner, healthy ? Clone(previous) : std::nullopt, launcher, Text(journal, "transactionId"), [&](const Progress& progress) { Log(progress.detail, report); });
         }
         fs::remove(path); Log("Recovered the interrupted renderer activation.", report);
     }
@@ -201,8 +201,8 @@ namespace uvsr::launcher
         { auto owner = InspectOwnership(paths); Require(owner.has_value(), "UVSR is not installed for this Windows user."); return ScheduleUninstall(*owner, report); }
         const auto owner = EnsureOwnership(paths);
         Require(!fs::exists(paths.operations / "uninstall.json"), "An uninstall is pending. Close earlier launcher windows and reopen UVSR Launcher.");
-        auto snapshot = Inspect(); RecoverLauncher(owner, snapshot.damaged ? std::nullopt : snapshot.state, report);
-        auto launcher = EnsureLauncher(owner, snapshot.damaged ? std::nullopt : snapshot.state, desktop, stop, report);
+        auto snapshot = Inspect(); RecoverLauncher(owner, snapshot.damaged ? std::nullopt : Clone(snapshot.state), report);
+        auto launcher = EnsureLauncher(owner, snapshot.damaged ? std::nullopt : Clone(snapshot.state), desktop, stop, report);
         RecoverRenderer(owner, launcher, report);
         const auto statePath = paths.state / "state.json", journalPath = paths.state / "transaction.json";
         const bool existed = fs::exists(statePath);
@@ -228,13 +228,13 @@ namespace uvsr::launcher
         const auto transaction = Guid();
         Json journal = JObject({{"schemaVersion", JNumber(1)}, {"installationId", JString(owner)}, {"transactionId", JString(transaction)},
             {"operation", JNumber(int(requested))}, {"phase", JString(shellOnly ? "shell-update" : "download")},
-            {"candidateVersionId", shellOnly ? Member(*previous, "activeVersionId") : Json{}}, {"previousState", Nullable(previous)}, {"startedUtc", JString(UtcNow())}});
+            {"candidateVersionId", shellOnly ? json::Seed(Member(*previous, "activeVersionId")) : json::Seed{}}, {"previousState", Nullable(previous)}, {"startedUtc", JString(UtcNow())}});
         WriteRecord(journalPath, journal); Checkpoint("renderer-download");
         bool activated = false, committed = false;
         Json candidate;
         try
         {
-            if (shellOnly) { candidate = *previous; Set(candidate, "desktopShortcut", JBool(desktop)); }
+            if (shellOnly) { candidate = Clone(*previous); Set(candidate, "desktopShortcut", JBool(desktop)); }
             else
             {
                 auto archive = paths.state / "downloads" / ("renderer-" + feed.hash + ".zip");
@@ -259,7 +259,7 @@ namespace uvsr::launcher
             CheckCancelled(stop); if (report) report({"Installing UVSR Engine", "Activating the verified renderer and Windows shortcuts.", {}, false});
             WriteRecord(statePath, candidate); activated = true; Checkpoint("renderer-state-activated");
             Set(journal, "phase", JString(shellOnly ? "shell-update" : "shell-activation")); WriteRecord(journalPath, journal);
-            shell.Apply(owner, candidate, launcher, transaction, [&](const Progress& progress) { Log(progress.detail, report); }); committed = true; Checkpoint("renderer-shell-committed");
+            shell.Apply(owner, std::optional<Json>(Clone(candidate)), launcher, transaction, [&](const Progress& progress) { Log(progress.detail, report); }); committed = true; Checkpoint("renderer-shell-committed");
         }
         catch (...)
         {
@@ -269,12 +269,12 @@ namespace uvsr::launcher
                 if (oldBytes) WriteAtomic(statePath, *oldBytes); else { RejectReparseChain(statePath); fs::remove(statePath); }
                 bool healthy = false;
                 if (previous) try { ValidateRendererState(*previous, owner); healthy = true; } catch (...) {}
-                shell.Apply(owner, healthy ? previous : std::nullopt, launcher, transaction, [&](const Progress& progress) { Log(progress.detail, report); });
+                shell.Apply(owner, healthy ? Clone(previous) : std::nullopt, launcher, transaction, [&](const Progress& progress) { Log(progress.detail, report); });
             }
             if (!committed) { shell.RemoveStaged(transaction); fs::remove(journalPath); }
             std::rethrow_exception(failure);
         }
-        try { fs::remove(journalPath); Sweep(owner, candidate, launcher, report); }
+        try { fs::remove(journalPath); Sweep(owner, std::optional<Json>(Clone(candidate)), launcher, report); }
         catch (const std::exception& error) { Log(std::string("Cleanup was deferred: ") + error.what(), report); }
         const auto verb = requested == Operation::Install ? "installed" : requested == Operation::Reinstall ? "reinstalled" : "updated";
         const auto message = shellOnly ? "UVSR Engine is already at the newest trusted package." : "UVSR was " + std::string(verb) + " successfully.";

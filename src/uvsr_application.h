@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tone_mapping_settings.h"
+#include "gpu_adapter_catalog.h"
 
 #include "auto_exposure.h"
 #include "camera_controllers.h"
@@ -14,56 +15,17 @@
 #include "pixel_zoom.h"
 #include "ray_traced_sky_visibility_settings.h"
 #include "fast_approximate_aa_options.h"
-#include "world_space_representation.h"
+#include "world_space_representation_nvrhi.h"
+#include "renderer_scene.h"
+#include "renderer_scene_ray.h"
+#include "renderer_scene_material_mode.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
-#include <string>
-#include <vector>
-
-namespace donut::engine
-{
-    class Material;
-    class SceneGraphNode;
-}
 
 namespace uvsr
 {
-    enum class PathTracingSceneDomainStatus : std::uint8_t
-    {
-        Supported,
-        BlendedGeometryOmitted,
-        Unsupported
-    };
-
-    struct GpuAdapterChoice
-    {
-        int adapterIndex = -1;
-        std::string name;
-        std::uint64_t dedicatedVideoMemory = 0;
-        std::uint32_t vendorId = 0;
-        std::uint32_t deviceId = 0;
-        bool usesSharedSystemMemory = false;
-        std::uint32_t highestShaderModel = 0;
-        std::uint32_t highestFeatureLevel = 0;
-        std::uint32_t rootSignatureVersion = 0;
-        std::uint32_t resourceBindingTier = 0;
-        std::uint32_t rayTracingTier = 0;
-        std::uint32_t adapterLuidLowPart = 0;
-        std::int32_t adapterLuidHighPart = 0;
-        std::uint64_t driverVersion = 0;
-    };
-
-    enum class WhiteWorldMode
-    {
-        Off,
-        On,
-        PreserveDetail,
-        PreserveLighting
-    };
-
     enum class PbrLightingDebugView : std::uint32_t
     {
         None,
@@ -93,7 +55,7 @@ namespace uvsr
         DisplayPresentationSettings Presentation = DefaultDisplayPresentationSettings;
         bool OverrideVisualMaxes = false;
         PixelZoomMode PixelZoom = PixelZoomMode::Off;
-        std::vector<GpuAdapterChoice> GpuAdapterChoices;
+        GpuAdapterCatalog GpuAdapterChoices;
         int ActiveGpuAdapterIndex = -1;
         LightingSolution Lighting = LightingSolution::RayMarching;
         PathTracingSettings PathTracing;
@@ -121,8 +83,8 @@ namespace uvsr
         AutoExposureSettings AutoExposure;
         PbrLightingDebugView LightingDebugView = PbrLightingDebugView::None;
         CameraMode Camera = CameraMode::ThirdPerson;
-        std::shared_ptr<donut::engine::Material> SelectedMaterial;
-        std::shared_ptr<donut::engine::SceneGraphNode> SelectedNode;
+        RendererSceneHandle SelectedMaterial;
+        RendererSceneHandle SelectedNode;
         bool ShowMaterialDrawer = false;
         bool CopyScreenshotToClipboard = false;
 

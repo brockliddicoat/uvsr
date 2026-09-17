@@ -1,25 +1,16 @@
 #pragma once
 
 #include "settings_snapshot_transaction.h"
+#include "settings_snapshot.h"
+#include "settings_snapshot_decoder.h"
+#include "settings_snapshot_selectors.h"
 
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
-#include <string>
 #include <string_view>
-#include <vector>
 
 namespace uvsr
 {
-    [[nodiscard]] std::string NormalizeCommandAscii(
-        std::string_view value,
-        bool collapseSeparators = false);
-    [[nodiscard]] bool TryParseCommandInteger(
-        std::string_view value,
-        std::int64_t& parsed);
-    [[nodiscard]] bool RejectUnchangedCommandMutation(
-        std::string_view path,
-        std::string& error);
     [[nodiscard]] inline const UiSettingsCommandDefinition*
         FindSettingsCommandDefinition(SettingId id) noexcept
     {
@@ -31,112 +22,49 @@ namespace uvsr
         }
         return nullptr;
     }
-    [[nodiscard]] std::filesystem::path
-        GetSettingsSnapshotCatalogPath();
-
-    struct SettingsSnapshotAdapterOption
-    {
-        std::int64_t index = -1;
-        std::string name;
-    };
-
-    struct SettingsSnapshotSceneOption
-    {
-        std::string fileName;
-        std::string displayName;
-        std::string runtimeFileName;
-    };
-
-    struct SettingsSnapshotLightOption
-    {
-        std::size_t index = 0u;
-        std::string identity;
-    };
-
-    struct SettingsSnapshotMaterialOption
-    {
-        std::uint32_t id = 0u;
-        std::string name;
-    };
-
-    [[nodiscard]] std::string FormatSettingsSnapshotAdapterToken(
-        std::int64_t index);
-    [[nodiscard]] std::string FormatSettingsSnapshotSceneToken(
-        std::string_view fileName);
-    [[nodiscard]] std::string FormatSettingsSnapshotLightToken(
-        std::size_t index,
-        std::string_view identity);
-    [[nodiscard]] std::string FormatSettingsSnapshotMaterialToken(
-        bool none,
-        std::uint32_t id = 0u);
-
-    [[nodiscard]] bool ResolveSettingsSnapshotAdapterToken(
-        std::string_view requested,
-        const std::vector<SettingsSnapshotAdapterOption>& options,
-        std::int64_t& index,
-        std::string& canonicalToken,
-        std::string& error);
-    [[nodiscard]] bool ResolveSettingsSnapshotSceneToken(
-        std::string_view requested,
-        const std::vector<SettingsSnapshotSceneOption>& options,
-        std::string& fileName,
-        std::string& canonicalToken,
-        std::string& error);
-    [[nodiscard]] bool ResolveSettingsSnapshotLightToken(
-        std::string_view requested,
-        const std::vector<SettingsSnapshotLightOption>& options,
-        std::size_t& index,
-        std::string& canonicalToken,
-        std::string& error);
-    [[nodiscard]] bool ResolveSettingsSnapshotMaterialToken(
-        std::string_view requested,
-        const std::vector<SettingsSnapshotMaterialOption>& options,
-        bool& none,
-        std::uint32_t& id,
-        std::string& canonicalToken,
-        std::string& error);
-
     struct SettingsSnapshotRuntimeAccess
     {
         bool sceneReady = false;
-        SettingsSnapshotValueValidator validateValue;
-        SettingsSnapshotValueReader readValue;
-        SettingsSnapshotValueReader readRawValue;
-        SettingsSnapshotValueWriter writeValue;
-        SettingsSnapshotSelectorDriver driveSelector;
+        void* context = nullptr;
+        SettingsSnapshotValueValidator validateValue = nullptr;
+        SettingsSnapshotValueReader readValue = nullptr;
+        SettingsSnapshotValueReader readRawValue = nullptr;
+        SettingsSnapshotValueWriter writeValue = nullptr;
+        SettingsSnapshotSelectorDriver driveSelector = nullptr;
     };
 
     class SettingsSnapshotController
     {
     public:
-        SettingsSnapshotController();
+        explicit SettingsSnapshotController(SettingsSnapshotCatalogLocation location) noexcept;
 
-        [[nodiscard]] const std::string& Code() const noexcept
+        [[nodiscard]] std::string_view Code() const noexcept
         {
-            return m_Code;
+            return m_Code.View();
         }
 
-        [[nodiscard]] const std::string& Canonical() const noexcept
+        [[nodiscard]] std::string_view Canonical() const noexcept
         {
-            return m_Canonical;
+            return {m_Canonical.Data(), m_Canonical.Size()};
         }
 
-        void Refresh(const SettingsSnapshotValueReader& readValue);
-        [[nodiscard]] std::string BuildCatalogSection() const;
+        [[nodiscard]] bool Refresh(const SettingsSnapshotRuntimeAccess& access,
+            SettingsSnapshotError& error) noexcept;
+        [[nodiscard]] bool BuildCatalogSection(json::EncodedText& output,
+            SettingsSnapshotError& error) const noexcept;
         [[nodiscard]] bool Persist(
-            const std::filesystem::path& path) const;
-        [[nodiscard]] bool PersistToLocalCatalog() const;
+            const wchar_t* path, SettingsSnapshotError& error) const noexcept;
+        [[nodiscard]] bool PersistToLocalCatalog(SettingsSnapshotError& error) const noexcept;
 
         [[nodiscard]] SettingsSnapshotTransactionStep
         BeginApplyCanonicalStaged(
             std::string_view canonical,
-            const SettingsSnapshotRuntimeAccess& access);
+            const SettingsSnapshotRuntimeAccess& access) noexcept;
         [[nodiscard]] SettingsSnapshotTransactionStep
         BeginLoadCodeStaged(
             std::string_view code,
-            const SettingsSnapshotRuntimeAccess& access);
-        [[nodiscard]] SettingsSnapshotTransactionStep ContinueStagedApply(
-            const SettingsSnapshotRuntimeAccess& access);
+            const SettingsSnapshotRuntimeAccess& access) noexcept;
+        [[nodiscard]] SettingsSnapshotTransactionStep ContinueStagedApply() noexcept;
         [[nodiscard]] bool HasStagedApply() const noexcept
         {
             return m_TransactionCoordinator.IsActive();
@@ -145,13 +73,15 @@ namespace uvsr
     private:
         [[nodiscard]] SettingsSnapshotTransactionStep BeginDecodedStaged(
             const DecodedSettings& decoded,
-            const SettingsSnapshotRuntimeAccess& access);
+            const SettingsSnapshotRuntimeAccess& access) noexcept;
         [[nodiscard]] SettingsSnapshotTransactionStep FinalizeStagedStep(
             SettingsSnapshotTransactionStep step,
-            const SettingsSnapshotRuntimeAccess& access);
+            const SettingsSnapshotRuntimeAccess& access) noexcept;
 
-        std::string m_Code;
-        std::string m_Canonical;
+        const SettingsSnapshotCatalogLocation m_CatalogLocation;
+        SettingsSnapshotCode m_Code;
+        json::EncodedText m_Canonical;
         SettingsSnapshotTransactionCoordinator m_TransactionCoordinator;
+        SettingsSnapshotRuntimeAccess m_StagedAccess;
     };
 }

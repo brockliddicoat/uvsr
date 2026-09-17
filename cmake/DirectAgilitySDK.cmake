@@ -1,3 +1,7 @@
+include_guard(GLOBAL)
+include(FetchContent)
+include("${CMAKE_CURRENT_LIST_DIR}/VerifyDirectDependencyState.cmake")
+
 set(UVSR_D3D12_AGILITY_PACKAGE_VERSION "1.619.5")
 set(UVSR_D3D12_AGILITY_SDK_VERSION 619)
 set(UVSR_D3D12_AGILITY_ARCHIVE_NAME

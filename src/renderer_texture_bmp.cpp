@@ -22,213 +22,79 @@
 
 #include "renderer_texture_bmp.h"
 
-#if !defined(UVSR_RENDERER_BMP_ENCODER_ONLY)
-#include "renderer_common_passes.h"
-#endif
-
-#include <array>
-#include <fstream>
-#include <limits>
-#include <vector>
+#include <limits.h>
+#include <share.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <wchar.h>
 
 namespace uvsr
 {
 namespace
 {
-    constexpr std::uint32_t BmpHeaderSize = 54u;
+    constexpr uint32_t BmpHeaderSize = 54u;
 
-    void StoreU16(std::array<std::uint8_t, BmpHeaderSize>& header,
-        std::size_t offset, std::uint16_t value)
+    void StoreU16(uint8_t* header, size_t offset, uint16_t value) noexcept
     {
-        header[offset] = std::uint8_t(value);
-        header[offset + 1u] = std::uint8_t(value >> 8u);
+        header[offset] = uint8_t(value);
+        header[offset + 1u] = uint8_t(value >> 8u);
     }
 
-    void StoreU32(std::array<std::uint8_t, BmpHeaderSize>& header,
-        std::size_t offset, std::uint32_t value)
+    void StoreU32(uint8_t* header, size_t offset, uint32_t value) noexcept
     {
-        for (std::size_t byte = 0u; byte < 4u; ++byte)
-            header[offset + byte] = std::uint8_t(value >> (byte * 8u));
+        for (size_t byte = 0u; byte < 4u; ++byte)
+            header[offset + byte] = uint8_t(value >> (byte * 8u));
     }
 }
 
-bool WriteRendererBmp(
-    const std::filesystem::path& path,
-    std::uint32_t width,
-    std::uint32_t height,
-    std::size_t sourceRowPitch,
-    const void* rgbaPixels)
+bool WriteRendererBmp(const wchar_t* path, uint32_t width, uint32_t height,
+    size_t sourceRowPitch, const void* rgbaPixels) noexcept
 {
-    constexpr std::uint64_t BytesPerPixel = 4u;
-    if (path.empty() || !rgbaPixels || width == 0u || height == 0u ||
-        width > std::uint32_t(std::numeric_limits<std::int32_t>::max()) ||
-        height > std::uint32_t(std::numeric_limits<std::int32_t>::max()))
-    {
-        return false;
-    }
+    if (!path || !path[0] || !rgbaPixels || !width || !height ||
+        width > uint32_t(INT32_MAX) || height > uint32_t(INT32_MAX)) return false;
+    constexpr uint64_t BytesPerPixel = 4u;
+    const uint64_t packedRowBytes = uint64_t(width) * BytesPerPixel;
+    const uint64_t pixelBytes = packedRowBytes * height;
+    if (sourceRowPitch < packedRowBytes || pixelBytes > UINT32_MAX - BmpHeaderSize) return false;
+    const size_t rowBytes = size_t(packedRowBytes);
+    const size_t precedingRows = height - 1u;
+    if (precedingRows && sourceRowPitch > (SIZE_MAX - rowBytes) / precedingRows) return false;
+    const size_t sourceBytes = precedingRows * sourceRowPitch + rowBytes;
+    if (sourceBytes > size_t(PTRDIFF_MAX) ||
+        sourceBytes > UINTPTR_MAX - reinterpret_cast<uintptr_t>(rgbaPixels)) return false;
 
-    const std::uint64_t packedRowBytes = std::uint64_t(width) * BytesPerPixel;
-    const std::uint64_t pixelBytes = packedRowBytes * height;
-    if (sourceRowPitch < packedRowBytes ||
-        pixelBytes > std::numeric_limits<std::uint32_t>::max() - BmpHeaderSize)
-    {
-        return false;
-    }
-
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    if (!output)
-        return false;
-
-    std::array<std::uint8_t, BmpHeaderSize> header{};
-    header[0] = 'B';
-    header[1] = 'M';
-    StoreU32(header, 2u, BmpHeaderSize + std::uint32_t(pixelBytes));
+    FILE* output = _wfsopen(path, L"wb", _SH_DENYNO);
+    if (!output) return false;
+    uint8_t header[BmpHeaderSize]{};
+    header[0] = 'B'; header[1] = 'M';
+    StoreU32(header, 2u, BmpHeaderSize + uint32_t(pixelBytes));
     StoreU32(header, 10u, BmpHeaderSize);
     StoreU32(header, 14u, 40u);
     StoreU32(header, 18u, width);
     StoreU32(header, 22u, height);
     StoreU16(header, 26u, 1u);
     StoreU16(header, 28u, 32u);
-    StoreU32(header, 34u, std::uint32_t(pixelBytes));
-    output.write(
-        reinterpret_cast<const char*>(header.data()),
-        std::streamsize(header.size()));
-
-    const auto* source = static_cast<const std::uint8_t*>(rgbaPixels);
-    std::vector<std::uint8_t> bgraRow(
-        static_cast<std::size_t>(packedRowBytes),
-        0u);
-    for (std::uint32_t outputRow = 0u; outputRow < height; ++outputRow)
+    StoreU32(header, 34u, uint32_t(pixelBytes));
+    bool written = fwrite(header, 1, sizeof(header), output) == sizeof(header);
+    auto* bgraRow = written ? static_cast<uint8_t*>(malloc(rowBytes)) : nullptr;
+    if (written && !bgraRow) written = false;
+    const auto* source = static_cast<const uint8_t*>(rgbaPixels);
+    for (uint32_t outputRow = 0u; written && outputRow < height; ++outputRow)
     {
-        const std::uint32_t sourceRow = height - outputRow - 1u;
-        const std::uint8_t* sourcePixel =
-            source + std::size_t(sourceRow) * sourceRowPitch;
-        for (std::uint32_t column = 0u; column < width; ++column)
+        const uint32_t sourceRow = height - outputRow - 1u;
+        const uint8_t* sourcePixel = source + size_t(sourceRow) * sourceRowPitch;
+        for (uint32_t column = 0u; column < width; ++column)
         {
-            const std::size_t offset = std::size_t(column) * 4u;
+            const size_t offset = size_t(column) * 4u;
             bgraRow[offset] = sourcePixel[offset + 2u];
             bgraRow[offset + 1u] = sourcePixel[offset + 1u];
             bgraRow[offset + 2u] = sourcePixel[offset];
             bgraRow[offset + 3u] = sourcePixel[offset + 3u];
         }
-        output.write(
-            reinterpret_cast<const char*>(bgraRow.data()),
-            std::streamsize(bgraRow.size()));
+        written = fwrite(bgraRow, 1, rowBytes, output) == rowBytes;
     }
-    output.close();
-    return output.good();
+    free(bgraRow);
+    const bool closed = fclose(output) == 0;
+    return written && closed;
 }
-
-#if !defined(UVSR_RENDERER_BMP_ENCODER_ONLY)
-bool SaveRendererTextureBmp(
-    nvrhi::IDevice* device,
-    RendererCommonPasses* commonPasses,
-    nvrhi::ITexture* texture,
-    nvrhi::ResourceStates textureState,
-    const std::filesystem::path& path)
-{
-    if (!device || !texture || path.empty())
-        return false;
-
-    const nvrhi::TextureDesc& sourceDescription = texture->getDesc();
-    if (sourceDescription.dimension != nvrhi::TextureDimension::Texture2D ||
-        sourceDescription.width == 0u || sourceDescription.height == 0u ||
-        sourceDescription.sampleCount != 1u)
-    {
-        return false;
-    }
-
-    const bool directlyReadable =
-        sourceDescription.format == nvrhi::Format::RGBA8_UNORM ||
-        sourceDescription.format == nvrhi::Format::SRGBA8_UNORM;
-    nvrhi::TextureDesc readbackDescription;
-    readbackDescription.width = sourceDescription.width;
-    readbackDescription.height = sourceDescription.height;
-    readbackDescription.mipLevels = 1u;
-    readbackDescription.format = directlyReadable
-        ? sourceDescription.format
-        : nvrhi::Format::SRGBA8_UNORM;
-    readbackDescription.dimension = nvrhi::TextureDimension::Texture2D;
-
-    nvrhi::TextureHandle convertedTexture;
-    nvrhi::FramebufferHandle convertedFramebuffer;
-    nvrhi::ITexture* copySource = texture;
-    if (!directlyReadable)
-    {
-        if (!commonPasses || !commonPasses->IsValid())
-            return false;
-        nvrhi::TextureDesc convertedDescription = readbackDescription;
-        convertedDescription.isRenderTarget = true;
-        convertedDescription.initialState =
-            nvrhi::ResourceStates::RenderTarget;
-        convertedDescription.keepInitialState = true;
-        convertedDescription.debugName = "Renderer/BMP Conversion";
-        convertedTexture = device->createTexture(convertedDescription);
-        if (!convertedTexture)
-            return false;
-        convertedFramebuffer = device->createFramebuffer(
-            nvrhi::FramebufferDesc().addColorAttachment(convertedTexture));
-        if (!convertedFramebuffer)
-            return false;
-        copySource = convertedTexture;
-    }
-
-    nvrhi::StagingTextureHandle stagingTexture =
-        device->createStagingTexture(
-            readbackDescription,
-            nvrhi::CpuAccessMode::Read);
-    nvrhi::CommandListHandle commandList = device->createCommandList();
-    if (!stagingTexture || !commandList)
-        return false;
-
-    commandList->open();
-    if (textureState != nvrhi::ResourceStates::Unknown)
-    {
-        commandList->beginTrackingTextureState(
-            texture,
-            nvrhi::TextureSubresourceSet(0u, 1u, 0u, 1u),
-            textureState);
-    }
-    if (!directlyReadable && !commonPasses->BlitTexture(
-            commandList,
-            convertedFramebuffer,
-            texture))
-    {
-        commandList->close();
-        return false;
-    }
-    commandList->copyTexture(
-        stagingTexture,
-        nvrhi::TextureSlice(),
-        copySource,
-        nvrhi::TextureSlice());
-    if (textureState != nvrhi::ResourceStates::Unknown)
-    {
-        commandList->setTextureState(
-            texture,
-            nvrhi::TextureSubresourceSet(0u, 1u, 0u, 1u),
-            textureState);
-        commandList->commitBarriers();
-    }
-    commandList->close();
-    device->executeCommandList(commandList);
-
-    std::size_t rowPitch = 0u;
-    const void* pixels = device->mapStagingTexture(
-        stagingTexture,
-        nvrhi::TextureSlice(),
-        nvrhi::CpuAccessMode::Read,
-        &rowPitch);
-    if (!pixels)
-        return false;
-    const bool written = WriteRendererBmp(
-        path,
-        readbackDescription.width,
-        readbackDescription.height,
-        rowPitch,
-        pixels);
-    device->unmapStagingTexture(stagingTexture);
-    return written;
-}
-#endif
 }

@@ -1,10 +1,11 @@
 #include "uvsr_scene_viewer.h"
-#include "uvsr_renderer_scene.h"
-#include "uvsr_renderer_lighting.h"
-#include "uvsr_renderer_frame.h"
+#include "uvsr_renderer_scene_nvrhi.h"
+#include "uvsr_renderer_lighting_nvrhi.h"
+#include "uvsr_renderer_frame_nvrhi.h"
 #include "uvsr_runtime.h"
 #include "uvsr_application.h"
 #include "renderer_log.h"
+#include "renderer_scene_encoding.h"
 #include <donut/app/DeviceManager.h>
 #include <algorithm>
 #include <cmath>
@@ -14,11 +15,7 @@
 #include <cstring>
 
 using namespace donut;
-using namespace donut::math;
 using namespace donut::app;
-using namespace donut::vfs;
-using namespace donut::engine;
-using namespace donut::render;
 using namespace uvsr;
 
 namespace
@@ -81,7 +78,7 @@ auto UvsrSceneViewer::InvalidateLightingAccumulationHistory() -> void {
 auto UvsrSceneViewer::SynchronizeLightingAccumulationHistory(
         uint32_t width,
         uint32_t height,
-        const std::vector<std::shared_ptr<Light>>& submittedLights,
+        const RendererSceneLightRange& submittedLights,
         const RaySceneView& rayScene,
         bool sceneContentChanged,
         const NoiseSettings& skyNoiseSettings,
@@ -97,13 +94,17 @@ auto UvsrSceneViewer::SynchronizeLightingAccumulationHistory(
         uint64_t viewSignature = 1469598103934665603ull;
         uint64_t signature = 1469598103934665603ull;
 
-        if (m_frame->view)
+        if (m_frame->view.valid)
         {
-            // Exclude temporal jitter. Path accumulation is invalidated by a
-            // physical camera change, not by presentation-only sample offsets.
-            const dm::affine3 worldToView = m_frame->view->GetViewMatrix();
-            const dm::float4x4 viewToClip =
-                m_frame->view->GetProjectionMatrix(false);
+            // exclude temporal jitter and preserve the former 9+3 affine hash layout.
+            const auto& view = m_frame->view.constants;
+            float worldToView[12];
+            for (unsigned row = 0; row < 3; ++row)
+                for (unsigned column = 0; column < 3; ++column)
+                    worldToView[row * 3 + column] = view.matWorldToView.values[row * 4 + column];
+            for (unsigned column = 0; column < 3; ++column)
+                worldToView[9 + column] = view.matWorldToView.values[12 + column];
+            const auto& viewToClip = view.matViewToClipNoOffset;
             HashLightingHistoryValue(viewSignature, worldToView);
             HashLightingHistoryValue(viewSignature, viewToClip);
         }
@@ -111,8 +112,7 @@ auto UvsrSceneViewer::SynchronizeLightingAccumulationHistory(
         HashLightingHistoryValue(signature, width);
         HashLightingHistoryValue(signature, height);
         HashLightingHistoryValue(signature, m_ui.DirectionalShadows.hardShadows);
-        const uintptr_t sceneIdentity =
-            reinterpret_cast<uintptr_t>(m_scene->world.get());
+        const uint64_t sceneIdentity = submittedLights.scene.generation;
         HashLightingHistoryValue(signature, sceneIdentity);
         HashLightingHistoryValue(signature, sceneContentChanged);
         if (sceneContentChanged)
@@ -121,10 +121,10 @@ auto UvsrSceneViewer::SynchronizeLightingAccumulationHistory(
             HashLightingHistoryValue(signature, contentFrame);
         }
 
-        const SpotLight* submittedFlashlight =
+        const RendererSceneHandle submittedFlashlight =
             ShouldSubmitFlashlight(m_lighting->flashlightTransition)
-                ? m_lighting->flashlight.get()
-                : nullptr;
+                ? m_lighting->flashlight
+                : RendererSceneHandle{};
         const FlashlightBeamProfile flashlightProfile =
             submittedFlashlight
                 ? ResolveFlashlightBeamProfile(
@@ -153,21 +153,20 @@ auto UvsrSceneViewer::SynchronizeLightingAccumulationHistory(
             }
         }
 
-        const uint64_t lightCount = uint64_t(submittedLights.size());
+        const uint64_t lightCount = submittedLights.Count();
         HashLightingHistoryValue(signature, lightCount);
-        for (const std::shared_ptr<Light>& light : submittedLights)
+        for (uint32_t ordinal = 0; ordinal < lightCount; ++ordinal)
         {
-            const bool validLight = bool(light);
+            const auto light = submittedLights.At(ordinal);
+            LightConstants constants{};
+            const bool validLight = EncodeRendererSceneLight(submittedLights.scene, light, constants).Succeeded();
             HashLightingHistoryValue(signature, validLight);
-            if (!light)
+            if (!validLight)
+            {
+                const uint64_t failedFrame = uint64_t(GetFrameIndex());
+                HashLightingHistoryValue(signature, failedFrame);
                 continue;
-
-            LightConstants constants;
-            // FillLightConstants writes only fields relevant to the concrete
-            // light type. Clear every lane before hashing so static lights
-            // produce a stable renderer-wide history signature.
-            std::memset(&constants, 0, sizeof(constants));
-            light->FillLightConstants(constants);
+            }
             HashLightingHistoryValue(signature, constants);
         }
 

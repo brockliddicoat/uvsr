@@ -46,15 +46,15 @@ namespace
         };
     }
 
-    [[nodiscard]] std::string GetUiSettingToken(
+    [[nodiscard]] std::string_view GetUiSettingToken(
         SettingId id,
         std::size_t index)
     {
         const UiSettingsTypedDomain& domain =
             GetUiSettingDefinition(id).typedDomain;
         return index < domain.tokenCount
-            ? std::string(domain.tokens[index])
-            : std::string{};
+            ? domain.tokens[index]
+            : std::string_view{};
     }
 
     [[nodiscard]] std::size_t GetUiSettingTokenIndex(
@@ -125,7 +125,7 @@ UIRenderer::RootPanel UIRenderer::BeginRootPanel(
     ImGui::SetNextWindowCollapsed(request.value_or(performance),
         request ? ImGuiCond_Always : ImGuiCond_Once);
     request.reset();
-    ImGui::PushFont(m_UiHeaderFont->GetScaledFont());
+    ImGui::PushFont(m_UiContext.HeaderFont());
     const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | (performance
         ? ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings
         : ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
@@ -165,7 +165,7 @@ auto UIRenderer::GetSettingsCollapsedWindowHeight(
 bool UIRenderer::DrawCollapsingHeader(
     const char* label, const char* tooltip, ImGuiTreeNodeFlags flags)
 {
-    ImGui::PushFont(m_UiHeaderFont->GetScaledFont());
+    ImGui::PushFont(m_UiContext.HeaderFont());
     ImGuiStyle& style = ImGui::GetStyle();
     const float itemSpacingY = std::exchange(style.ItemSpacing.y, 0.f);
     const bool open = ImGui::CollapsingHeader(label, flags);
@@ -249,6 +249,11 @@ void UIRenderer::EndControlRegion()
 
 bool UIRenderer::BeginSettingsTree(const char* label, ImGuiTreeNodeFlags flags, const char* tooltip)
 {
+    if (m_NestedDrawerCount >= MaximumNestedDrawerDepth)
+    {
+        uvsr::log::error("The settings tree exceeds its checked nesting bound.");
+        return false;
+    }
     const ImGuiID id = ImGui::GetID(label);
     const bool open = ImGui::TreeNodeEx(label, flags | ImGuiTreeNodeFlags_NoTreePushOnOpen);
     if (tooltip)
@@ -258,15 +263,16 @@ bool UIRenderer::BeginSettingsTree(const char* label, ImGuiTreeNodeFlags flags, 
     BeginControlRegion(id ^ ImGuiID(0xE60792B5u));
     const float indent = ImGui::GetStyle().IndentSpacing;
     ImGui::Indent(indent);
-    g_NestedDrawerContexts.push_back({ ImGui::GetCurrentWindow(), indent });
+    m_NestedDrawerContexts[m_NestedDrawerCount++] = { ImGui::GetCurrentWindow(), indent };
     return true;
 }
 
 void UIRenderer::EndSettingsTree()
 {
-    assert(!g_NestedDrawerContexts.empty());
-    ImGui::Unindent(g_NestedDrawerContexts.back().indentSpacing);
-    g_NestedDrawerContexts.pop_back();
+    assert(m_NestedDrawerCount != 0);
+    if (!m_NestedDrawerCount) return;
+    ImGui::Unindent(m_NestedDrawerContexts[m_NestedDrawerCount - 1u].indentSpacing);
+    m_NestedDrawerContexts[--m_NestedDrawerCount] = {};
     ImGuiStyle& style = ImGui::GetStyle();
     const float itemSpacingY = std::exchange(style.ItemSpacing.y, 0.f);
     EndControlRegion();
@@ -281,22 +287,66 @@ bool UIRenderer::BeginToggleRegion(const char* id, bool visible)
     return true;
 }
 
+void UIRenderer::DrawMaterialEditorName(uint32_t selectionId, std::string_view name)
+{
+    name = name.substr(0, name.find('\0'));
+    if (name.empty()) name = "";
+    char prefix[sizeof("Material 4294967295:")];
+    const int written = snprintf(prefix, sizeof(prefix), "Material %u:", selectionId);
+    if (written < 0 || size_t(written) >= sizeof(prefix))
+    {
+        uvsr::log::warning("could not format the material label");
+        return;
+    }
+    ImGui::BeginGroup();
+    ImGui::TextUnformatted(prefix);
+    ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
+    const float nameWidth = ImGui::GetContentRegionAvail().x;
+    const bool truncated = ImGui::CalcTextSize(name.data(), name.data() + name.size()).x > nameWidth;
+    std::string_view display = name;
+    SettingsSnapshotText clipped;
+    SettingsSnapshotError error;
+    if (truncated)
+    {
+        const char* end = name.data();
+        ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(),
+            std::max(0.f, nameWidth - ImGui::CalcTextSize("...").x), 0.f,
+            name.data(), name.data() + name.size(), &end);
+        if (clipped.AssignParts({name.substr(0, size_t(end - name.data())), "..."}, error))
+            display = clipped.View();
+        else
+            uvsr::log::warning("could not prepare the material label: %s", error.Message());
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, UiSuccessColor);
+    ImGui::TextUnformatted(display.data(), display.data() + display.size());
+    ImGui::PopStyleColor();
+    ImGui::EndGroup();
+    if (truncated && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+    {
+        SettingsSnapshotText tooltip;
+        if (tooltip.Assign(name, error))
+            ImGui::SetTooltip("%s", tooltip.View().data());
+        else
+            uvsr::log::warning("could not prepare the material tooltip: %s", error.Message());
+    }
+}
+
 auto UIRenderer::DrawMaterialEditorTextureFilename(
-        const char* filename,
-        const float4& color) -> void {
-        const std::string_view fullFilename =
-            filename != nullptr ? std::string_view(filename) : std::string_view();
+        std::string_view filename,
+        const gpu_contract::Float4& color) -> void {
+        // the previous c-string boundary hid embedded NUL and all following bytes.
+        const std::string_view fullFilename = filename.substr(0, filename.find('\0'));
         const FrontEllipsisText formatted =
-            FormatFrontEllipsisUtf8(fullFilename, 25u);
+            FormatFrontEllipsisUtf8<25u>(fullFilename);
         ImGui::TextColored(
             ImVec4(color.x, color.y, color.z, color.w),
             "%s",
-            formatted.display.c_str());
+            formatted.display);
         if (formatted.truncated)
         {
             const FrontEllipsisText tooltip =
-                FormatFrontEllipsisUtf8(fullFilename, 117u);
-            ImGui::SetItemTooltip("%s", tooltip.display.c_str());
+                FormatFrontEllipsisUtf8<117u>(fullFilename);
+            ImGui::SetItemTooltip("%s", tooltip.display);
         }
     }
 
@@ -335,9 +385,9 @@ auto UIRenderer::DrawPresetResetIcon(
 
         const bool nestedDropdownGutterAvailable =
             nestedDropdownGutterRequested &&
-            !g_NestedDrawerContexts.empty() &&
+            m_NestedDrawerCount != 0 &&
             ImGui::GetCurrentWindow() ==
-                g_NestedDrawerContexts.back().bodyWindow;
+                m_NestedDrawerContexts[m_NestedDrawerCount - 1u].bodyWindow;
         if (nestedDropdownGutterRequested)
         {
             assert(nestedDropdownGutterAvailable);
@@ -345,7 +395,7 @@ auto UIRenderer::DrawPresetResetIcon(
         if (nestedDropdownGutterAvailable)
         {
             const NestedDrawerContext& context =
-                g_NestedDrawerContexts.back();
+                m_NestedDrawerContexts[m_NestedDrawerCount - 1u];
             ImGuiWindow* window = ImGui::GetCurrentWindow();
             const float resetButtonScreenX =
                 ImGui::GetCursorScreenPos().x +
@@ -414,12 +464,12 @@ auto UIRenderer::DrawPresetResetIcon(
     }
 
 void UIRenderer::DrawPerformancePanelContents(
-    float settingsControlWidth, const std::string& performanceLine)
+    float settingsControlWidth, const char* performanceLine)
 {
     ImGui::PushItemWidth(settingsControlWidth);
     const float summaryCursorX = ImGui::GetCursorPosX();
     ImGui::SetCursorPosX(summaryCursorX + g_UiSpacingTokens.tight);
-    ImGui::TextUnformatted(performanceLine.c_str());
+    ImGui::TextUnformatted(performanceLine);
     ImGui::SetItemTooltip("%s",
         "tris counts main-pass triangles after frustum culling; "
         "occluded, back-facing, or alpha-discarded ones may remain.");
@@ -542,29 +592,52 @@ void UIRenderer::DrawPerformancePanelContents(
 UiSettingsValue UIRenderer::ReadUiPresentationValue(SettingId id)
 {
     UiSettingsValue value;
-    std::string error;
+    SettingsSnapshotError error;
     // Disabled rows still display their retained values. Command reads keep
     // their availability checks; this read never requests a mutation.
     if (!DispatchTypedSetting(GetUiSettingDefinition(id), nullptr, value, error, true, true))
-        uvsr::log::warning("UI setting read failed for %s: %s", SettingName(id).data(), error.c_str());
+        uvsr::log::warning("UI setting read failed for %s: %s", SettingName(id).data(), error.Message());
     return value;
 }
 
 bool UIRenderer::ApplyUiSetting(SettingId id, const UiSettingsValue& value)
 {
-    std::string error;
+    SettingsSnapshotError error;
     const bool applied = ApplySettingValue(id, value, error);
     if (!applied)
-        uvsr::log::warning("UI setting update failed: %s", error.c_str());
+        uvsr::log::warning("UI setting update failed: %s", error.Message());
     return applied;
+}
+
+bool UIRenderer::ApplyUiSettingText(SettingId id, std::string_view text)
+{
+    const auto& definition = GetUiSettingDefinition(id);
+    UiSettingsValue value;
+    SettingsSnapshotError error;
+    bool prepared = false;
+    if (definition.typedDomain.kind == UiSettingsDomainKind::Enumeration)
+        prepared = value.SetToken(text, error);
+    else if (definition.typedDomain.kind == UiSettingsDomainKind::Selector)
+        prepared = value.SetSelector(text, error);
+    else
+    {
+        uvsr::log::warning("UI setting update failed: setting does not accept text");
+        return false;
+    }
+    if (!prepared)
+    {
+        uvsr::log::warning("UI setting update failed: %s", error.Message());
+        return false;
+    }
+    return ApplyUiSetting(id, value);
 }
 
 bool UIRenderer::ResetUiSetting(SettingId id)
 {
-    std::string error;
+    SettingsSnapshotError error;
     const bool reset = ResetSettingValue(id, error);
     if (!reset)
-        uvsr::log::warning("UI setting reset failed: %s", error.c_str());
+        uvsr::log::warning("UI setting reset failed: %s", error.Message());
     return reset;
 }
 
@@ -574,20 +647,20 @@ bool UIRenderer::IsUiSettingChanged(SettingId id)
     if (!definition || !definition->Supports(UiSettingsCommandVerb::Reset) ||
         !IsSettingAvailable(id))
         return false;
-    std::string error;
+    SettingsSnapshotError error;
     const bool atDefault = IsSettingAtContextualDefault(id, error);
-    if (!error.empty())
-        uvsr::log::warning("UI setting default check failed: %s", error.c_str());
-    return error.empty() && !atDefault;
+    if (!error.MessageView().empty())
+        uvsr::log::warning("UI setting default check failed: %s", error.Message());
+    return error.MessageView().empty() && !atDefault;
 }
 
 std::size_t UIRenderer::ReadUiTokenIndex(SettingId id)
 {
     UiSettingsValue value;
-    std::string error;
+    SettingsSnapshotError error;
     if (ReadSettingValue(id, value, error) && value.kind == UiSettingsValueKind::Token)
-        return GetUiSettingTokenIndex(id, value.text);
-    uvsr::log::warning("UI setting read failed for %s: %s", SettingName(id).data(), error.c_str());
+        return GetUiSettingTokenIndex(id, value.Text());
+    uvsr::log::warning("UI setting read failed for %s: %s", SettingName(id).data(), error.Message());
     return 0u;
 }
 
@@ -604,7 +677,7 @@ bool UIRenderer::DrawUiReset(
 
 void UIRenderer::DrawUiBoolean(
     const char* label, SettingId id, const char* tooltip,
-    bool nestedReset, const std::string* texturePath, const char* resetId)
+    bool nestedReset, const std::string_view* texturePath, const char* resetId)
 {
     bool current = ReadUiPresentationValue(id).boolean;
     if (ImGui::Checkbox(label, &current))
@@ -614,7 +687,7 @@ void UIRenderer::DrawUiBoolean(
     {
         ImGui::SameLine();
         const ImVec4 color = UiSuccessColor;
-        DrawMaterialEditorTextureFilename(texturePath->c_str(), float4(color.x, color.y, color.z, color.w));
+        DrawMaterialEditorTextureFilename(*texturePath, {color.x, color.y, color.z, color.w});
     }
     DrawUiReset(id, nestedReset, resetId);
 }
@@ -695,9 +768,9 @@ void UIRenderer::DrawUiColor(
     if (!enabled)
         return;
     UiSettingsValue value = UiSettingsValue::Vector({ 0.f, 0.f, 0.f, 0.f }, 3u);
-    std::string error;
+    SettingsSnapshotError error;
     if (IsSettingAvailable(id) && !ReadSettingValue(id, value, error))
-        uvsr::log::warning("UI color read failed: %s", error.c_str());
+        uvsr::log::warning("UI color read failed: %s", error.Message());
     if (width > 0.f)
         SetNextLabeledControlWidth(label, width);
     if (ImGui::ColorEdit3(label, value.vector.data(),
@@ -717,10 +790,10 @@ void UIRenderer::DrawUiColor(
 
 void UIRenderer::DrawUiTokenOption(SettingId id, std::size_t index, bool selected)
 {
-    const std::string label = FormatUiSettingsTokenLabel(id, index);
-    DrawDropdownOption(label.c_str(), selected, [this, id, index]()
+    const auto label = FormatUiSettingsTokenLabel(id, index);
+    DrawDropdownOption(label.Data(), selected, [this, id, index]()
     {
-        ApplyUiSetting(id, UiSettingsValue::Token(GetUiSettingToken(id, index)));
+        ApplyUiSettingText(id, GetUiSettingToken(id, index));
     });
 }
 
@@ -729,10 +802,12 @@ void UIRenderer::DrawUiRoundedTokenCombo(
 {
     const auto& domain = GetUiSettingDefinition(id).typedDomain;
     const std::size_t current = ReadUiTokenIndex(id);
-    std::string preview = FormatUiSettingsTokenLabel(id, current);
+    const auto value = FormatUiSettingsTokenLabel(id, current);
+    char preview[SettingsMetadataText::Capacity + sizeof(" (Custom)")]{};
+    memcpy(preview, value.Data(), value.Size());
     if (custom)
-        preview += " (Custom)";
-    if (!ImGui::BeginCombo(label, preview.c_str()))
+        memcpy(preview + value.Size(), " (Custom)", sizeof(" (Custom)"));
+    if (!ImGui::BeginCombo(label, preview))
         return;
     for (std::size_t index = 0u; index < domain.tokenCount; ++index)
     {
@@ -747,16 +822,16 @@ void UIRenderer::DrawUiTokenCombo(
     const char* label, SettingId id, const char* tooltip, bool nestedReset)
 {
     const auto& domain = GetUiSettingDefinition(id).typedDomain;
-    std::array<std::string, UiSettingsTypedDomain::MaximumTokenCount> labels;
-    std::array<const char*, UiSettingsTypedDomain::MaximumTokenCount> pointers{};
+    SettingsMetadataText labels[UiSettingsTypedDomain::MaximumTokenCount];
+    const char* pointers[UiSettingsTypedDomain::MaximumTokenCount]{};
     for (std::size_t index = 0u; index < domain.tokenCount; ++index)
     {
         labels[index] = FormatUiSettingsTokenLabel(id, index);
-        pointers[index] = labels[index].c_str();
+        pointers[index] = labels[index].Data();
     }
     int candidate = static_cast<int>(ReadUiTokenIndex(id));
-    if (ImGui::Combo(label, &candidate, pointers.data(), domain.tokenCount))
-        ApplyUiSetting(id, UiSettingsValue::Token(GetUiSettingToken(id, std::size_t(candidate))));
+    if (ImGui::Combo(label, &candidate, pointers, domain.tokenCount))
+        ApplyUiSettingText(id, GetUiSettingToken(id, std::size_t(candidate)));
     ImGui::SetItemTooltip("%s", tooltip);
     DrawUiReset(id, nestedReset);
 }
@@ -782,12 +857,12 @@ auto UIRenderer::DrawGeneralDrawer(float settingsControlWidth) -> void {
             "lighting with selective ray-traced visibility. Path Tracing "
             "integrates light transport through the shared scene.");
 
-        if (!m_ui.GpuAdapterChoices.empty())
+        if (m_ui.GpuAdapterChoices.Count())
         {
             const GpuAdapterChoice* activeAdapter =
                 GetActiveGpuAdapterChoice();
             const char* activeAdapterName = activeAdapter
-                ? activeAdapter->name.c_str()
+                ? activeAdapter->name.data()
                 : "Unknown adapter";
 
             ImGui::TextUnformatted("Graphics Adapter");
@@ -803,21 +878,23 @@ auto UIRenderer::DrawGeneralDrawer(float settingsControlWidth) -> void {
                         adapter.adapterIndex ==
                         m_ui.ActiveGpuAdapterIndex;
                     DrawDropdownOption(
-                        adapter.name.c_str(),
+                        adapter.name.data(),
                         selected,
                         [this, adapterIndex = adapter.adapterIndex]()
                         {
-                            std::string error;
-                            if (!ApplySettingValue(
+                            SettingsSnapshotError error;
+                            SettingsSnapshotError valueError;
+                            UiSettingsValue value;
+                            if (!AcceptFormattedSelector(FormatSettingsSnapshotAdapterToken(adapterIndex, value, valueError), value, valueError))
+                                error = std::move(valueError);
+                            if (!error.MessageView().empty() || !ApplySettingValue(
                                     SettingId::GpuAdapter,
-                                    UiSettingsValue::Selector(
-                                        FormatSettingsSnapshotAdapterToken(
-                                            adapterIndex)),
+                                    value,
                                     error))
                             {
                                 uvsr::log::warning(
                                     "Graphics adapter update failed: %s",
-                                    error.c_str());
+                                    error.Message());
                             }
                         });
                     if (selected)
@@ -839,9 +916,9 @@ auto UIRenderer::DrawGeneralDrawer(float settingsControlWidth) -> void {
             "and V levels the roll.");
 
         const ImGuiStyle& style = ImGui::GetStyle();
-        const std::string currentScene =
-            m_app->GetCurrentSceneName();
-        const std::string currentSceneDisplayName =
+        const SceneCatalogEntry* currentScene =
+            m_app->GetCurrentSceneCatalogEntry();
+        const std::string_view currentSceneDisplayName =
             m_app->GetCurrentSceneDisplayName();
         const float folderButtonWidth = ImGui::GetFrameHeight();
         ImGui::TextUnformatted("World Scenes");
@@ -849,25 +926,26 @@ auto UIRenderer::DrawGeneralDrawer(float settingsControlWidth) -> void {
             -(folderButtonWidth + style.ItemSpacing.x));
         if (ImGui::BeginCombo(
                 "##Scene",
-                currentSceneDisplayName.c_str()))
+                currentSceneDisplayName.data()))
         {
-            const std::vector<SceneCatalogEntry>& scenes =
+            const SceneCatalog& scenes =
                 m_app->GetAvailableScenes();
             for (const SceneCatalogEntry& scene : scenes)
             {
-                ImGui::PushID(scene.FileName.c_str());
+                ImGui::PushID(scene.FileName.data());
                 const bool selected =
-                    scene.FileName == currentScene;
+                    &scene == currentScene;
                 DrawDropdownOption(
-                    scene.DisplayName.c_str(),
+                    scene.DisplayName.data(),
                     selected,
-                    [this,
-                        sceneToken = FormatSettingsSnapshotSceneToken(
-                            MakeSceneDisplayName(m_app->GetSceneDir(), scene.FileName))]()
+                    [this, &scene]()
                     {
-                        ApplyUiSetting(
-                            SettingId::SceneCurrent,
-                            UiSettingsValue::Selector(sceneToken));
+                        UiSettingsValue value;
+                        SettingsSnapshotError error;
+                        if (AcceptFormattedSelector(FormatSettingsSnapshotSceneToken(scene.CommandName, value, error), value, error))
+                            ApplyUiSetting(SettingId::SceneCurrent, value);
+                        else
+                            uvsr::log::warning("Could not prepare scene selection: %s", error.Message());
                     });
                 if (selected)
                     ImGui::SetItemDefaultFocus();
@@ -885,12 +963,12 @@ auto UIRenderer::DrawGeneralDrawer(float settingsControlWidth) -> void {
         const ImVec2 iconMaximum = ImGui::GetItemRectMax();
         if (openSceneFolderPressed)
         {
-            std::string error;
+            SettingsSnapshotError error;
             if (!RunAction(ActionId::OpenSceneFolder, error))
             {
                 uvsr::log::warning(
                     "Open scene folder failed: %s",
-                    error.c_str());
+                    error.Message());
             }
         }
         ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -933,9 +1011,9 @@ auto UIRenderer::DrawGeneralDrawer(float settingsControlWidth) -> void {
             ImGui::PushStyleColor(
                 ImGuiCol_Text,
                 UiErrorColor);
-            const std::string& workerFailure =
+            const char* workerFailure =
                 m_app->GetSceneLoadFailure();
-            if (workerFailure.empty())
+            if (!*workerFailure)
             {
                 ImGui::TextWrapped(
                     "The selected scene could not be loaded.");
@@ -944,7 +1022,7 @@ auto UIRenderer::DrawGeneralDrawer(float settingsControlWidth) -> void {
             {
                 ImGui::TextWrapped(
                     "The selected scene could not be loaded: %s",
-                    workerFailure.c_str());
+                    workerFailure);
             }
             ImGui::PopStyleColor();
             if (ImGui::Button(
@@ -1087,31 +1165,23 @@ auto UIRenderer::DrawMaterialDrawer(float settingsControlWidth) -> void {
         }
 
         BeginDrawerBody("##MaterialBody", settingsControlWidth);
-        auto material = m_ui.SelectedMaterial;
+        const auto scene = m_app->GetSceneView();
+        const auto* record = FindRendererSceneMaterial(scene, m_ui.SelectedMaterial);
+        const auto* material = record ? &record->values : nullptr;
         if (material)
         {
-            const std::string materialPrefix = "Material " + std::to_string(material->materialID) + ":";
-            ImGui::BeginGroup();
-            ImGui::TextUnformatted(materialPrefix.c_str());
-            ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
-            const float nameWidth = ImGui::GetContentRegionAvail().x;
-            const bool truncated = ImGui::CalcTextSize(material->name.c_str()).x > nameWidth;
-            std::string name = material->name;
-            if (truncated)
+            const auto materialText = RendererSceneText(scene, record->name);
+            std::string_view texturePaths[uint32_t(RendererSceneMaterialTextureSlot::Count)];
+            const auto texturePath = [&](RendererSceneMaterialTextureSlot slot) -> const std::string_view*
             {
-                const char* end = name.data();
-                ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(),
-                    std::max(0.f, nameWidth - ImGui::CalcTextSize("...").x), 0.f,
-                    name.data(), name.data() + name.size(), &end);
-                name.resize(size_t(end - name.data()));
-                name += "...";
-            }
-            ImGui::TextColored(UiSuccessColor, "%s", name.c_str());
-            ImGui::EndGroup();
-            if (truncated)
-                ImGui::SetItemTooltip("%s", material->name.c_str());
+                auto& path = texturePaths[uint32_t(slot)];
+                path = m_app->GetSceneTexturePath(material->textures[uint32_t(slot)]);
+                return &path;
+            };
+            DrawMaterialEditorName(record->selectionId,
+                {materialText.count ? materialText.data : "", materialText.count});
 
-            ImGui::PushID(material->materialID);
+            ImGui::PushID(int(record->selectionId));
 
             SetNextLabeledControlWidth("Material Domain", settingsControlWidth);
             DrawUiRoundedTokenCombo(
@@ -1135,7 +1205,7 @@ auto UIRenderer::DrawMaterialDrawer(float settingsControlWidth) -> void {
                     SettingId::MaterialSelectedBaseTextureEnabled,
                     "Enable the selected material's base or diffuse texture.",
                     false,
-                    &material->baseOrDiffuseTexture->path);
+                    texturePath(RendererSceneMaterialTextureSlot::BaseOrDiffuse));
             }
             DrawUiColor(
                 material->useSpecularGlossModel
@@ -1160,7 +1230,7 @@ auto UIRenderer::DrawMaterialDrawer(float settingsControlWidth) -> void {
                     SettingId::MaterialSelectedMetalSpecularTextureEnabled,
                     "Enable the selected material's metal rough or specular texture.",
                     false,
-                    &material->metalRoughOrSpecularTexture->path);
+                    texturePath(RendererSceneMaterialTextureSlot::MetalRoughOrSpecular));
             }
 
             if (material->useSpecularGlossModel)
@@ -1230,7 +1300,7 @@ auto UIRenderer::DrawMaterialDrawer(float settingsControlWidth) -> void {
                     SettingId::MaterialSelectedOpacity))
             {
                 DrawUiFloat(
-                    material->baseOrDiffuseTexture
+                    (material->textures[uint32_t(RendererSceneMaterialTextureSlot::BaseOrDiffuse)] != InvalidSceneIndex)
                         ? "Opacity Factor"
                         : "Opacity",
                     SettingId::MaterialSelectedOpacity,
@@ -1239,7 +1309,7 @@ auto UIRenderer::DrawMaterialDrawer(float settingsControlWidth) -> void {
                     ImGuiSliderFlags_None,
                     false,
                     settingsControlWidth,
-                    static_cast<bool>(material->baseOrDiffuseTexture));
+                    static_cast<bool>((material->textures[uint32_t(RendererSceneMaterialTextureSlot::BaseOrDiffuse)] != InvalidSceneIndex)));
             }
             if (IsSettingAvailable(
                     SettingId::MaterialSelectedAlphaCutoff))
@@ -1263,7 +1333,7 @@ auto UIRenderer::DrawMaterialDrawer(float settingsControlWidth) -> void {
                     SettingId::MaterialSelectedNormalTextureEnabled,
                     "Enable the selected material's normal texture.",
                     false,
-                    &material->normalTexture->path);
+                    texturePath(RendererSceneMaterialTextureSlot::Normal));
                 if (material->enableNormalTexture)
                 {
                     DrawUiFloat(
@@ -1286,7 +1356,7 @@ auto UIRenderer::DrawMaterialDrawer(float settingsControlWidth) -> void {
                     SettingId::MaterialSelectedOcclusionTextureEnabled,
                     "Enable the selected material's occlusion texture.",
                     false,
-                    &material->occlusionTexture->path);
+                    texturePath(RendererSceneMaterialTextureSlot::Occlusion));
                 if (material->enableOcclusionTexture)
                 {
                     DrawUiFloat(
@@ -1309,7 +1379,7 @@ auto UIRenderer::DrawMaterialDrawer(float settingsControlWidth) -> void {
                     SettingId::MaterialSelectedEmissiveTextureEnabled,
                     "Enable the selected material's emissive texture.",
                     false,
-                    &material->emissiveTexture->path);
+                    texturePath(RendererSceneMaterialTextureSlot::Emissive));
             }
             DrawUiColor(
                 "Emissive Color",
@@ -1338,7 +1408,7 @@ auto UIRenderer::DrawMaterialDrawer(float settingsControlWidth) -> void {
                         SettingId::MaterialSelectedTransmissionTextureEnabled,
                         "Enable the selected material's transmission texture.",
                         false,
-                        &material->transmissionTexture->path);
+                        texturePath(RendererSceneMaterialTextureSlot::Transmission));
                 }
                 DrawUiFloat(
                     "Transmission Factor",
@@ -1359,7 +1429,7 @@ auto UIRenderer::DrawMaterialDrawer(float settingsControlWidth) -> void {
                     SettingId::MaterialSelectedAlphaMaskTextureEnabled,
                     "Enable the selected material's alpha mask texture.",
                     false,
-                    &material->opacityTexture->path);
+                    texturePath(RendererSceneMaterialTextureSlot::Opacity));
             }
             ImGui::PopID();
         }
@@ -1377,35 +1447,42 @@ void UIRenderer::UpdateStatSnapshot(int width, int height)
 {
     constexpr double interval = 1.0 / 24.0;
     const double frameTime = std::max(0.0, double(ImGui::GetIO().DeltaTime));
-    m_StatSnapshotElapsed += frameTime;
-    if (frameTime > 0.0)
+    const double elapsed = m_StatSnapshotElapsed + frameTime;
+    const double sum = frameTime > 0.0 ? m_StatFrameTimeSum + frameTime : m_StatFrameTimeSum;
+    const uint32_t count = m_StatFrameTimeCount + (frameTime > 0.0 ? 1u : 0u);
+    if (m_HasAppliedStatSnapshot && elapsed < interval)
     {
-        m_StatFrameTimeSum += frameTime;
-        ++m_StatFrameTimeCount;
-    }
-    if (m_HasAppliedStatSnapshot && m_StatSnapshotElapsed < interval)
+        m_StatSnapshotElapsed = elapsed;
+        m_StatFrameTimeSum = sum;
+        m_StatFrameTimeCount = count;
         return;
+    }
 
-    m_StatSnapshotElapsed = m_HasAppliedStatSnapshot
-        ? std::fmod(m_StatSnapshotElapsed, interval) : 0.0;
-    if (m_StatFrameTimeCount > 0u)
-        m_DisplayedFrameTime = m_StatFrameTimeSum / double(m_StatFrameTimeCount);
+    const double displayedFrameTime = count > 0u
+        ? sum / double(count) : m_DisplayedFrameTime;
+    PerformanceStatText candidate;
+    if (!FormatStatLine(candidate.resolution, "%d x %d", width, height) ||
+        !FormatTriangleCount(m_app->GetSubmittedMainViewTriangles(), candidate.triangles) ||
+        (displayedFrameTime > 0.0 &&
+            (!FormatStatLine(candidate.milliseconds, "%.1f ms", displayedFrameTime * 1e3) ||
+             !FormatStatLine(candidate.framesPerSecond, "%.1f fps", 1.0 / displayedFrameTime))))
+    {
+        uvsr::log::error("Unable to format the performance summary.");
+        return;
+    }
+    const int written = snprintf(candidate.line, sizeof(candidate.line), "%s / %s / %s / %s",
+        candidate.resolution, candidate.triangles, candidate.milliseconds, candidate.framesPerSecond);
+    if (written < 0 || size_t(written) >= sizeof(candidate.line))
+    {
+        uvsr::log::error("Unable to compose the performance summary.");
+        return;
+    }
+    m_PerformanceStatText = candidate;
+    m_DisplayedFrameTime = displayedFrameTime;
+    m_StatSnapshotElapsed = m_HasAppliedStatSnapshot ? std::fmod(elapsed, interval) : 0.0;
     m_StatFrameTimeSum = 0.0;
     m_StatFrameTimeCount = 0u;
     m_HasAppliedStatSnapshot = true;
-    FormatStatLine(m_PerformanceStatValues[0], "%d x %d", width, height);
-    m_PerformanceStatValues[3] = FormatTriangleCount(m_app->GetSubmittedMainViewTriangles());
-    if (m_DisplayedFrameTime > 0.0)
-    {
-        FormatStatLine(m_PerformanceStatValues[1], "%.1f ms", m_DisplayedFrameTime * 1e3);
-        FormatStatLine(m_PerformanceStatValues[2], "%.1f fps", 1.0 / m_DisplayedFrameTime);
-    }
-    else
-    {
-        m_PerformanceStatValues[1].clear();
-        m_PerformanceStatValues[2].clear();
-    }
-
 }
 
 auto UIRenderer::DrawCenteredActionButton(const char* label, float width) -> bool {
@@ -1429,12 +1506,12 @@ auto UIRenderer::DrawCenteredActionButton(const char* label, float width) -> boo
 auto UIRenderer::buildUI(void) -> void {
         const auto runUiAction = [this](ActionId id)
         {
-            std::string error;
+            SettingsSnapshotError error;
             if (!RunAction(id, error))
             {
                 uvsr::log::warning(
                     "UI action failed: %s",
-                    error.c_str());
+                    error.Message());
                 return false;
             }
             return true;
@@ -1442,7 +1519,7 @@ auto UIRenderer::buildUI(void) -> void {
         ApplyUiStyle(m_UiDisplayScale);
         int width, height;
         GetDeviceManager()->GetWindowDimensions(width, height);
-        ImFont* activeUiFont = m_UiBodyFont->GetScaledFont();
+        ImFont* activeUiFont = m_UiContext.BodyFont();
         m_SettingsPanelMarginPixels = static_cast<uint32_t>(
             std::max(
                 1.f,
@@ -1477,37 +1554,41 @@ auto UIRenderer::buildUI(void) -> void {
                 m_StatSnapshotElapsed = 0.0;
                 m_StatFrameTimeSum = 0.0;
                 m_StatFrameTimeCount = 0;
-                for (std::string& value : m_PerformanceStatValues)
-                    value.clear();
+                m_PerformanceStatText = {};
                 m_HasAppliedStatSnapshot = false;
                 m_SceneLoadCounterStart =
                     std::chrono::steady_clock::now();
-                m_SceneLoadHistoryKey = m_app->GetCurrentSceneName();
+                // settings can replace the accepted request before the next idle UI frame.
+                SettingsSnapshotText historyKey;
+                SettingsSnapshotError error;
+                if (!historyKey.Assign(m_app->GetCurrentSceneName(), error))
+                    uvsr::log::warning("Could not retain scene loading history key: %s", error.Message());
+                m_SceneLoadHistoryKey = std::move(historyKey);
                 m_SceneLoadFailed = false;
             }
 
-            BeginFullScreenWindow();
+            RendererUiContext::BeginFullScreenWindow();
             ImGui::PushFont(activeUiFont);
 
-            const auto& stats = Scene::GetLoadingStats();
-            const uint32_t objectsLoaded = stats.ObjectsLoaded.load();
+            const auto stats = m_app->GetSceneLoadProgress();
+            const uint32_t objectsLoaded = stats.objectsCompleted;
             const uint32_t objectsTotal = std::max(
-                stats.ObjectsTotal.load(),
+                stats.objectsTotal,
                 objectsLoaded);
             const uint64_t importStepsCompleted =
-                stats.ImportStepsCompleted.load();
+                stats.importStepsCompleted;
             const uint64_t importStepsTotal = std::max(
-                stats.ImportStepsTotal.load(),
+                stats.importStepsTotal,
                 importStepsCompleted);
             const uint32_t texturesDecoded =
-                m_app->GetTextureCache()->GetNumberOfLoadedTextures();
+                stats.texturesDecoded;
             const uint32_t texturesReady =
-                m_app->GetTextureCache()->GetNumberOfFinalizedTextures();
+                m_app->GetSceneTexturesReady();
             const uint32_t texturesTotal = std::max(
-                m_app->GetTextureCache()->GetNumberOfRequestedTextures(),
+                stats.texturesTotal,
                 std::max(texturesDecoded, texturesReady));
             char messageBuffer[512];
-            const std::string sceneDisplayName =
+            const std::string_view sceneDisplayName =
                 m_app->GetCurrentSceneDisplayName();
             const char* loadingPhase =
                 m_app->IsSceneGpuUploadPending()
@@ -1520,21 +1601,17 @@ auto UIRenderer::buildUI(void) -> void {
             const uint64_t elapsedLoadTicks =
                 ResolveSceneLoadElapsedTicks(elapsedLoadMilliseconds);
             uint64_t averageLoadTicks = 0u;
-            const auto sceneTiming = m_SceneLoadTiming.byScene.find(
-                m_SceneLoadHistoryKey);
-            if (sceneTiming != m_SceneLoadTiming.byScene.end())
-            {
-                averageLoadTicks = ResolveAverageSceneLoadTicks(
-                    sceneTiming->second);
-            }
+            if (const auto* sceneTiming = m_SceneLoadTiming.Find(m_SceneLoadHistoryKey.View()))
+                averageLoadTicks = ResolveAverageSceneLoadTicks(*sceneTiming);
             if (averageLoadTicks == 0u)
             {
                 averageLoadTicks = ResolveAverageSceneLoadTicks(
                     m_SceneLoadTiming.allScenes);
             }
-            const std::string averageLoadLabel = averageLoadTicks > 0u
-                ? std::to_string(averageLoadTicks)
-                : "--";
+            char averageLoadLabel[21] = "--";
+            if (averageLoadTicks > 0u)
+                snprintf(averageLoadLabel, sizeof(averageLoadLabel), "%llu",
+                    static_cast<unsigned long long>(averageLoadTicks));
             snprintf(
                 messageBuffer,
                 std::size(messageBuffer),
@@ -1542,11 +1619,11 @@ auto UIRenderer::buildUI(void) -> void {
                 "%s: %llu/%s\n"
                 "Objects: %u/%u / Import steps: %llu/%llu / "
                 "Textures decoded: %u/%u / GPU ready: %u/%u",
-                sceneDisplayName.c_str(),
+                sceneDisplayName.data(),
                 1 + int(elapsedLoadMilliseconds / 500u % 3u), "...",
                 loadingPhase,
                 static_cast<unsigned long long>(elapsedLoadTicks),
-                averageLoadLabel.c_str(),
+                averageLoadLabel,
                 objectsLoaded,
                 objectsTotal,
                 static_cast<unsigned long long>(importStepsCompleted),
@@ -1555,9 +1632,9 @@ auto UIRenderer::buildUI(void) -> void {
                 texturesTotal,
                 texturesReady,
                 texturesTotal);
-            DrawScreenCenteredText(messageBuffer);
+            RendererUiContext::DrawScreenCenteredText(messageBuffer);
             ImGui::PopFont();
-            EndFullScreenWindow();
+            RendererUiContext::EndFullScreenWindow();
 
             return;
         }
@@ -1576,17 +1653,14 @@ auto UIRenderer::buildUI(void) -> void {
                 RecordSceneLoadDuration(
                     m_SceneLoadTiming.allScenes,
                     completedLoadMilliseconds);
-                if (!RecordBoundedSceneLoadDuration(
-                        m_SceneLoadTiming.byScene,
-                        m_SceneLoadHistoryKey,
-                        completedLoadMilliseconds))
-                {
-                    uvsr::log::warning(
-                        "Scene loading history rejected the key '%s'",
-                        m_SceneLoadHistoryKey.c_str());
-                }
+                SettingsSnapshotError error;
+                const auto historyKey = m_SceneLoadHistoryKey.View();
+                if (!historyKey.empty() && !m_SceneLoadTiming.Record(historyKey, completedLoadMilliseconds, error))
+                    uvsr::log::warning("Could not record scene loading history for '%s': %s",
+                        historyKey.data(), error.Message());
                 SaveSceneLoadTimingDatabase();
             }
+            m_SceneLoadHistoryKey = {};
         }
         m_WasSceneLoading = false;
 
@@ -1603,8 +1677,7 @@ auto UIRenderer::buildUI(void) -> void {
             ImGui::PopFont();
             return;
         }
-        const std::string performanceLine = m_PerformanceStatValues[0] + " / " +
-            m_PerformanceStatValues[3] + " / " + m_PerformanceStatValues[1] + " / " + m_PerformanceStatValues[2];
+        const char* const performanceLine = m_PerformanceStatText.line;
 
         // fixed controls and a separate picker lane must fit the viewport.
         const float settingsPanelMarginPixels =
@@ -1668,7 +1741,7 @@ auto UIRenderer::buildUI(void) -> void {
                 performanceGeometry.body,
                 performanceGeometry.summary,
                 style.WindowRounding,
-                performanceLine.c_str());
+                performanceLine);
         }
         const float performanceWindowBottom = performance.window->Pos.y + performance.window->Size.y;
         EndRootPanel();
@@ -1696,7 +1769,7 @@ auto UIRenderer::buildUI(void) -> void {
             ImGui::PushStyleColor(
                 ImGuiCol_Text,
                 hiddenSnapshotText);
-            ImGui::TextUnformatted(m_SettingsSnapshots.Code().c_str());
+            ImGui::TextUnformatted(m_SettingsSnapshots.Code().data());
             ImGui::PopStyleColor();
             expandedSettingsSnapshotMinimum = ImGui::GetItemRectMin();
             expandedSettingsSnapshotSubmitted = true;
@@ -1748,37 +1821,31 @@ auto UIRenderer::buildUI(void) -> void {
         }
 
         const auto drawNoiseSettingsControls = [&] (
-            const char* identifier,
+            const char* patternLabel, const char* resolutionLabel,
+            const char* animateLabel, const char* animateReset,
             bool nestedResetIcons,
             const std::array<SettingId, 3>& settingIds)
         {
-            const std::string patternLabel =
-                std::string("Noise Pattern##") + identifier;
             SetNextLabeledControlWidth("Noise Pattern", settingsControlWidth);
             DrawUiTokenCombo(
-                patternLabel.c_str(),
+                patternLabel,
                 settingIds[0],
                 "Choose a precomputed R8 spatial or spatiotemporal noise "
                 "texture.",
                 nestedResetIcons);
 
-            const std::string resolutionLabel =
-                std::string("Noise Resolution##") + identifier;
             SetNextLabeledControlWidth(
                 "Noise Resolution", settingsControlWidth);
             DrawUiTokenCombo(
-                resolutionLabel.c_str(),
+                resolutionLabel,
                 settingIds[1],
                 "Choose the centered tile resolution used by this noise "
                 "texture.",
                 nestedResetIcons);
 
-            const std::string animateLabel =
-                std::string("Animate Samples##") + identifier;
-            const std::string animateReset = std::string(identifier) + "NoiseAnimate";
-            DrawUiBoolean(animateLabel.c_str(), settingIds[2],
+            DrawUiBoolean(animateLabel, settingIds[2],
                 "Advance the noise sequence after each successful effect dispatch.",
-                false, nullptr, animateReset.c_str());
+                false, nullptr, animateReset);
         };
 
         const auto drawDirectionalRayShadowControls = [&]()
@@ -1822,8 +1889,8 @@ auto UIRenderer::buildUI(void) -> void {
                         1, 64, 1, 64, "%d", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_Logarithmic))
                 {
                     const int sampleCount = 1 << std::clamp(int(std::lround(std::log2(double(std::max(1, shadowSamples))))), 0, 6);
-                    ApplyUiSetting(SettingId::ShadowsRayTracedSamplesPerPixel,
-                        UiSettingsValue::Token(std::to_string(sampleCount)));
+                    ApplyUiSettingText(SettingId::ShadowsRayTracedSamplesPerPixel,
+                        std::to_string(sampleCount));
                 }
                 ImGui::SetItemTooltip("Shadow rays per pixel for the directional light and flashlight. Zero-size emitters need only one ray. Path tracing uses its own path sample count.");
                 DrawUiReset(SettingId::ShadowsRayTracedSamplesPerPixel);
@@ -1891,7 +1958,7 @@ auto UIRenderer::buildUI(void) -> void {
         EndControlRegion();
         }
 
-        const auto& lights = m_app->GetEditableLights();
+        const auto lights = m_app->GetEditableLights();
         const bool lightsOpen = DrawCollapsingHeader(
             "Light", "Show scene light controls.");
         if (lightsOpen)
@@ -1901,10 +1968,10 @@ auto UIRenderer::buildUI(void) -> void {
                 settingsControlWidth);
             if (m_ui.DirectionalShadows.hardShadows)
                 ImGui::TextWrapped("Hard Shadows overrides emitter sizes to zero. Stored sizes below return when it is off.");
-            if (!lights.empty())
+            if (lights.Count())
             {
                 UiSettingsValue selectedLightValue;
-                std::string selectedLightError;
+                SettingsSnapshotError selectedLightError;
                 const bool selectedLightRead = ReadSettingValue(
                     SettingId::LightSelected,
                     selectedLightValue,
@@ -1913,35 +1980,36 @@ auto UIRenderer::buildUI(void) -> void {
                 {
                     uvsr::log::warning(
                         "Selected light read failed: %s",
-                        selectedLightError.c_str());
+                        selectedLightError.Message());
                 }
                 ImGui::SetNextItemWidth(settingsControlWidth);
+                const auto selectedLightName = m_app->GetSceneLightName(m_SelectedLight);
                 const bool lightComboOpen = ImGui::BeginCombo(
-                    "Select Light", m_SelectedLight ? m_SelectedLight->GetName().c_str() : "(None)");
+                    "Select Light", m_SelectedLight ? selectedLightName.c_str() : "(None)");
                 ImGui::SetItemTooltip("Choose a light to edit.");
                 if (lightComboOpen)
                 {
-                    for (std::size_t index = 0u;
-                        index < lights.size(); ++index)
+                    for (uint32_t index = 0u; index < lights.Count(); ++index)
                     {
-                        const auto& light = lights[index];
-                        const std::string selector =
-                            FormatSettingsSnapshotLightToken(
-                                index,
-                                light->GetName());
+                        const auto light = lights.At(index);
+                        const auto name = m_app->GetSceneLightName(light);
+                        UiSettingsValue selector;
+                        SettingsSnapshotError selectorError;
+                        const bool prepared = AcceptFormattedSelector(
+                            FormatSettingsSnapshotLightToken(index, name, selector, selectorError), selector, selectorError);
                         const bool selected = selectedLightRead &&
                             selectedLightValue.kind ==
                                 UiSettingsValueKind::Selector &&
-                            selectedLightValue.text == selector;
+                            prepared && selectedLightValue == selector;
                         DrawDropdownOption(
-                            light->GetName().c_str(),
+                            name.c_str(),
                             selected,
-                            [this, selector]()
+                            [this, &selector, &selectorError, prepared]()
                             {
-                                ApplyUiSetting(
-                                    SettingId::LightSelected,
-                                    UiSettingsValue::Selector(
-                                        selector));
+                                if (prepared)
+                                    ApplyUiSetting(SettingId::LightSelected, selector);
+                                else
+                                    uvsr::log::warning("Could not prepare light selection: %s", selectorError.Message());
                             });
                         if (selected)
                         {
@@ -1952,7 +2020,7 @@ auto UIRenderer::buildUI(void) -> void {
                 }
                 DrawUiReset(SettingId::LightSelected, false, "Selected Light", "Select the scene's primary directional light.");
 
-                if (m_SelectedLight)
+                if (const auto* selectedLight = m_app->GetSceneLight(m_SelectedLight))
                 {
                     if (m_app->IsFlashlight(m_SelectedLight))
                     {
@@ -2102,11 +2170,13 @@ auto UIRenderer::buildUI(void) -> void {
                     else
                     {
                     const auto drawLightDirection =
-                        [&](const Light& light, bool directional)
+                        [&](bool directional)
                         {
+                            RendererSceneLightDirection direction;
+                            if (!m_app->ReadSceneLightDirection(m_SelectedLight, direction)) return;
                             auto [azimuth, elevation] =
-                                GetCommandLightAngles(
-                                    light.GetDirection(),
+                                GetRendererSceneLightAngles(
+                                    direction,
                                     directional);
                             const auto drawAngle = [&] (
                                 const char* label,
@@ -2153,13 +2223,11 @@ auto UIRenderer::buildUI(void) -> void {
                             }
                         };
 
-                    switch (m_SelectedLight->GetLightType())
+                    switch (selectedLight->kind)
                     {
-                    case UVSR_LIGHT_TYPE_DIRECTIONAL:
+                    case RendererSceneLightKind::Directional:
                     {
-                        const auto& light = static_cast<const DirectionalLight&>(
-                            *m_SelectedLight);
-                        drawLightDirection(light, true);
+                        drawLightDirection(true);
                         DrawUiColor(
                             "Color",
                             SettingId::LightSelectedColor,
@@ -2179,7 +2247,7 @@ auto UIRenderer::buildUI(void) -> void {
                             "degrees creates a zero extent emitter with hard shadows.");
                         break;
                     }
-                    case UVSR_LIGHT_TYPE_POINT:
+                    case RendererSceneLightKind::Point:
                     {
                         DrawUiFloat(
                             m_ui.DirectionalShadows.hardShadows ? "Stored Radius" : "Radius",
@@ -2200,11 +2268,9 @@ auto UIRenderer::buildUI(void) -> void {
                             ImGuiSliderFlags_Logarithmic);
                         break;
                     }
-                    case UVSR_LIGHT_TYPE_SPOT:
+                    case RendererSceneLightKind::Spot:
                     {
-                        const auto& light = static_cast<const SpotLight&>(
-                            *m_SelectedLight);
-                        drawLightDirection(light, false);
+                        drawLightDirection(false);
                         DrawUiFloat(
                             m_ui.DirectionalShadows.hardShadows ? "Stored Radius" : "Radius",
                             SettingId::LightSelectedRadius,
@@ -2458,10 +2524,9 @@ auto UIRenderer::buildUI(void) -> void {
                             closestIndex = index;
                         }
                     }
-                    ApplyUiSetting(
+                    ApplyUiSettingText(
                         SettingId::SkyVisibilitySamplesPerPixel,
-                        UiSettingsValue::Token(
-                            std::string(sampleDomain.tokens[closestIndex])));
+                        sampleDomain.tokens[closestIndex]);
                 }
                 ImGui::SetItemTooltip(
                     "Trace and average 1 to 64 cosine-weighted normal-hemisphere "
@@ -2479,7 +2544,10 @@ auto UIRenderer::buildUI(void) -> void {
                         skyVisibility.noise.specifyNoise))
                 {
                     drawNoiseSettingsControls(
-                        "RayTracedSkyVisibility",
+                        "Noise Pattern##RayTracedSkyVisibility",
+                        "Noise Resolution##RayTracedSkyVisibility",
+                        "Animate Samples##RayTracedSkyVisibility",
+                        "RayTracedSkyVisibilityNoiseAnimate",
                         true,
                         {
                             SettingId::SkyVisibilityNoisePattern,
@@ -2552,7 +2620,10 @@ auto UIRenderer::buildUI(void) -> void {
             };
 
             drawNoiseSettingsControls(
-                "GlobalNoise",
+                "Noise Pattern##GlobalNoise",
+                "Noise Resolution##GlobalNoise",
+                "Animate Samples##GlobalNoise",
+                "GlobalNoiseNoiseAnimate",
                 false,
                 {
                     SettingId::NoisePattern,
@@ -2618,11 +2689,11 @@ auto UIRenderer::buildUI(void) -> void {
             const SettingId debugPbrId = SettingId::DebugPbrFilter;
             const std::size_t lightingView =
                 ReadUiTokenIndex(debugPbrId);
-            const std::string lightingViewLabel =
+            const auto lightingViewLabel =
                 FormatUiSettingsTokenLabel(debugPbrId, lightingView);
             if (ImGui::BeginCombo(
                     "Information Filter",
-                    lightingViewLabel.c_str()))
+                    lightingViewLabel.Data()))
             {
                 const UiSettingsTypedDomain& domain =
                     GetUiSettingDefinition(debugPbrId).typedDomain;
@@ -2688,10 +2759,9 @@ auto UIRenderer::buildUI(void) -> void {
             const std::size_t tokenIndex =
                 (ReadUiTokenIndex(zoomId) + 1u) %
                 zoomDomain.tokenCount;
-            ApplyUiSetting(
+            ApplyUiSettingText(
                 zoomId,
-                UiSettingsValue::Token(
-                    GetUiSettingToken(zoomId, tokenIndex)));
+                GetUiSettingToken(zoomId, tokenIndex));
         }
         ImGui::SetItemTooltip(
             "Cycle exact Off, 2x, 3x, 4x, and 5x pixel zoom. Z uses the "
@@ -2713,7 +2783,7 @@ auto UIRenderer::buildUI(void) -> void {
             settingsDecorationDrawList->AddText(
                 expandedSettingsSnapshotMinimum,
                 ImGui::GetColorU32(ImGuiCol_Text),
-                m_SettingsSnapshots.Code().c_str());
+                m_SettingsSnapshots.Code().data());
             settingsDecorationDrawList->PopClipRect();
         }
         ImGui::SetUvsrColorPickerBounds(0.f, 0.f);
@@ -2731,7 +2801,7 @@ auto UIRenderer::buildUI(void) -> void {
                 settingsBodyRect,
                 settingsGeometry.summary,
                 rootBodyRounding,
-                m_SettingsSnapshots.Code().c_str());
+                m_SettingsSnapshots.Code().data());
             const bool snapshotHovered = snapshotHitRect.Contains(ImGui::GetIO().MousePos);
             if (snapshotHovered)
             {

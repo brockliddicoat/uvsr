@@ -1,0 +1,95 @@
+#pragma once
+
+#include "windows_executable_path.h"
+
+#include "renderer_runtime_capture.h"
+
+#include "agx_tone_mapping_pass_nvrhi.h"
+#include "auto_exposure_nvrhi.h"
+#include "fast_approximate_aa_nvrhi.h"
+#include "renderer_common_passes_nvrhi.h"
+#include "renderer_geometry_passes_nvrhi.h"
+#include "renderer_pixel_readback.h"
+#include "renderer_shader_factory_nvrhi.h"
+#include "renderer_targets_nvrhi.h"
+#include "uvsr_application.h"
+#if defined(UVSR_BUILD_TESTING)
+#include "retained_runtime_diagnostic.h"
+#endif
+#include "renderer_view.h"
+#include <array>
+#include <memory>
+#include <optional>
+
+namespace uvsr
+{
+    enum class MaterialPickPurpose
+    {
+        None,
+        FocusCameraAtCursor,
+        RefreshMaterialDrawerSelection
+    };
+
+    enum class RenderPassPreparationStage
+    {
+        Idle,
+        GBuffer,
+        DeferredLighting,
+        DeferredLightingPipelines,
+        FastApproximateAA,
+        EnvironmentBackground,
+        ToneMapping,
+        Complete
+    };
+
+    struct RendererFrameState
+    {
+        static constexpr uint32_t TimerLatency = 4u;
+        // lighting and UI borrow these helpers; both die before this frame owner.
+        std::unique_ptr<uvsr::RendererShaderFactory> rendererShaderFactory;
+        std::unique_ptr<uvsr::RendererCommonPasses> rendererCommonPasses;
+        std::unique_ptr<RenderTargets> renderTargets;
+        std::unique_ptr<RendererGeometryPass> gBufferGeometryPass;
+        std::unique_ptr<AutoExposurePass> autoExposurePass;
+        std::unique_ptr<AgxToneMappingPass> agxToneMappingPass;
+        WindowsPath toneMappingLutDirectory;
+        ColorLutResource toneMappingLut;
+        std::unique_ptr<FastApproximateAAPass> fastApproximateAAPass;
+        std::unique_ptr<RendererGeometryPass> materialIdGeometryPass;
+        std::unique_ptr<uvsr::RendererPixelReadback> pixelReadback;
+        RendererView view;
+        nvrhi::CommandListHandle commandList;
+        std::array<std::array<nvrhi::TimerQueryHandle, TimerLatency>, static_cast<size_t>(RendererTimingStage::Count)> rendererTimerQueries;
+        std::array<std::array<bool, TimerLatency>, static_cast<size_t>(RendererTimingStage::Count)> rendererTimerPending{};
+        std::array<std::array<uint64_t, TimerLatency>, static_cast<size_t>(RendererTimingStage::Count)> rendererTimerPendingEpoch{};
+        std::array<uint64_t, static_cast<size_t>(RendererTimingStage::Count)> rendererTimerStageEpoch{};
+        std::array<bool, static_cast<size_t>(RendererTimingStage::Count)> rendererTimerActive{};
+        uint32_t rendererTimerFrame = 0u;
+        bool rendererTimerFrameWritable = true;
+        RendererTimings rendererTimings;
+        uint64_t submittedMainViewTriangles = 0u;
+        float frameDeltaSeconds = 0.f;
+        gpu_contract::Uint2 pickPosition{};
+        MaterialPickPurpose materialPickPurpose = MaterialPickPurpose::None;
+        uint64_t materialPickGeneration = 0;
+        bool autoExposureDispatchedThisFrame = false;
+#if defined(UVSR_BUILD_TESTING)
+        bool runtimeOutputCaptureRequested = false;
+        RuntimeCaptureSequence runtimeCaptureSequence;
+        std::optional<RuntimeOutputEvidence> runtimeOutputEvidence;
+        WindowsPath runtimeOutputCapturePath;
+        nvrhi::StagingTextureHandle runtimeLinearReadback;
+        bool runtimeLinearReadbackQueued = false;
+        unsigned runtimeCaptureSettlingFrames = 0u;
+        bool runtimeCaptureDrainBeforeSampling = false;
+        void FailRuntimeOutputCapture() noexcept
+        {
+            runtimeOutputEvidence = RuntimeOutputEvidence{};
+            runtimeOutputCaptureRequested = false;
+            runtimeCaptureDrainBeforeSampling = false;
+        }
+#endif
+        RenderPassPreparationStage renderPassPreparationStage = RenderPassPreparationStage::Idle;
+        bool renderPassPreparationWaitForIbl = false;
+    };
+}

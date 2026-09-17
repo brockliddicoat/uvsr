@@ -22,11 +22,11 @@ namespace
     constexpr std::int64_t MaximumRendererBytes =
         32ll * 1024ll * 1024ll * 1024ll;
 
-    [[nodiscard]] JsonValue DecodeEnvelope(
+    [[nodiscard]] JsonDocument DecodeEnvelope(
         std::string_view text,
         std::int64_t schemaVersion)
     {
-        const JsonValue envelope = ParseJson(text);
+        const JsonDocument envelope = ParseJson(text);
         RequireExactObject(envelope,
             { "schemaVersion", "keyId", "payloadBase64", "signatureBase64" },
             "feed envelope");
@@ -37,9 +37,9 @@ namespace
         }
         if (String(Member(envelope, "keyId"), "feed key") != KeyId)
             throw std::runtime_error("feed key is not canonical");
-        const std::string& payloadText =
+        const std::string_view payloadText =
             String(Member(envelope, "payloadBase64"), "payload");
-        const std::string& signatureText =
+        const std::string_view signatureText =
             String(Member(envelope, "signatureBase64"), "signature");
         const std::vector<unsigned char> payload = DecodeBase64(payloadText);
         const std::vector<unsigned char> signature = DecodeBase64(signatureText);
@@ -96,12 +96,12 @@ namespace
 
     void ValidateLauncher(std::string_view text)
     {
-        const JsonValue payload = DecodeEnvelope(text, 2);
+        const JsonDocument payload = DecodeEnvelope(text, 2);
         RequireExactObject(payload,
             { "schemaVersion", "productId", "channel", "releaseSequence",
               "version", "sourceCommit", "artifact" },
             "launcher feed payload");
-        ValidateCommon(payload, 2);
+        ValidateCommon(payload.Root(), 2);
         if (!IsCanonicalDottedVersion(
                 String(Member(payload, "version"), "launcher version"),
                 3u, std::numeric_limits<std::int32_t>::max()))
@@ -114,13 +114,13 @@ namespace
 
     void ValidateRenderer(std::string_view text)
     {
-        const JsonValue payload = DecodeEnvelope(text, 1);
+        const JsonDocument payload = DecodeEnvelope(text, 1);
         RequireExactObject(payload,
             { "schemaVersion", "productId", "channel", "releaseSequence",
               "sourceCommit", "settingsHash", "engineVersion", "artifact" },
             "renderer feed payload");
-        ValidateCommon(payload, 1);
-        const std::string& settingsHash = String(
+        ValidateCommon(payload.Root(), 1);
+        const std::string_view settingsHash = String(
             Member(payload, "settingsHash"), "settings hash");
         if (!IsLowerHex(settingsHash, 32u))
             throw std::runtime_error("settings hash is not canonical");

@@ -1,46 +1,47 @@
 #include "uvsr_scene_viewer.h"
-#include "uvsr_renderer_scene.h"
-#include "uvsr_renderer_lighting.h"
-#include "uvsr_renderer_frame.h"
+#include "uvsr_renderer_scene_nvrhi.h"
+#include "uvsr_renderer_lighting_nvrhi.h"
+#include "uvsr_renderer_frame_nvrhi.h"
 #include "uvsr_runtime.h"
 #include "uvsr_application.h"
 #include "renderer_log.h"
 #include <donut/app/DeviceManager.h>
 #include <algorithm>
 #include <cmath>
-#include <stdexcept>
+#include <new>
 #include <utility>
 #include "gpu_capabilities.h"
 
 using namespace donut;
-using namespace donut::math;
 using namespace donut::app;
-using namespace donut::vfs;
-using namespace donut::engine;
-using namespace donut::render;
 using namespace uvsr;
 
-auto UvsrSceneViewer::EnsureDirectionalRayVisibilityPass() -> void {
+auto UvsrSceneViewer::EnsureDirectionalRayVisibilityPass() -> bool {
         if (!m_ui.Representation.allowRayTraversal ||
             !m_ui.DirectionalShadows.enabled ||
             m_lighting->directionalRayVisibilityPass ||
             !SupportsDirectionalRayVisibility())
         {
-            return;
+            return true;
         }
-        m_lighting->directionalRayVisibilityPass =
-            std::make_unique<RayVisibilityPass>(
+        std::unique_ptr<RayVisibilityPass> candidate(new (std::nothrow) RayVisibilityPass(
                 GetDevice(),
-                m_frame->rendererShaderFactory,
-                m_scene->bindlessLayout, RayVisibilityPass::Kind::Sun);
+                m_frame->rendererShaderFactory.get(),
+                m_scene->bindlessLayout, RayVisibilityPass::Kind::Sun));
+        if (!candidate)
+            return FailRender("Directional ray visibility allocation failed");
+        if (!candidate->IsSupported())
+            return FailRender("Required renderer pass failed: directional ray visibility");
+        m_lighting->directionalRayVisibilityPass = std::move(candidate);
         uvsr::log::info(
             "Directional ray visibility first-use pipeline %s",
             m_lighting->directionalRayVisibilityPass->IsSupported()
                 ? "available"
                 : "unavailable");
+        return true;
     }
 
-auto UvsrSceneViewer::EnsureRayTracedFlashlightShadowPass() -> void {
+auto UvsrSceneViewer::EnsureRayTracedFlashlightShadowPass() -> bool {
         if (!m_ui.Representation.allowRayTraversal ||
             !m_ui.Flashlight.castShadows ||
             !m_lighting->flashlight ||
@@ -48,22 +49,27 @@ auto UvsrSceneViewer::EnsureRayTracedFlashlightShadowPass() -> void {
             m_lighting->rayTracedFlashlightShadowPass ||
             !HasRayTracedFlashlightShadowHardwareSupport())
         {
-            return;
+            return true;
         }
 
-        m_lighting->rayTracedFlashlightShadowPass =
-            std::make_unique<RayVisibilityPass>(
+        std::unique_ptr<RayVisibilityPass> candidate(new (std::nothrow) RayVisibilityPass(
                 GetDevice(),
-                m_frame->rendererShaderFactory,
-                m_scene->bindlessLayout, RayVisibilityPass::Kind::Flashlight);
+                m_frame->rendererShaderFactory.get(),
+                m_scene->bindlessLayout, RayVisibilityPass::Kind::Flashlight));
+        if (!candidate)
+            return FailRender("Ray-traced flashlight shadow allocation failed");
+        if (!candidate->IsSupported())
+            return FailRender("Required renderer pass failed: ray-traced flashlight visibility");
+        m_lighting->rayTracedFlashlightShadowPass = std::move(candidate);
         uvsr::log::info(
             "Ray-traced flashlight shadow first-use pipeline %s",
             m_lighting->rayTracedFlashlightShadowPass->IsSupported()
                 ? "available"
                 : "unavailable");
+        return true;
     }
 
-auto UvsrSceneViewer::EnsureRayTracedSkyVisibilityPass() -> void {
+auto UvsrSceneViewer::EnsureRayTracedSkyVisibilityPass() -> bool {
         const bool debugSelected =
             m_ui.Lighting == LightingSolution::RayMarching &&
             m_ui.LightingDebugView ==
@@ -76,18 +82,23 @@ auto UvsrSceneViewer::EnsureRayTracedSkyVisibilityPass() -> void {
             m_lighting->rayTracedSkyVisibilityPass ||
             !SupportsRayTracedSkyVisibility())
         {
-            return;
+            return true;
         }
-        m_lighting->rayTracedSkyVisibilityPass =
-            std::make_unique<RayVisibilityPass>(
+        std::unique_ptr<RayVisibilityPass> candidate(new (std::nothrow) RayVisibilityPass(
                 GetDevice(),
-                m_frame->rendererShaderFactory,
-                m_scene->bindlessLayout, RayVisibilityPass::Kind::Sky);
+                m_frame->rendererShaderFactory.get(),
+                m_scene->bindlessLayout, RayVisibilityPass::Kind::Sky));
+        if (!candidate)
+            return FailRender("Ray-traced sky visibility allocation failed");
+        if (!candidate->IsSupported())
+            return FailRender("Required renderer pass failed: ray-traced sky visibility");
+        m_lighting->rayTracedSkyVisibilityPass = std::move(candidate);
         uvsr::log::info(
             "Ray-traced sky visibility first-use pipeline %s",
             m_lighting->rayTracedSkyVisibilityPass->IsSupported()
                 ? "available"
                 : "unavailable");
+        return true;
     }
 
 auto UvsrSceneViewer::HasDirectionalRayVisibilityHardwareSupport() const -> bool {

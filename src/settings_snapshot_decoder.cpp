@@ -1,302 +1,183 @@
 #include "settings_snapshot_decoder.h"
-
-#include "settings_snapshot.h"
-#include "json_document.h"
-#include "windows_executable_path.h"
-
-#include <algorithm>
-#include <cstdlib>
-#include <fstream>
-#include <iterator>
-#include <memory>
-#include <set>
-#include <sstream>
-#include <stdexcept>
+#include "settings_snapshot_internal.h"
 
 namespace uvsr
 {
     namespace
     {
-        [[nodiscard]] std::string ReadUtf8Text(
-            const std::filesystem::path& path)
+        bool Fail(SettingsSnapshotError& error, SettingsSnapshotErrorCode code,
+            const char* message) noexcept
         {
-            std::ifstream stream(path, std::ios::binary);
-            if (!stream)
-                throw std::runtime_error(
-                    "snapshot catalog not found: " + path.u8string());
-            return {
-                std::istreambuf_iterator<char>(stream),
-                std::istreambuf_iterator<char>()
-            };
+            error = {};
+            error.code = code;
+            error.message = message;
+            return false;
         }
 
-        [[nodiscard]] std::string EscapeSnapshotValue(
-            std::string_view value)
+        bool Publish(json::EncodedText&& text, json::EncodedText& output,
+            SettingsSnapshotError& error) noexcept
         {
-            std::string escaped;
-            escaped.reserve(value.size());
-            for (const char character : value)
+            if (!text.IsValid())
             {
-                switch (character)
+                const auto code = text.Failure().code;
+                return Fail(error, code == json::ErrorCode::OutOfMemory
+                    ? SettingsSnapshotErrorCode::OutOfMemory
+                    : code == json::ErrorCode::Capacity ? SettingsSnapshotErrorCode::Capacity
+                    : SettingsSnapshotErrorCode::Format, text.Failure().message);
+            }
+            output = static_cast<json::EncodedText&&>(text);
+            return true;
+        }
+
+        bool EmitUnescaped(json::OutputWriter& output, const void* context) noexcept
+        {
+            const auto value = *static_cast<const std::string_view*>(context);
+            size_t start = 0;
+            for (size_t index = 0; index < value.size(); ++index)
+            {
+                if (value[index] != '\\') continue;
+                if (!output.Raw({value.data() + start, index - start})) return false;
+                if (++index == value.size())
+                    return output.Reject(json::ErrorCode::InvalidInput, "snapshot value has a trailing escape");
+                char character = 0;
+                switch (value[index])
                 {
-                case '\\': escaped += "\\\\"; break;
-                case '\n': escaped += "\\n"; break;
-                case '\r': escaped += "\\r"; break;
-                case '\t': escaped += "\\t"; break;
-                default: escaped.push_back(character); break;
+                case '\\': character = '\\'; break;
+                case 'n': character = '\n'; break;
+                case 'r': character = '\r'; break;
+                case 't': character = '\t'; break;
+                default:
+                    return output.Reject(json::ErrorCode::InvalidInput,
+                        "snapshot value contains an unknown escape");
                 }
+                if (!output.Raw({&character, 1})) return false;
+                start = index + 1;
             }
-            return escaped;
-        }
-    }
-
-    std::vector<std::filesystem::path>
-    GetDefaultSettingsSnapshotCatalogPaths(std::string_view version)
-    {
-        if (version.size() != 4u)
-            throw std::invalid_argument("snapshot version must have four digits");
-
-#if defined(UVSR_BUILD_TESTING)
-        return { GetExecutableDirectoryWide() / "state" /
-            ("settings-snapshots-v" + std::string(version) + ".txt") };
-#else
-
-        wchar_t* localAppDataBuffer = nullptr;
-        std::size_t localAppDataSize = 0u;
-        if (_wdupenv_s(
-                &localAppDataBuffer,
-                &localAppDataSize,
-                L"LOCALAPPDATA") != 0)
-        {
-            throw std::runtime_error("cannot read LOCALAPPDATA");
-        }
-        const std::unique_ptr<wchar_t, decltype(&std::free)> localAppData(
-            localAppDataBuffer,
-            &std::free);
-        if (!localAppData || localAppDataSize <= 1u)
-        {
-            throw std::runtime_error(
-                "LOCALAPPDATA is unavailable; pass an explicit catalog path");
+            return output.Raw({start ? value.data() + start : value.data(), value.size() - start});
         }
 
-        const std::string catalogName =
-            "settings-snapshots-v" + std::string(version) + ".txt";
-        const std::filesystem::path localRoot(localAppData.get());
-        std::vector<std::filesystem::path> catalogs = {
-            localRoot / "UVSR" / catalogName
-        };
-
-        const std::filesystem::path packagesRoot = localRoot / "Packages";
-        std::error_code error;
-        if (!std::filesystem::is_directory(packagesRoot, error))
-            return catalogs;
-
-        std::vector<std::filesystem::path> packageDirectories;
-        for (std::filesystem::directory_iterator iterator(packagesRoot, error), end;
-             !error && iterator != end;
-             iterator.increment(error))
+        bool EmitEscaped(json::OutputWriter& output, std::string_view value) noexcept
         {
-            if (iterator->is_directory(error))
-                packageDirectories.push_back(iterator->path());
-        }
-        if (error)
-            throw std::runtime_error("cannot inspect package-local catalogs");
-        std::sort(packageDirectories.begin(), packageDirectories.end());
-        for (const std::filesystem::path& packageDirectory : packageDirectories)
-        {
-            const std::filesystem::path candidate = packageDirectory /
-                "LocalCache" / "Local" / "UVSR" / catalogName;
-            if (std::filesystem::is_regular_file(candidate, error) && !error)
-                catalogs.push_back(candidate);
-            error.clear();
-        }
-        return catalogs;
-#endif
-    }
-
-    std::vector<std::string> ReadMatchingSettingsSnapshots(
-        const std::filesystem::path& catalogPath,
-        std::string_view code)
-    {
-        const std::string text = ReadUtf8Text(catalogPath);
-        const std::string opening = "[" + std::string(code) + "]";
-        const std::string closing = "[/" + std::string(code) + "]";
-        std::vector<std::string> snapshots;
-        std::istringstream stream(text);
-        std::string line;
-        while (std::getline(stream, line))
-        {
-            if (!line.empty() && line.back() == '\r')
-                line.pop_back();
-            if (line != opening)
-                continue;
-
-            std::string canonical;
-            bool terminated = false;
-            while (std::getline(stream, line))
+            size_t start = 0;
+            for (size_t index = 0; index < value.size(); ++index)
             {
-                if (!line.empty() && line.back() == '\r')
-                    line.pop_back();
-                if (line == closing)
+                const char* escape = nullptr;
+                switch (value[index])
                 {
-                    terminated = true;
-                    break;
+                case '\\': escape = "\\\\"; break;
+                case '\n': escape = "\\n"; break;
+                case '\r': escape = "\\r"; break;
+                case '\t': escape = "\\t"; break;
+                default: continue;
                 }
-                canonical += line;
-                canonical.push_back('\n');
+                if (!output.Raw({value.data() + start, index - start}) ||
+                    !output.Raw({escape, 2})) return false;
+                start = index + 1;
             }
-            if (!terminated)
-            {
-                throw std::runtime_error(
-                    "snapshot catalog contains an unterminated " +
-                    std::string(code) + " entry");
-            }
-            snapshots.push_back(std::move(canonical));
+            return output.Raw({start ? value.data() + start : value.data(), value.size() - start});
         }
-        return snapshots;
-    }
 
-    std::string UnescapeSettingsSnapshotValue(std::string_view value)
-    {
-        std::string result;
-        result.reserve(value.size());
-        for (std::size_t index = 0u; index < value.size(); ++index)
+        bool EmitCanonical(json::OutputWriter& output, const void* context) noexcept
         {
-            if (value[index] != '\\')
+            const auto& settings = *static_cast<const DecodedSettings*>(context);
+            for (size_t index = 0; index < settings.Count(); ++index)
             {
-                result.push_back(value[index]);
-                continue;
+                const auto& setting = settings.Entries()[index];
+                if (!output.Raw({setting.name.data(), setting.name.size()}) ||
+                    !output.Raw("=") || !EmitEscaped(output, setting.value) ||
+                    !output.Raw("\n")) return false;
             }
-            if (++index == value.size())
-                throw std::runtime_error("snapshot value has a trailing escape");
-            switch (value[index])
-            {
-            case '\\': result.push_back('\\'); break;
-            case 'n': result.push_back('\n'); break;
-            case 'r': result.push_back('\r'); break;
-            case 't': result.push_back('\t'); break;
-            default:
-                throw std::runtime_error(
-                    "snapshot value contains an unknown escape");
-            }
+            return true;
         }
-        return result;
+
+        bool EmitJson(json::OutputWriter& output, const void* context) noexcept
+        {
+            const auto& settings = *static_cast<const DecodedSettings*>(context);
+            if (!output.Raw("{\n")) return false;
+            for (size_t index = 0; index < settings.Count(); ++index)
+            {
+                const auto& setting = settings.Entries()[index];
+                if (!output.Raw("  ") || !output.String({setting.name.data(), setting.name.size()}) ||
+                    !output.Raw(": ") || !output.String({setting.value.data(), setting.value.size()}) ||
+                    (index + 1 < settings.Count() && !output.Raw(",")) ||
+                    !output.Raw("\n")) return false;
+            }
+            return output.Raw("}\n");
+        }
     }
 
-    DecodedSettings ParseSettingsSnapshot(std::string_view canonicalSettings)
+    bool UnescapeSettingsSnapshotValue(std::string_view value,
+        json::EncodedText& output, SettingsSnapshotError& error) noexcept
     {
-        DecodedSettings settings;
-        std::size_t offset = 0u;
+        json::EncodedText previousDetail(static_cast<json::EncodedText&&>(error.detail));
+        error = {};
+        if (!settings_snapshot_detail::ValidText(value))
+            return Fail(error, SettingsSnapshotErrorCode::InvalidInput, "invalid snapshot text range");
+        json::EncodedText candidate(EmitUnescaped, &value);
+        if (!candidate.IsValid() && candidate.Failure().code == json::ErrorCode::InvalidInput)
+            return Fail(error, SettingsSnapshotErrorCode::Escape, candidate.Failure().message);
+        return Publish(static_cast<json::EncodedText&&>(candidate), output, error);
+    }
+
+    bool ParseSettingsSnapshot(std::string_view canonicalSettings,
+        DecodedSettings& output, SettingsSnapshotError& error) noexcept
+    {
+        json::EncodedText previousDetail(static_cast<json::EncodedText&&>(error.detail));
+        error = {};
+        if (!settings_snapshot_detail::ValidText(canonicalSettings))
+            return Fail(error, SettingsSnapshotErrorCode::InvalidInput, "invalid snapshot text range");
+        DecodedSettings candidate;
+        size_t offset = 0;
         while (offset < canonicalSettings.size())
         {
-            const std::size_t newline = canonicalSettings.find('\n', offset);
-            const std::size_t end = newline == std::string_view::npos
-                ? canonicalSettings.size()
-                : newline;
-            const std::string_view line = canonicalSettings.substr(
-                offset,
-                end - offset);
+            const size_t newline = canonicalSettings.find('\n', offset);
+            const size_t end = newline == std::string_view::npos ? canonicalSettings.size() : newline;
+            const auto line = canonicalSettings.substr(offset, end - offset);
             if (line.empty())
-                throw std::runtime_error("snapshot contains an empty setting line");
-            const std::size_t separator = line.find('=');
-            if (separator == std::string_view::npos || separator == 0u)
-                throw std::runtime_error("snapshot contains an invalid setting line");
-            const std::string name(line.substr(0u, separator));
-            const auto inserted = settings.emplace(
-                name,
-                UnescapeSettingsSnapshotValue(line.substr(separator + 1u)));
-            if (!inserted.second)
-                throw std::runtime_error("snapshot contains a duplicate setting");
-            if (newline == std::string_view::npos)
-                break;
-            offset = newline + 1u;
+                return Fail(error, SettingsSnapshotErrorCode::InvalidInput,
+                    "snapshot contains an empty setting line");
+            const size_t separator = line.find('=');
+            if (separator == std::string_view::npos || !separator)
+                return Fail(error, SettingsSnapshotErrorCode::InvalidInput,
+                    "snapshot contains an invalid setting line");
+            // validate the value before insertion to retain duplicate/escape error order.
+            json::EncodedText value;
+            if (!UnescapeSettingsSnapshotValue(line.substr(separator + 1), value, error) ||
+                !candidate.Insert(line.substr(0, separator), {value.Data(), value.Size()}, error)) return false;
+            if (newline == std::string_view::npos) break;
+            offset = newline + 1;
         }
-        return settings;
-    }
-
-    DecodedSettings DecodeSettingsSnapshot(
-        std::string_view code,
-        const std::vector<std::filesystem::path>& catalogPaths)
-    {
-        if (!IsSettingsSnapshotCode(code))
-            throw std::invalid_argument("expected a registered 32-digit snapshot code");
-
-        std::set<std::string> uniqueSnapshots;
-        bool foundCatalog = false;
-        for (const std::filesystem::path& catalogPath : catalogPaths)
-        {
-            std::error_code error;
-            if (!std::filesystem::is_regular_file(catalogPath, error))
-                continue;
-            foundCatalog = true;
-            const auto snapshots = ReadMatchingSettingsSnapshots(catalogPath, code);
-            uniqueSnapshots.insert(snapshots.begin(), snapshots.end());
-        }
-        if (!foundCatalog)
-            throw std::runtime_error("no settings snapshot catalog was found");
-        if (uniqueSnapshots.empty())
-            throw std::runtime_error("settings snapshot is absent from the catalogs");
-        if (uniqueSnapshots.size() != 1u)
-            throw std::runtime_error("settings snapshot fingerprint collision");
-
-        const std::string& canonical = *uniqueSnapshots.begin();
-        if (BuildSettingsSnapshotCode(canonical, code.substr(0u, 4u)) != code)
-            throw std::runtime_error("settings snapshot fingerprint check failed");
-        return ParseSettingsSnapshot(canonical);
-    }
-
-    bool ValidateSettingsSnapshotLoadCode(
-        std::string_view code,
-        std::string& error)
-    {
-        error.clear();
-        if (!IsSettingsSnapshotCode(code))
-        {
-            error = "expected a registered 32-character lowercase snapshot code";
-            return false;
-        }
-        const std::string_view currentVersion(
-            SettingsSnapshotVersionText.data(),
-            4u);
-        const std::string_view requestedVersion = code.substr(0u, 4u);
-        if (requestedVersion != currentVersion &&
-            !IsSupportedLegacySettingsSnapshotVersion(requestedVersion))
-        {
-            error = "snapshot schema " + std::string(requestedVersion) +
-                " is neither this engine's schema " +
-                std::string(currentVersion) +
-                " nor a supported legacy migration";
-            return false;
-        }
+        output = static_cast<DecodedSettings&&>(candidate);
         return true;
     }
 
-    std::string FormatCanonicalSettingsSnapshot(
-        const DecodedSettings& settings)
+    bool FormatCanonicalSettingsSnapshot(const DecodedSettings& settings,
+        json::EncodedText& output, SettingsSnapshotError& error) noexcept
     {
-        std::string canonical;
-        for (const auto& setting : settings)
-        {
-            canonical += setting.first;
-            canonical.push_back('=');
-            canonical += EscapeSnapshotValue(setting.second);
-            canonical.push_back('\n');
-        }
-        return canonical;
+        error = {};
+        return Publish(json::EncodedText(EmitCanonical, &settings), output, error);
     }
 
-    std::string FormatDecodedSettingsJson(const DecodedSettings& settings)
+    bool FormatDecodedSettingsJson(const DecodedSettings& settings,
+        json::EncodedText& output, SettingsSnapshotError& error) noexcept
     {
-        std::string output = "{\n";
-        for (auto iterator = settings.begin(); iterator != settings.end(); ++iterator)
-        {
-            output += "  \"" + json::Escape(iterator->first) + "\": \"" +
-                json::Escape(iterator->second) + "\"";
-            if (std::next(iterator) != settings.end())
-                output.push_back(',');
-            output.push_back('\n');
-        }
-        output += "}\n";
-        return output;
+        error = {};
+        return Publish(json::EncodedText(EmitJson, &settings), output, error);
+    }
+
+    bool FormatSettingsSnapshotCatalogSection(std::string_view code, std::string_view canonical,
+        json::EncodedText& output, SettingsSnapshotError& error) noexcept
+    {
+        json::EncodedText previousDetail(static_cast<json::EncodedText&&>(error.detail));
+        error = {};
+        if (!settings_snapshot_detail::ValidText(code) || !settings_snapshot_detail::ValidText(canonical))
+            return Fail(error, SettingsSnapshotErrorCode::InvalidInput, "invalid snapshot text range");
+        struct SectionText { std::string_view code; std::string_view canonical; } text{code, canonical};
+        return Publish(json::EncodedText([](json::OutputWriter& writer, const void* context) noexcept {
+            const auto& section = *static_cast<const SectionText*>(context);
+            return writer.Raw("[") && writer.Raw({section.code.data(), section.code.size()}) && writer.Raw("]\n") &&
+                writer.Raw({section.canonical.data(), section.canonical.size()}) && writer.Raw("[/") &&
+                writer.Raw({section.code.data(), section.code.size()}) && writer.Raw("]\n");
+        }, &text), output, error);
     }
 }

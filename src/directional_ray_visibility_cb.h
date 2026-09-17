@@ -5,7 +5,7 @@
 
 struct DirectionalRayVisibilityConstants
 {
-    PlanarViewConstants view;
+    RendererViewConstants view;
     UVSR_GPU_FLOAT4 directionToLightAndDistance;
     float rayBias;
     float depthQuantizationStep;

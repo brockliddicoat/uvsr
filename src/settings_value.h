@@ -1,8 +1,7 @@
 #pragma once
 
 #include "ui_settings_command_catalog.h"
-
-#include <utility>
+#include "settings_snapshot_storage.h"
 
 namespace uvsr
 {
@@ -22,6 +21,35 @@ namespace uvsr
         Selector
     };
 
+    class SettingsSnapshotText
+    {
+    public:
+        SettingsSnapshotText() noexcept = default;
+        ~SettingsSnapshotText() noexcept;
+        SettingsSnapshotText(const SettingsSnapshotText&) = delete;
+        SettingsSnapshotText& operator=(const SettingsSnapshotText&) = delete;
+        SettingsSnapshotText(SettingsSnapshotText&& other) noexcept;
+        SettingsSnapshotText& operator=(SettingsSnapshotText&& other) noexcept;
+
+        // successful assignment, movement or destruction invalidates views.
+        // failed assignment and cloning preserve output bytes and views.
+        [[nodiscard]] std::string_view View() const noexcept
+        {
+            return {m_LongText ? m_LongText : m_ShortText, m_TextSize};
+        }
+        [[nodiscard]] bool Assign(std::string_view text, SettingsSnapshotError& error) noexcept;
+        [[nodiscard]] bool AssignParts(std::initializer_list<std::string_view> parts,
+            SettingsSnapshotError& error) noexcept;
+        [[nodiscard]] bool CloneTo(SettingsSnapshotText& output, SettingsSnapshotError& error) const noexcept;
+
+    private:
+        // preserve the previous MSVC string threshold without a path-size limit.
+        char m_ShortText[16]{};
+        char* m_LongText = nullptr;
+        size_t m_TextSize = 0;
+        [[nodiscard]] bool StoreParts(std::initializer_list<std::string_view> parts, SettingsSnapshotError& error) noexcept;
+    };
+
     struct UiSettingsValue
     {
         UiSettingsValueKind kind = UiSettingsValueKind::Token;
@@ -30,25 +58,43 @@ namespace uvsr
         float scalar = 0.f;
         std::array<float, 4> vector{};
         std::uint8_t componentCount = 0u;
-        std::string text;
+
+        UiSettingsValue() noexcept = default;
+        ~UiSettingsValue() noexcept = default;
+        UiSettingsValue(const UiSettingsValue&) = delete;
+        UiSettingsValue& operator=(const UiSettingsValue&) = delete;
+        UiSettingsValue(UiSettingsValue&& other) noexcept;
+        UiSettingsValue& operator=(UiSettingsValue&& other) noexcept;
+
+        // text is owned. successful assignment, movement or destruction
+        // invalidates views; failed assignment and cloning preserve output.
+        [[nodiscard]] std::string_view Text() const noexcept
+        {
+            return m_Text.View();
+        }
+        [[nodiscard]] bool SetToken(std::string_view text, SettingsSnapshotError& error) noexcept;
+        [[nodiscard]] bool SetSelector(std::string_view text, SettingsSnapshotError& error) noexcept;
+        [[nodiscard]] bool SetSelectorParts(std::initializer_list<std::string_view> parts,
+            SettingsSnapshotError& error) noexcept;
+        [[nodiscard]] bool CloneTo(UiSettingsValue& output, SettingsSnapshotError& error) const noexcept;
 
         [[nodiscard]] bool operator==(const UiSettingsValue& other) const noexcept;
 
-        [[nodiscard]] static UiSettingsValue Boolean(bool value)
+        [[nodiscard]] static UiSettingsValue Boolean(bool value) noexcept
         {
             UiSettingsValue result;
             result.kind = UiSettingsValueKind::Boolean;
             result.boolean = value;
             return result;
         }
-        [[nodiscard]] static UiSettingsValue Integer(std::int64_t value)
+        [[nodiscard]] static UiSettingsValue Integer(std::int64_t value) noexcept
         {
             UiSettingsValue result;
             result.kind = UiSettingsValueKind::Integer;
             result.integer = value;
             return result;
         }
-        [[nodiscard]] static UiSettingsValue Float(float value)
+        [[nodiscard]] static UiSettingsValue Float(float value) noexcept
         {
             UiSettingsValue result;
             result.kind = UiSettingsValueKind::Float;
@@ -57,7 +103,7 @@ namespace uvsr
         }
         [[nodiscard]] static UiSettingsValue Vector(
             const std::array<float, 4>& value,
-            std::uint8_t componentCount)
+            std::uint8_t componentCount) noexcept
         {
             UiSettingsValue result;
             result.kind = UiSettingsValueKind::Vector;
@@ -65,52 +111,54 @@ namespace uvsr
             result.componentCount = componentCount;
             return result;
         }
-        [[nodiscard]] static UiSettingsValue Token(std::string value)
-        {
-            UiSettingsValue result;
-            result.kind = UiSettingsValueKind::Token;
-            result.text = std::move(value);
-            return result;
-        }
-        [[nodiscard]] static UiSettingsValue Selector(std::string value)
-        {
-            UiSettingsValue result;
-            result.kind = UiSettingsValueKind::Selector;
-            result.text = std::move(value);
-            return result;
-        }
+
+    private:
+        SettingsSnapshotText m_Text;
+        [[nodiscard]] bool SetText(UiSettingsValueKind kind, std::string_view text,
+            SettingsSnapshotError& error) noexcept;
     };
 
     [[nodiscard]] bool ParseCanonicalUiSettingsValue(
         const UiSettingsCommandDefinition& definition,
         std::string_view canonical,
         UiSettingsValue& value,
-        std::string& error,
-        SettingsSnapshotValidationContext context = {});
+        SettingsSnapshotError& error,
+        SettingsSnapshotValidationContext context = {}) noexcept;
     [[nodiscard]] bool FormatUiSettingsValue(
         const UiSettingsCommandDefinition& definition,
         const UiSettingsValue& value,
-        std::string& canonical,
-        std::string& error);
+        json::EncodedText& canonical,
+        SettingsSnapshotError& error) noexcept;
+    [[nodiscard]] bool FormatUiSettingsValue(
+        const UiSettingsCommandDefinition& definition,
+        const UiSettingsValue& value,
+        SettingsSnapshotText& canonical,
+        SettingsSnapshotError& error) noexcept;
     [[nodiscard]] bool ValidateUiSettingsValue(
         const UiSettingsCommandDefinition& definition,
         const UiSettingsValue& value,
-        std::string& error,
-        SettingsSnapshotValidationContext context = {});
+        SettingsSnapshotError& error,
+        SettingsSnapshotValidationContext context = {}) noexcept;
     [[nodiscard]] bool GetDeclaredUiSettingsDefaultValue(
         const UiSettingsCommandDefinition& definition,
-        UiSettingsValue& value) noexcept;
+        UiSettingsValue& value, SettingsSnapshotError& error) noexcept;
 
     [[nodiscard]] bool ValidateSettingsSnapshotSelectorToken(
         SettingId id,
         std::string_view token,
-        std::string& error);
+        SettingsSnapshotError& error) noexcept;
 
     [[nodiscard]] bool ValidateSettingsSnapshotCatalogValue(
         const UiSettingsCommandDefinition& definition,
         std::string_view value,
-        std::string& error,
-        SettingsSnapshotValidationContext context = {});
+        SettingsSnapshotError& error,
+        SettingsSnapshotValidationContext context = {}) noexcept;
 
-    [[nodiscard]] bool ParseCanonicalSettingsFloat(std::string_view text, float& value);
+    [[nodiscard]] bool ParseCanonicalSettingsFloat(std::string_view text, float& value,
+        SettingsSnapshotError& error) noexcept;
+
+#if defined(UVSR_SETTINGS_VALUE_TEST_HOOKS)
+    void FailUiSettingsValueAllocationAfter(size_t successfulAllocations) noexcept;
+    void ClearUiSettingsValueAllocationFailure() noexcept;
+#endif
 }

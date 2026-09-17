@@ -1,47 +1,44 @@
 #include "uvsr_scene_viewer.h"
-#include "uvsr_renderer_scene.h"
-#include "uvsr_renderer_lighting.h"
-#include "uvsr_renderer_frame.h"
+#include "uvsr_renderer_scene_nvrhi.h"
+#include "uvsr_renderer_lighting_nvrhi.h"
+#include "uvsr_renderer_frame_nvrhi.h"
 #include "uvsr_runtime.h"
+#include "uvsr_command_line.h"
 #include "uvsr_application.h"
 #include "renderer_log.h"
+#include "settings_snapshot_storage.h"
 #include <donut/app/DeviceManager.h>
 #include <algorithm>
 #include <cmath>
-#include <stdexcept>
+#include <stdio.h>
 #include <utility>
+#include <new>
 #include "gpu_capabilities.h"
 #include "windows_executable_path.h"
-#include <donut/engine/CommonRenderPasses.h>
-#include <donut/engine/TextureCache.h>
+#include "retained_scene_paths.h"
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 #include <Windows.h>
 #include <cstring>
-#include <cctype>
+#if defined(UVSR_BUILD_TESTING)
+#include "retained_runtime_capture_file.h"
+#endif
 
 using namespace donut;
-using namespace donut::math;
 using namespace donut::app;
-using namespace donut::vfs;
-using namespace donut::engine;
-using namespace donut::render;
 using namespace uvsr;
 
 bool RestartCurrentProcess()
 {
-    std::wstring commandLine = GetCommandLineW();
-    if (g_RestartAdapterIndex >= 0)
+    // ParseUvsrCommandLine applies options from left to right. appending the
+    // requested adapter overrides an earlier option without rewriting arguments.
+    RestartCommandLine mutableCommandLine;
+    RestartCommandLineError error;
+    if (!mutableCommandLine.Prepare(GetCommandLineW(), g_RestartAdapterIndex, error))
     {
-        // ParseUvsrCommandLine applies options from left to right, so appending
-        // the requested adapter also replaces an older -adapter option carried
-        // by a previous renderer restart without rewriting unrelated arguments.
-        commandLine += L" -adapter ";
-        commandLine += std::to_wstring(g_RestartAdapterIndex);
+        uvsr::log::error("Failed to prepare UVSR restart command line (error %u)", unsigned(error));
+        return false;
     }
-
-    std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
-    mutableCommandLine.push_back(L'\0');
 
     STARTUPINFOW startupInfo{};
     startupInfo.cb = sizeof(startupInfo);
@@ -49,7 +46,7 @@ bool RestartCurrentProcess()
 
     const BOOL created = CreateProcessW(
         nullptr,
-        mutableCommandLine.data(),
+        mutableCommandLine.Data(),
         nullptr,
         nullptr,
         FALSE,
@@ -89,76 +86,93 @@ auto UvsrSceneViewer::ShouldRenderUnfocused() -> bool {
 #endif
     }
 
-UvsrSceneViewer::UvsrSceneViewer(
-        DeviceManager* deviceManager,
-        UIData& ui,
-        const std::string& sceneName)
-        : Super(deviceManager)
-        , m_scene(std::make_unique<RendererSceneState>(deviceManager->GetDevice()))
-        , m_lighting(std::make_unique<RendererLightingState>())
-        , m_frame(std::make_unique<RendererFrameState>(deviceManager->GetDevice()))
-        , m_ui(ui) {
-        m_scene->rootFs = std::make_shared<RootFileSystem>();
+UvsrSceneViewer::UvsrSceneViewer(DeviceManager* deviceManager, UIData& ui,
+        const RendererNvrhiMessageCallback& nvrhiMessages) noexcept
+        : donut::app::IRenderPass(deviceManager), m_ui(ui), m_nvrhiMessages(nvrhiMessages) {}
 
-        const std::filesystem::path executableDirectory =
-            GetExecutableDirectoryWide();
-        std::filesystem::path mediaDir = executableDirectory.parent_path() / "media";
-        std::filesystem::path frameworkShaderDir = executableDirectory / "shaders/framework" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
-        std::filesystem::path appShaderDir = executableDirectory / "shaders/uvsr" / app::GetShaderTypeName(GetDevice()->getGraphicsAPI());
-
-        m_scene->rootFs->mount("/media", mediaDir);
-        m_scene->rootFs->mount("/shaders/donut", frameworkShaderDir);
-        m_scene->rootFs->mount("/shaders/uvsr", appShaderDir);
-
-        m_scene->nativeFs = std::make_shared<NativeFileSystem>();
-        m_frame->rendererShaderFactory =
-            std::make_shared<uvsr::RendererShaderFactory>(
-                GetDevice(), appShaderDir);
-        m_frame->rendererCommonPasses =
-            std::make_shared<uvsr::RendererCommonPasses>(
-                GetDevice(), m_frame->rendererShaderFactory);
+auto UvsrSceneViewer::Initialize(std::string_view sceneName, SettingsSnapshotError& error) -> bool {
+        error = {};
+        if (m_scene || m_lighting || m_frame || !GetDeviceManager() || !GetDevice())
+        {
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "Invalid renderer initialization state.", {}};
+            return false;
+        }
+        const auto allocationFailure = [&error](const char* message) {
+            error = {SettingsSnapshotErrorCode::OutOfMemory, 0, 0, message, {}};
+            return false;
+        };
+        const auto resourceFailure = [&error](const char* message) {
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, message, {}};
+            return false;
+        };
+        m_scene.reset(new (std::nothrow) RendererSceneState(GetDevice()));
+        if (!m_scene) return allocationFailure("Could not allocate renderer scene state.");
+        m_lighting.reset(new (std::nothrow) RendererLightingState());
+        if (!m_lighting) return allocationFailure("Could not allocate renderer lighting state.");
+        m_frame.reset(new (std::nothrow) RendererFrameState());
+        if (!m_frame) return allocationFailure("Could not allocate renderer frame state.");
+        WindowsPath directory;
+        WindowsPathResult pathResult;
+        const auto pathFailure = [&error, &pathResult](const char* message) {
+            error = {pathResult.error == WindowsPathError::Allocation ? SettingsSnapshotErrorCode::OutOfMemory :
+                SettingsSnapshotErrorCode::Path, pathResult.nativeCode, 0, message, {}};
+            return false;
+        };
+        if (!GetExecutableDirectoryWide(directory, pathResult))
+            return pathFailure("UVSR could not identify its executable path.");
+        WindowsPath installationDirectory, mediaDir;
+        if (!ExecutableDirectoryFromModulePath(directory.Data(), directory.Size(), installationDirectory, pathResult) ||
+            !JoinWindowsRelativePath(installationDirectory.Data(), L"media", mediaDir, pathResult))
+            return pathFailure("UVSR could not prepare its packaged media path.");
+        WindowsPath appShaderDir;
+        if (!JoinWindowsRelativePath(directory.Data(), L"shaders/uvsr/dxil", appShaderDir, pathResult))
+            return pathFailure("UVSR could not prepare its packaged shader path.");
+        m_frame->rendererShaderFactory.reset(new (std::nothrow) RendererShaderFactory(
+            GetDevice(), appShaderDir.Data()));
+        if (!m_frame->rendererShaderFactory) return allocationFailure("Could not allocate the renderer shader factory.");
+        m_frame->rendererCommonPasses.reset(new (std::nothrow) RendererCommonPasses(
+            GetDevice(), m_frame->rendererShaderFactory.get()));
+        if (!m_frame->rendererCommonPasses) return allocationFailure("Could not allocate renderer common resources.");
         if (!m_frame->rendererCommonPasses->IsValid())
         {
-            throw std::runtime_error(
-                "UVSR common renderer resources failed to initialize");
+            return resourceFailure("UVSR common renderer resources failed to initialize");
         }
 
-        m_scene->sceneDir = mediaDir / "glTF-Sample-Assets/Models/";
-        const std::array retainedSceneDescriptors = {
-            m_scene->sceneDir /
-                "bistro_interior_retextured/"
-                "bistro_interior_retextured.scene.json",
-            m_scene->sceneDir /
-                "san_miguel_retextured/"
-                "san_miguel_retextured.scene.json"
-        };
-        std::vector<std::string> retainedSceneFiles;
-        retainedSceneFiles.reserve(retainedSceneDescriptors.size());
-        for (const std::filesystem::path& descriptor :
-            retainedSceneDescriptors)
+        if (!JoinWindowsRelativePath(mediaDir.Data(), L"glTF-Sample-Assets/Models/", m_scene->sceneDir, pathResult))
+            return pathFailure("UVSR could not prepare its retained scene directory.");
+        WindowsPath retainedSceneDescriptors[RetainedSceneFileCount];
+        for (size_t index = 0; index < RetainedSceneFileCount; ++index)
+            if (!JoinWindowsRelativePath(m_scene->sceneDir.Data(), RetainedSceneRelativePaths[index],
+                    retainedSceneDescriptors[index], pathResult))
+                return pathFailure("UVSR could not prepare a retained scene path.");
+        WindowsPathText retainedSceneFiles[RetainedSceneFileCount];
+        std::string_view retainedSceneViews[RetainedSceneFileCount];
+        SettingsSnapshotError& sceneError = error;
+        for (size_t index = 0; index < RetainedSceneFileCount; ++index)
         {
-            std::error_code error;
-            if (!std::filesystem::is_regular_file(descriptor, error))
-            {
-                uvsr::log::fatal(
-                    "Required retained scene descriptor is unavailable: "
-                    "%s (%s)",
-                    descriptor.generic_string().c_str(),
-                    error ? error.message().c_str() : "not a regular file");
-            }
-            retainedSceneFiles.push_back(
-                descriptor.lexically_normal().generic_string());
+            const auto& descriptor = retainedSceneDescriptors[index];
+            if (!ValidateRetainedSceneFile(descriptor.Data(), descriptor.Size(), sceneError) ||
+                !PrepareRetainedSceneName(descriptor.Data(), descriptor.Size(), retainedSceneFiles[index], sceneError))
+                return false;
+            retainedSceneViews[index] = {retainedSceneFiles[index].Data(), retainedSceneFiles[index].Size()};
         }
-        m_scene->sceneCatalog = BuildSceneCatalog(
-            m_scene->sceneDir,
-            retainedSceneFiles);
-
-        if (m_scene->sceneCatalog.size() != retainedSceneDescriptors.size())
+        if (!BuildSceneCatalog({m_scene->sceneDir.Data(), m_scene->sceneDir.Size()},
+                {retainedSceneViews, RetainedSceneFileCount}, m_scene->sceneCatalog, sceneError))
         {
-            uvsr::log::fatal(
-                "The retained scene catalog must resolve exactly Bistro and "
-                "San Miguel; resolved %zu entries",
-                m_scene->sceneCatalog.size());
+            error = ComposeSettingsSnapshotError({"Could not prepare retained scenes: ", error.MessageView()},
+                error.code, error.nativeCode, error.cleanupCode);
+            return false;
+        }
+
+        if (m_scene->sceneCatalog.Count() != RetainedSceneFileCount)
+        {
+            char count[32];
+            const int length = snprintf(count, sizeof(count), "%zu", m_scene->sceneCatalog.Count());
+            if (length <= 0 || size_t(length) >= sizeof(count))
+                return resourceFailure("Could not format the retained scene count.");
+            error = ComposeSettingsSnapshotError({"The retained scene catalog must resolve exactly Bistro and "
+                "San Miguel; resolved ", {count, size_t(length)}, " entries"});
+            return false;
         }
 
         const auto activeAdapter = std::find_if(
@@ -189,10 +203,11 @@ UvsrSceneViewer::UvsrSceneViewer(
         }
         if (m_scene->bindlessLayout)
         {
-            m_scene->descriptorTable =
-                std::make_shared<DescriptorTableManager>(
-                    GetDevice(),
-                    m_scene->bindlessLayout);
+            m_scene->descriptorTable.reset(new (std::nothrow) RendererSceneDescriptorsNvrhi(
+                GetDevice(), m_scene->bindlessLayout));
+            if (!m_scene->descriptorTable) return allocationFailure("Could not allocate scene descriptors.");
+            if (!m_scene->descriptorTable->IsValid())
+                return resourceFailure("Scene descriptor table creation failed");
         }
         else
         {
@@ -203,61 +218,83 @@ UvsrSceneViewer::UvsrSceneViewer(
                 "available",
                 resourceBindingTier);
         }
-        m_TextureCache = std::make_shared<TextureCache>(
-            GetDevice(),
-            m_scene->nativeFs,
-            m_scene->descriptorTable);
+        WindowsPath environmentDirectory;
+        if (!JoinWindowsRelativePath(mediaDir.Data(), L"environments", environmentDirectory, pathResult))
+            return pathFailure("UVSR could not prepare its environment asset path.");
+        m_lighting->imageBasedLightingEnvironment.reset(new (std::nothrow) ImageBasedLightingEnvironment(
+            GetDevice(), m_frame->rendererShaderFactory.get(), m_frame->rendererCommonPasses.get(),
+            static_cast<WindowsPath&&>(environmentDirectory)));
+        if (!m_lighting->imageBasedLightingEnvironment) return allocationFailure("Could not allocate the IBL environment.");
+        WindowsPath noiseDirectory;
+        if (!JoinWindowsRelativePath(mediaDir.Data(), L"uvsr/noise", noiseDirectory, pathResult))
+            return pathFailure("UVSR could not prepare its noise asset path.");
+        m_lighting->noiseTextureLibrary.reset(new (std::nothrow) NoiseTextureLibrary(
+            GetDevice(), static_cast<WindowsPath&&>(noiseDirectory)));
+        if (!m_lighting->noiseTextureLibrary) return allocationFailure("Could not allocate the noise texture library.");
+        if (!JoinWindowsRelativePath(mediaDir.Data(), L"luts/kodak", m_frame->toneMappingLutDirectory, pathResult))
+            return pathFailure("UVSR could not prepare its film LUT directory.");
 
-        m_frame->shaderFactory = std::make_shared<ShaderFactory>(GetDevice(), m_scene->rootFs, "/shaders");
-        m_CommonPasses = std::make_shared<CommonRenderPasses>(GetDevice(), m_frame->shaderFactory);
-        m_lighting->imageBasedLightingEnvironment =
-            std::make_unique<ImageBasedLightingEnvironment>(
-                GetDevice(),
-                m_frame->rendererShaderFactory,
-                m_frame->rendererCommonPasses,
-                mediaDir / "environments");
-        m_lighting->noiseTextureLibrary = std::make_unique<NoiseTextureLibrary>(
-            GetDevice(),
-            mediaDir / "uvsr/noise");
-
-        m_frame->opaqueDrawStrategy = std::make_shared<InstancedOpaqueDrawStrategy>();
 
 
         m_frame->commandList = GetDevice()->createCommandList();
-        m_scene->worldSpaceRepresentation =
-            std::make_unique<WorldSpaceRepresentation>(GetDevice());
+        if (!m_frame->commandList) return resourceFailure("Could not create the renderer command list.");
+        m_scene->worldSpaceRepresentation.reset(new (std::nothrow) WorldSpaceRepresentation(GetDevice()));
+        if (!m_scene->worldSpaceRepresentation) return allocationFailure("Could not allocate the world-space representation.");
         for (auto& stageQueries : m_frame->rendererTimerQueries)
         {
             for (nvrhi::TimerQueryHandle& query : stageQueries)
+            {
                 query = GetDevice()->createTimerQuery();
+                if (!query) return resourceFailure("Could not create renderer timing queries.");
+            }
         }
 
         if (sceneName.empty())
         {
             // Prefer the smaller retained scene as the startup fallback. This
             // ordering is not evidence that it is more runtime-reliable.
-            const std::string defaultScene = (m_scene->sceneDir
-                / "bistro_interior_retextured/bistro_interior_retextured.scene.json").lexically_normal().generic_string();
-            if (const SceneCatalogEntry* entry = FindSceneCatalogEntry(m_scene->sceneCatalog, defaultScene))
-                SetCurrentSceneName(entry->FileName);
-            else
+            const std::string_view defaultScene = retainedSceneViews[0];
+            const SceneCatalogEntry* entry = nullptr;
+            if (!FindSceneCatalogEntry(m_scene->sceneCatalog, defaultScene, entry, sceneError))
             {
+                error = ComposeSettingsSnapshotError({"Could not resolve the startup scene: ", error.MessageView()},
+                    error.code, error.nativeCode, error.cleanupCode);
+                return false;
+            }
+            if (!entry)
+            {
+                entry = &m_scene->sceneCatalog[0];
                 uvsr::log::warning(
                     "Default Bistro descriptor '%s' was not found; loading '%s' instead.",
-                    defaultScene.c_str(),
-                    m_scene->sceneCatalog.front().FileName.c_str());
-                SetCurrentSceneName(m_scene->sceneCatalog.front().FileName);
+                    defaultScene.data(), entry->FileName.data());
+            }
+            if (!SetCurrentSceneName(entry->FileName, sceneError))
+            {
+                error = ComposeSettingsSnapshotError({"Could not select the startup scene: ", error.MessageView()},
+                    error.code, error.nativeCode, error.cleanupCode);
+                return false;
             }
         }
-        else
-            SetCurrentSceneName(sceneName);
-
+        else if (!SetCurrentSceneName(sceneName, sceneError))
+        {
+            error = ComposeSettingsSnapshotError({"Could not select the startup scene: ", error.MessageView()},
+                error.code, error.nativeCode, error.cleanupCode);
+            return false;
+        }
+        return true;
     }
 
 UvsrSceneViewer::~UvsrSceneViewer() {
         // The task executes this derived class's LoadScene. Join it before
         // any state captured through `this` can be destroyed.
-        m_scene->sceneLoadWorker.Reset();
+        m_sceneLoadWorker.Reset();
+        if (!m_scene || !m_lighting || !m_frame) return;
+        if (m_scene->hasRendererSceneResources && !m_scene->sceneRetirementPending)
+        {
+            if (!m_scene->sceneRetirement.Begin())
+                uvsr::log::fatal("UVSR could not arm scene GPU retirement during shutdown");
+            m_scene->sceneRetirementPending = true;
+        }
         if (m_scene->sceneRetirementPending &&
             m_scene->sceneRetirement.CompleteBlocking() !=
                 RendererSceneRetirementStatus::Ready)
@@ -265,20 +302,21 @@ UvsrSceneViewer::~UvsrSceneViewer() {
             uvsr::log::fatal(
                 "UVSR could not prove scene GPU retirement during shutdown");
         }
+        SceneUnloading();
+        // technique borrows expire before their frame-owned common resources.
+        m_lighting.reset();
+        m_scene.reset();
+        m_frame.reset();
     }
 
-auto UvsrSceneViewer::GetRootFs() const -> std::shared_ptr<vfs::IFileSystem> {
-		return m_scene->rootFs;
-	}
-
-auto UvsrSceneViewer::GetActiveCamera() const -> BaseCamera& {
+auto UvsrSceneViewer::GetActiveCamera() const -> CameraController& {
         switch (m_ui.Camera)
         {
-        case CameraMode::FirstPerson: return (BaseCamera&)m_scene->firstPersonCamera;
-        case CameraMode::ThirdPerson: return (BaseCamera&)m_scene->thirdPersonCamera;
-        case CameraMode::Static: return (BaseCamera&)m_scene->staticCamera;
-        case CameraMode::Pivot: return (BaseCamera&)m_scene->pivotCamera;
-        default: return (BaseCamera&)m_scene->firstPersonCamera;
+        case CameraMode::FirstPerson: return m_scene->firstPersonCamera;
+        case CameraMode::ThirdPerson: return m_scene->thirdPersonCamera;
+        case CameraMode::Static: return m_scene->staticCamera;
+        case CameraMode::Pivot: return m_scene->pivotCamera;
+        default: return m_scene->firstPersonCamera;
         }
     }
 
@@ -289,10 +327,10 @@ auto UvsrSceneViewer::SetCameraMode(CameraMode mode) -> void {
         if (mode == m_ui.Camera)
             return;
 
-        const BaseCamera& source = GetActiveCamera();
-        const float3 position = source.GetPosition();
-        const float3 direction = source.GetDir();
-        const float3 up = source.GetUp();
+        const CameraController& source = GetActiveCamera();
+        const gpu_contract::Float3 position = source.GetPosition();
+        const gpu_contract::Float3 direction = source.GetDir();
+        const gpu_contract::Float3 up = source.GetUp();
 
         switch (mode)
         {
@@ -318,10 +356,10 @@ auto UvsrSceneViewer::SetCameraMode(CameraMode mode) -> void {
     }
 
 auto UvsrSceneViewer::ApplyCameraPose(
-        float3 position,
-        float3 direction,
-        float3 up,
-        float3 right,
+        gpu_contract::Float3 position,
+        gpu_contract::Float3 direction,
+        gpu_contract::Float3 up,
+        gpu_contract::Float3 right,
         float verticalFovDegrees) -> void {
         m_scene->cameraVerticalFov = verticalFovDegrees;
         const float zoomReferenceDistance =
@@ -356,7 +394,7 @@ auto UvsrSceneViewer::ApplyCameraPose(
             m_frame->autoExposurePass->Reset();
     }
 
-auto UvsrSceneViewer::ResetFactorySettingsRuntimeState() -> void {
+auto UvsrSceneViewer::ResetFactorySettingsRuntimeState() -> bool {
         if (m_lighting->directionalRayVisibilityPass)
             m_lighting->directionalRayVisibilityPass->ResetBindingCache();
         if (m_lighting->rayTracedFlashlightShadowPass)
@@ -366,9 +404,19 @@ auto UvsrSceneViewer::ResetFactorySettingsRuntimeState() -> void {
         if (m_scene->worldSpaceRepresentation)
             m_scene->worldSpaceRepresentation->Reset();
 
-        m_lighting->flashlightTransition = 0.f;
         if (m_lighting->flashlight)
-            m_lighting->flashlight->intensity = 0.f;
+        {
+            RendererSceneLightValues candidate;
+            const bool read = ReadSceneLightValues(m_lighting->flashlight, candidate);
+            candidate.intensity = 0.f;
+            if (!read || !SetSceneLightValues(m_lighting->flashlight, candidate))
+            {
+                uvsr::log::error("Flashlight reset transaction failed");
+                GetDeviceManager()->ReportRenderDisposition(RendererRenderDisposition::Failed);
+                return false;
+            }
+        }
+        m_lighting->flashlightTransition = 0.f;
         ResetFlashlightMotion();
         if (m_frame->autoExposurePass)
             m_frame->autoExposurePass->Reset();
@@ -378,6 +426,7 @@ auto UvsrSceneViewer::ResetFactorySettingsRuntimeState() -> void {
         ResetImageBasedLightingHistory();
         m_ui.ShaderReloadRequested = true;
         uvsr::log::info("All renderer settings restored to factory defaults");
+        return true;
     }
 
 
@@ -476,102 +525,52 @@ auto UvsrSceneViewer::SynchronizeCameraInput() -> void {
     }
 
 auto UvsrSceneViewer::BuildCameraCollisionWorld(
-        const Scene& scene,
-        float collisionRadius) -> CameraCollisionWorld {
-        const auto extractionStart =
-            std::chrono::high_resolution_clock::now();
-        std::vector<CameraCollisionWorld::Triangle> triangles;
-        const auto& instances =
-            scene.GetSceneGraph()->GetMeshInstances();
-
-        size_t triangleCapacity = 0;
-        for (const auto& instance : instances)
+        const RendererSceneLoadCancellation& cancellation) -> bool {
+        if (cancellation.IsRequested()) return false;
+        const auto start = std::chrono::steady_clock::now();
+        const auto view = m_scene->canonical.View();
+        // only this worker writes the output. all borrowed packed source inputs
+        // stay frozen until the render owner joins and releases CPU payloads.
+        struct Inputs
         {
-            if (!instance)
-                continue;
-
-            std::shared_ptr<MeshInfo> mesh = instance->GetMesh();
-            if (const auto skinnedInstance = std::dynamic_pointer_cast<SkinnedMeshInstance>(instance))
-                mesh = skinnedInstance->GetPrototypeMesh();
-
-            if (!mesh)
-                continue;
-
-            for (const auto& geometry : mesh->geometries)
-            {
-                if (geometry && geometry->type == MeshGeometryPrimitiveType::Triangles)
-                    triangleCapacity += geometry->numIndices / 3;
-            }
-        }
-        triangles.reserve(triangleCapacity);
-
-        for (const auto& instance : instances)
+            CameraCollisionSourceBuffers* buffers = nullptr;
+            ~Inputs() { delete[] buffers; }
+        } inputs;
+        if (view.bufferGroups.count != m_scene->geometry.BufferCount() || view.bufferGroups.count > UINT32_MAX ||
+            view.bufferGroups.count > size_t(PTRDIFF_MAX) / sizeof(CameraCollisionSourceBuffers))
+            return false;
+        if (view.bufferGroups.count)
         {
-            if (!instance || !instance->GetNode())
-                continue;
-
-            std::shared_ptr<MeshInfo> mesh = instance->GetMesh();
-            if (const auto skinnedInstance = std::dynamic_pointer_cast<SkinnedMeshInstance>(instance))
-                mesh = skinnedInstance->GetPrototypeMesh();
-
-            if (!mesh || !mesh->buffers || mesh->buffers->indexData.empty() ||
-                mesh->buffers->positionData.empty())
-            {
-                continue;
-            }
-
-            const auto& indices = mesh->buffers->indexData;
-            const auto& positions = mesh->buffers->positionData;
-            const affine3 localToWorld = instance->GetNode()->GetLocalToWorldTransformFloat();
-
-            for (const auto& geometry : mesh->geometries)
-            {
-                if (!geometry || geometry->type != MeshGeometryPrimitiveType::Triangles)
-                    continue;
-
-                const size_t firstIndex = size_t(mesh->indexOffset) + geometry->indexOffsetInMesh;
-                const size_t firstVertex = size_t(mesh->vertexOffset) + geometry->vertexOffsetInMesh;
-                if (firstIndex + geometry->numIndices > indices.size())
-                {
-                    uvsr::log::warning("Skipping camera collision geometry with an invalid index range");
-                    continue;
-                }
-
-                for (uint32_t index = 0; index + 2 < geometry->numIndices; index += 3)
-                {
-                    const size_t vertex0 = firstVertex + indices[firstIndex + index];
-                    const size_t vertex1 = firstVertex + indices[firstIndex + index + 1];
-                    const size_t vertex2 = firstVertex + indices[firstIndex + index + 2];
-                    if (vertex0 >= positions.size() || vertex1 >= positions.size() ||
-                        vertex2 >= positions.size())
-                    {
-                        continue;
-                    }
-
-                    triangles.push_back({
-                        localToWorld.transformPoint(positions[vertex0]),
-                        localToWorld.transformPoint(positions[vertex1]),
-                        localToWorld.transformPoint(positions[vertex2])
-                    });
-                }
-            }
+            inputs.buffers = new (std::nothrow) CameraCollisionSourceBuffers[view.bufferGroups.count];
+            if (!inputs.buffers) return false;
         }
-
-        const auto buildStart = std::chrono::high_resolution_clock::now();
-        const auto extractionDuration =
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                buildStart - extractionStart).count();
-        CameraCollisionWorld collisionWorld;
-        collisionWorld.Build(std::move(triangles));
-        const auto buildDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::high_resolution_clock::now() - buildStart).count();
-        uvsr::log::info(
-            "Camera collision: %zu triangles, %.3f-unit radius, extracted in %lld ms and built in %lld ms on the scene worker",
-            collisionWorld.GetTriangleCount(),
-            collisionRadius,
-            static_cast<long long>(extractionDuration),
-            static_cast<long long>(buildDuration));
-        return collisionWorld;
+        for (size_t index = 0; index < view.bufferGroups.count; ++index)
+        {
+            const auto source = m_scene->geometry.Buffer(index);
+            if (!source.indices.IsValid() || !source.vertices.IsValid() || source.indices.count % sizeof(uint32_t)) return false;
+            // initial skin collision uses the canonical prototype, whose packed
+            // positions are present. derived GPU-only groups remain empty here.
+            if (!source.vertices.count) continue;
+            const auto range = view.bufferGroups.data[index].attributes[uint32_t(RendererSceneVertexAttribute::Position)];
+            if (range.offset > source.vertices.count || range.size > source.vertices.count - range.offset) return false;
+            inputs.buffers[index] = {source.indices,
+                {source.vertices.data + size_t(range.offset), size_t(range.size)}};
+        }
+        CameraCollisionWorld candidate;
+        const auto result = candidate.BuildFromScene(view, {inputs.buffers, view.bufferGroups.count});
+        if (result != CameraCollisionBuildError::None)
+        {
+            uvsr::log::error("Canonical camera collision preparation failed: %u", unsigned(result));
+            return false;
+        }
+        if (cancellation.IsRequested()) return false;
+        m_scene->pendingCameraCollisionWorld.emplace(std::move(candidate));
+        const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        uvsr::log::info("Camera collision: %zu triangles, %.3f-unit radius, prepared from canonical records in %lld ms on the scene worker",
+            m_scene->pendingCameraCollisionWorld->GetTriangleCount(), m_scene->cameraCollisionRadius,
+            static_cast<long long>(milliseconds));
+        return true;
     }
 
 auto UvsrSceneViewer::KeyboardUpdate(int key, int scancode, int action, int mods) -> bool {
@@ -594,7 +593,7 @@ auto UvsrSceneViewer::MousePosUpdate(double xpos, double ypos) -> bool {
         if (m_frame->materialPickPurpose == MaterialPickPurpose::None)
         {
             m_frame->pickPosition =
-                uint2(static_cast<uint>(xpos), static_cast<uint>(ypos));
+                gpu_contract::Uint2{static_cast<uint32_t>(xpos), static_cast<uint32_t>(ypos)};
         }
 
         return true;
@@ -612,7 +611,7 @@ auto UvsrSceneViewer::MouseButtonUpdate(int button, int action, int mods) -> boo
             // motion cannot slide the pending material-ID readback elsewhere.
             m_frame->materialPickPurpose =
                 MaterialPickPurpose::FocusCameraAtCursor;
-            m_frame->materialPickScene = m_scene->world.get();
+            m_frame->materialPickGeneration = m_scene->canonical.View().generation;
         }
 
         return true;
@@ -631,6 +630,7 @@ auto UvsrSceneViewer::Animate(float fElapsedTimeSeconds) -> void {
             ? std::clamp(fElapsedTimeSeconds, 0.f, 1.f)
             : 0.f;
         SynchronizeCameraInput();
+        if (!m_scene->rendererSceneLoaded) return;
 
         switch (m_ui.Camera)
         {
@@ -638,13 +638,13 @@ auto UvsrSceneViewer::Animate(float fElapsedTimeSeconds) -> void {
         {
             // Freelook combines mouse/arrow look, W/S dolly, and A/D strafe.
             // It moves the eye directly with no orbit target or pivot state.
-            const float3 start = m_scene->thirdPersonCamera.GetPosition();
+            const gpu_contract::Float3 start = m_scene->thirdPersonCamera.GetPosition();
             m_scene->thirdPersonCamera.Animate(fElapsedTimeSeconds);
 
-            const float3 desiredPosition = m_scene->thirdPersonCamera.GetPosition();
-            const float3 resolvedPosition = m_scene->cameraCollisionWorld.MoveSphere(
+            const gpu_contract::Float3 desiredPosition = m_scene->thirdPersonCamera.GetPosition();
+            const gpu_contract::Float3 resolvedPosition = m_scene->cameraCollisionWorld.MoveSphere(
                 start, desiredPosition, m_scene->cameraCollisionRadius);
-            if (lengthSquared(resolvedPosition - desiredPosition) > 1e-12f)
+            if (LengthSquared(resolvedPosition - desiredPosition) > 1e-12f)
             {
                 // The correction becomes the free-look camera's next origin;
                 // its look direction and dolly sensitivity stay unchanged.
@@ -662,13 +662,13 @@ auto UvsrSceneViewer::Animate(float fElapsedTimeSeconds) -> void {
 
         case CameraMode::FirstPerson:
         {
-            const float3 start = m_scene->firstPersonCamera.GetPosition();
+            const gpu_contract::Float3 start = m_scene->firstPersonCamera.GetPosition();
             m_scene->firstPersonCamera.Animate(fElapsedTimeSeconds);
 
-            const float3 desiredPosition = m_scene->firstPersonCamera.GetPosition();
-            const float3 resolvedPosition = m_scene->cameraCollisionWorld.MoveSphere(
+            const gpu_contract::Float3 desiredPosition = m_scene->firstPersonCamera.GetPosition();
+            const gpu_contract::Float3 resolvedPosition = m_scene->cameraCollisionWorld.MoveSphere(
                 start, desiredPosition, m_scene->cameraCollisionRadius);
-            if (lengthSquared(resolvedPosition - desiredPosition) > 1e-12f)
+            if (LengthSquared(resolvedPosition - desiredPosition) > 1e-12f)
             {
                 m_scene->firstPersonCamera.LookTo(
                     resolvedPosition,
@@ -679,31 +679,60 @@ auto UvsrSceneViewer::Animate(float fElapsedTimeSeconds) -> void {
         }
         }
 
-        UpdateFlashlightAnimation(fElapsedTimeSeconds);
-        UpdateFlashlightMotion(fElapsedTimeSeconds);
+        float flashlightDelta = fElapsedTimeSeconds;
+#if defined(UVSR_BUILD_TESTING)
+        if (m_frame->runtimeOutputCaptureRequested)
+            flashlightDelta = 0.f;
+#endif
+        UpdateFlashlightAnimation(flashlightDelta);
+        UpdateFlashlightMotion(flashlightDelta);
     }
 
 #if defined(UVSR_BUILD_TESTING)
 auto UvsrSceneViewer::RequestRuntimeOutputEvidence(
         size_t caseIndex,
-        std::string_view caseName) -> void {
-        std::string safeName(caseName);
-        for (char& character : safeName)
+        std::string_view caseName,
+        std::string_view phase) -> bool {
+        RuntimeCaptureFileResult preparation;
+        if (!BuildRuntimeCapturePath(caseIndex, caseName, phase,
+                m_frame->runtimeOutputCapturePath, preparation))
         {
-            if (!std::isalnum(static_cast<unsigned char>(character)) &&
-                character != '-' && character != '_')
+            uvsr::log::error("Runtime capture path preparation failed (%u, code %u)",
+                unsigned(preparation.error), preparation.code);
+            // a rejected overlapping request must not orphan the older capture.
+            if (m_frame->runtimeOutputCaptureRequested)
             {
-                character = '-';
+                m_frame->FailRuntimeOutputCapture();
+                return true;
             }
+            return false;
         }
-        m_frame->runtimeOutputCapturePath =
-            std::filesystem::temp_directory_path() /
-            ("uvsr-retained-runtime-" +
-                std::to_string(GetCurrentProcessId())) /
-            ("case-" + std::to_string(caseIndex) + "-" + safeName +
-                ".bmp");
         m_frame->runtimeOutputEvidence.reset();
+        const bool pathSelected = m_ui.Lighting == LightingSolution::PathTracing;
+        if (!g_VerifyRetainedRuntimeRequested ||
+            (pathSelected && !m_lighting->pathTracingPass) ||
+            m_frame->runtimeOutputCaptureRequested)
+        {
+            uvsr::log::error("Runtime capture could not arm its deterministic sequence");
+            m_frame->runtimeOutputEvidence = RuntimeOutputEvidence{};
+            m_frame->runtimeOutputCaptureRequested = false;
+            return true;
+        }
+        // settle the capture-only pose and its scene-dirty pulse before arming samples.
+        m_lighting->flashlightTransition = m_ui.FlashlightEnabled ? 1.f : 0.f;
+        if (!ApplyFlashlightPresentation())
+        {
+            uvsr::log::error("Runtime capture flashlight transaction failed");
+            m_frame->runtimeOutputEvidence = RuntimeOutputEvidence{};
+            m_frame->runtimeOutputCaptureRequested = false;
+            return true;
+        }
+        ResetFlashlightMotion();
+        UpdateFlashlightMotion(0.f);
+        m_frame->runtimeCaptureSequence = {};
+        m_frame->runtimeCaptureSettlingFrames = 2u;
         m_frame->runtimeOutputCaptureRequested = true;
+        return true;
     }
 #endif
 
@@ -718,11 +747,11 @@ auto UvsrSceneViewer::ConsumeRuntimeOutputEvidence() -> std::optional<RuntimeOut
 
 #if defined(UVSR_BUILD_TESTING)
 auto UvsrSceneViewer::NudgeCameraForRuntimeDiagnostic() -> void {
-        const BaseCamera& camera = GetActiveCamera();
-        const float3 direction = normalize(camera.GetDir());
-        const float3 upHint = normalize(camera.GetUp());
-        const float3 right = normalize(cross(direction, upHint));
-        const float3 up = normalize(cross(right, direction));
+        const CameraController& camera = GetActiveCamera();
+        const gpu_contract::Float3 direction = Normalize(camera.GetDir());
+        const gpu_contract::Float3 upHint = Normalize(camera.GetUp());
+        const gpu_contract::Float3 right = Normalize(Cross(direction, upHint));
+        const gpu_contract::Float3 up = Normalize(Cross(right, direction));
         ApplyCameraPose(
             camera.GetPosition() + right * 0.05f,
             direction,
@@ -734,12 +763,12 @@ auto UvsrSceneViewer::NudgeCameraForRuntimeDiagnostic() -> void {
 
 #if defined(UVSR_BUILD_TESTING)
 auto UvsrSceneViewer::CaptureRetainedRuntimeCameraPose() const -> RetainedRuntimeCameraPose {
-        const BaseCamera& camera = GetActiveCamera();
+        const CameraController& camera = GetActiveCamera();
         return {
             camera.GetPosition(),
             camera.GetDir(),
             camera.GetUp(),
-            normalize(cross(camera.GetDir(), camera.GetUp())),
+            Normalize(Cross(camera.GetDir(), camera.GetUp())),
             m_scene->cameraVerticalFov
         };
     }
@@ -758,13 +787,29 @@ auto UvsrSceneViewer::RestoreRetainedRuntimeCameraPose(
 #endif
 
 auto UvsrSceneViewer::HasPrimaryDirectionalLight() const -> bool {
-        return bool(m_lighting->sunLight);
+        return GetSceneLight(m_lighting->sunLight) != nullptr;
     }
 
-auto UvsrSceneViewer::GetPrimaryDirectionalLight() const -> std::shared_ptr<DirectionalLight> {
-        return m_lighting->sunLight;
+auto UvsrSceneViewer::GetPrimaryDirectionalLight() const -> RendererSceneHandle {
+        return HasPrimaryDirectionalLight() ? m_lighting->sunLight : RendererSceneHandle{};
     }
 
-auto UvsrSceneViewer::GetEditableLights() const -> const std::vector<std::shared_ptr<Light>>& {
-        return m_lighting->editableLights;
+auto UvsrSceneViewer::GetEditableLights() const -> RendererSceneLightRange {
+        return {GetSceneView(), m_lighting->flashlight, true};
+    }
+
+auto UvsrSceneViewer::GetSceneLight(RendererSceneHandle light) const -> const RendererSceneLight* {
+        return FindRendererSceneLight(GetSceneView(), light);
+    }
+
+auto UvsrSceneViewer::GetSceneLightName(RendererSceneHandle light) const -> std::string {
+        return std::string(GetSceneLightNameView(light));
+    }
+
+auto UvsrSceneViewer::GetSceneLightNameView(RendererSceneHandle light) const noexcept -> std::string_view {
+        const auto scene = GetSceneView();
+        const auto* record = FindRendererSceneLight(scene, light);
+        if (!record || record->nodeIndex >= scene.nodes.count) return {};
+        const auto name = RendererSceneText(scene, scene.nodes.data[record->nodeIndex].name);
+        return name.count ? std::string_view(name.data, name.count) : std::string_view{};
     }

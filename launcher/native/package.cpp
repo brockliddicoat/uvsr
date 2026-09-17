@@ -42,23 +42,7 @@ namespace uvsr::launcher
             return result;
         }
         bool EqualJson(const Json& a, const Json& b)
-        {
-            if (a.kind != b.kind) return false;
-            if (a.kind == Json::Kind::Object)
-            {
-                if (a.object.size() != b.object.size()) return false;
-                for (const auto& [name, value] : a.object)
-                { const auto* other = b.Find(name); if (!other || !EqualJson(value, *other)) return false; }
-                return true;
-            }
-            if (a.kind == Json::Kind::Array)
-            {
-                if (a.array.size() != b.array.size()) return false;
-                for (size_t i = 0; i < a.array.size(); ++i) if (!EqualJson(a.array[i], b.array[i])) return false;
-                return true;
-            }
-            return Serialize(a) == Serialize(b);
-        }
+        { return json::Equal(a.Root(), b.Root()); }
     }
     bool AllowedPackagePath(std::string_view path, bool directory)
     {
@@ -93,14 +77,14 @@ namespace uvsr::launcher
                 Text(manifest, "settingsHash") == feed->settingsHash && Text(manifest, "engineVersion") == feed->version, "The renderer manifest does not match its signed feed.");
         const bool legacy = !feed && Text(manifest, "settingsHash") == "df2b9ab2a2c8d65e4415dc93c0051f0c";
         const auto& files = Member(manifest, "files");
-        Require(files.kind == Json::Kind::Array && !files.array.empty() && files.array.size() <= 100000, "The renderer file inventory is invalid.");
+        Require(files.Type() == json::Kind::Array && files.Count() > 0 && files.Count() <= 100000, "The renderer file inventory is invalid.");
         std::map<std::string, PackageFile> recorded;
         uint64_t expanded = 0;
-        for (const auto& item : files.array)
+        for (auto item = files.First(); item.IsValid(); item = item.Next())
         {
             RequireExactObject(item, {"relativePath", "size", "sha256"}, "package file");
             auto size = Number(item, "size");
-            PackageFile file{Text(item, "relativePath"), Text(item, "sha256"), uint64_t(size)};
+            PackageFile file{std::string(Text(item, "relativePath")), std::string(Text(item, "sha256")), uint64_t(size)};
             Require(size >= 0 && uint64_t(size) <= MaximumExpandedBytes - expanded && IsLowerHex(file.hash, 64) &&
                 (AllowedPackagePath(file.path) || (legacy && (std::ranges::find(LegacyShaders, file.path) != std::end(LegacyShaders) ||
                     file.path == "bin/licenses/Andrew-Helmer-Stochastic-Generation-MIT.txt" || file.path == "bin/licenses/Microsoft-DirectX-Graphics-Samples.txt"))) &&
@@ -141,12 +125,14 @@ namespace uvsr::launcher
         ValidatePe(engine);
         for (const auto& [key, expected] : std::initializer_list<std::pair<std::wstring_view, std::string>>{
             {L"ProductName", "UVSR Engine"}, {L"FileDescription", "UVSR Engine"}, {L"InternalName", "uvsr-engine"}, {L"OriginalFilename", EngineName},
-            {L"FileVersion", Text(manifest, "engineVersion")}, {L"ProductVersion", Text(manifest, "engineVersion") + "+" + Text(manifest, "settingsHash")},
-            {L"SourceCommit", Text(manifest, "sourceCommit")}, {L"SourceIdentity", Text(manifest, "sourceCommit")},
-            {L"SettingsNumberHash", Text(manifest, "settingsHash")}, {L"BuildConfiguration", "Release"}, {L"ProductionBuild", "true"}})
+            {L"FileVersion", std::string(Text(manifest, "engineVersion"))}, {L"ProductVersion", std::string(Text(manifest, "engineVersion")) + "+" + std::string(Text(manifest, "settingsHash"))},
+            {L"SourceCommit", std::string(Text(manifest, "sourceCommit"))}, {L"SourceIdentity", std::string(Text(manifest, "sourceCommit"))},
+            {L"SettingsNumberHash", std::string(Text(manifest, "settingsHash"))}, {L"BuildConfiguration", "Release"}, {L"ProductionBuild", "true"}})
             Require(PeString(engine, key) == expected, "The renderer PE identity does not match its package.");
         const auto settings = ReadRecord(root / "bin/settings/canonical-settings.json", 16u << 20);
-        const auto authority = ParseJson(BuildSettingsContractJson());
+        const auto encodedAuthority = BuildSettingsContractJson();
+        Require(encodedAuthority.IsValid(), encodedAuthority.Failure().message);
+        const auto authority = ParseJson(std::string_view{encodedAuthority.Data(), encodedAuthority.Size()});
         bool settingsValid = EqualJson(settings, authority);
         if (legacy)
         {

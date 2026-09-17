@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <iomanip>
 #include <map>
 #include <optional>
 #include <set>
@@ -37,9 +38,23 @@ namespace
         Fail("catalog SettingId fixture was not found");
     }
 
-    uvsr::SettingsSnapshotTransactionEntry Entry(uvsr::SettingId id, std::string value)
+    uvsr::SettingsSnapshotTransactionEntry Entry(uvsr::SettingId id, std::string_view value)
     {
-        return { id, std::move(value) };
+        return { id, value };
+    }
+    void OwnReason(std::string_view reason, uvsr::SettingsSnapshotError& error) noexcept
+    {
+        error = {};
+        error.code = uvsr::SettingsSnapshotErrorCode::InvalidInput;
+        error.detail = uvsr::json::EncodedText([](uvsr::json::OutputWriter& output, const void* context) noexcept {
+            const auto text = *static_cast<const std::string_view*>(context);
+            return output.Raw({text.data(), text.size()});
+        }, &reason);
+        if (!error.detail.IsValid())
+        {
+            error.code = uvsr::SettingsSnapshotErrorCode::OutOfMemory;
+            error.message = "cannot prepare injected error";
+        }
     }
     struct GraphRuntime
     {
@@ -58,6 +73,8 @@ namespace
         std::string material = "1";
         std::optional<std::pair<uvsr::SettingId, std::string>> pendingSelector;
         std::optional<uvsr::SettingId> failOnceOnWrite;
+        std::optional<uvsr::SettingId> mismatchOnceOnWrite;
+        bool failSelectorRollback = false;
         bool mutateBeforeFailure = false;
         bool asyncSelectors = false;
         bool pendingRollback = false;
@@ -84,21 +101,22 @@ namespace
 
         bool ReadVisible(
             uvsr::SettingId id,
-            std::string& value,
-            std::string& error)
+            uvsr::SettingsSnapshotText& value,
+            uvsr::SettingsSnapshotError& error)
         {
+            std::string_view text;
             if (id == uvsr::SettingId::SceneCurrent)
-                value = scene;
+                text = scene;
             else if (id == uvsr::SettingId::LightSelected)
-                value = light;
+                text = light;
             else if (id == uvsr::SettingId::MaterialSelected)
-                value = material;
+                text = material;
             else if (IsMaterialValue(id))
             {
                 if (material == "none")
-                    value = "<unavailable>";
+                    text = "<unavailable>";
                 else
-                    value = materials[material][id];
+                    text = materials[material][id];
             }
             else if (IsLightValue(id))
             {
@@ -112,28 +130,28 @@ namespace
                     (availability == uvsr::UiSettingsAvailability::SpotLight &&
                         spotLights.find(light) != spotLights.end());
                 if (!available)
-                    value = "<unavailable>";
+                    text = "<unavailable>";
                 else
-                    value = lights[light][id];
+                    text = lights[light][id];
             }
             else
             {
                 const auto found = globals.find(id);
                 if (found == globals.end())
                 {
-                    error = "missing graph runtime value";
+                    error.code = uvsr::SettingsSnapshotErrorCode::InvalidInput;
+                    error.message = "missing graph runtime value";
                     return false;
                 }
-                value = found->second;
+                text = found->second;
             }
-            error.clear();
-            return true;
+            return value.Assign(text, error);
         }
 
         bool ReadRaw(
             uvsr::SettingId id,
-            std::string& value,
-            std::string& error)
+            uvsr::SettingsSnapshotText& value,
+            uvsr::SettingsSnapshotError& error)
         {
             return ReadVisible(id, value, error);
         }
@@ -186,6 +204,12 @@ namespace
                 error = "injected graph write failure";
                 return false;
             }
+            if (mismatchOnceOnWrite == id)
+            {
+                mismatchOnceOnWrite.reset();
+                error.clear();
+                return true;
+            }
             mutate();
             error.clear();
             return true;
@@ -218,6 +242,11 @@ namespace
         {
             Require(id != uvsr::SettingId::GpuAdapter,
                 "read-only adapter must never reach the selector driver");
+            if (rollback && failSelectorRollback)
+            {
+                error = "injected selector rollback failure";
+                return uvsr::SettingsSnapshotSelectorTransition::Failed;
+            }
             if (begin)
             {
                 Require(!pendingSelector, "a second selector cannot begin while one is pending");
@@ -250,54 +279,45 @@ namespace
         [[nodiscard]] uvsr::SettingsSnapshotStagedRuntimeAccess Access()
         {
             return {
-                [this](uvsr::SettingId id,
-                    std::string_view value,
-                    std::string_view dependencySelector,
-                    std::string& validationError)
-                {
+                this,
+                [](void* owner, uvsr::SettingId id, std::string_view value,
+                    std::string_view dependencySelector, uvsr::SettingsSnapshotError& error) noexcept {
+                    auto& live = *static_cast<GraphRuntime*>(owner);
                     uvsr::SettingsSnapshotValidationContext context;
                     if (id == uvsr::SettingId::MaterialSelectedOpacity)
                     {
                         const std::string target = dependencySelector.empty()
-                            ? material
-                            : std::string(dependencySelector);
+                            ? live.material : std::string(dependencySelector);
                         context.hasMaterialBaseTexture = true;
-                        context.materialHasBaseTexture =
-                            baseTexturedMaterials.find(target) !=
-                            baseTexturedMaterials.end();
+                        context.materialHasBaseTexture = live.baseTexturedMaterials.find(target) != live.baseTexturedMaterials.end();
                     }
-                    return uvsr::ValidateSettingsSnapshotCatalogValue(
-                        FindDefinition(id), value, validationError, context);
+                    return uvsr::ValidateSettingsSnapshotCatalogValue(FindDefinition(id), value, error, context);
                 },
-                [this](uvsr::SettingId id,
-                    std::string& value,
-                    std::string& error)
-                {
-                    return ReadVisible(id, value, error);
+                [](void* owner, uvsr::SettingId id, uvsr::SettingsSnapshotText& value,
+                    uvsr::SettingsSnapshotError& error) noexcept {
+                    return static_cast<GraphRuntime*>(owner)->ReadVisible(id, value, error);
                 },
-                [this](uvsr::SettingId id,
-                    std::string& value,
-                    std::string& error)
-                {
-                    return ReadRaw(id, value, error);
+                [](void* owner, uvsr::SettingId id, uvsr::SettingsSnapshotText& value,
+                    uvsr::SettingsSnapshotError& error) noexcept {
+                    return static_cast<GraphRuntime*>(owner)->ReadRaw(id, value, error);
                 },
-                [this](uvsr::SettingId id,
-                    std::string_view value,
-                    std::string& error)
-                {
-                    return Write(id, value, error);
+                [](void* owner, uvsr::SettingId id, std::string_view value,
+                    uvsr::SettingsSnapshotError& error) noexcept {
+                    std::string reason;
+                    const bool result = static_cast<GraphRuntime*>(owner)->Write(id, value, reason);
+                    if (!result) OwnReason(reason, error);
+                    return result;
                 },
-                [this](uvsr::SettingId id,
-                    std::string_view value,
-                    bool begin,
-                    bool rollback,
-                    std::string& error)
-                {
-                    return DriveSelector(
-                        id, value, begin, rollback, error);
+                [](void* owner, uvsr::SettingId id, std::string_view value, bool begin, bool rollback,
+                    uvsr::SettingsSnapshotError& error) noexcept {
+                    std::string reason;
+                    const auto result = static_cast<GraphRuntime*>(owner)->DriveSelector(id, value, begin, rollback, reason);
+                    if (result == uvsr::SettingsSnapshotSelectorTransition::Failed) OwnReason(reason, error);
+                    return result;
                 }
             };
         }
+
     };
 
     GraphRuntime MakeGraphRuntime()
@@ -356,6 +376,232 @@ namespace
         return runtime;
     }
 
+    struct OwnershipRuntime
+    {
+        GraphRuntime graph = MakeGraphRuntime();
+        uvsr::SettingsSnapshotTransactionCoordinator* coordinator = nullptr;
+        std::size_t callbacks = 0;
+        int reenterOn = 0;
+        bool reentered = false;
+        bool sourceReadOom = false;
+        bool targetReadOom = false;
+        bool rollbackReadOom = false;
+        bool readFaultIssued = false;
+        std::size_t diagnosticBudget = SIZE_MAX;
+
+        OwnershipRuntime() { graph.globals[uvsr::SettingId::UiVisible] = "on"; }
+
+        void Enter(int phase)
+        {
+            ++callbacks;
+            if (phase != reenterOn || reentered) return;
+            reentered = true;
+            Require(coordinator && coordinator->IsActive(), "callback must observe active coordinator ownership");
+            coordinator->Reset();
+            auto nested = coordinator->Begin({}, Access());
+            auto advanced = coordinator->Advance();
+            Require(coordinator->IsActive() &&
+                nested.result.failureStage == uvsr::SettingsSnapshotTransactionFailureStage::Configuration &&
+                advanced.result.failureStage == uvsr::SettingsSnapshotTransactionFailureStage::Configuration,
+                "callback reentry must reject without resetting its outer transaction");
+        }
+
+        bool Read(uvsr::SettingId id, bool raw, uvsr::SettingsSnapshotText& value,
+            uvsr::SettingsSnapshotError& error)
+        {
+            Enter(2);
+            const bool exhaust = !readFaultIssued &&
+                (sourceReadOom || (targetReadOom && raw && graph.scene == "b/main.scene.json") ||
+                    (rollbackReadOom && raw && graph.writeCount != 0));
+            if (exhaust)
+            {
+                readFaultIssued = true;
+                uvsr::FailUiSettingsValueAllocationAfter(0);
+                const bool accepted = value.Assign("a checked read that needs owned text storage", error);
+                uvsr::ClearUiSettingsValueAllocationFailure();
+                return accepted;
+            }
+            return raw ? graph.ReadRaw(id, value, error) : graph.ReadVisible(id, value, error);
+        }
+
+        uvsr::SettingsSnapshotStagedRuntimeAccess Access()
+        {
+            return {
+                this,
+                [](void* owner, uvsr::SettingId id, std::string_view value, std::string_view dependency,
+                    uvsr::SettingsSnapshotError& error) noexcept {
+                    auto& live = *static_cast<OwnershipRuntime*>(owner);
+                    live.Enter(1);
+                    const auto access = live.graph.Access();
+                    return access.validateValue(access.context, id, value, dependency, error);
+                },
+                [](void* owner, uvsr::SettingId id, uvsr::SettingsSnapshotText& value,
+                    uvsr::SettingsSnapshotError& error) noexcept {
+                    return static_cast<OwnershipRuntime*>(owner)->Read(id, false, value, error);
+                },
+                [](void* owner, uvsr::SettingId id, uvsr::SettingsSnapshotText& value,
+                    uvsr::SettingsSnapshotError& error) noexcept {
+                    return static_cast<OwnershipRuntime*>(owner)->Read(id, true, value, error);
+                },
+                [](void* owner, uvsr::SettingId id, std::string_view value,
+                    uvsr::SettingsSnapshotError& error) noexcept {
+                    auto& live = *static_cast<OwnershipRuntime*>(owner);
+                    live.Enter(3);
+                    const auto access = live.graph.Access();
+                    const bool accepted = access.writeValue(access.context, id, value, error);
+                    if (!accepted)
+                    {
+                        error.nativeCode = 91;
+                        error.cleanupCode = 92;
+                        if (live.diagnosticBudget != SIZE_MAX)
+                            uvsr::json::FailAllocationAfter(live.diagnosticBudget);
+                    }
+                    return accepted;
+                },
+                [](void* owner, uvsr::SettingId id, std::string_view value, bool begin, bool rollback,
+                    uvsr::SettingsSnapshotError& error) noexcept {
+                    auto& live = *static_cast<OwnershipRuntime*>(owner);
+                    live.Enter(4);
+                    const auto access = live.graph.Access();
+                    return access.driveSelector(access.context, id, value, begin, rollback, error);
+                }
+            };
+        }
+    };
+
+    void CheckOwnershipFailures()
+    {
+        using namespace uvsr;
+        const SettingsSnapshotTransactionEntry change[] = {{SettingId::UiVisible, "off"}};
+        for (int phase : {1, 2, 3})
+        {
+            OwnershipRuntime live;
+            SettingsSnapshotTransactionCoordinator coordinator;
+            live.coordinator = &coordinator;
+            live.reenterOn = phase;
+            const auto result = coordinator.Begin(change, live.Access());
+            Require(result.progress == SettingsSnapshotTransactionProgress::Succeeded && live.reentered &&
+                live.graph.globals.at(SettingId::UiVisible) == "off" && live.graph.writeCount == 1 &&
+                !coordinator.IsActive(), "callback reentry changed or interrupted its outer transaction");
+        }
+        {
+            OwnershipRuntime live;
+            SettingsSnapshotTransactionCoordinator coordinator;
+            FailSettingsSnapshotTransactionAllocationAfter(0);
+            const auto rejected = coordinator.Begin(change, live.Access());
+            ClearSettingsSnapshotTransactionAllocationFailure();
+            Require(rejected.progress == SettingsSnapshotTransactionProgress::Failed &&
+                rejected.result.error.code == SettingsSnapshotErrorCode::OutOfMemory &&
+                rejected.result.failureStage == SettingsSnapshotTransactionFailureStage::Configuration &&
+                live.callbacks == 0 && !coordinator.IsActive(), "state exhaustion reached a runtime callback");
+            Require(coordinator.Begin(change, live.Access()).result.succeeded, "state allocation retry failed");
+        }
+        {
+            OwnershipRuntime live;
+            SettingsSnapshotTransactionCoordinator coordinator;
+            const std::string longScene = std::string(4096, 'a') + ".scene.json";
+            const SettingsSnapshotTransactionEntry request[] = {{SettingId::SceneCurrent, longScene}};
+            FailUiSettingsValueAllocationAfter(0);
+            const auto rejected = coordinator.Begin(request, live.Access());
+            ClearUiSettingsValueAllocationFailure();
+            Require(rejected.progress == SettingsSnapshotTransactionProgress::Failed &&
+                rejected.result.error.code == SettingsSnapshotErrorCode::OutOfMemory && live.callbacks == 0 &&
+                !coordinator.IsActive(), "request clone exhaustion reached a runtime callback");
+        }
+        for (bool target : {false, true})
+        {
+            OwnershipRuntime live;
+            live.sourceReadOom = !target;
+            live.targetReadOom = target;
+            SettingsSnapshotTransactionCoordinator coordinator;
+            const SettingsSnapshotTransactionEntry request[] = {{SettingId::SceneCurrent, "b/main.scene.json"}};
+            const auto result = coordinator.Begin(request, live.Access());
+            Require(result.progress == SettingsSnapshotTransactionProgress::Failed && live.readFaultIssued &&
+                result.result.error.code == SettingsSnapshotErrorCode::OutOfMemory &&
+                result.result.failureStage == SettingsSnapshotTransactionFailureStage::Capture &&
+                result.result.rollbackAttempted == target && result.result.rollbackSucceeded == target &&
+                live.graph.scene == "a/main.scene.json" && live.graph.writeCount == 0,
+                "capture exhaustion failed to preserve or restore the original scene");
+        }
+        {
+            OwnershipRuntime live;
+            live.graph.failOnceOnWrite = SettingId::UiVisible;
+            live.graph.mutateBeforeFailure = true;
+            live.rollbackReadOom = true;
+            SettingsSnapshotTransactionCoordinator coordinator;
+            const auto result = coordinator.Begin(change, live.Access());
+            const auto callbacks = live.callbacks;
+            const auto repeated = coordinator.Advance();
+            Require(result.progress == SettingsSnapshotTransactionProgress::Failed && live.readFaultIssued &&
+                result.result.rollbackAttempted && !result.result.rollbackSucceeded &&
+                result.result.failureStage == SettingsSnapshotTransactionFailureStage::Apply &&
+                live.graph.writeCount == 1 && live.graph.globals.at(SettingId::UiVisible) == "off" &&
+                repeated.result.error.MessageView() == result.result.error.MessageView() && live.callbacks == callbacks,
+                "rollback reader failure lost its failure state or continued mutation");
+        }
+        for (std::size_t budget : {0u, 1u})
+        {
+            OwnershipRuntime live;
+            live.graph.failOnceOnWrite = SettingId::UiVisible;
+            live.graph.mutateBeforeFailure = true;
+            live.diagnosticBudget = budget;
+            SettingsSnapshotTransactionCoordinator coordinator;
+            const auto result = coordinator.Begin(change, live.Access());
+            json::ClearAllocationFailure();
+            const bool preserved = result.progress == SettingsSnapshotTransactionProgress::Failed &&
+                result.result.error.code == SettingsSnapshotErrorCode::OutOfMemory &&
+                result.result.error.nativeCode == 91 && result.result.error.cleanupCode == 92 &&
+                result.result.failureStage == SettingsSnapshotTransactionFailureStage::Apply &&
+                result.result.rollbackAttempted && result.result.rollbackSucceeded &&
+                live.graph.globals.at(SettingId::UiVisible) == "on" && live.graph.writeCount == 2;
+            if (!preserved)
+                std::cerr << "diagnostic budget " << budget << ", progress " << static_cast<int>(result.progress)
+                    << ", error " << static_cast<int>(result.result.error.code) << ", native "
+                    << result.result.error.nativeCode << ", cleanup " << result.result.error.cleanupCode
+                    << ", stage " << static_cast<int>(result.result.failureStage) << ", rollback "
+                    << result.result.rollbackAttempted << '/' << result.result.rollbackSucceeded << ", live "
+                    << live.graph.globals.at(SettingId::UiVisible) << ", writes " << live.graph.writeCount
+                    << ", reason " << result.result.error.MessageView() << '\n';
+            Require(preserved,
+                "diagnostic exhaustion changed rollback or lost its numeric failure fields");
+            if (budget == 1)
+            {
+                const auto callbacks = live.callbacks;
+                const auto repeated = coordinator.Advance();
+                Require(repeated.result.error.MessageView().find("injected graph write failure") != std::string_view::npos &&
+                    repeated.result.error.code == SettingsSnapshotErrorCode::InvalidInput && live.callbacks == callbacks,
+                    "result clone exhaustion changed the retained terminal error");
+            }
+        }
+    }
+
+    void CaptureGraph(const uvsr::SettingsSnapshotTransactionResult& result,
+        const GraphRuntime& runtime)
+    {
+        std::cout << "result " << result.succeeded << ' ' << result.rollbackAttempted
+            << ' ' << result.rollbackSucceeded << ' ' << result.changedValueCount
+            << ' ' << static_cast<unsigned>(result.failureStage) << ' '
+            << std::quoted(result.error.MessageView()) << '\n';
+        std::cout << "selectors " << std::quoted(runtime.scene) << ' '
+            << std::quoted(runtime.light) << ' ' << std::quoted(runtime.material)
+            << ' ' << runtime.writeCount << ' ' << runtime.selectorBeginCount
+            << ' ' << runtime.selectorPollCount << '\n';
+        for (const auto& [id, value] : runtime.globals)
+            std::cout << "global " << static_cast<std::uint64_t>(id) << ' '
+                << std::quoted(value) << '\n';
+        for (const auto& [name, values] : runtime.materials)
+            for (const auto& [id, value] : values)
+                std::cout << "material " << std::quoted(name) << ' '
+                    << static_cast<std::uint64_t>(id) << ' ' << std::quoted(value) << '\n';
+        for (const auto& [name, values] : runtime.lights)
+            for (const auto& [id, value] : values)
+                std::cout << "light " << std::quoted(name) << ' '
+                    << static_cast<std::uint64_t>(id) << ' ' << std::quoted(value) << '\n';
+        for (const auto& event : runtime.events)
+            std::cout << "event " << std::quoted(event) << '\n';
+        std::cout << "end\n";
+    }
+
     uvsr::SettingsSnapshotTransactionResult RunGraph(
         const std::vector<uvsr::SettingsSnapshotTransactionEntry>& transaction,
         GraphRuntime& runtime)
@@ -363,21 +609,23 @@ namespace
         uvsr::SettingsSnapshotStagedRuntimeAccess access = runtime.Access();
         uvsr::SettingsSnapshotTransactionCoordinator coordinator;
         uvsr::SettingsSnapshotTransactionStep step =
-            coordinator.Begin(transaction, access);
+            coordinator.Begin({transaction.data(), transaction.size()}, access);
         unsigned advances = 0u;
         while (step.progress ==
             uvsr::SettingsSnapshotTransactionProgress::Pending)
         {
             Require(++advances < 64u, "transaction must finish bounded selector transitions");
-            step = coordinator.Advance(access);
+            step = coordinator.Advance();
         }
-        return step.result;
+        CaptureGraph(step.result, runtime);
+        return std::move(step.result);
     }
 }
 
 int main()
 {
     using namespace uvsr;
+    CheckOwnershipFailures();
     SettingsSnapshotTransactionResult result;
 
     {
@@ -684,6 +932,73 @@ int main()
             "shuffled transaction input must produce one deterministic DAG plan");
     }
 
+    {
+        GraphRuntime graph = MakeGraphRuntime();
+        graph.globals[SettingId::UiVisible] = "off";
+        graph.mismatchOnceOnWrite = SettingId::UiVisible;
+        result = RunGraph({Entry(SettingId::UiVisible, "on")}, graph);
+        Require(!result.succeeded && result.failureStage ==
+                SettingsSnapshotTransactionFailureStage::Readback &&
+                result.rollbackAttempted && result.rollbackSucceeded &&
+                result.changedValueCount == 0u &&
+                graph.globals.at(SettingId::UiVisible) == "off",
+            "an accepted write with mismatched readback must restore its source");
+    }
+    {
+        GraphRuntime graph = MakeGraphRuntime();
+        graph.globals[SettingId::UiVisible] = "off";
+        graph.failOnceOnWrite = SettingId::UiVisible;
+        graph.failSelectorRollback = true;
+        SettingsSnapshotTransactionCoordinator coordinator;
+        auto access = graph.Access();
+        const SettingsSnapshotTransactionEntry requests[] = {Entry(SettingId::SceneCurrent, "b/main.scene.json"),
+            Entry(SettingId::UiVisible, "on")};
+        auto step = coordinator.Begin(requests, access);
+        Require(step.progress == SettingsSnapshotTransactionProgress::Failed &&
+                step.result.failureStage == SettingsSnapshotTransactionFailureStage::Apply &&
+                step.result.rollbackAttempted && !step.result.rollbackSucceeded &&
+                step.result.error.MessageView().find("injected graph write failure") != std::string::npos &&
+                step.result.error.MessageView().find("injected selector rollback failure") != std::string::npos &&
+                !coordinator.IsActive(),
+            "rollback failure must retain the first failure and its own reason");
+        const auto events = graph.events;
+        step = coordinator.Advance();
+        Require(step.progress == SettingsSnapshotTransactionProgress::Failed &&
+                graph.events == events,
+            "advancing a failed rollback must issue no further callbacks");
+        CaptureGraph(step.result, graph);
+    }
+    {
+        GraphRuntime graph = MakeGraphRuntime();
+        graph.asyncSelectors = true;
+        const std::string longScene = std::string(4096u, 'a') + ".scene.json";
+        SettingsSnapshotTransactionCoordinator coordinator;
+        {
+            auto access = graph.Access();
+            std::string callerScene = longScene;
+            auto requests = std::vector{Entry(SettingId::SceneCurrent, callerScene)};
+            const auto step = coordinator.Begin({requests.data(), requests.size()}, access);
+            Require(step.progress == SettingsSnapshotTransactionProgress::Pending &&
+                    step.waitingFor == "scene.current" && coordinator.IsActive() &&
+                    graph.selectorBeginCount == 1u,
+                "a long scene selector must remain pending with its stable name");
+            GraphRuntime other = MakeGraphRuntime();
+            const SettingsSnapshotTransactionEntry replacement[] = {{SettingId::UiVisible, "off"}};
+            const auto rejected = coordinator.Begin(replacement, other.Access());
+            coordinator.Reset();
+            Require(rejected.result.failureStage == SettingsSnapshotTransactionFailureStage::Configuration &&
+                coordinator.IsActive() && other.events.empty() && other.writeCount == 0,
+                "a second Begin or Reset must preserve pending text and its original callback context");
+            access = {};
+            callerScene.assign(8192u, 'x');
+        }
+        const auto step = coordinator.Advance();
+        Require(step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
+                graph.scene == longScene && graph.selectorPollCount == 1u &&
+                !coordinator.IsActive(),
+            "pending work must own complete text beyond caller request lifetime");
+        CaptureGraph(step.result, graph);
+    }
     std::cout << "UVSR settings snapshot transaction validation passed\n";
     return EXIT_SUCCESS;
 }

@@ -1,22 +1,10 @@
 #pragma once
 
 #include "auto_exposure_shared.h"
-
-#include <nvrhi/nvrhi.h>
-
 #include <cmath>
-#include <cstdint>
-#include <memory>
-
-namespace donut::engine
-{
-    class ICompositeView;
-}
 
 namespace uvsr
 {
-    class RendererShaderFactory;
-
     struct AutoExposureFrameHistory
     {
         bool resetRequested = true;
@@ -121,45 +109,4 @@ namespace uvsr
         return settings;
     }
 
-    class AutoExposurePass final
-    {
-    public:
-        AutoExposurePass(
-            nvrhi::IDevice* device,
-            const std::shared_ptr<RendererShaderFactory>&
-                shaderFactory);
-
-        [[nodiscard]] bool IsAvailable() const;
-        [[nodiscard]] bool DidDispatchThisFrame() const
-        {
-            return m_DispatchedThisFrame;
-        }
-
-        [[nodiscard]] nvrhi::IBuffer* Render(
-            nvrhi::ICommandList* commandList,
-            const donut::engine::ICompositeView& compositeView,
-            nvrhi::ITexture* sceneColor,
-            const AutoExposureSettings& settings,
-            float frameDeltaSeconds,
-            bool diagnosticView);
-
-        void Reset();
-
-    private:
-        nvrhi::DeviceHandle m_Device;
-        nvrhi::BufferHandle m_ConstantBuffer;
-        nvrhi::BufferHandle m_HistogramBuffer;
-        nvrhi::BufferHandle m_ExposureBuffer;
-        nvrhi::ShaderHandle m_HistogramShader;
-        nvrhi::ShaderHandle m_ResolveShader;
-        nvrhi::BindingLayoutHandle m_HistogramBindingLayout;
-        nvrhi::BindingLayoutHandle m_ResolveBindingLayout;
-        nvrhi::BindingSetHandle m_HistogramBindingSet;
-        nvrhi::BindingSetHandle m_ResolveBindingSet;
-        nvrhi::ComputePipelineHandle m_HistogramPipeline;
-        nvrhi::ComputePipelineHandle m_ResolvePipeline;
-        nvrhi::ITexture* m_BoundSceneColor = nullptr;
-        AutoExposureFrameHistory m_FrameHistory;
-        bool m_DispatchedThisFrame = false;
-    };
 }

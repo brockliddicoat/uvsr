@@ -20,7 +20,8 @@
 namespace uvsr::launcher
 {
     namespace fs = std::filesystem;
-    using Json = json::Value;
+    using Json = json::Document;
+    using JsonValue = json::Value;
     using namespace contract;
     inline constexpr char ProductId[] = "0c47a7a8-1ec4-4ffd-b6c4-2f7614181223";
     inline constexpr char KeyId[] = "uvsr-launcher-update-p256-2026-01";
@@ -42,13 +43,13 @@ namespace uvsr::launcher
 
     inline void Require(bool condition, std::string_view message)
     {
-        if (!condition) throw std::runtime_error(std::string(message));
+        if (!condition) throw json::LegacyError(std::string(message));
     }
     void WinCheck(BOOL result, std::string_view operation);
-    struct AccessError : std::runtime_error
+    struct AccessError : json::LegacyError
     {
         DWORD code;
-        AccessError(std::string message, DWORD error) : std::runtime_error(std::move(message)), code(error) {}
+        AccessError(std::string message, DWORD error) : json::LegacyError(std::move(message)), code(error) {}
     };
     std::wstring Wide(std::string_view text);
     std::string Utf8(std::wstring_view text);
@@ -59,15 +60,22 @@ namespace uvsr::launcher
     bool IsVersionId(std::string_view value);
     std::string NewVersionId(std::string_view commit);
     std::string QuoteJson(std::string_view text);
-    Json JString(std::string text);
-    Json JNumber(int64_t value);
-    Json JBool(bool value);
-    Json JObject(std::initializer_list<std::pair<std::string, Json>> values);
+    json::Seed JString(std::string_view text);
+    json::Seed JNumber(int64_t value);
+    json::Seed JBool(bool value);
+    Json JObject(std::initializer_list<json::Member> values);
+    Json JArray();
+    void Append(Json& array, json::Seed value);
+    Json Clone(const Json& value);
+    std::optional<Json> Clone(const std::optional<Json>& value);
     std::string Serialize(const Json& value);
-    const std::string& Text(const Json& value, std::string_view name);
-    int64_t Number(const Json& value, std::string_view name);
-    bool Flag(const Json& value, std::string_view name);
-    void Set(Json& value, std::string_view name, Json replacement);
+    std::string_view Text(JsonValue value, std::string_view name);
+    int64_t Number(JsonValue value, std::string_view name);
+    bool Flag(JsonValue value, std::string_view name);
+    inline std::string_view Text(const Json& value, std::string_view name) { return Text(value.Root(), name); }
+    inline int64_t Number(const Json& value, std::string_view name) { return Number(value.Root(), name); }
+    inline bool Flag(const Json& value, std::string_view name) { return Flag(value.Root(), name); }
+    void Set(Json& value, std::string_view name, json::Seed replacement);
 
     struct Handle
     {
@@ -135,7 +143,9 @@ namespace uvsr::launcher
     void VerifyP256Signature(std::span<const unsigned char> payload,
         std::span<const unsigned char> signature, std::string_view publicKey);
     std::string ArtifactUrl(const Feed& feed);
-    void ValidateState(const Json& state, std::string_view installation, Component component);
+    void ValidateState(JsonValue state, std::string_view installation, Component component);
+    inline void ValidateState(const Json& state, std::string_view installation, Component component)
+    { ValidateState(state.Root(), installation, component); }
     enum class UpdateState { NotInstalled, Current, UpdateAvailable, RepairNeeded, CheckFailed };
     UpdateState Classify(const std::optional<Json>& recorded, bool healthy, const Feed& feed);
     void ValidateLauncherMetadata(const fs::path& path, std::string_view version,

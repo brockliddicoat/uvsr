@@ -4,8 +4,13 @@
 #include "engine_startup.h"
 #include "gpu_capabilities.h"
 #include "renderer_nvrhi_message_callback.h"
+#include "renderer_frame_donut.h"
 #include "uvsr_command_line.h"
 #include "windows_executable_path.h"
+#include "windows_file_identity.h"
+#include "windows_path_text.h"
+#include <new>
+#include <climits>
 #include <donut/app/DeviceManager.h>
 #include <nvrhi/utils.h>
 #include <dwmapi.h>
@@ -23,10 +28,46 @@ static void ShowGraphicsStartupError(const wchar_t* message)
         MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
 }
 
+namespace
+{
+    struct ApplicationRenderPasses final
+    {
+        explicit ApplicationRenderPasses(DeviceManager& owner) noexcept : host(owner) {}
+        ~ApplicationRenderPasses() noexcept { (void)Release(); }
+        ApplicationRenderPasses(const ApplicationRenderPasses&) = delete;
+        ApplicationRenderPasses& operator=(const ApplicationRenderPasses&) = delete;
+
+        // the scoped application-frame binding must end before this owner releases.
+        bool Release() noexcept
+        {
+            if (uiRegistered) host.RemoveRenderPass(ui.get());
+            if (sceneRegistered) host.RemoveRenderPass(scene.get());
+            uiRegistered = sceneRegistered = false;
+            bool idle = true;
+            if ((ui || scene) && !loopReturned)
+            {
+                idle = host.GetDevice()->waitForIdle();
+                if (!idle) uvsr::log::error("UVSR could not wait for startup GPU work during shutdown.");
+            }
+            ui.reset();
+            // viewer destruction joins its worker before releasing borrowed state.
+            scene.reset();
+            return idle;
+        }
+
+        DeviceManager& host;
+        std::unique_ptr<UvsrSceneViewer> scene;
+        std::unique_ptr<UIRenderer> ui;
+        bool sceneRegistered = false;
+        bool uiRegistered = false;
+        bool loopReturned = false;
+    };
+}
+
 bool SelectGraphicsAdapter(
     DeviceManager* deviceManager,
     DeviceCreationParameters& deviceParams,
-    std::vector<GpuAdapterChoice>& adapterChoices)
+    GpuAdapterCatalog& output)
 {
     // Donut's DX12 fallback selects DXGI adapter zero. On hybrid laptops that
     // is commonly the integrated GPU even when a much faster discrete GPU is
@@ -47,7 +88,7 @@ bool SelectGraphicsAdapter(
         return false;
     }
 
-    adapterChoices.clear();
+    GpuAdapterCatalog adapterChoices;
     const bool automaticSelection = deviceParams.adapterIndex < 0;
     int bestAdapterIndex = -1;
     uint64_t bestDedicatedVideoMemory = 0;
@@ -187,6 +228,12 @@ bool SelectGraphicsAdapter(
             }
         }
 
+        if (index > static_cast<size_t>(INT_MAX))
+        {
+            uvsr::log::error("DXGI adapter index exceeds the supported integer range");
+            ShowGraphicsStartupError(L"UVSR could not retain the graphics adapter list.");
+            return false;
+        }
         GpuAdapterChoice choice;
         choice.adapterIndex = static_cast<int>(index);
         choice.name = adapter.name;
@@ -205,7 +252,13 @@ bool SelectGraphicsAdapter(
         choice.driverVersion = SUCCEEDED(driverVersionResult)
             ? static_cast<uint64_t>(driverVersion.QuadPart)
             : 0u;
-        adapterChoices.push_back(std::move(choice));
+        SettingsSnapshotError catalogError;
+        if (!adapterChoices.Append(choice, catalogError))
+        {
+            uvsr::log::error("UVSR could not retain graphics adapter choices: %s", catalogError.Message());
+            ShowGraphicsStartupError(L"UVSR could not retain the graphics adapter list.");
+            return false;
+        }
 
         if (automaticSelection &&
             (bestAdapterIndex < 0 || adapter.dedicatedVideoMemory > bestDedicatedVideoMemory))
@@ -215,7 +268,7 @@ bool SelectGraphicsAdapter(
         }
     }
 
-    if (adapterChoices.empty())
+    if (!adapterChoices.Count())
     {
         uvsr::log::error(
             "No hardware graphics adapter supports UVSR's Direct3D 12 "
@@ -257,7 +310,7 @@ bool SelectGraphicsAdapter(
             "Selected graphics adapter %d: %s "
             "(PCI %04X:%04X, shared / UMA, Shader Model %u.%u)",
             selectedChoice->adapterIndex,
-            selectedChoice->name.c_str(),
+            selectedChoice->name.data(),
             selectedChoice->vendorId,
             selectedChoice->deviceId,
             (selectedChoice->highestShaderModel >> 4u) & 0xFu,
@@ -269,7 +322,7 @@ bool SelectGraphicsAdapter(
             "Selected graphics adapter %d: %s "
             "(PCI %04X:%04X, %llu MiB dedicated VRAM, Shader Model %u.%u)",
             selectedChoice->adapterIndex,
-            selectedChoice->name.c_str(),
+            selectedChoice->name.data(),
             selectedChoice->vendorId,
             selectedChoice->deviceId,
             static_cast<unsigned long long>(selectedChoice->dedicatedVideoMemory / (1024ull * 1024ull)),
@@ -301,6 +354,7 @@ bool SelectGraphicsAdapter(
         driverVersion,
         driverSubVersion,
         driverBuild);
+    output = std::move(adapterChoices);
     return true;
 }
 
@@ -318,41 +372,61 @@ bool ValidateLoadedD3D12Runtime()
         return false;
     }
 
-    std::wstring loadedPath(32768, L'\0');
-    const DWORD loadedLength = GetModuleFileNameW(
-        runtimeModule,
-        loadedPath.data(),
-        static_cast<DWORD>(loadedPath.size()));
-    if (loadedLength == 0 || loadedLength >= loadedPath.size())
+    WindowsPath loadedPath;
+    WindowsPathResult loadedResult;
+    if (!GetModulePathWide(runtimeModule, loadedPath, loadedResult))
     {
         uvsr::log::error(
             "UVSR could not identify the loaded DirectX 12 runtime "
             "(Win32 error %lu)",
-            GetLastError());
+            static_cast<unsigned long>(loadedResult.nativeCode));
         ShowGraphicsStartupError(
             L"UVSR could not verify its packaged DirectX 12 runtime. Reinstall "
             L"UVSR with UVSR Launcher, then try again.");
         return false;
     }
-    loadedPath.resize(loadedLength);
 
-    std::error_code actualPathError;
-    std::error_code expectedPathError;
-    std::error_code equivalentPathError;
-    const std::filesystem::path actual = std::filesystem::weakly_canonical(
-        std::filesystem::path(loadedPath),
-        actualPathError);
-    const std::filesystem::path expected = std::filesystem::weakly_canonical(
-        GetExecutableDirectoryWide() / "D3D12" / "D3D12Core.dll",
-        expectedPathError);
-    const bool matchesPackage = !actualPathError && !expectedPathError &&
-        std::filesystem::equivalent(actual, expected, equivalentPathError) &&
-        !equivalentPathError;
+    WindowsPath directory;
+    WindowsPathResult pathResult;
+    if (!GetExecutableDirectoryWide(directory, pathResult))
+    {
+        uvsr::log::error("UVSR could not identify its executable path (Win32 error %lu)",
+            static_cast<unsigned long>(pathResult.nativeCode));
+        ShowGraphicsStartupError(
+            L"UVSR could not verify its packaged DirectX 12 runtime. Reinstall "
+            L"UVSR with UVSR Launcher, then try again.");
+        return false;
+    }
+    WindowsPath actual;
+    WindowsPath expected;
+    WindowsPath expectedInput;
+    WindowsPathResult actualResult;
+    WindowsPathResult expectedResult;
+    const bool actualReady = WeaklyCanonicalWindowsPath(loadedPath.Data(), actual, actualResult);
+    const bool expectedReady = JoinWindowsRelativePath(directory.Data(), LR"(D3D12\D3D12Core.dll)", expectedInput, expectedResult) &&
+        WeaklyCanonicalWindowsPath(expectedInput.Data(), expected, expectedResult);
+    WindowsSameFileResult identity;
+    const bool matchesPackage = actualReady && expectedReady &&
+        QueryWindowsSameFile(actual.Data(), expected.Data(), identity) && identity.equivalent;
+    WindowsPathText actualText;
+    WindowsPathTextResult textResult;
+    if (!actualText.Assign(actual.Data(), actual.Size(), WindowsPathTextForm::Native,
+            WindowsPathTextEncoding::Utf8, textResult))
+    {
+        uvsr::log::error("UVSR could not encode the loaded DirectX 12 runtime path (Win32 error %lu)",
+            static_cast<unsigned long>(textResult.nativeCode));
+        ShowGraphicsStartupError(matchesPackage
+            ? L"UVSR could not verify its packaged DirectX 12 runtime. Reinstall "
+              L"UVSR with UVSR Launcher, then try again."
+            : L"UVSR did not load the DirectX 12 runtime that belongs to this "
+              L"installation. Reinstall UVSR with UVSR Launcher, then try again.");
+        return false;
+    }
     if (!matchesPackage)
     {
         uvsr::log::error(
             "UVSR loaded an unexpected DirectX 12 runtime: %s",
-            actual.u8string().c_str());
+            actualText.Data());
         ShowGraphicsStartupError(
             L"UVSR did not load the DirectX 12 runtime that belongs to this "
             L"installation. Reinstall UVSR with UVSR Launcher, then try again.");
@@ -361,7 +435,7 @@ bool ValidateLoadedD3D12Runtime()
 
     uvsr::log::info(
         "Loaded packaged DirectX 12 runtime: %s (D3D12SDKVersion %u)",
-        actual.u8string().c_str(),
+        actualText.Data(),
         UVSR_D3D12_AGILITY_SDK_VERSION);
     return true;
 }
@@ -500,18 +574,26 @@ int WINAPI WinMain(
         }
     }
 #endif
-    if (const std::optional<int> diagnostic =
-            TryRunEngineDiagnosticCommand(__argc, __argv))
+    if (const auto diagnostic = TryRunEngineDiagnosticCommand(__argc, __argv); diagnostic.handled)
     {
-        return *diagnostic;
+        return diagnostic.exitCode;
     }
     InitializeEngineDiagnosticLog();
     ApplyProcessPriority();
+    const auto sourceCommit = GetBuiltSourceCommit();
+    const auto settingsHash = GetBuiltSettingsNumberHash();
+    const auto engineVersion = GetBuiltEngineVersion();
+    if (sourceCommit.size() > size_t(INT_MAX) || settingsHash.size() > size_t(INT_MAX) ||
+        engineVersion.size() > size_t(INT_MAX))
+    {
+        uvsr::log::error("UVSR build identity exceeds the diagnostic text limit");
+        return 1;
+    }
     uvsr::log::info(
-        "UVSR engine identity: source %s, settings %s, version %s",
-        std::string(GetBuiltSourceCommit()).c_str(),
-        std::string(GetBuiltSettingsNumberHash()).c_str(),
-        std::string(GetBuiltEngineVersion()).c_str());
+        "UVSR engine identity: source %.*s, settings %.*s, version %.*s",
+        int(sourceCommit.size()), sourceCommit.empty() ? "" : sourceCommit.data(),
+        int(settingsHash.size()), settingsHash.empty() ? "" : settingsHash.data(),
+        int(engineVersion.size()), engineVersion.empty() ? "" : engineVersion.data());
     constexpr nvrhi::GraphicsAPI api = nvrhi::GraphicsAPI::D3D12;
 
     RendererNvrhiMessageCallback nvrhiMessageCallback;
@@ -537,20 +619,21 @@ int WINAPI WinMain(
     deviceParams.vsyncEnabled = false;
 
     UvsrStartupOptions startupOptions;
-    std::string commandLineError;
+    UvsrCommandLineError commandLineError;
     if (!ParseUvsrCommandLine(
             __argc, __argv, startupOptions, commandLineError))
     {
-        uvsr::log::error("%s", commandLineError.c_str());
+        uvsr::log::error("%s%s%s%s", commandLineError.prefix, commandLineError.argument,
+            commandLineError.suffix, commandLineError.snapshot.text);
         return 1;
     }
     bool messageLoopSucceeded = true;
-    if (startupOptions.width)
-        deviceParams.backBufferWidth = *startupOptions.width;
-    if (startupOptions.height)
-        deviceParams.backBufferHeight = *startupOptions.height;
-    if (startupOptions.adapterIndex)
-        deviceParams.adapterIndex = *startupOptions.adapterIndex;
+    if (startupOptions.width != 0)
+        deviceParams.backBufferWidth = startupOptions.width;
+    if (startupOptions.height != 0)
+        deviceParams.backBufferHeight = startupOptions.height;
+    if (startupOptions.adapterIndex >= 0)
+        deviceParams.adapterIndex = startupOptions.adapterIndex;
     deviceParams.startFullscreen = startupOptions.fullscreen;
 #if defined(UVSR_BUILD_TESTING)
     if (startupOptions.debugValidation)
@@ -560,9 +643,6 @@ int WINAPI WinMain(
         g_RuntimeDebugValidationRequested = true;
     }
 #endif
-    std::string sceneName = std::move(startupOptions.sceneName);
-    std::string startupSettingsSnapshotCode =
-        std::move(startupOptions.settingsSnapshotCode);
     if (!VerifyAppLocalD3D12Core())
     {
         uvsr::log::error(
@@ -573,7 +653,7 @@ int WINAPI WinMain(
         deviceParams.enableDebugRuntime);
 
     DeviceManager* deviceManager = DeviceManager::Create(api);
-    std::vector<GpuAdapterChoice> adapterChoices;
+    GpuAdapterCatalog adapterChoices;
     if (!SelectGraphicsAdapter(
             deviceManager,
             deviceParams,
@@ -618,68 +698,58 @@ int WINAPI WinMain(
             deviceManager->GetWindow());
     }
 
+    const char* requiredFontFailure = nullptr;
     {
         UIData uiData;
         uiData.GpuAdapterChoices = std::move(adapterChoices);
         uiData.ActiveGpuAdapterIndex = deviceParams.adapterIndex;
-        std::shared_ptr<UvsrSceneViewer> demo;
-        std::shared_ptr<UIRenderer> gui;
-        const auto releaseUiState = [&]()
+        ApplicationRenderPasses passes(*deviceManager);
+        SettingsSnapshotError startupError;
+        messageLoopSucceeded = false;
+        do
         {
-            if (gui)
-                deviceManager->RemoveRenderPass(gui.get());
-            if (demo)
-                deviceManager->RemoveRenderPass(demo.get());
-            gui.reset();
-            demo.reset();
-        };
-
-        try
-        {
-            demo = std::make_shared<UvsrSceneViewer>(
-                deviceManager,
-                uiData,
-                sceneName);
-            gui = std::make_shared<UIRenderer>(
-                deviceManager,
-                demo,
-                uiData,
-                startupSettingsSnapshotCode);
-            if (!gui->Init(demo->GetShaderFactory()))
+            passes.scene.reset(new (std::nothrow) UvsrSceneViewer(deviceManager, uiData, nvrhiMessageCallback));
+            if (!passes.scene)
             {
-                // The scene worker executes UvsrSceneViewer::LoadScene and may
-                // still use the device. Destroy UI ownership and join that
-                // worker before shutting the device down on this failure.
-                releaseUiState();
-                deviceManager->Shutdown();
-                delete deviceManager;
-                return 1;
+                startupError = {SettingsSnapshotErrorCode::OutOfMemory, 0, 0, "Could not allocate the scene viewer.", {}};
+                break;
             }
-
-            deviceManager->AddRenderPassToBack(demo.get());
-            deviceManager->AddRenderPassToBack(gui.get());
+            if (!passes.scene->Initialize(startupOptions.sceneName, startupError)) break;
+            passes.ui.reset(new (std::nothrow) UIRenderer(deviceManager, passes.scene.get(), uiData,
+                startupOptions.settingsSnapshotCode));
+            if (!passes.ui)
+            {
+                startupError = {SettingsSnapshotErrorCode::OutOfMemory, 0, 0, "Could not allocate the UI renderer.", {}};
+                break;
+            }
+            if (!passes.ui->Init(nvrhiMessageCallback, startupError)) break;
+            DonutApplicationFrameBinding frame(*deviceManager, *passes.scene, *passes.ui);
+            // the host publishes before its synchronous resize callbacks.
+            passes.sceneRegistered = true;
+            deviceManager->AddRenderPassToBack(passes.scene.get());
+            passes.uiRegistered = true;
+            deviceManager->AddRenderPassToBack(passes.ui.get());
             messageLoopSucceeded = deviceManager->RunMessageLoop();
-        }
-        catch (const RequiredUiFontStartupError& error)
-        {
-            uvsr::log::error(
-                "Cannot initialize required UVSR UI fonts: %s",
-                error.what());
-            ShowGraphicsStartupError(
-                L"UVSR requires the Windows Segoe UI Semibold and Bold fonts. "
-                L"Restore these standard Windows fonts, then try again.");
-            releaseUiState();
-            deviceManager->Shutdown();
-            delete deviceManager;
-            return 1;
-        }
-
+            passes.loopReturned = true;
+        } while (false);
+        requiredFontFailure = passes.ui ? passes.ui->RequiredFontFailure() : nullptr;
+        messageLoopSucceeded &= passes.Release();
+        if (!requiredFontFailure && startupError.code != SettingsSnapshotErrorCode::None)
+            uvsr::log::error("%s", startupError.Message());
     }
 
     deviceManager->Shutdown();
     messageLoopSucceeded &= !deviceManager->HasRuntimeFailure();
     delete deviceManager;
 
+    if (requiredFontFailure)
+    {
+        uvsr::log::error("Cannot initialize required UVSR UI fonts: %s", requiredFontFailure);
+        ShowGraphicsStartupError(
+            L"UVSR requires the Windows Segoe UI Semibold and Bold fonts. "
+            L"Restore these standard Windows fonts, then try again.");
+        return 1;
+    }
     if (!messageLoopSucceeded)
         return 1;
 

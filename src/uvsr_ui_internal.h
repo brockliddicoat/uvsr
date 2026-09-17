@@ -26,32 +26,30 @@
 #include "uvsr_application.h"
 #include "uvsr_runtime.h"
 #include "uvsr_settings_commands.h"
-#include "renderer_common_passes.h"
-#include "renderer_shader_factory.h"
+#include "renderer_common_passes_nvrhi.h"
+#include "renderer_shader_factory_nvrhi.h"
 #include "renderer_statistics.h"
 #include "renderer_gpu_contract.h"
 #include "build_identity.h"
-#include "windows_executable_path.h"
 #include "scene_catalog.h"
 #include "scene_loading.h"
+#include "settings_value.h"
+#include "windows_executable_path.h"
 #include "settings_snapshot_decoder.h"
 #include "settings_snapshot.h"
 #include "settings_snapshot_transaction.h"
 #include "ui_layout.h"
 #include "ui_settings_command_catalog.h"
 #include "ui_performance_timing_rows.h"
-#include "path_tracing_pass.h"
+#include "path_tracing_pass_nvrhi.h"
 #include "renderer_log.h"
 #include "display_sync_test.h"
 #if defined(UVSR_BUILD_TESTING)
 #include "retained_runtime_diagnostic.h"
 #endif
-#include <donut/engine/Scene.h>
-#include <donut/engine/ShaderFactory.h>
-#include <donut/engine/TextureCache.h>
-#include <donut/engine/View.h>
-#include <donut/app/imgui_renderer.h>
-#include <donut/app/UserInterfaceUtils.h>
+#include "renderer_ui_context.h"
+#include "renderer_ui_nvrhi.h"
+#include "renderer_ui_input_glfw.h"
 #include <imgui_internal.h>
 #include <GLFW/glfw3.h>
 #include <Windows.h>
@@ -65,32 +63,41 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <functional>
 #include <limits>
 #include <optional>
-#include <sstream>
-#include <stdexcept>
-#include <unordered_map>
+#include "ui_light_defaults.h"
 #include <utility>
 #include <type_traits>
 #include <initializer_list>
 
 using namespace donut;
-using namespace donut::math;
 using namespace donut::app;
-using namespace donut::vfs;
-using namespace donut::engine;
 using namespace uvsr;
 
 namespace uvsr_detail
 {
+    inline bool AcceptFormattedSelector(bool formatted, const UiSettingsValue& value,
+        SettingsSnapshotError& error) noexcept
+    {
+        if (formatted) return true;
+        // existing UI reads and actions consume an empty selector for malformed
+        // source identities. checked storage failures must still reach the caller.
+        if (error.code == SettingsSnapshotErrorCode::InvalidInput &&
+            value.kind == UiSettingsValueKind::Selector && value.Text().empty())
+        {
+            error = {};
+            return true;
+        }
+        return false;
+    }
+
     struct alignas(16) PixelZoomConstants
     {
-        uint2 sourceSize;
-        uint2 panelMin;
+        gpu_contract::Uint2 sourceSize;
+        gpu_contract::Uint2 panelMin;
 
-        uint2 panelSize;
+        gpu_contract::Uint2 panelSize;
         uint32_t zoomFactor = 0u;
         float cornerRadius = 8.f;
 
@@ -100,10 +107,10 @@ namespace uvsr_detail
         float shadowOpacity = 0.34f;
 
         float shadowOffsetY = 3.f;
-        float3 padding;
+        gpu_contract::Float3 padding;
 
-        float4 outlineTopColor;
-        float4 outlineBottomColor;
+        gpu_contract::Float4 outlineTopColor;
+        gpu_contract::Float4 outlineBottomColor;
     };
 
     static_assert(sizeof(PixelZoomConstants) == 96u);
@@ -112,7 +119,7 @@ namespace uvsr_detail
     {
     private:
         nvrhi::DeviceHandle m_Device;
-        std::shared_ptr<uvsr::RendererCommonPasses> m_CommonPasses;
+        uvsr::RendererCommonPasses* m_CommonPasses = nullptr;
         nvrhi::CommandListHandle m_CommandList;
         nvrhi::ShaderHandle m_PixelShader;
         nvrhi::BindingLayoutHandle m_BindingLayout;
@@ -138,6 +145,9 @@ namespace uvsr_detail
 
         bool EnsureResources(nvrhi::IFramebuffer* framebuffer)
         {
+            if (!framebuffer || !m_Device || !m_CommonPasses || !m_CommonPasses->IsValid() ||
+                !m_CommandList || !m_PixelShader || !m_BindingLayout || !m_ConstantBuffer)
+                return false;
             const nvrhi::FramebufferInfoEx& framebufferInfo =
                 framebuffer->getFramebufferInfo();
             if (framebufferInfo.colorFormats.empty())
@@ -217,16 +227,17 @@ namespace uvsr_detail
     public:
         PixelZoomPass(
             nvrhi::IDevice* device,
-            const std::shared_ptr<uvsr::RendererShaderFactory>& shaderFactory,
-            std::shared_ptr<uvsr::RendererCommonPasses> commonPasses)
+            uvsr::RendererShaderFactory* shaderFactory,
+            uvsr::RendererCommonPasses* commonPasses)
             : m_Device(device)
-            , m_CommonPasses(std::move(commonPasses))
+            , m_CommonPasses(commonPasses)
         {
+            if (!device || !shaderFactory || !commonPasses) return;
             m_CommandList = device->createCommandList();
             m_PixelShader = shaderFactory->CreateShader(
                 "uvsr/pixel_zoom_ps.hlsl",
                 "main",
-                nullptr,
+                {},
                 nvrhi::ShaderType::Pixel);
 
             nvrhi::BufferDesc constantBufferDesc;
@@ -299,15 +310,15 @@ namespace uvsr_detail
             }
 
             PixelZoomConstants constants{};
-            constants.sourceSize = uint2(
+            constants.sourceSize = {
                 layout.sourceWidth,
-                layout.sourceHeight);
-            constants.panelMin = uint2(
+                layout.sourceHeight};
+            constants.panelMin = {
                 layout.panelMinX,
-                layout.panelMinY);
-            constants.panelSize = uint2(
+                layout.panelMinY};
+            constants.panelSize = {
                 layout.panelWidth,
-                layout.panelHeight);
+                layout.panelHeight};
             constants.zoomFactor = layout.zoomFactor;
             constants.cornerRadius = cornerRadius;
             constants.opacity = 1.f;
@@ -316,9 +327,9 @@ namespace uvsr_detail
             // without filtering the magnified interior.
             constants.outlineWidth = 1.5f;
             constants.outlineTopColor =
-                float4(0.88f, 0.90f, 0.94f, 0.10f);
+                {0.88f, 0.90f, 0.94f, 0.10f};
             constants.outlineBottomColor =
-                float4(0.96f, 0.97f, 1.00f, 0.30f);
+                {0.96f, 0.97f, 1.00f, 0.30f};
 
             const float shadowExtent =
                 std::ceil(
@@ -377,13 +388,7 @@ namespace uvsr_detail
 
 using namespace uvsr_detail;
 
-class RequiredUiFontStartupError final : public std::runtime_error
-{
-public:
-    using std::runtime_error::runtime_error;
-};
-
-class UIRenderer : public ImGui_Renderer
+class UIRenderer : public donut::app::IRenderPass
 {
 private:
     enum class StatisticsEffect : int
@@ -407,43 +412,78 @@ private:
 
     struct FrontEllipsisText
     {
-        std::string display;
+        // ImGui consumes at most four bytes per code point. the tooltip uses 117.
+        char display[4u * 117u + 3u + 1u]{};
         bool truncated = false;
     };
 
+    template<size_t MaximumCodePoints>
     [[nodiscard]] static FrontEllipsisText FormatFrontEllipsisUtf8(
-        std::string_view source,
-        size_t maximumCodePoints);
+        std::string_view source) noexcept {
+        static_assert(MaximumCodePoints <= 117u);
+        FrontEllipsisText result;
+        if (source.empty()) return result;
+        const char* const begin = source.data();
+        const char* cursor = begin;
+        const char* const end = begin + source.size();
+        size_t codePointCount = 0;
+        while (cursor < end && codePointCount < MaximumCodePoints)
+        {
+            unsigned int codePoint = 0;
+            const int byteCount = ImTextCharFromUtf8(
+                &codePoint,
+                cursor,
+                end);
+            cursor += byteCount > 0 ? byteCount : 1;
+            ++codePointCount;
+        }
 
-    std::shared_ptr<UvsrSceneViewer> m_app;
+        result.truncated = cursor < end;
+        const size_t bytes = size_t(cursor - begin);
+        if (bytes) std::memcpy(result.display, begin, bytes);
+        if (result.truncated)
+            std::memcpy(result.display + bytes, "...", 3u);
+        return result;
+    }
 
-    std::shared_ptr<app::RegisteredFont> m_UiBodyFont;
-    std::shared_ptr<app::RegisteredFont> m_UiHeaderFont;
+    // the application destroys UI before this viewer and its helpers.
+    UvsrSceneViewer* m_app;
+
+    uvsr::RendererUiContext m_UiContext;
+    uvsr::RendererUiNvrhi m_UiGpu;
+    bool m_UiGpuReady = false;
     bool m_RequiredFontsReady = false;
-    std::shared_ptr<engine::Light> m_SelectedLight;
+    const char* m_RequiredFontFailure = nullptr;
+    uvsr::RendererSceneHandle m_SelectedLight;
     double m_DisplayedFrameTime = 0.0;
     double m_StatSnapshotElapsed = 0.0;
     double m_StatFrameTimeSum = 0.0;
     uint32_t m_StatFrameTimeCount = 0;
-    std::array<std::string, 4> m_PerformanceStatValues;
+    struct PerformanceStatText
+    {
+        char resolution[512]{};
+        char milliseconds[512]{};
+        char framesPerSecond[512]{};
+        char triangles[32]{};
+        // three stat limits, the triangle limit, three separators and a terminator.
+        char line[3u * 511u + 31u + 9u + 1u]{};
+    };
+    PerformanceStatText m_PerformanceStatText;
     uvsr::PerformanceTimingRowRetention m_PerformanceTimingRows;
     bool m_HasAppliedStatSnapshot = false;
     bool m_WasSceneLoading = false;
     bool m_SceneLoadFailed = false;
     std::chrono::steady_clock::time_point m_SceneLoadCounterStart;
-    std::string m_SceneLoadHistoryKey;
+    SettingsSnapshotText m_SceneLoadHistoryKey;
     SceneLoadTimingDatabase m_SceneLoadTiming;
 
-    [[nodiscard]] static std::filesystem::path
-        GetSceneLoadTimingDatabasePath();
+    [[nodiscard]] static bool GetSceneLoadTimingDatabasePath(
+        WindowsPath& output, WindowsPathResult& result) noexcept;
 
     void LoadSceneLoadTimingDatabase();
 
     void SaveSceneLoadTimingDatabase() const;
     std::unique_ptr<PixelZoomPass> m_PixelZoomPass;
-    std::unordered_map<nvrhi::IFramebuffer*, nvrhi::FramebufferHandle>
-        m_UiFramebuffers;
-    nvrhi::Format m_UiFramebufferFormat = nvrhi::Format::UNKNOWN;
     uint32_t m_SettingsPanelMarginPixels =
         static_cast<uint32_t>(UiSpacingBasePixels * 4.f);
     float m_UiDisplayScale = 1.f;
@@ -463,18 +503,18 @@ private:
     void DrawDisplaySyncTest();
     void ResetPresentationTiming();
     void AdvanceDisplayPresentation(float elapsedTimeSeconds);
-    void PacePresentation();
     void DrawDeveloperDrawer(float controlWidth);
     void DrawPostprocessDrawer(float controlWidth);
     float m_SettingsScrollY = 0.f;
     int m_SettingsScrollFrame = -1;
     SettingsSnapshotController m_SettingsSnapshots;
-    std::string m_StartupSettingsSnapshotCode;
+    // startup text borrows process argv, which outlives this UI owner.
+    std::string_view m_StartupSettingsSnapshotCode;
     bool m_StartupSettingsSnapshotAttempted = false;
-    std::string m_PendingSettingsSnapshotCode;
+    SettingsSnapshotText m_PendingSettingsSnapshotCode;
 #if defined(UVSR_BUILD_TESTING)
-    bool SelectRuntimeDiagnostic(SettingId id, const std::string& selector,
-        const char* emptyError, const char* failurePrefix, std::string& error);
+    bool SelectRuntimeDiagnostic(SettingId id, const UiSettingsValue& selector,
+        const char* emptyError, const char* failurePrefix, SettingsSnapshotError& error);
     bool m_SettingsContractDiagnosticComplete = false;
     std::unique_ptr<RetainedRuntimeDiagnosticState>
         m_RetainedRuntimeDiagnostic;
@@ -497,22 +537,7 @@ private:
     int m_StatisticsEffect =
         static_cast<int>(StatisticsEffect::CompleteRenderer);
 
-    struct LightDefaultState
-    {
-        int type = UVSR_LIGHT_TYPE_NONE;
-        double3 direction = double3(0.0, -1.0, 0.0);
-        float3 color = float3(1.f);
-        float irradiance = 1.f;
-        float angularSize = 0.f;
-        float radius = 0.f;
-        float intensity = 1.f;
-        float innerAngle = 180.f;
-        float outerAngle = 180.f;
-    };
-
-    std::unordered_map<
-        std::string,
-        LightDefaultState> m_LightDefaults;
+    UiLightDefaultsCache m_LightDefaults;
 
 	UIData& m_ui;
     inline static UiSpacingTokens g_UiSpacingTokens;
@@ -561,24 +586,29 @@ private:
         ImGuiWindow* bodyWindow;
         float indentSpacing;
     };
-    inline static std::vector<NestedDrawerContext> g_NestedDrawerContexts;
+    // FXAA and FXAA Tuning are the deepest retained settings tree.
+    static constexpr size_t MaximumNestedDrawerDepth = 2;
+    NestedDrawerContext m_NestedDrawerContexts[MaximumNestedDrawerDepth]{};
+    size_t m_NestedDrawerCount = 0;
 
     static void BeginControlRegion(ImGuiID id);
     static void EndControlRegion();
-    static bool BeginSettingsTree(const char* label,
+    bool BeginSettingsTree(const char* label,
         ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_None, const char* tooltip = nullptr);
-    static void EndSettingsTree();
+    void EndSettingsTree();
     static bool BeginToggleRegion(const char* id, bool visible);
 
+    static void DrawMaterialEditorName(uint32_t selectionId, std::string_view name);
+
     static void DrawMaterialEditorTextureFilename(
-        const char* filename,
-        const float4& color);
+        std::string_view filename,
+        const gpu_contract::Float4& color);
 
     static void SetNextLabeledControlWidth(
         const char* label,
         float preferredWidth);
 
-    static bool DrawPresetResetIcon(const char* id, bool modified,
+    bool DrawPresetResetIcon(const char* id, bool modified,
         const char* tooltip = "Reset this setting to its default value.", bool nested = false);
 
     template<typename Action>
@@ -591,14 +621,13 @@ private:
             action();
     }
 
-    static std::filesystem::path GetWindowsFontsDirectory();
 
     bool IsCommandRuntimeMutationLocked(
         const UiSettingsCommandDefinition& definition) const;
 
     bool CheckCommandMutationAllowed(
         const UiSettingsCommandDefinition& definition,
-        std::string& error) const;
+        SettingsSnapshotError& error) const;
 
     void RequestMaterialDrawerVisible(bool visible);
 
@@ -609,91 +638,91 @@ private:
         bool invalidateHistory = true);
 
     [[nodiscard]] bool ResetAllSettingsToFactoryDefaults(
-        std::string& error);
+        SettingsSnapshotError& error);
 
     [[nodiscard]] bool RunAction(
         ActionId id,
-        std::string& error);
+        SettingsSnapshotError& error);
 
-    std::shared_ptr<Light> GetDefaultCommandLight() const;
+    uvsr::RendererSceneHandle GetDefaultCommandLight() const;
 
-    std::shared_ptr<Light> EnsureCommandSelectedLight();
+    uvsr::RendererSceneHandle EnsureCommandSelectedLight();
 
-    const LightDefaultState& GetCommandLightDefaults(
-        const std::shared_ptr<Light>& light);
+    [[nodiscard]] bool GetCommandLightDefaults(RendererSceneHandle light,
+        UiLightDefaults& output, SettingsSnapshotError& error);
 
-    static std::pair<float, float> GetCommandLightAngles(
-        const double3& storedDirection,
-        bool directional);
+    static bool IsCommandMaterialTransmissive(RendererMaterialDomain domain);
 
-    static double3 MakeCommandLightDirection(
-        float azimuthDegrees,
-        float elevationDegrees,
-        bool directional);
+    static bool IsCommandMaterialAlphaTested(RendererMaterialDomain domain);
 
-    static bool IsCommandMaterialTransmissive(MaterialDomain domain);
-
-    static bool IsCommandMaterialAlphaTested(MaterialDomain domain);
-
-    static bool IsCommandMaterialAlphaBlended(MaterialDomain domain);
+    static bool IsCommandMaterialAlphaBlended(RendererMaterialDomain domain);
 
     bool DispatchTypedSetting(
         const UiSettingsCommandDefinition& definition,
         const UiSettingsValue* requested,
         UiSettingsValue& value,
-        std::string& error,
+        SettingsSnapshotError& error,
         bool allowLatentMutation = false,
-        bool deferMutationEffects = false);
+        bool deferMutationEffects = false,
+        SettingsSnapshotErrorCode* valueFailure = nullptr);
 
     [[nodiscard]] bool ResolveSettingDefaultValue(
         const UiSettingsCommandDefinition& definition,
         UiSettingsValue& value,
-        std::string& error);
+        SettingsSnapshotError& error);
 
     void ApplySettingMutationEffects(
         const UiSettingsCommandDefinition& definition);
 
     [[nodiscard]] bool ReadSettingValue(
         SettingId id,
-        std::string& value,
-        std::string& error);
+        SettingsSnapshotText& value,
+        SettingsSnapshotError& error);
 
     [[nodiscard]] bool ReadSettingValue(
         SettingId id,
         UiSettingsValue& value,
-        std::string& error);
+        SettingsSnapshotError& error);
 
     [[nodiscard]] bool ApplySettingValue(
         SettingId id,
         std::string_view canonicalValue,
-        std::string& error);
+        SettingsSnapshotError& error);
 
     [[nodiscard]] bool ApplySettingValue(
         SettingId id,
         const UiSettingsValue& value,
-        std::string& error,
+        SettingsSnapshotError& error,
         bool deferMutationEffects = false);
 
     [[nodiscard]] bool ResetSettingValue(
         SettingId id,
-        std::string& error);
+        SettingsSnapshotError& error);
 
     [[nodiscard]] bool IsSettingAvailable(SettingId id) const;
 
     [[nodiscard]] bool IsSettingAtContextualDefault(
         SettingId id,
-        std::string& error);
+        SettingsSnapshotError& error);
+
+    [[nodiscard]] bool ValidateSettingsSnapshotValue(SettingId id, std::string_view requestedValue,
+        std::string_view dependencySelector, SettingsSnapshotError& error) noexcept;
+    [[nodiscard]] bool ReadSettingsSnapshotValue(SettingId id, bool raw, SettingsSnapshotText& value,
+        SettingsSnapshotError& error) noexcept;
+    [[nodiscard]] bool WriteSettingsSnapshotValue(SettingId id, std::string_view requestedValue,
+        SettingsSnapshotError& error) noexcept;
+    [[nodiscard]] SettingsSnapshotSelectorTransition DriveSettingsSnapshotSelector(SettingId id,
+        std::string_view canonicalToken, bool begin, bool rollback, SettingsSnapshotError& error) noexcept;
 
     [[nodiscard]] SettingsSnapshotRuntimeAccess
     MakeSettingsSnapshotRuntimeAccess();
 
-    void RefreshSettingsSnapshot();
+    bool RefreshSettingsSnapshot();
 
     void CopySettingsSnapshot();
 
-    void FailStartupSettingsSnapshot(
-        std::string_view code,
-        std::string_view error);
+    // callers retain terminated argv, checked text or fixed diagnostics through the call.
+    void FailStartupSettingsSnapshot(std::string_view code, std::string_view error);
 
     void HandleStagedSettingsSnapshotStep(
         const SettingsSnapshotTransactionStep& step);
@@ -702,17 +731,18 @@ private:
 
     void DrawPerformancePanelContents(
         float settingsControlWidth,
-        const std::string& performanceLine);
+        const char* performanceLine);
 
     UiSettingsValue ReadUiPresentationValue(SettingId id);
     bool ApplyUiSetting(SettingId id, const UiSettingsValue& value);
+    bool ApplyUiSettingText(SettingId id, std::string_view text);
     bool ResetUiSetting(SettingId id);
     bool IsUiSettingChanged(SettingId id);
     std::size_t ReadUiTokenIndex(SettingId id);
     bool DrawUiReset(SettingId id, bool nested = false, const char* resetId = nullptr,
         const char* tooltip = "Reset this setting to its default value.");
     void DrawUiBoolean(const char* label, SettingId id, const char* tooltip,
-        bool nestedReset = false, const std::string* texturePath = nullptr, const char* resetId = nullptr);
+        bool nestedReset = false, const std::string_view* texturePath = nullptr, const char* resetId = nullptr);
     void DrawUiFloat(const char* label, SettingId id, const char* format,
         const char* tooltip, ImGuiSliderFlags flags = ImGuiSliderFlags_None,
         bool nestedReset = false, float width = 0.f, bool useContextMaximum = false);
@@ -734,18 +764,36 @@ private:
     void DrawMaterialDrawer(float settingsControlWidth);
 
     template <typename... Arguments>
-    static void FormatStatLine(
-        std::string& destination,
+    [[nodiscard]] static bool FormatStatLine(
+        char (&destination)[512],
         const char* format,
-        Arguments... arguments)
+        Arguments... arguments) noexcept
     {
-        char buffer[512];
-        snprintf(
-            buffer,
-            std::size(buffer),
-            format,
-            arguments...);
-        destination = buffer;
+        return snprintf(destination, sizeof(destination), format, arguments...) >= 0;
+    }
+
+    [[nodiscard]] static bool FormatSliderInput(
+        char (&output)[sizeof("%.1f centimeters")], const char* format) noexcept
+    {
+        if (!format) return false;
+        size_t bytes = 0;
+        while (bytes < sizeof(output) && format[bytes]) ++bytes;
+        if (bytes == sizeof(output)) return false;
+        std::memcpy(output, format, bytes + 1u);
+        const char* const words[] = {" degrees", " centimeters", " candela"};
+        const char* const units[] = {"\xC2\xB0", " cm", " cd"};
+        for (size_t index = 0; index < sizeof(words) / sizeof(words[0]); ++index)
+        {
+            char* const found = std::strstr(output, words[index]);
+            if (!found) continue;
+            const size_t wordBytes = std::strlen(words[index]);
+            const size_t unitBytes = std::strlen(units[index]);
+            std::memmove(found + unitBytes, found + wordBytes,
+                bytes - size_t(found - output) - wordBytes + 1u);
+            std::memcpy(found, units[index], unitBytes);
+            bytes -= wordBytes - unitBytes;
+        }
+        return true;
     }
 
     void UpdateStatSnapshot(int width, int height);
@@ -760,6 +808,12 @@ private:
             travelMaximum <= logicalMaximum);
         const ImGuiDataType type = std::is_same_v<Number, int>
             ? ImGuiDataType_S32 : ImGuiDataType_Float;
+        char inputFormat[sizeof("%.1f centimeters")];
+        if (!FormatSliderInput(inputFormat, format))
+        {
+            uvsr::log::error("The slider input format exceeds its checked control bound.");
+            return false;
+        }
         bool changed;
         const float width = ImGui::CalcItemWidth();
         const float gap = ImGui::GetStyle().ItemInnerSpacing.x;
@@ -774,16 +828,8 @@ private:
                 ImGuiSliderFlags_AlwaysClamp);
         ImGui::SameLine(0.f, gap);
         ImGui::SetNextItemWidth(numberWidth);
-        std::string inputFormat = format;
-        for (const auto& [word, unit] : { std::pair{ " degrees", "\xC2\xB0" },
-            std::pair{ " centimeters", " cm" }, std::pair{ " candela", " cd" } })
-        {
-            const auto offset = inputFormat.find(word);
-            if (offset != std::string::npos)
-                inputFormat.replace(offset, std::strlen(word), unit);
-        }
         const bool edited = ImGui::InputScalar("##value", type, value,
-            nullptr, nullptr, inputFormat.c_str());
+            nullptr, nullptr, inputFormat);
         if (edited)
             *value = std::clamp(*value,
                 m_ui.OverrideVisualMaxes ? logicalMinimum : travelMinimum,
@@ -808,26 +854,31 @@ public:
     ~UIRenderer() override;
     UIRenderer(
         DeviceManager* deviceManager,
-        std::shared_ptr<UvsrSceneViewer> app,
+        UvsrSceneViewer* app,
         UIData& ui,
-        std::string startupSettingsSnapshotCode);
+        std::string_view startupSettingsSnapshotCode) noexcept;
 
     void Animate(float elapsedTimeSeconds) override;
 
-    bool Init(std::shared_ptr<ShaderFactory> shaderFactory);
+    // one attempt after viewer initialization succeeds; destroy this owner on failure.
+    [[nodiscard]] bool Init(const uvsr::RendererNvrhiMessageCallback& messages, SettingsSnapshotError& error);
+    [[nodiscard]] const char* RequiredFontFailure() const noexcept { return m_RequiredFontFailure; }
+    void PacePresentation();
+    bool ShouldAnimateUnfocused() override { return true; }
+    bool SupportsDepthBuffer() override { return false; }
 
 #if defined(UVSR_BUILD_TESTING)
     [[nodiscard]] bool ChangeRuntimeDiagnosticMaterial(
-        std::string& error);
+        SettingsSnapshotError& error);
 
     [[nodiscard]] bool ChangeRuntimeDiagnosticLight(
-        std::string& error);
+        SettingsSnapshotError& error);
 
     [[nodiscard]] bool SelectRuntimeDiagnosticFlashlight(
-        std::string& error);
+        SettingsSnapshotError& error);
 
     [[nodiscard]] bool ToggleRuntimeDiagnosticFlashlight(
-        std::string& error);
+        SettingsSnapshotError& error);
 
     void DriveRetainedRuntimeDiagnostic();
     int VerifyCanonicalSettingsContract();
@@ -849,5 +900,9 @@ protected:
         int action,
         int mods) override;
 
-    virtual void buildUI(void) override;
+    bool KeyboardCharInput(unsigned int unicode, int mods) override;
+    bool MousePosUpdate(double x, double y) override;
+    bool MouseScrollUpdate(double x, double y) override;
+    bool MouseButtonUpdate(int button, int action, int mods) override;
+    void buildUI();
 };

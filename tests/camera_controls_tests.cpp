@@ -3,24 +3,27 @@
 
 #include <array>
 #include <cmath>
-#include <iostream>
-#include <stdexcept>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
 #include <utility>
 #include <vector>
 
-using namespace donut::math;
 using namespace uvsr;
 
 namespace
 {
-    const float3 Position(3.f, -2.f, 7.f);
-    const float3 Direction(0.f, 0.f, 1.f);
+    const gpu_contract::Float3 Position{3.f, -2.f, 7.f};
+    const gpu_contract::Float3 Direction{0.f, 0.f, 1.f};
     constexpr float HalfDiagonal = 0.707106781f;
 
     void Require(bool condition, const char* message)
     {
         if (!condition)
-            throw std::runtime_error(message);
+            { std::fprintf(stderr, "camera acceptance failed: %s\n", message); std::exit(1); }
     }
 
     bool NearlyEqual(float actual, float expected, float tolerance = 1e-4f)
@@ -28,9 +31,17 @@ namespace
         return std::abs(actual - expected) <= tolerance;
     }
 
-    bool NearlyEqual(float3 actual, float3 expected, float tolerance = 1e-4f)
+    bool NearlyEqual(gpu_contract::Float3 actual, gpu_contract::Float3 expected, float tolerance = 1e-4f)
     {
-        return lengthSquared(actual - expected) <= tolerance * tolerance;
+        return LengthSquared(actual - expected) <= tolerance * tolerance;
+    }
+
+    bool SameMatrix(const gpu_contract::Float4x4& actual, const gpu_contract::Float4x4& expected)
+    {
+        for (size_t lane = 0; lane < 16; ++lane)
+            if (actual.values[lane] != expected.values[lane])
+                return false;
+        return true;
     }
 
     template<class Camera>
@@ -50,32 +61,32 @@ namespace
     void RolledPose(Camera& camera)
     {
         camera.SetExactPose(Position, Direction,
-            float3(-HalfDiagonal, HalfDiagonal, 0), float3(-HalfDiagonal, -HalfDiagonal, 0));
+            gpu_contract::Float3{-HalfDiagonal, HalfDiagonal, 0}, gpu_contract::Float3{-HalfDiagonal, -HalfDiagonal, 0});
     }
 
     void CheckModesAndKeys()
     {
         UvsrThirdPersonCamera free;
-        free.SetExactPose(Position, float3(0, .6f, .8f), float3(0, .8f, -.6f), float3(-1, 0, 0));
+        free.SetExactPose(Position, gpu_contract::Float3{0, .6f, .8f}, gpu_contract::Float3{0, .8f, -.6f}, gpu_contract::Float3{-1, 0, 0});
         const auto view = free.GetWorldToViewMatrix();
-        Require(all(view.m_linear.row0 == float3(-1, 0, 0)) &&
-            all(view.m_linear.row1 == float3(0, .8f, .6f)) &&
-            all(view.m_linear.row2 == float3(0, -.6f, .8f)), "exact pose lost its framing basis");
+        Require((gpu_contract::Float3{view.values[0], view.values[1], view.values[2]} == gpu_contract::Float3{-1, 0, 0}) &&
+            (gpu_contract::Float3{view.values[4], view.values[5], view.values[6]} == gpu_contract::Float3{0, .8f, .6f}) &&
+            (gpu_contract::Float3{view.values[8], view.values[9], view.values[10]} == gpu_contract::Float3{0, -.6f, .8f}), "exact pose lost its framing basis");
         StaticViewCamera locked;
-        locked.SetExactPose(Position, free.GetDir(), free.GetUp(), float3(-1, 0, 0));
-        Require(locked.GetWorldToViewMatrix() == view, "Locked changed the Freelook spawn matrix");
+        locked.SetExactPose(Position, free.GetDir(), free.GetUp(), gpu_contract::Float3{-1, 0, 0});
+        Require(SameMatrix(locked.GetWorldToViewMatrix(), view), "Locked changed the Freelook spawn matrix");
         Key(locked, GLFW_KEY_W, GLFW_PRESS);
         locked.MousePosUpdate(900, 600);
         locked.MouseButtonUpdate(GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS, 0);
         locked.Animate(1);
-        Require(locked.GetWorldToViewMatrix() == view, "Locked accepted movement or look input");
+        Require(SameMatrix(locked.GetWorldToViewMatrix(), view), "Locked accepted movement or look input");
 
         UvsrFirstPersonCamera first(true);
-        first.LookTo(float3(0.f), float3(1, 0, 0));
+        first.LookTo(gpu_contract::Float3{0.f}, gpu_contract::Float3{1, 0, 0});
         Key(first, GLFW_KEY_W, GLFW_PRESS);
         first.Animate(1);
         Key(first, GLFW_KEY_W, GLFW_RELEASE);
-        Require(NearlyEqual(first.GetPosition(), float3(6, 0, 0)), "first-person forward speed changed");
+        Require(NearlyEqual(first.GetPosition(), gpu_contract::Float3{6, 0, 0}), "first-person forward speed changed");
         for (const int key : { GLFW_KEY_Q, GLFW_KEY_E })
         {
             Key(first, key, GLFW_PRESS);
@@ -90,16 +101,16 @@ namespace
             Key(first, key, GLFW_PRESS);
             first.Animate(.25f);
             Key(first, key, GLFW_RELEASE);
-            Require(first.GetWorldToViewMatrix() == before, "reserved input changed the camera");
+            Require(SameMatrix(first.GetWorldToViewMatrix(), before), "reserved input changed the camera");
             if (key == GLFW_KEY_LEFT_SHIFT || key == GLFW_KEY_RIGHT_SHIFT)
             {
-                first.LookTo(float3(0.f), float3(1, 0, 0));
+                first.LookTo(gpu_contract::Float3{0.f}, gpu_contract::Float3{1, 0, 0});
                 Key(first, key, GLFW_PRESS);
                 Key(first, GLFW_KEY_W, GLFW_PRESS);
                 first.Animate(1);
                 Key(first, GLFW_KEY_W, GLFW_RELEASE);
                 Key(first, key, GLFW_RELEASE);
-                Require(NearlyEqual(first.GetPosition(), float3(12, 0, 0)), "Shift must double movement without vertical motion");
+                Require(NearlyEqual(first.GetPosition(), gpu_contract::Float3{12, 0, 0}), "Shift must double movement without vertical motion");
             }
         }
         for (const int key : { GLFW_KEY_X, GLFW_KEY_C })
@@ -131,7 +142,7 @@ namespace
             Key(free, key, GLFW_PRESS);
             Frames(free, 60);
             Key(free, key, GLFW_RELEASE);
-            Require(all(free.GetPosition() == before), "Freelook accepted retired translation input");
+            Require((free.GetPosition() == before), "Freelook accepted retired translation input");
         }
     }
 
@@ -141,8 +152,8 @@ namespace
         for (const int movement : { GLFW_KEY_W, GLFW_KEY_A, GLFW_KEY_Q })
         {
             Camera normal, fast;
-            normal.LookTo(float3(0.f), Direction);
-            fast.LookTo(float3(0.f), Direction);
+            normal.LookTo(gpu_contract::Float3{0.f}, Direction);
+            fast.LookTo(gpu_contract::Float3{0.f}, Direction);
             Key(normal, movement, GLFW_PRESS);
             Key(fast, movement, GLFW_PRESS);
             Key(fast, GLFW_KEY_LEFT_SHIFT, GLFW_PRESS);
@@ -168,9 +179,9 @@ namespace
         RolledPose(camera);
         const auto originalUp = camera.GetUp();
         Key(camera, GLFW_KEY_V, GLFW_PRESS);
-        Require(all(camera.GetUp() == originalUp), "V snapped the captured pose");
+        Require((camera.GetUp() == originalUp), "V snapped the captured pose");
         int crossings = 0;
-        float previous = PI_f / 4, peak = 0;
+        float previous = RendererPiF / 4, peak = 0;
         for (int frame = 0; frame < 120; ++frame)
         {
             camera.Animate(.01f);
@@ -183,11 +194,11 @@ namespace
                 previous = roll;
             }
             peak = std::min(peak, roll);
-            Require(all(camera.GetPosition() == Position) && all(camera.GetDir() == Direction),
+            Require((camera.GetPosition() == Position) && (camera.GetDir() == Direction),
                 "roll leveling moved or redirected the eye");
         }
-        Require(crossings == 1 && std::abs(peak / (PI_f / 4)) >= .145f &&
-            std::abs(peak / (PI_f / 4)) <= .155f && all(camera.GetUp() == float3(0, 1, 0)),
+        Require(crossings == 1 && std::abs(peak / (RendererPiF / 4)) >= .145f &&
+            std::abs(peak / (RendererPiF / 4)) <= .155f && (camera.GetUp() == gpu_contract::Float3{0, 1, 0}),
             "roll leveling lost its single bounded overshoot or exact endpoint");
     }
 
@@ -197,7 +208,7 @@ namespace
         UvsrThirdPersonCamera third;
         CheckLeveling(first);
         CheckLeveling(third);
-        std::array<float3, 4> results;
+        std::array<gpu_contract::Float3, 4> results;
         const std::array<int, 3> rates{ 30, 60, 144 };
         for (size_t i = 0; i < results.size(); ++i)
         {
@@ -247,7 +258,7 @@ namespace
                 const auto moved = camera.GetWorldToViewMatrix();
                 camera.MouseButtonUpdate(GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0);
                 camera.Animate(.5f);
-                Require(!NearlyEqual(camera.GetDir(), capturedDirection) && camera.GetWorldToViewMatrix() == moved,
+                Require(!NearlyEqual(camera.GetDir(), capturedDirection) && SameMatrix(camera.GetWorldToViewMatrix(), moved),
                     "new trackpad motion did not cancel pending leveling");
             }
             else
@@ -258,9 +269,9 @@ namespace
                     camera.Animate(.01f);
                 }
                 const auto direction = camera.GetDir();
-                Require(all(camera.GetPosition() == Position) && all(direction == capturedDirection) &&
+                Require((camera.GetPosition() == Position) && (direction == capturedDirection) &&
                     (input == 0 || !NearlyEqual(direction, Direction)) &&
-                    NearlyEqual(dot(camera.GetUp(), float3(0, 1, 0)), std::sqrt(1 - direction.y * direction.y), 2e-5f),
+                    NearlyEqual(Dot(camera.GetUp(), gpu_contract::Float3{0, 1, 0}), std::sqrt(1 - direction.y * direction.y), 2e-5f),
                     "stationary trackpad canceled leveling or V lost the queued input pose");
             }
         }
@@ -280,21 +291,21 @@ namespace
             }
             const auto stopped = camera.GetWorldToViewMatrix();
             camera.Animate(.7f);
-            Require(camera.GetWorldToViewMatrix() == stopped, "pose replacement or input failed to cancel leveling");
+            Require(SameMatrix(camera.GetWorldToViewMatrix(), stopped), "pose replacement or input failed to cancel leveling");
         }
-        first.SetExactPose(Position, float3(1e-5f, 1, 0),
-            float3(HalfDiagonal, -1e-5f * HalfDiagonal, HalfDiagonal),
-            float3(HalfDiagonal, -1e-5f * HalfDiagonal, -HalfDiagonal));
+        first.SetExactPose(Position, gpu_contract::Float3{1e-5f, 1, 0},
+            gpu_contract::Float3{HalfDiagonal, -1e-5f * HalfDiagonal, HalfDiagonal},
+            gpu_contract::Float3{HalfDiagonal, -1e-5f * HalfDiagonal, -HalfDiagonal});
         Key(first, GLFW_KEY_V, GLFW_PRESS);
         constexpr std::array<float, 5> times{ .003f, .011f, .007f, .019f, .005f };
         for (size_t frame = 0; frame < 140; ++frame)
         {
             first.Animate(times[frame % times.size()]);
-            Require(std::isfinite(length(first.GetUp())) && NearlyEqual(length(first.GetUp()), 1) &&
-                std::abs(dot(first.GetDir(), first.GetUp())) < 1e-4f, "near-vertical leveling produced an invalid basis");
+            Require(std::isfinite(Length(first.GetUp())) && NearlyEqual(Length(first.GetUp()), 1) &&
+                std::abs(Dot(first.GetDir(), first.GetUp())) < 1e-4f, "near-vertical leveling produced an invalid basis");
         }
-        Require(all(first.GetPosition() == Position) && all(first.GetDir() == float3(1e-5f, 1, 0)) &&
-            NearlyEqual(first.GetUp(), float3(0, 0, 1), 2e-5f), "near-vertical leveling changed the captured pose");
+        Require((first.GetPosition() == Position) && (first.GetDir() == gpu_contract::Float3{1e-5f, 1, 0}) &&
+            NearlyEqual(first.GetUp(), gpu_contract::Float3{0, 0, 1}, 2e-5f), "near-vertical leveling changed the captured pose");
     }
 
     void CheckDolly()
@@ -311,30 +322,30 @@ namespace
         Require(NearlyEqual(camera.GetPosition().z - Position.z, step, 2e-4f) && camera.GetDollyScale() < 1,
             "wheel dolly missed its requested step");
 
-        struct Move { int key; float3 direction; };
+        struct Move { int key; gpu_contract::Float3 direction; };
         for (const auto& move : { Move{ GLFW_KEY_W, Direction }, { GLFW_KEY_S, -Direction },
-                 { GLFW_KEY_Q, float3(0, 1, 0) }, { GLFW_KEY_E, float3(0, -1, 0) },
-                 { GLFW_KEY_D, float3(-1, 0, 0) }, { GLFW_KEY_A, float3(1, 0, 0) } })
+                 { GLFW_KEY_Q, gpu_contract::Float3{0, 1, 0} }, { GLFW_KEY_E, gpu_contract::Float3{0, -1, 0} },
+                 { GLFW_KEY_D, gpu_contract::Float3{-1, 0, 0} }, { GLFW_KEY_A, gpu_contract::Float3{1, 0, 0} } })
         {
             camera.LookTo(Position, Direction, move.key == GLFW_KEY_Q || move.key == GLFW_KEY_E
-                ? float3(1, 0, 0) : float3(0, 1, 0));
+                ? gpu_contract::Float3{1, 0, 0} : gpu_contract::Float3{0, 1, 0});
             camera.ResetZoomReferenceDistance(10);
             Key(camera, move.key, GLFW_PRESS);
             Frames(camera, 1);
             const auto firstStep = camera.GetPosition() - Position;
             Frames(camera, 1);
-            Require(dot(firstStep, move.direction) > 0 &&
-                dot(camera.GetPosition() - Position - firstStep, move.direction) > dot(firstStep, move.direction),
+            Require(Dot(firstStep, move.direction) > 0 &&
+                Dot(camera.GetPosition() - Position - firstStep, move.direction) > Dot(firstStep, move.direction),
                 "keyboard movement lost its acceleration");
             Frames(camera, 58);
             const auto displacement = camera.GetPosition() - Position;
-            Require(dot(displacement, move.direction) > 0 &&
-                NearlyEqual(displacement, move.direction * dot(displacement, move.direction)),
-                "keyboard movement changed direction or added cross-axis drift");
+            Require(Dot(displacement, move.direction) > 0 &&
+                NearlyEqual(displacement, move.direction * Dot(displacement, move.direction)),
+                "keyboard movement changed direction or added Cross-axis drift");
             Key(camera, move.key, GLFW_RELEASE);
             const auto releasePosition = camera.GetPosition();
             Frames(camera, 1);
-            Require(dot(camera.GetPosition() - releasePosition, move.direction) > 0, "key release snapped movement to rest");
+            Require(Dot(camera.GetPosition() - releasePosition, move.direction) > 0, "key release snapped movement to rest");
             Frames(camera, 180);
             Require(std::abs(camera.GetKeyboardDollyVelocity()) < 1e-4f &&
                 std::abs(camera.GetKeyboardStrafeVelocity()) < 1e-4f &&
@@ -349,13 +360,13 @@ namespace
         camera.CancelPendingMotion();
         const auto stopped = camera.GetPosition();
         Frames(camera, 30);
-        Require(all(camera.GetPosition() == stopped), "canceling pending motion left residual movement");
+        Require((camera.GetPosition() == stopped), "canceling pending motion left residual movement");
         Key(camera, GLFW_KEY_A, GLFW_PRESS);
         Frames(camera, 60);
         const auto resetPosition = camera.GetPosition();
         camera.ResetZoomReferenceDistance(12);
         Frames(camera, 30);
-        Require(all(camera.GetPosition() == resetPosition) && camera.GetKeyboardStrafeVelocity() == 0,
+        Require((camera.GetPosition() == resetPosition) && camera.GetKeyboardStrafeVelocity() == 0,
             "movement reference reset retained strafe input");
         for (int notch = 0; notch < 80; ++notch)
             camera.MouseScrollUpdate(0, 1);
@@ -365,71 +376,170 @@ namespace
         for (int notch = 0; notch < 10; ++notch)
             camera.MouseScrollUpdate(0, 1);
         Frames(camera, 240);
-        Require(NearlyEqual(camera.GetDollyScale(), minimum) && dot(camera.GetPosition() - before, camera.GetDir()) > .02f,
+        Require(NearlyEqual(camera.GetDollyScale(), minimum) && Dot(camera.GetPosition() - before, camera.GetDir()) > .02f,
             "wheel dolly stopped at its sensitivity floor");
         const auto reference = camera.GetReferenceZoomDistance();
         const auto wheel = camera.GetBaseWheelStepDistance();
         const auto direction = camera.GetDir();
-        camera.ApplyCollisionPosition(float3(2, 3, 4));
-        Require(all(camera.GetPosition() == float3(2, 3, 4)) && camera.GetReferenceZoomDistance() == reference &&
-            camera.GetBaseWheelStepDistance() == wheel && camera.GetDollyScale() == minimum && all(camera.GetDir() == direction),
+        camera.ApplyCollisionPosition(gpu_contract::Float3{2, 3, 4});
+        Require((camera.GetPosition() == gpu_contract::Float3{2, 3, 4}) && camera.GetReferenceZoomDistance() == reference &&
+            camera.GetBaseWheelStepDistance() == wheel && camera.GetDollyScale() == minimum && (camera.GetDir() == direction),
             "collision changed look or dolly state");
     }
 
     void CheckCollision()
     {
         CameraCollisionWorld world;
-        Require(all(world.MoveSphere(float3(-1, 2, 3), float3(4, 5, 6), .25f) == float3(4, 5, 6)),
+        const auto point = [](gpu_contract::Float3 value) { return CameraCollisionWorld::Point{value.x, value.y, value.z}; };
+        const auto move = [&](gpu_contract::Float3 start, gpu_contract::Float3 end, float radius)
+        {
+            const auto value = world.MoveSphere(point(start), point(end), radius);
+            return gpu_contract::Float3{value.x, value.y, value.z};
+        };
+        const auto resolve = [&](gpu_contract::Float3 start, gpu_contract::Float3 movement, float radius)
+        {
+            const auto value = world.ResolveSphere(point(start), point(movement), radius);
+            return gpu_contract::Float3{value.x, value.y, value.z};
+        };
+        Require((move(gpu_contract::Float3{-1, 2, 3}, gpu_contract::Float3{4, 5, 6}, .25f) == gpu_contract::Float3{4, 5, 6}),
             "empty collision world blocked movement");
-        std::vector<CameraCollisionWorld::Triangle> wall;
+        CameraCollisionWorld::Triangle wall[128];
+        size_t triangle = 0;
         for (int y = 0; y < 8; ++y)
         for (int z = 0; z < 8; ++z)
         {
             const float y0 = -10.f + float(y) * 2.5f, z0 = -10.f + float(z) * 2.5f;
-            wall.push_back({ float3(0, y0, z0), float3(0, y0 + 2.5f, z0), float3(0, y0 + 2.5f, z0 + 2.5f) });
-            wall.push_back({ float3(0, y0, z0), float3(0, y0 + 2.5f, z0 + 2.5f), float3(0, y0, z0 + 2.5f) });
+            wall[triangle++] = {{0, y0, z0}, {0, y0 + 2.5f, z0}, {0, y0 + 2.5f, z0 + 2.5f}};
+            wall[triangle++] = {{0, y0, z0}, {0, y0 + 2.5f, z0 + 2.5f}, {0, y0, z0 + 2.5f}};
         }
-        world.Build(std::move(wall));
+        Require(world.Build(wall) == CameraCollisionBuildError::None, "collision build failed");
         Require(world.GetTriangleCount() == 128, "collision BVH lost valid triangles");
         for (float radius : { .25f, .5f })
         {
-            const auto hit = world.MoveSphere(float3(-1, 0, 0), float3(1, 0, 0), radius);
+            const auto hit = move(gpu_contract::Float3{-1, 0, 0}, gpu_contract::Float3{1, 0, 0}, radius);
             Require(NearlyEqual(hit.x, -radius, .002f) && NearlyEqual(hit.y, 0) && NearlyEqual(hit.z, 0), "thin wall sweep tunneled or drifted");
-            const auto pressed = world.MoveSphere(hit, float3(1, 0, 0), radius);
+            const auto pressed = move(hit, gpu_contract::Float3{1, 0, 0}, radius);
             Require(NearlyEqual(pressed, hit, .002f), "continued wall pressure changed the standoff");
         }
-        const auto slide = world.MoveSphere(float3(-1, -1, 0), float3(1, 1, 0), .25f);
+        const auto slide = move(gpu_contract::Float3{-1, -1, 0}, gpu_contract::Float3{1, 1, 0}, .25f);
         Require(NearlyEqual(slide.x, -.25f, .002f) && slide.y > .9f, "wall contact lost tangential sliding");
-        Require(NearlyEqual(world.MoveSphere(float3(-1, 0, 0), float3(-2, .5f, 0), .25f), float3(-2, .5f, 0)),
+        Require(NearlyEqual(move(gpu_contract::Float3{-1, 0, 0}, gpu_contract::Float3{-2, .5f, 0}, .25f), gpu_contract::Float3{-2, .5f, 0}),
             "movement away from geometry changed");
-        Require(all(world.MoveSphere(float3(-1, 0, 0), float3(-1, 0, 0), .25f) == float3(-1, 0, 0)),
+        Require((move(gpu_contract::Float3{-1, 0, 0}, gpu_contract::Float3{-1, 0, 0}, .25f) == gpu_contract::Float3{-1, 0, 0}),
             "stationary camera lost its idle position");
-        Require(NearlyEqual(world.ResolveSphere(float3(-.1f, 0, 0), float3(1, 0, 0), .25f).x, -.25f, .002f),
+        Require(NearlyEqual(resolve(gpu_contract::Float3{-.1f, 0, 0}, gpu_contract::Float3{1, 0, 0}, .25f).x, -.25f, .002f),
             "enlarged mounted hitbox could not repair overlap");
-        const auto activation = world.ResolveSphere(float3(-.1f, 0, 0), float3(.4f, 0, 0), .1f);
-        Require(NearlyEqual(world.MoveSphere(activation, float3(.3f, 0, 0), .1f).x, -.1f, .002f),
+        const auto activation = resolve(gpu_contract::Float3{-.1f, 0, 0}, gpu_contract::Float3{.4f, 0, 0}, .1f);
+        Require(NearlyEqual(move(activation, gpu_contract::Float3{.3f, 0, 0}, .1f).x, -.1f, .002f),
             "first activation appeared through the wall");
-        world.Build({ { float3(0.f), float3(0.f), float3(0.f) } });
+        const CameraCollisionWorld::Triangle degenerate[1]{};
+        Require(world.Build(degenerate) == CameraCollisionBuildError::None,
+            "empty collision candidate failed");
         Require(world.Empty(), "degenerate triangles entered collision");
     }
 }
 
-int main()
+namespace
 {
-    try
+    void TraceFloat(float value)
     {
-        CheckModesAndKeys();
-        CheckDoubleMovementSpeed<UvsrFirstPersonCamera>();
-        CheckDoubleMovementSpeed<UvsrThirdPersonCamera>();
-        CheckRollInput();
-        CheckDolly();
-        CheckCollision();
-        std::cout << "camera acceptance passed\n";
+        std::uint32_t bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        std::printf(" %08x", bits);
+    }
+
+    template<class Camera>
+    void TraceCamera(const char* name, Camera& camera)
+    {
+        camera.LookTo({3.f, -2.f, 7.f}, {.2f, .1f, 1.f}, {0.f, 1.f, 0.f});
+        constexpr float steps[] = {1.f / 120.f, 1.f / 60.f, 1.f / 30.f, 0.f, 1.f / 144.f};
+        for (unsigned frame = 0; frame < 160; ++frame)
+        {
+            switch (frame)
+            {
+            case 0: camera.MousePosUpdate(100, 200); camera.MouseButtonUpdate(GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS, 0); break;
+            case 1: camera.MousePosUpdate(113.5, 193.25); break;
+            case 2: camera.MousePosUpdate(117.25, 198.5); break;
+            case 5: camera.MouseButtonUpdate(GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0); break;
+            case 8: Key(camera, GLFW_KEY_W, GLFW_PRESS); break;
+            case 14: Key(camera, GLFW_KEY_LEFT_SHIFT, GLFW_PRESS); break;
+            case 18: Key(camera, GLFW_KEY_RIGHT_SHIFT, GLFW_PRESS); break;
+            case 20: Key(camera, GLFW_KEY_LEFT_SHIFT, GLFW_RELEASE); break;
+            case 24: Key(camera, GLFW_KEY_LEFT_CONTROL, GLFW_PRESS); break;
+            case 28: Key(camera, GLFW_KEY_RIGHT_CONTROL, GLFW_PRESS); break;
+            case 30: Key(camera, GLFW_KEY_LEFT_CONTROL, GLFW_RELEASE); break;
+            case 32: Key(camera, GLFW_KEY_RIGHT_CONTROL, GLFW_RELEASE); break;
+            case 35: Key(camera, GLFW_KEY_RIGHT_SHIFT, GLFW_RELEASE); break;
+            case 40: Key(camera, GLFW_KEY_W, GLFW_RELEASE); break;
+            case 41: Key(camera, GLFW_KEY_Q, GLFW_PRESS); break;
+            case 45: Key(camera, GLFW_KEY_Q, GLFW_RELEASE); Key(camera, GLFW_KEY_E, GLFW_PRESS); break;
+            case 49: Key(camera, GLFW_KEY_E, GLFW_RELEASE); break;
+            case 50: Key(camera, GLFW_KEY_A, GLFW_PRESS); break;
+            case 54: Key(camera, GLFW_KEY_A, GLFW_RELEASE); Key(camera, GLFW_KEY_D, GLFW_PRESS); break;
+            case 58: Key(camera, GLFW_KEY_D, GLFW_RELEASE); break;
+            case 60: Key(camera, GLFW_KEY_X, GLFW_PRESS); break;
+            case 64: Key(camera, GLFW_KEY_X, GLFW_RELEASE); break;
+            case 65: Key(camera, GLFW_KEY_V, GLFW_PRESS); break;
+            case 66: Key(camera, GLFW_KEY_V, GLFW_REPEAT); break;
+            case 67: Key(camera, GLFW_KEY_V, GLFW_RELEASE); break;
+            case 85: camera.SetExactPose({3.f, -2.f, 7.f}, {0.f, 0.f, 1.f}, {0.f, 1.f, 0.f}, {-1.f, 0.f, 0.f}); break;
+            case 100: Key(camera, GLFW_KEY_LEFT, GLFW_PRESS); break;
+            case 104: Key(camera, GLFW_KEY_UP, GLFW_PRESS); break;
+            case 108: Key(camera, GLFW_KEY_LEFT, GLFW_RELEASE); Key(camera, GLFW_KEY_UP, GLFW_RELEASE); break;
+            case 110: Key(camera, GLFW_KEY_C, GLFW_PRESS); break;
+            case 114: Key(camera, GLFW_KEY_C, GLFW_RELEASE); break;
+            case 116: Key(camera, GLFW_KEY_V, GLFW_PRESS); break;
+            case 117: Key(camera, GLFW_KEY_V, GLFW_RELEASE); break;
+            case 120: camera.MouseButtonUpdate(GLFW_MOUSE_BUTTON_LEFT, GLFW_PRESS, 0); break;
+            case 121: camera.MousePosUpdate(125.75, 182.5); break;
+            case 124: camera.MouseButtonUpdate(GLFW_MOUSE_BUTTON_LEFT, GLFW_RELEASE, 0); break;
+            case 128: camera.MouseScrollUpdate(0, 1); break;
+            case 130: camera.MouseScrollUpdate(0, -1); break;
+            case 132: camera.MouseScrollUpdate(0, 2); break;
+            case 136: Key(camera, GLFW_KEY_S, GLFW_PRESS); break;
+            case 140: Key(camera, GLFW_KEY_S, GLFW_RELEASE); break;
+            default: break;
+            }
+            camera.Animate(steps[frame % 5]);
+            std::printf("%s %u", name, frame);
+            for (const auto value : {camera.GetPosition(), camera.GetDir(), camera.GetUp()})
+            {
+                TraceFloat(value.x); TraceFloat(value.y); TraceFloat(value.z);
+            }
+            const auto& matrix = camera.GetWorldToViewMatrix();
+            for (unsigned row = 0; row < 4; ++row)
+                for (unsigned column = 0; column < 4; ++column)
+                    TraceFloat(matrix.values[row * 4 + column]);
+            std::putchar('\n');
+        }
+    }
+
+    void TraceModes()
+    {
+        UvsrFirstPersonCamera first;
+        UvsrFirstPersonCamera pivot(false);
+        UvsrThirdPersonCamera third;
+        StaticViewCamera fixed;
+        TraceCamera("first", first);
+        TraceCamera("pivot", pivot);
+        TraceCamera("third", third);
+        TraceCamera("static", fixed);
+    }
+}
+
+int main(int argc, char** argv)
+{
+    if (argc == 2 && std::strcmp(argv[1], "--trace") == 0)
+    {
+        TraceModes();
         return 0;
     }
-    catch (const std::exception& error)
-    {
-        std::cerr << "camera acceptance failed: " << error.what() << '\n';
-        return 1;
-    }
+    CheckModesAndKeys();
+    CheckDoubleMovementSpeed<UvsrFirstPersonCamera>();
+    CheckDoubleMovementSpeed<UvsrThirdPersonCamera>();
+    CheckRollInput();
+    CheckDolly();
+    CheckCollision();
+    std::puts("camera acceptance passed");
+    return 0;
 }

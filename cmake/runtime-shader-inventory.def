@@ -1,12 +1,3 @@
-bin/shaders/framework/dxil/blit_ps.bin
-bin/shaders/framework/dxil/fullscreen_vs.bin
-bin/shaders/framework/dxil/imgui_pixel.bin
-bin/shaders/framework/dxil/imgui_vertex.bin
-bin/shaders/framework/dxil/passes/depth_ps.bin
-bin/shaders/framework/dxil/passes/depth_vs_buffer_loads.bin
-bin/shaders/framework/dxil/rect_vs.bin
-bin/shaders/framework/dxil/sharpen_ps.bin
-bin/shaders/framework/dxil/skinning_cs.bin
 bin/shaders/uvsr/dxil/agx_tonemapping_ps.bin
 bin/shaders/uvsr/dxil/auto_exposure_histogram_cs.bin
 bin/shaders/uvsr/dxil/auto_exposure_resolve_cs.bin
@@ -30,4 +21,7 @@ bin/shaders/uvsr/dxil/ray_traced_sky_visibility_cs_Generate.bin
 bin/shaders/uvsr/dxil/renderer_blit_ps.bin
 bin/shaders/uvsr/dxil/renderer_fullscreen_vs.bin
 bin/shaders/uvsr/dxil/renderer_gbuffer_vs_buffer_loads.bin
+bin/shaders/uvsr/dxil/renderer_imgui_pixel.bin
+bin/shaders/uvsr/dxil/renderer_imgui_vertex.bin
 bin/shaders/uvsr/dxil/renderer_pixel_readback_cs.bin
+bin/shaders/uvsr/dxil/renderer_skinning_cs.bin

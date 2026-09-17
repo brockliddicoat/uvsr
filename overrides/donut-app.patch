@@ -1,24 +1,3 @@
-diff --git a/include/donut/app/ApplicationBase.h b/include/donut/app/ApplicationBase.h
-index e9bfeb63168342ae5a563b5b274d0f5e41e1ac44..32d3f247bba9d4ec244667536abeddf8d450e52e 100644
---- a/include/donut/app/ApplicationBase.h
-+++ b/include/donut/app/ApplicationBase.h
-@@ -26,6 +26,7 @@
- #include <donut/core/vfs/VFS.h>
- #include <nvrhi/nvrhi.h>
- #include <filesystem>
-+#include <atomic>
- #include <thread>
- #include <vector>
- 
-@@ -40,7 +41,7 @@ namespace donut::app
-     class ApplicationBase : public IRenderPass
-     {
-     private:
--        bool m_SceneLoaded;
-+        std::atomic_bool m_SceneLoaded;
-         bool m_AllTexturesFinalized;
- 
-     protected:
 diff --git a/include/donut/app/DeviceManager.h b/include/donut/app/DeviceManager.h
 index 67fc1f608014be6f41b919b420e899e6ff7b35b2..050f7398babf22e9ab78d6f2cafe0bc7c87e90c3 100644
 --- a/include/donut/app/DeviceManager.h
@@ -118,23 +97,6 @@ index 271c96c27b1edab11488be46129ebf7fed7115fe..330f2c91dbee27c5a01a3bc1d5295f44
 +    bool WaitForFrameFences();
 +    bool ReleaseRenderTargets();
 +};
-diff --git a/include/donut/app/UserInterfaceUtils.h b/include/donut/app/UserInterfaceUtils.h
-index 76e27c0e57ea982a4235b113415d59e1300fd8a3..833b39e1a4806a581633a3c65a548310721ae41b 100644
---- a/include/donut/app/UserInterfaceUtils.h
-+++ b/include/donut/app/UserInterfaceUtils.h
-@@ -39,7 +39,11 @@ namespace donut::app
-     bool FileDialog(bool bOpen, const char* pFilters, std::string& fileName);
-     bool FolderDialog(const char* pTitle, const char* pDefaultFolder, std::string& outFolderName);
-     
--    bool MaterialEditor(engine::Material* material, bool allowMaterialDomainChanges);
-+    bool MaterialEditor(
-+        engine::Material* material,
-+        bool allowMaterialDomainChanges,
-+        bool showMaterialDomain,
-+        const math::float4& positiveAccent);
- 
-     bool LightEditor_Directional(engine::DirectionalLight& light);
-     bool LightEditor_Point(engine::PointLight& light);
 diff --git a/src/app/DeviceManager.cpp b/src/app/DeviceManager.cpp
 index 7a680effbbf5b637c3a44ad498a63999c2488e5e..46f103b525f5600d77a77c8d78dbf35518fed1ca 100644
 --- a/src/app/DeviceManager.cpp
@@ -328,60 +290,6 @@ index 7a680effbbf5b637c3a44ad498a63999c2488e5e..46f103b525f5600d77a77c8d78dbf355
          ToggleFullscreen();
          return;
      }
-diff --git a/src/app/UserInterfaceUtils.cpp b/src/app/UserInterfaceUtils.cpp
-index 1808e0c95f4cd94453b540f776d41f1a0245fcc1..b6900980906fa1ae2b436e43b4cd8062a51598fd 100644
---- a/src/app/UserInterfaceUtils.cpp
-+++ b/src/app/UserInterfaceUtils.cpp
-@@ -169,19 +169,30 @@ bool donut::app::FolderDialog(const char* pTitle, const char* pDefaultFolder, st
- }
- #endif
- 
--bool donut::app::MaterialEditor(engine::Material* material, bool allowMaterialDomainChanges)
-+bool donut::app::MaterialEditor(
-+    engine::Material* material,
-+    bool allowMaterialDomainChanges,
-+    bool showMaterialDomain,
-+    const math::float4& positiveAccent)
- {
-     bool update = false;
- 
-     float itemWidth = ImGui::CalcItemWidth();
- 
--    if (allowMaterialDomainChanges)
-+    if (showMaterialDomain && allowMaterialDomainChanges)
-     {
--        update |= ImGui::Combo("Material Domain", (int*)&material->domain,
--            "Opaque\0Alpha-tested\0Alpha-blended\0Transmissive\0"
--            "Transmissive alpha-tested\0Transmissive alpha-blended\0");
-+        int domainIndex = int(material->domain);
-+        if (ImGui::Combo(
-+                "Material Domain",
-+                &domainIndex,
-+                "Opaque\0Alpha-tested\0Alpha-blended\0Transmissive\0"
-+                "Transmissive alpha-tested\0Transmissive alpha-blended\0"))
-+        {
-+            material->domain = engine::MaterialDomain(domainIndex);
-+            update = true;
-+        }
-     }
--    else
-+    else if (showMaterialDomain)
-     {
-         ImGui::Text("Material Domain: %s", MaterialDomainToString(material->domain));
-     }
-@@ -191,7 +202,11 @@ bool donut::app::MaterialEditor(engine::Material* material, bool allowMaterialDo
-         return std::filesystem::path(fullPath).filename().generic_string();
-     };
- 
--    const ImVec4 filenameColor = ImVec4(0.474f, 0.722f, 0.176f, 1.0f);
-+    const ImVec4 filenameColor(
-+        positiveAccent.x,
-+        positiveAccent.y,
-+        positiveAccent.z,
-+        positiveAccent.w);
- 
-     update |= ImGui::Checkbox("Double-Sided", &material->doubleSided);
-     
 diff --git a/src/app/dx12/DeviceManager_DX12.cpp b/src/app/dx12/DeviceManager_DX12.cpp
 index c92cd3991415b90f0337914a1055723d25b201e8..4153fad0c320bf5f07473eea498c9c59992193e8 100644
 --- a/src/app/dx12/DeviceManager_DX12.cpp

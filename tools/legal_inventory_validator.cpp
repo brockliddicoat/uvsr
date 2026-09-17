@@ -48,14 +48,11 @@ namespace
 
     [[nodiscard]] std::string Sha256(std::string_view input)
     {
-        try
-        {
-            return uvsr::Sha256(input);
-        }
-        catch (const uvsr::Sha256Error&)
-        {
+        uvsr::Sha256Digest digest;
+        uvsr::Sha256Result result;
+        if (!uvsr::Sha256(input.data(), input.size(), digest, result))
             throw std::runtime_error("Windows SHA-256 operation failed");
-        }
+        return digest.text;
     }
 
     void CheckLicense(const std::filesystem::path& root)

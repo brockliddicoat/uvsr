@@ -1,7 +1,7 @@
 #include "uvsr_scene_viewer.h"
-#include "uvsr_renderer_scene.h"
-#include "uvsr_renderer_lighting.h"
-#include "uvsr_renderer_frame.h"
+#include "uvsr_renderer_scene_nvrhi.h"
+#include "uvsr_renderer_lighting_nvrhi.h"
+#include "uvsr_renderer_frame_nvrhi.h"
 #include "uvsr_runtime.h"
 #include "uvsr_application.h"
 #include "renderer_log.h"
@@ -13,23 +13,15 @@
 
 
 using namespace donut;
-using namespace donut::math;
 using namespace donut::app;
-using namespace donut::vfs;
-using namespace donut::engine;
-using namespace donut::render;
 using namespace uvsr;
 
-auto UvsrSceneViewer::GetShaderFactory() -> std::shared_ptr<ShaderFactory> {
-        return m_frame->shaderFactory;
+auto UvsrSceneViewer::GetRendererShaderFactory() -> uvsr::RendererShaderFactory* {
+        return m_frame ? m_frame->rendererShaderFactory.get() : nullptr;
     }
 
-auto UvsrSceneViewer::GetRendererShaderFactory() -> std::shared_ptr<uvsr::RendererShaderFactory> {
-        return m_frame->rendererShaderFactory;
-    }
-
-auto UvsrSceneViewer::GetRendererCommonPasses() -> std::shared_ptr<uvsr::RendererCommonPasses> {
-        return m_frame->rendererCommonPasses;
+auto UvsrSceneViewer::GetRendererCommonPasses() -> uvsr::RendererCommonPasses* {
+        return m_frame ? m_frame->rendererCommonPasses.get() : nullptr;
     }
 
 

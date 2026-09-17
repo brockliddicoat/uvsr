@@ -1,32 +1,138 @@
 #include "retained_runtime_diagnostic.h"
-#include "json_document.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
 #include <limits>
-#include <map>
-#include <stdexcept>
+#include <new>
+#include <type_traits>
+#include <stdlib.h>
 
 namespace uvsr
 {
     namespace
     {
-        [[nodiscard]] UiSettingsValue DomainTokenValue(
+#if defined(UVSR_RETAINED_CASE_TEST_HOOKS)
+        thread_local size_t caseAllocationsLeft = SIZE_MAX;
+#endif
+        bool CaseStorageFailure(SettingsSnapshotError& error,
+            SettingsSnapshotErrorCode code, const char* message) noexcept
+        {
+            error = {};
+            error.code = code;
+            error.message = message;
+            return false;
+        }
+
+        template<class T> bool GrowCaseStorage(T*& entries, size_t count,
+            size_t& capacity, size_t requested, T* appended,
+            SettingsSnapshotError& error) noexcept
+        {
+            static_assert(std::is_nothrow_move_constructible_v<T> &&
+                std::is_nothrow_move_assignable_v<T> && std::is_nothrow_destructible_v<T>);
+            static_assert(alignof(T) <= alignof(std::max_align_t));
+            if (requested > size_t(PTRDIFF_MAX) / sizeof(T))
+                return CaseStorageFailure(error, SettingsSnapshotErrorCode::Capacity,
+                    "retained runtime storage exceeds addressable capacity");
+#if defined(UVSR_RETAINED_CASE_TEST_HOOKS)
+            if (!caseAllocationsLeft)
+                return CaseStorageFailure(error, SettingsSnapshotErrorCode::OutOfMemory,
+                    "cannot allocate retained runtime storage");
+            if (caseAllocationsLeft != SIZE_MAX) --caseAllocationsLeft;
+#endif
+            T* candidate = static_cast<T*>(malloc(requested * sizeof(T)));
+            if (!candidate)
+                return CaseStorageFailure(error, SettingsSnapshotErrorCode::OutOfMemory,
+                    "cannot allocate retained runtime storage");
+            // append first because its source may be a record in the old array.
+            if (appended) new (candidate + count) T(std::move(*appended));
+            for (size_t index = 0; index < count; ++index)
+            {
+                new (candidate + index) T(std::move(entries[index]));
+                entries[index].~T();
+            }
+            free(entries);
+            entries = candidate;
+            capacity = requested;
+            return true;
+        }
+    }
+
+    template<class T> void RetainedRuntimeList<T>::Clear() noexcept
+    {
+        for (size_t index = 0; index < m_Count; ++index) m_Entries[index].~T();
+        free(m_Entries);
+        m_Entries = nullptr;
+        m_Count = m_Capacity = 0;
+    }
+    template<class T> RetainedRuntimeList<T>::~RetainedRuntimeList() noexcept { Clear(); }
+    template<class T> RetainedRuntimeList<T>::RetainedRuntimeList(RetainedRuntimeList&& other) noexcept
+    {
+        *this = std::move(other);
+    }
+    template<class T> RetainedRuntimeList<T>& RetainedRuntimeList<T>::operator=(RetainedRuntimeList&& other) noexcept
+    {
+        if (this == &other) return *this;
+        Clear();
+        m_Entries = other.m_Entries;
+        m_Count = other.m_Count;
+        m_Capacity = other.m_Capacity;
+        other.m_Entries = nullptr;
+        other.m_Count = other.m_Capacity = 0;
+        return *this;
+    }
+    template<class T> bool RetainedRuntimeList<T>::Reserve(size_t capacity, SettingsSnapshotError& error) noexcept
+    {
+        error = {};
+        return capacity <= m_Capacity || GrowCaseStorage(m_Entries, m_Count,
+            m_Capacity, capacity, static_cast<T*>(nullptr), error);
+    }
+    template<class T> bool RetainedRuntimeList<T>::Append(T&& value, SettingsSnapshotError& error) noexcept
+    {
+        error = {};
+        if (m_Count == m_Capacity)
+        {
+            constexpr size_t Maximum = size_t(PTRDIFF_MAX) / sizeof(T);
+            if (m_Count == Maximum)
+                return CaseStorageFailure(error, SettingsSnapshotErrorCode::Capacity,
+                    "retained runtime storage exceeds addressable capacity");
+            const size_t capacity = m_Capacity > Maximum / 2 ? Maximum :
+                (m_Capacity ? m_Capacity * 2 : 4);
+            if (!GrowCaseStorage(m_Entries, m_Count, m_Capacity, capacity, &value, error)) return false;
+        }
+        else new (m_Entries + m_Count) T(std::move(value));
+        ++m_Count;
+        return true;
+    }
+    template class RetainedRuntimeList<RetainedRuntimeSetting>;
+    template class RetainedRuntimeList<RetainedRuntimeCase>;
+
+#if defined(UVSR_RETAINED_CASE_TEST_HOOKS)
+    void FailRetainedCaseAllocationAfter(size_t successfulAllocations) noexcept { caseAllocationsLeft = successfulAllocations; }
+    void ClearRetainedCaseAllocationFailure() noexcept { caseAllocationsLeft = SIZE_MAX; }
+#endif
+
+
+    namespace
+    {
+        [[nodiscard]] bool DomainTokenValue(
             SettingId id,
-            std::size_t tokenIndex)
+            std::size_t tokenIndex,
+            UiSettingsValue& value,
+            SettingsSnapshotError& error)
         {
             const UiSettingsCommandDefinition* definition =
                 FindSettingsCommandDefinition(id);
             if (!definition ||
                 tokenIndex >= definition->typedDomain.tokenCount)
             {
-                throw std::logic_error(
-                    "retained runtime case has an invalid domain token");
+                error = {};
+                error.code = SettingsSnapshotErrorCode::Catalog;
+                error.message = "retained runtime case has an invalid domain token";
+                return false;
             }
-            return UiSettingsValue::Token(std::string(
-                definition->typedDomain.tokens[tokenIndex]));
+            return value.SetToken(definition->typedDomain.tokens[tokenIndex], error);
         }
 
         [[nodiscard]] RetainedRuntimeCase::Setting BooleanSetting(
@@ -41,21 +147,9 @@ namespace uvsr
             return { id, UiSettingsValue::Float(value) };
         }
 
-        [[nodiscard]] RetainedRuntimeCase::Setting TokenSetting(
-            SettingId id, std::size_t tokenIndex)
-        {
-            return { id, DomainTokenValue(id, tokenIndex) };
-        }
-
-        [[nodiscard]] RetainedRuntimeCase::Setting SelectorSetting(
-            SettingId id, std::string value)
-        {
-            return { id, UiSettingsValue::Selector(std::move(value)) };
-        }
-
-        void Set(
+        [[nodiscard]] bool Set(
             RetainedRuntimeCase& runtimeCase,
-            RetainedRuntimeCase::Setting setting)
+            RetainedRuntimeCase::Setting setting, SettingsSnapshotError& error) noexcept
         {
             const auto existing = std::find_if(
                 runtimeCase.settings.begin(),
@@ -67,7 +161,26 @@ namespace uvsr
             if (existing != runtimeCase.settings.end())
                 existing->value = std::move(setting.value);
             else
-                runtimeCase.settings.push_back(std::move(setting));
+                return runtimeCase.settings.Append(std::move(setting), error);
+            return true;
+        }
+
+        [[nodiscard]] bool SetToken(RetainedRuntimeCase& runtimeCase,
+            SettingId id, std::size_t tokenIndex, SettingsSnapshotError& error)
+        {
+            RetainedRuntimeCase::Setting setting;
+            setting.id = id;
+            if (!DomainTokenValue(id, tokenIndex, setting.value, error)) return false;
+            return Set(runtimeCase, std::move(setting), error);
+        }
+
+        [[nodiscard]] bool SetSelector(RetainedRuntimeCase& runtimeCase,
+            SettingId id, std::string_view text, SettingsSnapshotError& error)
+        {
+            RetainedRuntimeCase::Setting setting;
+            setting.id = id;
+            if (!setting.value.SetSelector(text, error)) return false;
+            return Set(runtimeCase, std::move(setting), error);
         }
 
         [[nodiscard]] const UiSettingsValue* Get(
@@ -93,34 +206,35 @@ namespace uvsr
                 value->boolean == expected;
         }
 
-        [[nodiscard]] RetainedRuntimeCase Raster(std::string name)
+        [[nodiscard]] bool Raster(std::initializer_list<std::string_view> name,
+            RetainedRuntimeCase& runtimeCase, SettingsSnapshotError& error)
         {
-            RetainedRuntimeCase runtimeCase;
-            runtimeCase.name = std::move(name);
-            runtimeCase.settings = {
-                TokenSetting(SettingId::LightingSolution, 0u),
-                BooleanSetting(
-                    SettingId::RepresentationAllowRayTraversal, true),
-                BooleanSetting(SettingId::SkyVisibilityEnabled, false),
-                SelectorSetting(SettingId::LightSelected, "flashlight_1"),
-                BooleanSetting(
-                    SettingId::LightSelectedFlashlightEnabled, false),
-                BooleanSetting(
-                    SettingId::LightSelectedFlashlightCastShadows, true),
-                BooleanSetting(SettingId::ShadowsRayTracedEnabled, true)
-            };
-            return runtimeCase;
+            if (!runtimeCase.name.AssignParts(name, error)) return false;
+            if (!SetToken(runtimeCase, SettingId::LightingSolution, 0u, error)) return false;
+            if (!Set(runtimeCase, BooleanSetting(SettingId::RepresentationAllowRayTraversal, true), error)) return false;
+            if (!Set(runtimeCase, BooleanSetting(SettingId::SkyVisibilityEnabled, false), error)) return false;
+            if (!SetSelector(runtimeCase, SettingId::LightSelected, "flashlight_1", error)) return false;
+            if (!Set(runtimeCase, BooleanSetting(SettingId::LightSelectedFlashlightEnabled, false), error)) return false;
+            if (!Set(runtimeCase, BooleanSetting(SettingId::LightSelectedFlashlightCastShadows, true), error)) return false;
+            if (!Set(runtimeCase, BooleanSetting(SettingId::ShadowsRayTracedEnabled, true), error)) return false;
+            return true;
         }
 
-        [[nodiscard]] std::string LowerAscii(std::string value)
+        [[nodiscard]] bool ContainsLoweredSceneText(
+            std::string_view haystack, std::string_view needle) noexcept
         {
-            std::transform(
-                value.begin(), value.end(), value.begin(),
-                [](unsigned char character)
-                {
-                    return static_cast<char>(std::tolower(character));
-                });
-            return value;
+            if (needle.empty()) return true;
+            if (needle.size() > haystack.size()) return false;
+            const std::size_t last = haystack.size() - needle.size();
+            for (std::size_t start = 0; start <= last; ++start)
+            {
+                std::size_t offset = 0;
+                while (offset < needle.size() &&
+                    static_cast<char>(std::tolower(static_cast<unsigned char>(haystack[start + offset]))) == needle[offset])
+                    ++offset;
+                if (offset == needle.size()) return true;
+            }
+            return false;
         }
 
         constexpr double MaximumBaselineFrameMilliseconds = 1000.0;
@@ -159,64 +273,6 @@ namespace uvsr
                 : RetainedRuntimeAction::None;
         }
 
-        [[nodiscard]] const char* CaptureLabel(
-            RetainedRuntimeAction action) noexcept
-        {
-            switch (action)
-            {
-            case RetainedRuntimeAction::None: return "baseline";
-            case RetainedRuntimeAction::NudgeCamera: return "camera";
-            case RetainedRuntimeAction::ResizeViewport: return "resize";
-            case RetainedRuntimeAction::ChangeScene: return "scene";
-            case RetainedRuntimeAction::ChangeSetting: return "reference";
-            case RetainedRuntimeAction::ChangeMaterial: return "material";
-            case RetainedRuntimeAction::ChangeLight: return "light";
-            case RetainedRuntimeAction::ToggleFlashlight: return "flashlight";
-            case RetainedRuntimeAction::CyclePrerequisite: return "prerequisite-cycle";
-            case RetainedRuntimeAction::CycleLightingSolution:
-                return "lighting-solution";
-            }
-            return "invalid";
-        }
-
-        [[nodiscard]] std::string DescribeSnapshotMismatch(
-            std::string_view expected,
-            std::string_view actual)
-        {
-            std::size_t mismatch = 0u;
-            while (mismatch < expected.size() &&
-                mismatch < actual.size() &&
-                expected[mismatch] == actual[mismatch])
-            {
-                ++mismatch;
-            }
-            if (mismatch == expected.size() && mismatch == actual.size())
-                return {};
-
-            const std::size_t precedingLineEnd = mismatch == 0u
-                ? std::string_view::npos
-                : expected.rfind('\n', mismatch - 1u);
-            const std::size_t lineStart =
-                precedingLineEnd == std::string_view::npos
-                    ? 0u
-                    : precedingLineEnd + 1u;
-            const auto lineAt = [lineStart](std::string_view value)
-            {
-                if (lineStart >= value.size())
-                    return std::string("<end>");
-                const std::size_t lineEnd = value.find('\n', lineStart);
-                return std::string(value.substr(
-                    lineStart,
-                    lineEnd == std::string_view::npos
-                        ? std::string_view::npos
-                        : lineEnd - lineStart));
-            };
-            const std::size_t line = 1u + static_cast<std::size_t>(
-                std::count(expected.begin(),
-                    expected.begin() + lineStart, '\n'));
-            return " at line " + std::to_string(line) + ": expected '" +
-                lineAt(expected) + "', got '" + lineAt(actual) + "'";
-        }
 
     }
 
@@ -402,455 +458,82 @@ namespace uvsr
             pixels, width, height, rowPitchBytes, decodeFloat);
     }
 
-    RuntimeSemanticSignature BuildRuntimeSemanticSignature(
-        const RuntimeOutputEvidence& output) noexcept
+    bool BuildRetainedRuntimeCases(
+        std::string_view bistroScene,
+        std::string_view sanMiguelScene,
+        RetainedRuntimeCases& output,
+        SettingsSnapshotError& error) noexcept
     {
-        RuntimeSemanticSignature signature;
-        signature.width = output.width;
-        signature.height = output.height;
-        signature.meanLinearLuminance = output.meanLinearLuminance;
-        signature.rmsLinearLuminance = output.rmsLinearLuminance;
-        signature.meanLinearHorizontalGradient =
-            output.meanLinearHorizontalGradient;
-        signature.linearLuminanceHistogram =
-            output.linearLuminanceHistogram;
-        for (const std::uint64_t count : output.linearLuminanceHistogram)
-            signature.linearLuminanceSampleCount += count;
-        return signature;
-    }
-
-    bool RuntimeSemanticSignaturesAreDistinct(
-        const RuntimeSemanticSignature& left,
-        const RuntimeSemanticSignature& right) noexcept
-    {
-        if (left.width == 0u || left.height == 0u ||
-            left.width != right.width || left.height != right.height)
-        {
-            return false;
-        }
-        const auto differs = [](
-            double leftValue,
-            double rightValue,
-            double absoluteTolerance,
-            double relativeTolerance)
-        {
-            if (!std::isfinite(leftValue) || !std::isfinite(rightValue))
-                return false;
-            const double difference = std::fabs(leftValue - rightValue);
-            const double scale = std::max(
-                std::fabs(leftValue), std::fabs(rightValue));
-            return difference > std::max(
-                absoluteTolerance, scale * relativeTolerance);
-        };
-        double histogramDistance = 0.0;
-        if (left.linearLuminanceSampleCount > 0u &&
-            right.linearLuminanceSampleCount > 0u)
-        {
-            for (std::size_t index = 0u;
-                index < left.linearLuminanceHistogram.size(); ++index)
-            {
-                const double leftFrequency =
-                    double(left.linearLuminanceHistogram[index]) /
-                    double(left.linearLuminanceSampleCount);
-                const double rightFrequency =
-                    double(right.linearLuminanceHistogram[index]) /
-                    double(right.linearLuminanceSampleCount);
-                histogramDistance += std::fabs(
-                    leftFrequency - rightFrequency);
-            }
-        }
-        return
-            differs(left.meanLinearLuminance,
-                right.meanLinearLuminance, 0.00005, 0.001) ||
-            differs(left.rmsLinearLuminance,
-                right.rmsLinearLuminance, 0.00005, 0.001) ||
-            differs(left.meanLinearHorizontalGradient,
-                right.meanLinearHorizontalGradient, 0.00005, 0.002) ||
-            histogramDistance > 0.001;
-    }
-
-    bool ValidateRetainedRuntimeSemanticCaptures(
-        const std::vector<RetainedRuntimeCase>& cases,
-        const std::vector<RetainedRuntimeSemanticCapture>& captures,
-        std::string& reason)
-    {
-        std::map<std::string, const RetainedRuntimeCase*> expected;
-        for (const auto& runtimeCase : cases)
-        {
-            if (runtimeCase.exerciseRetainedStateChanges &&
-                (runtimeCase.name.empty() ||
-                 !expected.emplace(runtimeCase.name, &runtimeCase).second))
-            {
-                reason = "runtime scene case identity was empty or duplicated";
-                return false;
-            }
-        }
-        std::map<std::string, std::vector<const RetainedRuntimeSemanticCapture*>> observed;
-        for (const auto& capture : captures)
-        {
-            const auto found = expected.find(capture.caseName);
-            if (found == expected.end() || capture.sceneToken.empty() ||
-                (capture.sceneToken != found->second->actionBaselineSceneToken &&
-                 capture.sceneToken != found->second->expectedSceneToken) ||
-                capture.signature.width == 0u || capture.signature.height == 0u)
-            {
-                reason = "runtime scene capture identity or dimensions drifted";
-                return false;
-            }
-            observed[capture.caseName].push_back(&capture);
-        }
-        if (observed.size() != expected.size() || captures.size() != expected.size() * 2u)
-        {
-            reason = "runtime scene capture coverage was incomplete";
-            return false;
-        }
-        for (const auto& [name, pair] : observed)
-        {
-            if (pair.size() != 2u || pair[0]->sceneToken == pair[1]->sceneToken ||
-                !RuntimeSemanticSignaturesAreDistinct(pair[0]->signature, pair[1]->signature))
-            {
-                reason = "runtime scene case '" + name + "' lacked distinct scene output";
-                return false;
-            }
-        }
-        reason.clear();
-        return true;
-    }
-
-    namespace
-    {
-        [[nodiscard]] std::string Quoted(std::string_view value)
-        {
-            return "\"" + json::Escape(value) + "\"";
-        }
-
-        [[nodiscard]] const char* JsonBool(bool value) noexcept
-        {
-            return value ? "true" : "false";
-        }
-
-        [[nodiscard]] const char* ActionName(
-            RetainedRuntimeAction action) noexcept
-        {
-            switch (action)
-            {
-            case RetainedRuntimeAction::None: return "none";
-            case RetainedRuntimeAction::NudgeCamera: return "camera";
-            case RetainedRuntimeAction::ResizeViewport: return "resize";
-            case RetainedRuntimeAction::ChangeScene: return "scene";
-            case RetainedRuntimeAction::ChangeSetting: return "setting";
-            case RetainedRuntimeAction::ChangeMaterial: return "material";
-            case RetainedRuntimeAction::ChangeLight: return "light";
-            case RetainedRuntimeAction::ToggleFlashlight:
-                return "flashlight";
-            case RetainedRuntimeAction::CyclePrerequisite: return "prerequisite-cycle";
-            case RetainedRuntimeAction::CycleLightingSolution:
-                return "lighting-solution";
-            }
-            return "invalid";
-        }
-
-        [[nodiscard]] std::string Hex64(std::uint64_t value)
-        {
-            constexpr char Digits[] = "0123456789abcdef";
-            std::string text(16u, '0');
-            for (std::size_t index = 0u; index < text.size(); ++index)
-            {
-                const unsigned shift =
-                    static_cast<unsigned>((text.size() - index - 1u) * 4u);
-                text[index] = Digits[(value >> shift) & 0xfu];
-            }
-            return text;
-        }
-
-        [[nodiscard]] std::int64_t FrameMicroseconds(
-            double milliseconds) noexcept
-        {
-            if (!std::isfinite(milliseconds) || milliseconds <= 0.0)
-                return 0;
-            return static_cast<std::int64_t>(
-                std::llround(milliseconds * 1000.0));
-        }
-
-        [[nodiscard]] std::int64_t LinearMicrounits(
-            double value) noexcept
-        {
-            if (!std::isfinite(value))
-                return 0;
-            return static_cast<std::int64_t>(
-                std::llround(value * 1000000.0));
-        }
-
-        [[nodiscard]] std::string HistogramJson(
-            const std::array<std::uint64_t, 16>& histogram)
-        {
-            std::string json = "[";
-            for (std::size_t index = 0u; index < histogram.size(); ++index)
-            {
-                if (index != 0u)
-                    json.push_back(',');
-                json += std::to_string(histogram[index]);
-            }
-            json.push_back(']');
-            return json;
-        }
-
-        [[nodiscard]] std::string ProvenanceJsonMembers(
-            const RetainedRuntimeProvenance& provenance)
-        {
-            return
-                "\"settingsHash\":" + Quoted(provenance.settingsHash) +
-                ",\"engineVersion\":" + Quoted(provenance.engineVersion) +
-                ",\"sourceCommit\":" + Quoted(provenance.sourceCommit) +
-                ",\"sourceIdentity\":" + Quoted(provenance.sourceIdentity) +
-                ",\"sourceClean\":" + JsonBool(provenance.sourceClean) +
-                ",\"production\":" + JsonBool(provenance.production) +
-                ",\"configuration\":" + Quoted(provenance.configuration) +
-                ",\"packagePath\":" + Quoted(provenance.packagePath) +
-                ",\"executablePath\":" + Quoted(provenance.executablePath) +
-                ",\"executableSha256\":" +
-                    Quoted(provenance.executableSha256) +
-                ",\"debugLayerRequested\":" +
-                    JsonBool(provenance.debugLayerRequested) +
-                ",\"nvrhiValidationRequested\":" +
-                    JsonBool(provenance.nvrhiValidationRequested);
-        }
-    }
-
-    std::string BuildRetainedRuntimeStartJson(
-        const RetainedRuntimeProvenance& provenance,
-        std::size_t caseCount)
-    {
-        return "{\"event\":\"start\",\"schema\":4," +
-            ProvenanceJsonMembers(provenance) +
-            ",\"cases\":" + std::to_string(caseCount) +
-            ",\"timingPolicy\":\"baseline<=1000ms; phases<=max(4x-baseline,baseline+50ms)\"}";
-    }
-
-    std::string BuildRetainedRuntimeFailureJson(
-        std::string_view caseName,
-        std::string_view message)
-    {
-        return "{\"event\":\"failure\",\"case\":" +
-            Quoted(caseName) + ",\"message\":" + Quoted(message) + "}";
-    }
-
-    std::string BuildRetainedRuntimeCaseJson(
-        std::size_t caseIndex,
-        const RetainedRuntimeCase& runtimeCase,
-        const RetainedRuntimeTelemetry& telemetry)
-    {
-        const RuntimeOutputEvidence output = telemetry.output.value_or(
-            RuntimeOutputEvidence{});
-        return "{\"event\":\"case\",\"index\":" +
-            std::to_string(caseIndex) + ",\"name\":" +
-            Quoted(runtimeCase.name) + ",\"status\":\"pass\"," +
-            "\"phase\":" + Quoted(runtimeCase.exerciseRetainedStateChanges
-                ? "resize"
-                : CaptureLabel(runtimeCase.action)) + "," +
-            "\"activeScene\":" + Quoted(telemetry.currentScene) +
-            ",\"expectedAction\":" +
-            Quoted(runtimeCase.exerciseRetainedStateChanges
-                ? "camera-scene-resize-reference"
-                : ActionName(runtimeCase.action)) +
-            ",\"appliedAction\":" +
-            Quoted(ActionName(telemetry.lastAppliedAction)) +
-            ",\"pathHistory\":" +
-            std::to_string(telemetry.pathHistoryCount) +
-            ",\"directional\":" +
-            JsonBool(telemetry.directionalVisibilityDispatched) +
-            ",\"sky\":" + JsonBool(telemetry.skyVisibilityDispatched) +
-            ",\"flashlightLightingSubmitted\":" +
-            JsonBool(telemetry.flashlightLightingSubmitted) +
-            ",\"flashlightShadow\":" +
-            JsonBool(telemetry.flashlightVisibilityDispatched) +
-            ",\"accumulation\":" +
-            JsonBool(telemetry.lightingAccumulationCommitted) +
-            ",\"autoExposure\":" +
-            JsonBool(telemetry.autoExposureDispatched) +
-            ",\"globalNoise\":{\"pattern\":" +
-            Quoted(telemetry.globalNoisePattern) +
-            ",\"resolution\":" +
-            Quoted(telemetry.globalNoiseResolution) +
-            ",\"animateSamples\":" +
-            JsonBool(telemetry.globalNoiseAnimateSamples) +
-            ",\"accumulateSamples\":" +
-            JsonBool(telemetry.globalNoiseAccumulateSamples) + "}" +
-            ",\"cpuFrameUs\":" +
-            std::to_string(FrameMicroseconds(
-                telemetry.cpuFrameMilliseconds)) +
-            ",\"gpuFrameUs\":" +
-            std::to_string(FrameMicroseconds(
-                telemetry.gpuFrameMilliseconds)) +
-            ",\"gpuTimingAvailable\":" +
-            JsonBool(telemetry.gpuFrameTimingAvailable) +
-            ",\"output\":{\"width\":" + std::to_string(output.width) +
-            ",\"height\":" + std::to_string(output.height) +
-            ",\"encodedBytes\":" + std::to_string(output.encodedBytes) +
-            ",\"pixelBytes\":" + std::to_string(output.pixelBytes) +
-            ",\"minimumByte\":" +
-            std::to_string(static_cast<unsigned int>(output.minimumByte)) +
-            ",\"maximumByte\":" +
-            std::to_string(static_cast<unsigned int>(output.maximumByte)) +
-            ",\"artifactPath\":" + Quoted(output.artifactPath) +
-            ",\"linearFinite\":" + JsonBool(output.linearReadbackValid) +
-            ",\"nonFiniteComponents\":" +
-            std::to_string(output.nonFiniteComponentCount) +
-            ",\"varyingPixels\":" +
-            std::to_string(output.varyingPixelCount) +
-            ",\"edgePixels\":" + std::to_string(output.edgePixelCount) +
-            ",\"meanLuminanceMicro\":" +
-            std::to_string(LinearMicrounits(
-                output.meanLinearLuminance)) +
-            ",\"rmsLuminanceMicro\":" +
-            std::to_string(LinearMicrounits(
-                output.rmsLinearLuminance)) +
-            ",\"meanHorizontalGradientMicro\":" +
-            std::to_string(LinearMicrounits(
-                output.meanLinearHorizontalGradient)) +
-            ",\"luminanceHistogram\":" +
-            HistogramJson(output.linearLuminanceHistogram) +
-            ",\"linearFNV1a64\":" + Quoted(Hex64(output.linearHash)) +
-            ",\"fnv1a64\":" + Quoted(Hex64(output.pixelHash)) +
-            "}}";
-    }
-
-    std::string BuildRetainedRuntimeCaptureJson(
-        std::size_t caseIndex,
-        const RetainedRuntimeCase& runtimeCase,
-        std::string_view phase,
-        const RetainedRuntimeTelemetry& telemetry)
-    {
-        const RuntimeOutputEvidence output = telemetry.output.value_or(
-            RuntimeOutputEvidence{});
-        return "{\"event\":\"capture\",\"index\":" +
-            std::to_string(caseIndex) + ",\"name\":" +
-            Quoted(runtimeCase.name) + ",\"phase\":" + Quoted(phase) +
-            ",\"activeScene\":" + Quoted(telemetry.currentScene) +
-            ",\"flashlightLightingSubmitted\":" +
-            JsonBool(telemetry.flashlightLightingSubmitted) +
-            ",\"flashlightShadow\":" +
-            JsonBool(telemetry.flashlightVisibilityDispatched) +
-            ",\"accumulation\":" +
-            JsonBool(telemetry.lightingAccumulationCommitted) +
-            ",\"autoExposure\":" +
-            JsonBool(telemetry.autoExposureDispatched) +
-            ",\"globalNoise\":{\"pattern\":" +
-            Quoted(telemetry.globalNoisePattern) +
-            ",\"resolution\":" +
-            Quoted(telemetry.globalNoiseResolution) +
-            ",\"animateSamples\":" +
-            JsonBool(telemetry.globalNoiseAnimateSamples) +
-            ",\"accumulateSamples\":" +
-            JsonBool(telemetry.globalNoiseAccumulateSamples) + "}" +
-            ",\"cpuFrameUs\":" +
-            std::to_string(FrameMicroseconds(
-                telemetry.cpuFrameMilliseconds)) +
-            ",\"gpuFrameUs\":" +
-            std::to_string(FrameMicroseconds(
-                telemetry.gpuFrameMilliseconds)) +
-            ",\"output\":{\"width\":" +
-            std::to_string(output.width) + ",\"height\":" +
-            std::to_string(output.height) + ",\"artifactPath\":" +
-            Quoted(output.artifactPath) + ",\"linearFinite\":" +
-            JsonBool(output.linearReadbackValid) +
-            ",\"nonFiniteComponents\":" +
-            std::to_string(output.nonFiniteComponentCount) +
-            ",\"varyingPixels\":" +
-            std::to_string(output.varyingPixelCount) +
-            ",\"edgePixels\":" +
-            std::to_string(output.edgePixelCount) +
-            ",\"meanLuminanceMicro\":" +
-            std::to_string(LinearMicrounits(
-                output.meanLinearLuminance)) +
-            ",\"rmsLuminanceMicro\":" +
-            std::to_string(LinearMicrounits(
-                output.rmsLinearLuminance)) +
-            ",\"meanHorizontalGradientMicro\":" +
-            std::to_string(LinearMicrounits(
-                output.meanLinearHorizontalGradient)) +
-            ",\"luminanceHistogram\":" +
-            HistogramJson(output.linearLuminanceHistogram) +
-            ",\"linearFNV1a64\":" + Quoted(Hex64(output.linearHash)) +
-            "}}";
-    }
-
-    std::string BuildRetainedRuntimeSummaryJson(
-        const RetainedRuntimeProvenance& provenance,
-        bool passed,
-        std::size_t passedCases,
-        std::size_t totalCases,
-        std::int64_t elapsedMilliseconds)
-    {
-        return "{\"event\":\"summary\",\"status\":" +
-            Quoted(passed ? "pass" : "fail") + "," +
-            ProvenanceJsonMembers(provenance) +
-            ",\"passed\":" + std::to_string(passedCases) +
-            ",\"total\":" + std::to_string(totalCases) +
-            ",\"elapsedMs\":" + std::to_string(elapsedMilliseconds) +
-            "}";
-    }
-
-    std::vector<RetainedRuntimeCase> BuildRetainedRuntimeCases(
-        const std::string& bistroScene,
-        const std::string& sanMiguelScene)
-    {
+        error = {};
         constexpr std::string_view BistroToken =
             "bistro_interior_retextured";
         constexpr std::string_view SanMiguelToken =
             "san_miguel_retextured";
 
-        std::vector<RetainedRuntimeCase> cases;
-        cases.reserve(30u);
+        RetainedRuntimeCases cases;
+        if (!cases.Reserve(34u, error)) return false;
 
-        const auto setScene = [](
+        const auto setScene = [&error](
             RetainedRuntimeCase& runtimeCase,
-            const std::string& scene,
+            std::string_view scene,
             std::string_view token)
         {
-            Set(runtimeCase, SelectorSetting(SettingId::SceneCurrent, scene));
-            runtimeCase.expectedSceneToken = token;
+            if (!SetSelector(runtimeCase, SettingId::SceneCurrent, scene, error)) return false;
+            if (!runtimeCase.expectedSceneToken.Assign(token, error)) return false;
+            return true;
         };
 
         struct DiscreteSpec
         {
             std::string_view name;
-            RetainedRuntimeCase::Setting value;
+            SettingId id;
+            int tokenIndex = -1;
+            bool boolean = false;
         };
         const std::array<DiscreteSpec, 7> DiscreteCases = {{
             { "noise-pattern-spatial-white",
-                TokenSetting(SettingId::NoisePattern, 0u) },
+                SettingId::NoisePattern, 0 },
             { "noise-pattern-spatial-blue",
-                TokenSetting(SettingId::NoisePattern, 1u) },
+                SettingId::NoisePattern, 1 },
             { "noise-resolution-64x64",
-                TokenSetting(SettingId::NoiseResolution, 0u) },
+                SettingId::NoiseResolution, 0 },
             { "noise-resolution-256x256",
-                TokenSetting(SettingId::NoiseResolution, 2u) },
+                SettingId::NoiseResolution, 2 },
             { "noise-resolution-512x512",
-                TokenSetting(SettingId::NoiseResolution, 3u) },
+                SettingId::NoiseResolution, 3 },
             { "noise-animate-off",
-                BooleanSetting(SettingId::NoiseAnimateSamples, false) },
+                SettingId::NoiseAnimateSamples, -1, false },
             { "noise-accumulate-on",
-                BooleanSetting(SettingId::NoiseAccumulateSamples, true) },
+                SettingId::NoiseAccumulateSamples, -1, true },
         }};
         for (std::size_t index = 0u; index < DiscreteCases.size(); ++index)
         {
             const DiscreteSpec& spec = DiscreteCases[index];
-            RetainedRuntimeCase runtimeCase = Raster(std::string(spec.name));
-            Set(runtimeCase, TokenSetting(SettingId::NoisePattern, 2u));
-            Set(runtimeCase, TokenSetting(SettingId::NoiseResolution, 1u));
-            Set(runtimeCase, BooleanSetting(SettingId::NoiseAnimateSamples, true));
-            Set(runtimeCase, BooleanSetting(SettingId::NoiseAccumulateSamples, false));
+            RetainedRuntimeCase runtimeCase;
+            if (!Raster({spec.name}, runtimeCase, error) ||
+                !SetToken(runtimeCase, SettingId::NoisePattern, 2u, error) ||
+                !SetToken(runtimeCase, SettingId::NoiseResolution, 1u, error)) return false;
+            if (!Set(runtimeCase, BooleanSetting(SettingId::NoiseAnimateSamples, true), error)) return false;
+            if (!Set(runtimeCase, BooleanSetting(SettingId::NoiseAccumulateSamples, false), error)) return false;
             runtimeCase.expectDirectionalVisibility = true;
             runtimeCase.assertLightingAccumulationState = true;
             runtimeCase.expectLightingAccumulation =
-                spec.value.id == SettingId::NoiseAccumulateSamples;
-            Set(runtimeCase, spec.value);
-            if ((index % 2u) == 0u)
-                setScene(runtimeCase, bistroScene, BistroToken);
+                spec.id == SettingId::NoiseAccumulateSamples;
+            if (spec.tokenIndex >= 0)
+            {
+                if (!SetToken(runtimeCase, spec.id, std::size_t(spec.tokenIndex), error)) return false;
+            }
             else
-                setScene(runtimeCase, sanMiguelScene, SanMiguelToken);
-            cases.push_back(std::move(runtimeCase));
+                if (!Set(runtimeCase, BooleanSetting(spec.id, spec.boolean), error)) return false;
+            if ((index % 2u) == 0u)
+            {
+                if (!setScene(runtimeCase, bistroScene, BistroToken)) return false;
+            }
+            else
+            {
+                if (!setScene(runtimeCase, sanMiguelScene, SanMiguelToken)) return false;
+            }
+            if (!cases.Append(std::move(runtimeCase), error)) return false;
         }
 
         struct AllSignalSpec
@@ -864,129 +547,118 @@ namespace uvsr
         }};
         for (const AllSignalSpec& spec : AllSignalCases)
         {
-            RetainedRuntimeCase runtimeCase = Raster(std::string(spec.name));
-            const std::string& initialScene = spec.startsInBistro
+            RetainedRuntimeCase runtimeCase;
+            if (!Raster({spec.name}, runtimeCase, error)) return false;
+            const std::string_view initialScene = spec.startsInBistro
                 ? bistroScene
                 : sanMiguelScene;
-            const std::string& finalScene = spec.startsInBistro
+            const std::string_view finalScene = spec.startsInBistro
                 ? sanMiguelScene
                 : bistroScene;
             runtimeCase.snapshotRoundTrip = true;
             runtimeCase.exerciseRetainedStateChanges = true;
             runtimeCase.resizeWidth = 704;
             runtimeCase.resizeHeight = 400;
-            runtimeCase.actionBaselineSceneToken = spec.startsInBistro
+            if (!runtimeCase.actionBaselineSceneToken.Assign(spec.startsInBistro
                 ? BistroToken
-                : SanMiguelToken;
-            runtimeCase.expectedSceneToken = spec.startsInBistro
+                : SanMiguelToken, error)) return false;
+            if (!runtimeCase.expectedSceneToken.Assign(spec.startsInBistro
                 ? SanMiguelToken
-                : BistroToken;
+                : BistroToken, error)) return false;
             runtimeCase.actionSettingId = SettingId::SceneCurrent;
-            runtimeCase.actionBaselineValue =
-                UiSettingsValue::Selector(initialScene);
-            runtimeCase.actionValue = UiSettingsValue::Selector(finalScene);
-            Set(runtimeCase,
-                SelectorSetting(SettingId::SceneCurrent, initialScene));
-            Set(runtimeCase,
-                BooleanSetting(SettingId::SkyVisibilityEnabled, true));
-            Set(runtimeCase,
-                BooleanSetting(SettingId::SkyVisibilityDiffuseIbl, true));
-            Set(runtimeCase,
-                BooleanSetting(SettingId::SkyVisibilitySpecularIbl, true));
-            Set(runtimeCase,
-                TokenSetting(SettingId::SkyVisibilitySamplesPerPixel, 3u));
-            Set(runtimeCase,
-                SelectorSetting(SettingId::LightSelected, "flashlight_1"));
-            Set(runtimeCase, BooleanSetting(
-                SettingId::LightSelectedFlashlightEnabled, true));
-            Set(runtimeCase, BooleanSetting(
-                SettingId::LightSelectedFlashlightCastShadows, true));
-            Set(runtimeCase,
-                BooleanSetting(SettingId::ShadowsRayTracedEnabled, true));
+            if (!runtimeCase.actionBaselineValue.SetSelector(initialScene, error) ||
+                !runtimeCase.actionValue.SetSelector(finalScene, error) ||
+                !SetSelector(runtimeCase, SettingId::SceneCurrent, initialScene, error)) return false;
+            if (!Set(runtimeCase,
+                BooleanSetting(SettingId::SkyVisibilityEnabled, true), error)) return false;
+            if (!Set(runtimeCase,
+                BooleanSetting(SettingId::SkyVisibilityDiffuseIbl, true), error)) return false;
+            if (!Set(runtimeCase,
+                BooleanSetting(SettingId::SkyVisibilitySpecularIbl, true), error)) return false;
+            if (!SetToken(runtimeCase, SettingId::SkyVisibilitySamplesPerPixel, 3u, error) ||
+                !SetSelector(runtimeCase, SettingId::LightSelected, "flashlight_1", error)) return false;
+            if (!Set(runtimeCase, BooleanSetting(
+                SettingId::LightSelectedFlashlightEnabled, true), error)) return false;
+            if (!Set(runtimeCase, BooleanSetting(
+                SettingId::LightSelectedFlashlightCastShadows, true), error)) return false;
+            if (!Set(runtimeCase,
+                BooleanSetting(SettingId::ShadowsRayTracedEnabled, true), error)) return false;
             runtimeCase.expectDirectionalVisibility = true;
             runtimeCase.expectSkyVisibility = true;
             runtimeCase.expectFlashlightLightingSubmitted = true;
             runtimeCase.assertFlashlightLightingState = true;
             runtimeCase.expectFlashlightVisibility = true;
             runtimeCase.assertFlashlightVisibilityState = true;
-            cases.push_back(std::move(runtimeCase));
+            if (!cases.Append(std::move(runtimeCase), error)) return false;
         }
 
-        const std::array<UiSettingsValue, 6> Environments = {
-            DomainTokenValue(SettingId::SkyEnvironment, 0u),
-            DomainTokenValue(SettingId::SkyEnvironment, 1u),
-            DomainTokenValue(SettingId::SkyEnvironment, 2u),
-            DomainTokenValue(SettingId::SkyEnvironment, 3u),
-            DomainTokenValue(SettingId::SkyEnvironment, 4u),
-            DomainTokenValue(SettingId::SkyEnvironment, 5u)
-        };
+        constexpr std::size_t EnvironmentCount = 6;
         constexpr std::array<float, 3> Compensation = { -18.f, 0.f, 8.f };
         constexpr std::array<float, 3> Brightening = { 0.f, 8.f, 16.f };
         constexpr std::array<float, 3> Darkening = { 16.f, 8.f, 0.f };
         constexpr std::array<float, 3> AdjustmentPeriod = {
             0.05f, 0.2f, 5.f
         };
-        for (std::size_t index = 0u; index < Environments.size(); ++index)
+        for (std::size_t index = 0u; index < EnvironmentCount; ++index)
         {
-            RetainedRuntimeCase runtimeCase = Raster(
-                "hdr-environment-" + Environments[index].text);
-            setScene(runtimeCase,
+            RetainedRuntimeCase runtimeCase;
+            if (!DomainTokenValue(SettingId::SkyEnvironment, index, runtimeCase.actionValue, error) ||
+                !Raster({"hdr-environment-", runtimeCase.actionValue.Text()}, runtimeCase, error) ||
+                !setScene(runtimeCase,
                 (index % 2u) == 0u ? bistroScene : sanMiguelScene,
-                (index % 2u) == 0u ? BistroToken : SanMiguelToken);
-            Set(runtimeCase,
-                { SettingId::SkyEnvironment, Environments[index] });
+                (index % 2u) == 0u ? BistroToken : SanMiguelToken) ||
+                !SetToken(runtimeCase, SettingId::SkyEnvironment, index, error)) return false;
             runtimeCase.action = RetainedRuntimeAction::ChangeSetting;
             runtimeCase.actionSettingId = SettingId::SkyEnvironment;
-            runtimeCase.actionBaselineValue = Environments[
-                (index + Environments.size() - 1u) % Environments.size()];
-            runtimeCase.actionValue = Environments[index];
+            if (!DomainTokenValue(SettingId::SkyEnvironment,
+                (index + EnvironmentCount - 1u) % EnvironmentCount,
+                runtimeCase.actionBaselineValue, error)) return false;
             runtimeCase.requireActionOutputDifference = true;
-            Set(runtimeCase,
-                BooleanSetting(SettingId::SkyDiffuseIbl, true));
-            Set(runtimeCase,
-                BooleanSetting(SettingId::SkySpecularIbl, true));
-            Set(runtimeCase,
-                BooleanSetting(SettingId::SkyEnvironmentBackground, true));
-            Set(runtimeCase,
-                BooleanSetting(SettingId::SkyVisibilityEnabled, true));
-            Set(runtimeCase,
-                BooleanSetting(SettingId::SkyVisibilityDiffuseIbl, true));
-            Set(runtimeCase,
-                BooleanSetting(SettingId::SkyVisibilitySpecularIbl, true));
-            Set(runtimeCase,
-                TokenSetting(SettingId::SkyVisibilitySamplesPerPixel, 2u));
+            if (!Set(runtimeCase,
+                BooleanSetting(SettingId::SkyDiffuseIbl, true), error)) return false;
+            if (!Set(runtimeCase,
+                BooleanSetting(SettingId::SkySpecularIbl, true), error)) return false;
+            if (!Set(runtimeCase,
+                BooleanSetting(SettingId::SkyEnvironmentBackground, true), error)) return false;
+            if (!Set(runtimeCase,
+                BooleanSetting(SettingId::SkyVisibilityEnabled, true), error)) return false;
+            if (!Set(runtimeCase,
+                BooleanSetting(SettingId::SkyVisibilityDiffuseIbl, true), error)) return false;
+            if (!Set(runtimeCase,
+                BooleanSetting(SettingId::SkyVisibilitySpecularIbl, true), error)) return false;
+            if (!SetToken(runtimeCase, SettingId::SkyVisibilitySamplesPerPixel, 2u, error)) return false;
             const bool automaticExposure = (index % 2u) != 0u;
-            Set(runtimeCase, BooleanSetting(
-                SettingId::SkyAutoExposureEnabled, automaticExposure));
+            if (!Set(runtimeCase, BooleanSetting(
+                SettingId::SkyAutoExposureEnabled, automaticExposure), error)) return false;
             if (automaticExposure)
             {
                 const std::size_t profile = index / 2u;
-                Set(runtimeCase, FloatSetting(
+                if (!Set(runtimeCase, FloatSetting(
                     SettingId::SkyAutoExposureExposureCompensation,
-                    Compensation[profile]));
-                Set(runtimeCase, FloatSetting(
+                    Compensation[profile]), error)) return false;
+                if (!Set(runtimeCase, FloatSetting(
                     SettingId::SkyAutoExposureMaximumBrightening,
-                    Brightening[profile]));
-                Set(runtimeCase, FloatSetting(
+                    Brightening[profile]), error)) return false;
+                if (!Set(runtimeCase, FloatSetting(
                     SettingId::SkyAutoExposureMaximumDarkening,
-                    Darkening[profile]));
-                Set(runtimeCase, FloatSetting(
+                    Darkening[profile]), error)) return false;
+                if (!Set(runtimeCase, FloatSetting(
                     SettingId::SkyAutoExposureAdjustmentPeriod,
-                    AdjustmentPeriod[profile]));
+                    AdjustmentPeriod[profile]), error)) return false;
             }
             runtimeCase.expectSkyVisibility = true;
             runtimeCase.expectAutoExposure = automaticExposure;
             runtimeCase.assertAutoExposureState = true;
-            cases.push_back(std::move(runtimeCase));
+            if (!cases.Append(std::move(runtimeCase), error)) return false;
         }
 
-        RetainedRuntimeCase flashlightLighting = Raster(
-            "flashlight-lighting-toggle-bistro-1x");
-        setScene(flashlightLighting, bistroScene, BistroToken);
-        Set(flashlightLighting, BooleanSetting(
-            SettingId::LightSelectedFlashlightEnabled, true));
-        Set(flashlightLighting, BooleanSetting(
-            SettingId::LightSelectedFlashlightCastShadows, false));
+        RetainedRuntimeCase flashlightLighting;
+        if (!Raster({"flashlight-lighting-toggle-bistro-1x"}, flashlightLighting, error) ||
+            !setScene(flashlightLighting, bistroScene, BistroToken)) return false;
+        if (!Set(flashlightLighting, BooleanSetting(
+            SettingId::LightSelectedFlashlightEnabled, true), error)) return false;
+        if (!Set(flashlightLighting, BooleanSetting(
+            SettingId::LightSelectedFlashlightCastShadows, false), error)) return false;
         flashlightLighting.expectFlashlightLightingSubmitted = true;
         flashlightLighting.assertFlashlightLightingState = true;
         flashlightLighting.assertFlashlightVisibilityState = true;
@@ -997,15 +669,15 @@ namespace uvsr
             UiSettingsValue::Boolean(true);
         flashlightLighting.actionValue = UiSettingsValue::Boolean(false);
         flashlightLighting.requireActionOutputDifference = true;
-        cases.push_back(std::move(flashlightLighting));
+        if (!cases.Append(std::move(flashlightLighting), error)) return false;
 
-        RetainedRuntimeCase flashlightShadow = Raster(
-            "flashlight-shadow-toggle-san-miguel");
-        setScene(flashlightShadow, sanMiguelScene, SanMiguelToken);
-        Set(flashlightShadow, BooleanSetting(
-            SettingId::LightSelectedFlashlightEnabled, true));
-        Set(flashlightShadow, BooleanSetting(
-            SettingId::LightSelectedFlashlightCastShadows, true));
+        RetainedRuntimeCase flashlightShadow;
+        if (!Raster({"flashlight-shadow-toggle-san-miguel"}, flashlightShadow, error) ||
+            !setScene(flashlightShadow, sanMiguelScene, SanMiguelToken)) return false;
+        if (!Set(flashlightShadow, BooleanSetting(
+            SettingId::LightSelectedFlashlightEnabled, true), error)) return false;
+        if (!Set(flashlightShadow, BooleanSetting(
+            SettingId::LightSelectedFlashlightCastShadows, true), error)) return false;
         flashlightShadow.expectFlashlightLightingSubmitted = true;
         flashlightShadow.assertFlashlightLightingState = true;
         flashlightShadow.expectFlashlightVisibility = true;
@@ -1017,126 +689,133 @@ namespace uvsr
             UiSettingsValue::Boolean(true);
         flashlightShadow.actionValue = UiSettingsValue::Boolean(false);
         flashlightShadow.requireActionOutputDifference = true;
-        cases.push_back(std::move(flashlightShadow));
+        if (!cases.Append(std::move(flashlightShadow), error)) return false;
 
-        const auto pathCase = [&bistroScene](std::string name)
+        const auto pathCase = [&bistroScene, &error](std::string_view name,
+            RetainedRuntimeCase& runtimeCase)
         {
-            RetainedRuntimeCase runtimeCase = Raster(std::move(name));
+            if (!Raster({name}, runtimeCase, error)) return false;
             runtimeCase.expectedPathHistoryCount = 3u;
-            Set(runtimeCase,
-                SelectorSetting(SettingId::SceneCurrent, bistroScene));
-            Set(runtimeCase,
-                BooleanSetting(SettingId::SkyVisibilityEnabled, false));
-            Set(runtimeCase,
-                TokenSetting(SettingId::LightingSolution, 1u));
-            Set(runtimeCase,
-                TokenSetting(SettingId::NoisePattern, 2u));
-            runtimeCase.expectedSceneToken =
-                "bistro_interior_retextured";
-            return runtimeCase;
+            if (!SetSelector(runtimeCase, SettingId::SceneCurrent, bistroScene, error)) return false;
+            if (!Set(runtimeCase,
+                BooleanSetting(SettingId::SkyVisibilityEnabled, false), error)) return false;
+            if (!SetToken(runtimeCase, SettingId::LightingSolution, 1u, error) ||
+                !SetToken(runtimeCase, SettingId::NoisePattern, 2u, error)) return false;
+            if (!runtimeCase.expectedSceneToken.Assign("bistro_interior_retextured", error)) return false;
+            return true;
         };
 
-        RetainedRuntimeCase pathBaseline =
-            pathCase("path-tracing-bistro");
+        RetainedRuntimeCase pathBaseline;
+        if (!pathCase("path-tracing-bistro", pathBaseline)) return false;
         pathBaseline.snapshotRoundTrip = true;
-        cases.push_back(std::move(pathBaseline));
+        if (!cases.Append(std::move(pathBaseline), error)) return false;
 
-        RetainedRuntimeCase pathCamera =
-            pathCase("path-history-camera-reset");
+        RetainedRuntimeCase pathCamera;
+        if (!pathCase("path-history-camera-reset", pathCamera)) return false;
         pathCamera.action = RetainedRuntimeAction::NudgeCamera;
         pathCamera.requirePathHistoryRestart = true;
-        cases.push_back(std::move(pathCamera));
+        if (!cases.Append(std::move(pathCamera), error)) return false;
 
-        RetainedRuntimeCase pathResize =
-            pathCase("path-history-resize-reset");
+        RetainedRuntimeCase pathResize;
+        if (!pathCase("path-history-resize-reset", pathResize)) return false;
         pathResize.action = RetainedRuntimeAction::ResizeViewport;
         pathResize.resizeWidth = 800;
         pathResize.resizeHeight = 448;
         pathResize.requirePathHistoryRestart = true;
-        cases.push_back(std::move(pathResize));
+        if (!cases.Append(std::move(pathResize), error)) return false;
 
-        RetainedRuntimeCase pathScene =
-            pathCase("path-tracing-san-miguel-scene-reset");
+        RetainedRuntimeCase pathScene;
+        if (!pathCase("path-tracing-san-miguel-scene-reset", pathScene)) return false;
         pathScene.action = RetainedRuntimeAction::ChangeScene;
         pathScene.actionSettingId = SettingId::SceneCurrent;
-        pathScene.actionBaselineValue =
-            UiSettingsValue::Selector(bistroScene);
-        pathScene.actionBaselineSceneToken = BistroToken;
-        pathScene.actionValue = UiSettingsValue::Selector(sanMiguelScene);
-        pathScene.expectedSceneToken = SanMiguelToken;
+        if (!pathScene.actionBaselineValue.SetSelector(bistroScene, error)) return false;
+        if (!pathScene.actionBaselineSceneToken.Assign(BistroToken, error)) return false;
+        if (!pathScene.actionValue.SetSelector(sanMiguelScene, error)) return false;
+        if (!pathScene.expectedSceneToken.Assign(SanMiguelToken, error)) return false;
         pathScene.requirePathHistoryRestart = true;
-        cases.push_back(std::move(pathScene));
+        if (!cases.Append(std::move(pathScene), error)) return false;
 
         const auto appendPathRestart = [
-            &cases, &pathCase](
-                std::string name,
+            &cases, &pathCase, &error](
+                std::string_view name,
                 RetainedRuntimeAction action,
                 SettingId settingId = SettingId::Invalid,
                 UiSettingsValue baselineValue = {},
                 UiSettingsValue actionValue = {},
                 bool requireOutputDifference = false)
         {
-            RetainedRuntimeCase runtimeCase = pathCase(std::move(name));
+            RetainedRuntimeCase runtimeCase;
+            if (!pathCase(name, runtimeCase)) return false;
             runtimeCase.action = action;
             runtimeCase.actionSettingId = settingId;
             runtimeCase.actionBaselineValue = std::move(baselineValue);
             runtimeCase.actionValue = std::move(actionValue);
             if (runtimeCase.action == RetainedRuntimeAction::ChangeSetting)
             {
-                Set(runtimeCase, { runtimeCase.actionSettingId,
-                    runtimeCase.actionBaselineValue });
+                RetainedRuntimeCase::Setting setting;
+                setting.id = runtimeCase.actionSettingId;
+                if (!runtimeCase.actionBaselineValue.CloneTo(setting.value, error)) return false;
+                if (!Set(runtimeCase, std::move(setting), error)) return false;
             }
             runtimeCase.requirePathHistoryRestart = true;
             runtimeCase.requireActionOutputDifference =
                 requireOutputDifference;
-            cases.push_back(std::move(runtimeCase));
+            if (!cases.Append(std::move(runtimeCase), error)) return false;
+            return true;
         };
-        appendPathRestart(
+        const auto appendTokenPathRestart = [&](std::string_view name, SettingId id,
+            std::size_t baselineIndex, std::size_t actionIndex, bool requireDifference = false)
+        {
+            UiSettingsValue baselineValue;
+            UiSettingsValue actionValue;
+            return DomainTokenValue(id, baselineIndex, baselineValue, error) &&
+                DomainTokenValue(id, actionIndex, actionValue, error) &&
+                appendPathRestart(name, RetainedRuntimeAction::ChangeSetting, id,
+                    std::move(baselineValue), std::move(actionValue), requireDifference);
+        };
+        if (!appendTokenPathRestart(
             "path-history-environment-reset",
-            RetainedRuntimeAction::ChangeSetting,
             SettingId::SkyEnvironment,
-            DomainTokenValue(SettingId::SkyEnvironment, 0u),
-            DomainTokenValue(SettingId::SkyEnvironment, 3u), true);
-        appendPathRestart(
+            0u, 3u, true)) return false;
+        if (!appendPathRestart(
             "path-history-exposure-reset",
             RetainedRuntimeAction::ChangeSetting,
             SettingId::SkyExposure,
             UiSettingsValue::Float(-2.75f),
-            UiSettingsValue::Float(-1.75f), true);
-        appendPathRestart(
+            UiSettingsValue::Float(-1.75f), true)) return false;
+        if (!appendTokenPathRestart(
             "path-history-global-noise-reset",
-            RetainedRuntimeAction::ChangeSetting,
             SettingId::NoisePattern,
-            DomainTokenValue(SettingId::NoisePattern, 2u),
-            DomainTokenValue(SettingId::NoisePattern, 1u));
-        appendPathRestart(
+            2u, 1u)) return false;
+        if (!appendPathRestart(
             "path-history-material-reset",
-            RetainedRuntimeAction::ChangeMaterial);
-        appendPathRestart(
+            RetainedRuntimeAction::ChangeMaterial)) return false;
+        cases.Back().requireActionOutputDifference = true;
+        if (!appendPathRestart(
             "path-history-light-reset",
-            RetainedRuntimeAction::ChangeLight);
-        appendPathRestart(
+            RetainedRuntimeAction::ChangeLight)) return false;
+        if (!appendPathRestart(
             "path-history-flashlight-reset",
-            RetainedRuntimeAction::ToggleFlashlight);
-        appendPathRestart(
+            RetainedRuntimeAction::ToggleFlashlight)) return false;
+        if (!appendPathRestart(
             "path-history-lighting-solution-cycle",
-            RetainedRuntimeAction::CycleLightingSolution);
+            RetainedRuntimeAction::CycleLightingSolution)) return false;
 
-        appendPathRestart("path-history-maximum-bounces-reset",
+        if (!appendPathRestart("path-history-maximum-bounces-reset",
             RetainedRuntimeAction::ChangeSetting, SettingId::PathingMaximumBounces,
-            UiSettingsValue::Integer(1), UiSettingsValue::Integer(8), true);
-        appendPathRestart("path-history-minimum-bounces-reset",
+            UiSettingsValue::Integer(1), UiSettingsValue::Integer(8), true)) return false;
+        if (!appendPathRestart("path-history-minimum-bounces-reset",
             RetainedRuntimeAction::ChangeSetting, SettingId::PathingMinimumBounces,
-            UiSettingsValue::Integer(1), UiSettingsValue::Integer(4));
-        appendPathRestart("path-history-firefly-filter-reset",
+            UiSettingsValue::Integer(1), UiSettingsValue::Integer(4))) return false;
+        if (!appendPathRestart("path-history-firefly-filter-reset",
             RetainedRuntimeAction::ChangeSetting, SettingId::PathingFireflyFilter,
-            UiSettingsValue::Boolean(false), UiSettingsValue::Boolean(true), true);
-        Set(cases.back(), FloatSetting(SettingId::PathingFireflyThreshold, 10.f));
-        Set(cases.back(), FloatSetting(SettingId::SkyExposure, 3.f));
-        appendPathRestart("path-history-firefly-threshold-reset",
+            UiSettingsValue::Boolean(false), UiSettingsValue::Boolean(true), true)) return false;
+        if (!Set(cases.Back(), FloatSetting(SettingId::PathingFireflyThreshold, 10.f), error)) return false;
+        if (!Set(cases.Back(), FloatSetting(SettingId::SkyExposure, 3.f), error)) return false;
+        if (!appendPathRestart("path-history-firefly-threshold-reset",
             RetainedRuntimeAction::ChangeSetting, SettingId::PathingFireflyThreshold,
-            UiSettingsValue::Float(10.f), UiSettingsValue::Float(1000000.f), true);
-        Set(cases.back(), FloatSetting(SettingId::SkyExposure, 3.f));
+            UiSettingsValue::Float(10.f), UiSettingsValue::Float(1000000.f), true)) return false;
+        if (!Set(cases.Back(), FloatSetting(SettingId::SkyExposure, 3.f), error)) return false;
 
         const auto appendCycle = [&](RetainedRuntimeCase runtimeCase, SettingId id,
             UiSettingsValue baselineValue = UiSettingsValue::Boolean(true),
@@ -1146,24 +825,28 @@ namespace uvsr
             runtimeCase.actionSettingId = id;
             runtimeCase.actionBaselineValue = std::move(baselineValue);
             runtimeCase.actionValue = std::move(disabledValue);
-            setScene(runtimeCase, bistroScene, BistroToken);
-            cases.push_back(std::move(runtimeCase));
+            if (!setScene(runtimeCase, bistroScene, BistroToken)) return false;
+            if (!cases.Append(std::move(runtimeCase), error)) return false;
+            return true;
         };
-        auto pathTraversal = pathCase("path-traversal-cycle");
+        RetainedRuntimeCase pathTraversal;
+        if (!pathCase("path-traversal-cycle", pathTraversal)) return false;
         pathTraversal.requirePathHistoryRestart = true;
-        appendCycle(std::move(pathTraversal), SettingId::RepresentationAllowRayTraversal);
-        auto rasterTraversal = Raster("ray-marching-traversal-cycle");
+        if (!appendCycle(std::move(pathTraversal), SettingId::RepresentationAllowRayTraversal)) return false;
+        RetainedRuntimeCase rasterTraversal;
+        if (!Raster({"ray-marching-traversal-cycle"}, rasterTraversal, error)) return false;
         rasterTraversal.expectDirectionalVisibility = true;
-        appendCycle(std::move(rasterTraversal), SettingId::RepresentationAllowRayTraversal);
+        if (!appendCycle(std::move(rasterTraversal), SettingId::RepresentationAllowRayTraversal)) return false;
 
         std::rotate(cases.begin(), cases.end() - 2, cases.end());
-        return cases;
+        output = std::move(cases);
+        return true;
     }
 
 
     RetainedRuntimeDiagnosticState::RetainedRuntimeDiagnosticState(
-        std::vector<RetainedRuntimeCase> cases,
-        Clock::time_point start)
+        RetainedRuntimeCases cases,
+        Clock::time_point start) noexcept
         : m_Cases(std::move(cases))
         , m_Start(start)
         , m_CaseStart(start)
@@ -1184,12 +867,12 @@ namespace uvsr
 
     std::size_t RetainedRuntimeDiagnosticState::TotalCaseCount() const noexcept
     {
-        return m_Cases.size();
+        return m_Cases.Count();
     }
 
     bool RetainedRuntimeDiagnosticState::RequiresSettingsSnapshot() const noexcept
     {
-        if (m_CaseIndex >= m_Cases.size() ||
+        if (m_CaseIndex >= m_Cases.Count() ||
             !m_Cases[m_CaseIndex].snapshotRoundTrip ||
             m_SnapshotCompleted)
         {
@@ -1202,33 +885,34 @@ namespace uvsr
 
     RetainedRuntimeDirective RetainedRuntimeDiagnosticState::Finish(
         bool passed,
-        std::string message)
+        RetainedRuntimeMessage message) noexcept
     {
         m_Phase = Phase::Complete;
-        return {
+        RetainedRuntimeDirective directive{
             passed
                 ? RetainedRuntimeDirectiveKind::FinishPass
                 : RetainedRuntimeDirectiveKind::FinishFail,
-            m_CaseIndex < m_Cases.size()
+            m_CaseIndex < m_Cases.Count()
                 ? &m_Cases[m_CaseIndex]
                 : nullptr,
-            m_CaseIndex,
-            std::move(message)
+            m_CaseIndex
         };
+        directive.failure = message;
+        return directive;
     }
 
     RetainedRuntimeDirective RetainedRuntimeDiagnosticState::Abort(
-        std::string message,
-        Clock::time_point)
+        RetainedRuntimeMessage message,
+        Clock::time_point) noexcept
     {
-        return Finish(false, std::move(message));
+        return Finish(false, message);
     }
 
     bool RetainedRuntimeDiagnosticState::EvidenceReady(
         const RetainedRuntimeCase& runtimeCase,
         const RetainedRuntimeTelemetry& telemetry,
         bool beforeAction,
-        std::string& reason)
+        RetainedRuntimeMessage& reason) noexcept
     {
         if (telemetry.sceneBusy)
         {
@@ -1243,17 +927,15 @@ namespace uvsr
         const bool baselineScenePhase = beforeAction ||
             (runtimeCase.exerciseRetainedStateChanges &&
                 m_CurrentAction == RetainedRuntimeAction::NudgeCamera);
-        const std::string& expectedScene =
+        const std::string_view expectedScene =
             baselineScenePhase &&
-                !runtimeCase.actionBaselineSceneToken.empty()
-                ? runtimeCase.actionBaselineSceneToken
-                : runtimeCase.expectedSceneToken;
+                !runtimeCase.actionBaselineSceneToken.View().empty()
+                ? runtimeCase.actionBaselineSceneToken.View()
+                : runtimeCase.expectedSceneToken.View();
         if (!expectedScene.empty() &&
-            LowerAscii(telemetry.currentScene).find(expectedScene) ==
-                std::string::npos)
+            !ContainsLoweredSceneText(telemetry.currentScene, expectedScene))
         {
-            reason = "active scene does not match '" +
-                expectedScene + "'";
+            reason = {"active scene does not match '", expectedScene, "'"};
             return false;
         }
 
@@ -1352,10 +1034,10 @@ namespace uvsr
         const UiSettingsValue* expectedNoiseAccumulate =
             phaseValue(SettingId::NoiseAccumulateSamples);
         if ((expectedNoisePattern &&
-                telemetry.globalNoisePattern != expectedNoisePattern->text) ||
+                telemetry.globalNoisePattern != expectedNoisePattern->Text()) ||
             (expectedNoiseResolution &&
                 telemetry.globalNoiseResolution !=
-                    expectedNoiseResolution->text) ||
+                    expectedNoiseResolution->Text()) ||
             (expectedNoiseAnimate &&
                 telemetry.globalNoiseAnimateSamples !=
                     expectedNoiseAnimate->boolean) ||
@@ -1377,7 +1059,8 @@ namespace uvsr
         {
             if (!beforeAction &&
                 runtimeCase.requirePathHistoryRestart &&
-                telemetry.pathHistoryCount < m_PathCountBeforeAction)
+                telemetry.pathHistoryGeneration != 0u &&
+                telemetry.pathHistoryGeneration != m_PathGenerationBeforeAction)
             {
                 m_ObservedPathRestart = true;
             }
@@ -1385,26 +1068,24 @@ namespace uvsr
                 runtimeCase.requirePathHistoryRestart &&
                 !m_ObservedPathRestart)
             {
-                reason = "path history did not restart below its prior count";
+                reason = "path history generation did not change after the action";
                 return false;
             }
             if (telemetry.pathHistoryCount <
                 runtimeCase.expectedPathHistoryCount)
             {
-                reason = "path history count is " +
-                    std::to_string(telemetry.pathHistoryCount) +
-                    ", expected at least " +
-                    std::to_string(runtimeCase.expectedPathHistoryCount);
+                reason = RetainedRuntimeMessage::PathCount(
+                    telemetry.pathHistoryCount, runtimeCase.expectedPathHistoryCount);
                 return false;
             }
         }
-        reason.clear();
+        reason = {};
         return true;
     }
 
     RetainedRuntimeDirective RetainedRuntimeDiagnosticState::Tick(
         const RetainedRuntimeTelemetry& telemetry,
-        Clock::time_point now)
+        Clock::time_point now) noexcept
     {
         if (m_Phase == Phase::Complete)
             return {};
@@ -1413,21 +1094,19 @@ namespace uvsr
 
         if (m_Phase == Phase::Apply)
         {
-            if (m_CaseIndex >= m_Cases.size())
+            if (m_CaseIndex >= m_Cases.Count())
             {
-                std::string semanticReason;
-                if (!ValidateRetainedRuntimeSemanticCaptures(
-                        m_Cases, m_SemanticCaptures, semanticReason))
-                {
-                    return Finish(false, std::move(semanticReason));
-                }
-                return Finish(true, {});
+                const auto semantic = m_SemanticSummary.Validate(m_Cases.Data(), m_Cases.Count());
+                auto directive = Finish(semantic.Passed(), {});
+                directive.semanticFailure = semantic;
+                return directive;
             }
+            m_SemanticSummary.BeginCase();
             m_CaseStart = now;
             m_SettledFrames = 0u;
             m_CompletedActionCount = 0u;
             m_CurrentAction = RetainedRuntimeAction::None;
-            m_PathCountBeforeAction = 0u;
+            m_PathGenerationBeforeAction = 0u;
             m_ObservedPathRestart =
                 !m_Cases[m_CaseIndex].requirePathHistoryRestart;
             m_SnapshotCompleted =
@@ -1438,9 +1117,8 @@ namespace uvsr
             m_BaselineGpuMilliseconds = 0.0;
             m_CaptureCpuMilliseconds = 0.0;
             m_CaptureGpuMilliseconds = 0.0;
-            m_SavedSnapshot.clear();
-            m_CaptureLabel.clear();
-            m_WaitReason.clear();
+            m_SavedSnapshot = {};
+            m_WaitReason = {};
             m_Phase = Phase::WaitForEvidence;
             return {
                 RetainedRuntimeDirectiveKind::ApplyCase,
@@ -1452,7 +1130,9 @@ namespace uvsr
 
         if (now - m_CaseStart > std::chrono::minutes(5))
         {
-            return Finish(false, "case timeout: " + m_WaitReason);
+            auto message = m_WaitReason;
+            message.caseTimeout = true;
+            return Finish(false, message);
         }
         RetainedRuntimeCase& runtimeCase = m_Cases[m_CaseIndex];
 
@@ -1464,7 +1144,7 @@ namespace uvsr
                 return {};
             if (!telemetry.settingsSnapshot)
                 return Finish(false, "RESET snapshot was not observed");
-            if ((*telemetry.settingsSnapshot != m_SavedSnapshot) != runtimeCase.expectSnapshotResetChange)
+            if ((*telemetry.settingsSnapshot != m_SavedSnapshot.View()) != runtimeCase.expectSnapshotResetChange)
             {
                 return Finish(false, runtimeCase.expectSnapshotResetChange
                     ? "RESET left the non-default snapshot unchanged"
@@ -1472,12 +1152,11 @@ namespace uvsr
             }
             m_SettledFrames = 0u;
             m_Phase = Phase::WaitForRestoredEvidence;
-            return {
-                RetainedRuntimeDirectiveKind::RestoreSnapshot,
-                &runtimeCase,
-                m_CaseIndex,
-                m_SavedSnapshot
+            RetainedRuntimeDirective directive{
+                RetainedRuntimeDirectiveKind::RestoreSnapshot, &runtimeCase, m_CaseIndex
             };
+            directive.snapshot = m_SavedSnapshot.View();
+            return directive;
         }
 
         if (m_Phase == Phase::WaitForEvidence ||
@@ -1503,7 +1182,9 @@ namespace uvsr
             {
                 if (!telemetry.settingsSnapshot)
                     return Finish(false, "configured snapshot was not observed");
-                m_SavedSnapshot = *telemetry.settingsSnapshot;
+                SettingsSnapshotError error;
+                if (!m_SavedSnapshot.Assign(*telemetry.settingsSnapshot, error))
+                    return Finish(false, "configured snapshot could not be retained");
                 m_SettledFrames = 0u;
                 m_TimingRecoverySampleUsed = false;
                 m_Phase = Phase::WaitForResetFrame;
@@ -1516,14 +1197,11 @@ namespace uvsr
             }
             if (m_Phase == Phase::WaitForRestoredEvidence &&
                 (!telemetry.settingsSnapshot ||
-                    *telemetry.settingsSnapshot != m_SavedSnapshot))
+                    *telemetry.settingsSnapshot != m_SavedSnapshot.View()))
             {
-                return Finish(false,
-                    "saved settings did not restore the exact live snapshot" +
-                    (telemetry.settingsSnapshot
-                        ? DescribeSnapshotMismatch(
-                            m_SavedSnapshot, *telemetry.settingsSnapshot)
-                        : ": live snapshot was unavailable"));
+                return Finish(false, telemetry.settingsSnapshot
+                    ? RetainedRuntimeMessage::SnapshotMismatch(m_SavedSnapshot.View(), *telemetry.settingsSnapshot)
+                    : RetainedRuntimeMessage("saved settings did not restore the exact live snapshot: live snapshot was unavailable"));
             }
             if (!std::isfinite(telemetry.cpuFrameMilliseconds) ||
                 telemetry.cpuFrameMilliseconds <= 0.0)
@@ -1546,13 +1224,13 @@ namespace uvsr
             m_CaptureCpuMilliseconds = telemetry.cpuFrameMilliseconds;
             m_CaptureGpuMilliseconds = telemetry.gpuFrameMilliseconds;
             const auto deferOneTimingSample =
-                [this](std::string waitReason)
+                [this](RetainedRuntimeMessage waitReason)
                 {
                     if (m_TimingRecoverySampleUsed)
                         return false;
                     m_TimingRecoverySampleUsed = true;
                     m_SettledFrames = 1u;
-                    m_WaitReason = std::move(waitReason);
+                    m_WaitReason = waitReason;
                     return true;
                 };
 
@@ -1569,12 +1247,8 @@ namespace uvsr
                     {
                         return {};
                     }
-                    return Finish(false,
-                        "stable baseline frame time exceeded 1000 ms after "
-                        "one recovery sample: CPU=" +
-                        std::to_string(m_CaptureCpuMilliseconds) +
-                        " ms, GPU=" +
-                        std::to_string(m_CaptureGpuMilliseconds) + " ms");
+                    return Finish(false, RetainedRuntimeMessage::BaselineTiming(
+                        m_CaptureCpuMilliseconds, m_CaptureGpuMilliseconds));
                 }
             }
             else
@@ -1598,26 +1272,19 @@ namespace uvsr
                     {
                         return {};
                     }
-                    return Finish(false,
-                        "stable post-action frame time exceeded the 4x/50 ms "
-                        "baseline tolerance after one recovery sample: CPU=" +
-                        std::to_string(m_CaptureCpuMilliseconds) +
-                        " ms (limit " + std::to_string(cpuLimit) +
-                        " ms), GPU=" +
-                        std::to_string(m_CaptureGpuMilliseconds) +
-                        " ms (limit " + std::to_string(gpuLimit) + " ms)");
+                    return Finish(false, RetainedRuntimeMessage::ActionTiming(
+                        m_CaptureCpuMilliseconds, cpuLimit, m_CaptureGpuMilliseconds, gpuLimit));
                 }
             }
             if (m_Phase == Phase::WaitForRestoredEvidence)
                 m_SnapshotCompleted = true;
-            m_CaptureLabel = CaptureLabel(m_CurrentAction);
             m_Phase = Phase::WaitForCapture;
             RetainedRuntimeDirective directive{
                 RetainedRuntimeDirectiveKind::CaptureOutput,
                 &runtimeCase,
-                m_CaseIndex,
-                m_CaptureLabel
+                m_CaseIndex
             };
+            directive.captureLabel = RetainedRuntimeCaptureLabel(m_CurrentAction);
             directive.hasStableFrameTiming = true;
             directive.stableCpuFrameMilliseconds =
                 m_CaptureCpuMilliseconds;
@@ -1631,32 +1298,13 @@ namespace uvsr
             if (!telemetry.output)
                 return {};
             const RuntimeOutputEvidence& output = *telemetry.output;
+            const std::string_view captureLabel = RetainedRuntimeCaptureLabel(m_CurrentAction);
             if (!output.valid || output.pixelBytes == 0u ||
                 output.minimumByte == output.maximumByte ||
                 !output.linearReadbackValid ||
                 output.nonFiniteComponentCount != 0u)
             {
-                return Finish(false,
-                    "rendered output was empty, uniform, or non-finite: "
-                    "encoded-valid=" + std::to_string(output.valid) +
-                    ", pixel-bytes=" + std::to_string(output.pixelBytes) +
-                    ", byte-range=" +
-                    std::to_string(static_cast<unsigned int>(
-                        output.minimumByte)) + ".." +
-                    std::to_string(static_cast<unsigned int>(
-                        output.maximumByte)) +
-                    ", linear-valid=" +
-                    std::to_string(output.linearReadbackValid) +
-                    ", finite=" +
-                    std::to_string(output.finiteComponentCount) +
-                    ", non-finite=" +
-                    std::to_string(output.nonFiniteComponentCount) +
-                    ", varying=" +
-                    std::to_string(output.varyingPixelCount) +
-                    ", edges=" + std::to_string(output.edgePixelCount) +
-                    ", linear-range=" +
-                    std::to_string(output.minimumLinearValue) + ".." +
-                    std::to_string(output.maximumLinearValue));
+                return Finish(false, RetainedRuntimeMessage::InvalidOutput(output));
             }
             if (m_CurrentAction ==
                     RetainedRuntimeAction::ResizeViewport &&
@@ -1699,14 +1347,11 @@ namespace uvsr
                 (m_CurrentAction == RetainedRuntimeAction::None ||
                     m_CurrentAction == RetainedRuntimeAction::ChangeScene))
             {
-                RetainedRuntimeSemanticCapture capture;
-                capture.caseName = runtimeCase.name;
-                capture.sceneToken =
+                const std::string_view sceneToken =
                     m_CurrentAction == RetainedRuntimeAction::ChangeScene
-                        ? runtimeCase.expectedSceneToken
-                        : runtimeCase.actionBaselineSceneToken;
-                capture.signature = BuildRuntimeSemanticSignature(output);
-                m_SemanticCaptures.push_back(std::move(capture));
+                        ? std::string_view(runtimeCase.expectedSceneToken.View())
+                        : std::string_view(runtimeCase.actionBaselineSceneToken.View());
+                m_SemanticSummary.Record(runtimeCase, sceneToken, BuildRuntimeSemanticSignature(output));
             }
 
             if (m_CurrentAction != RetainedRuntimeAction::None)
@@ -1720,7 +1365,9 @@ namespace uvsr
                 if (nextAction == RetainedRuntimeAction::None)
                     return Finish(false, "runtime action sequence was incomplete");
                 m_CurrentAction = nextAction;
-                m_PathCountBeforeAction = telemetry.pathHistoryCount;
+                // sample readback can lag the capture's own reset. only an actual
+                // subsequent clear proves that the named action restarted history.
+                m_PathGenerationBeforeAction = telemetry.pathHistoryGeneration;
                 m_ObservedPathRestart =
                     !runtimeCase.requirePathHistoryRestart;
                 m_SettledFrames = 0u;
@@ -1730,9 +1377,9 @@ namespace uvsr
                 RetainedRuntimeDirective directive{
                     RetainedRuntimeDirectiveKind::ApplyAction,
                     &runtimeCase,
-                    m_CaseIndex,
-                    m_CaptureLabel
+                    m_CaseIndex
                 };
+                directive.captureLabel = captureLabel;
                 directive.action = nextAction;
                 directive.resizeWidth = runtimeCase.resizeWidth;
                 directive.resizeHeight = runtimeCase.resizeHeight;
@@ -1741,13 +1388,11 @@ namespace uvsr
                     if (nextAction == RetainedRuntimeAction::ChangeScene)
                     {
                         directive.actionSettingId = SettingId::SceneCurrent;
-                        directive.actionValue = runtimeCase.actionValue;
                     }
                 }
                 else
                 {
                     directive.actionSettingId = runtimeCase.actionSettingId;
-                    directive.actionValue = runtimeCase.actionValue;
                 }
                 directive.hasStableFrameTiming = true;
                 directive.stableCpuFrameMilliseconds =
@@ -1757,6 +1402,7 @@ namespace uvsr
                 return directive;
             }
 
+            m_SemanticSummary.CompleteCase(runtimeCase);
             const RetainedRuntimeCase* completed = &runtimeCase;
             const std::size_t completedIndex = m_CaseIndex;
             ++m_PassedCases;

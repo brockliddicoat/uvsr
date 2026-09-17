@@ -1,35 +1,32 @@
 #include "uvsr_scene_viewer.h"
-#include "uvsr_renderer_scene.h"
-#include "uvsr_renderer_lighting.h"
-#include "uvsr_renderer_frame.h"
+#include "uvsr_renderer_scene_nvrhi.h"
+#include "uvsr_renderer_lighting_nvrhi.h"
+#include "uvsr_renderer_frame_nvrhi.h"
 #include "uvsr_runtime.h"
 #include "uvsr_application.h"
 #include "renderer_log.h"
 #include <donut/app/DeviceManager.h>
 #include <algorithm>
 #include <cmath>
-#include <stdexcept>
+#include <new>
 #include <utility>
 
 
 using namespace donut;
-using namespace donut::math;
 using namespace donut::app;
-using namespace donut::vfs;
-using namespace donut::engine;
-using namespace donut::render;
 using namespace uvsr;
 
-auto UvsrSceneViewer::EnsurePathTracingPass() -> void {
-        if (m_lighting->pathTracingPass)
-            return;
+auto UvsrSceneViewer::EnsurePathTracingPass(bool requiredForFrame, bool replaceExisting) -> bool {
+        if (m_lighting->pathTracingPass && !replaceExisting)
+            return true;
 
-        m_lighting->pathTracingPass = std::make_unique<PathTracingPass>(
+        std::unique_ptr<PathTracingPass> candidate(new (std::nothrow) PathTracingPass(
             GetDevice(),
-            m_frame->rendererShaderFactory,
-            m_scene->bindlessLayout);
-        const PathTracingAvailability availability =
-            m_lighting->pathTracingPass->GetAvailability();
+            m_frame->rendererShaderFactory.get(),
+            m_scene->bindlessLayout));
+        if (!candidate)
+            return FailRender("Path tracing allocation failed");
+        const PathTracingAvailability availability = candidate->GetAvailability();
         uvsr::log::info(
             "Path tracing first-use availability: ray queries %s, "
             "executable pipeline %s",
@@ -37,6 +34,10 @@ auto UvsrSceneViewer::EnsurePathTracingPass() -> void {
             availability.executablePipelineAvailable
                 ? "available"
                 : "unavailable");
+        if (requiredForFrame && availability.rayQuerySupported && !availability.executablePipelineAvailable)
+            return FailRender("Required renderer pass failed: path tracing transport");
+        m_lighting->pathTracingPass = std::move(candidate);
+        return true;
     }
 
 auto UvsrSceneViewer::GetPathTracingCapabilities() const -> const PathTracingCapabilities& {
@@ -52,64 +53,30 @@ auto UvsrSceneViewer::GetPathTracingCenterPixelAcceptedSampleCount() const noexc
             : 0u;
     }
 
+#if defined(UVSR_BUILD_TESTING)
+auto UvsrSceneViewer::GetPathTracingHistoryGeneration() const noexcept -> uint64_t {
+        return m_lighting->pathTracingPass
+            ? m_lighting->pathTracingPass->GetHistoryGeneration()
+            : 0u;
+    }
+#endif
+
 auto UvsrSceneViewer::GetSelectedLightingTransportState()
         const noexcept -> SelectedLightingTransportState {
         return m_lighting->selectedLightingTransportState;
     }
 
 auto UvsrSceneViewer::GetPathTracingSceneDomainStatus() const -> PathTracingSceneDomainStatus {
-        if (!m_scene->world)
+        const auto view = m_scene->canonical.View();
+        const auto status = ClassifyPathTracingSceneDomain(view);
+        if (status == PathTracingSceneDomainStatus::Unsupported || m_scene->gpuTables.Generation() != view.generation)
             return PathTracingSceneDomainStatus::Unsupported;
-
-        const std::shared_ptr<SceneGraph> sceneGraph =
-            m_scene->world->GetSceneGraph();
-        if (!sceneGraph)
-            return PathTracingSceneDomainStatus::Unsupported;
-
-        bool blendedGeometryOmitted = false;
-        for (const std::shared_ptr<MeshInfo>& mesh : sceneGraph->GetMeshes())
+        for (size_t i = 0; i < view.meshes.count; ++i)
         {
-            if (!mesh || mesh->type != MeshType::Triangles ||
-                !mesh->buffers || !mesh->buffers->indexBuffer ||
-                !mesh->buffers->vertexBuffer ||
-                !mesh->buffers->hasAttribute(VertexAttribute::Position))
-            {
+            nvrhi::IBuffer* indices = nullptr;
+            nvrhi::IBuffer* vertices = nullptr;
+            if (!m_scene->gpuTables.GetBuffers(view.meshes.data[i].bufferGroupIndex, indices, vertices) || !indices || !vertices)
                 return PathTracingSceneDomainStatus::Unsupported;
-            }
-
-            for (const std::shared_ptr<MeshGeometry>& geometry :
-                mesh->geometries)
-            {
-                if (!geometry ||
-                    geometry->type != MeshGeometryPrimitiveType::Triangles ||
-                    geometry->numIndices < 3u ||
-                    geometry->numIndices % 3u != 0u ||
-                    geometry->numVertices == 0u ||
-                    !geometry->material)
-                {
-                    return PathTracingSceneDomainStatus::Unsupported;
-                }
-
-                const Material& material = *geometry->material;
-                if (material.transmissionFactor > 0.f ||
-                    material.enableSubsurfaceScattering || material.enableHair)
-                {
-                    return PathTracingSceneDomainStatus::Unsupported;
-                }
-                if (material.domain == MaterialDomain::AlphaBlended)
-                {
-                    blendedGeometryOmitted = true;
-                    continue;
-                }
-                if (material.domain != MaterialDomain::Opaque &&
-                    material.domain != MaterialDomain::AlphaTested)
-                {
-                    return PathTracingSceneDomainStatus::Unsupported;
-                }
-            }
         }
-
-        return blendedGeometryOmitted
-            ? PathTracingSceneDomainStatus::BlendedGeometryOmitted
-            : PathTracingSceneDomainStatus::Supported;
+        return status;
     }

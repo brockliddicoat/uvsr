@@ -7,7 +7,7 @@
 
 StructuredBuffer<GeometryData> t_RayMaterialGeometries :
     register(UVSR_RAY_MATERIAL_GEOMETRY_REGISTER);
-StructuredBuffer<MaterialConstants> t_RayMaterials :
+StructuredBuffer<RendererMaterialTableEntry> t_RayMaterials :
     register(UVSR_RAY_MATERIAL_CONSTANTS_REGISTER);
 StructuredBuffer<uint> t_RayGeometryIndexMap :
     register(UVSR_RAY_MATERIAL_GEOMETRY_INDEX_REGISTER);
@@ -63,7 +63,7 @@ bool RayMaterialTryResolveBounded(
     geometry = t_RayMaterialGeometries[globalGeometryIndex];
     if (geometry.materialIndex >= limits.z)
         return false;
-    material = t_RayMaterials[geometry.materialIndex];
+    material = t_RayMaterials[geometry.materialIndex].material;
     return true;
 }
 
@@ -186,7 +186,7 @@ bool RayMaterialCandidateIsCovered(
     const GeometryData geometry =
         t_RayMaterialGeometries[globalGeometryIndex];
     const MaterialConstants material =
-        t_RayMaterials[geometry.materialIndex];
+        t_RayMaterials[geometry.materialIndex].material;
     const bool opacityTextureAvailable =
         (material.flags & MaterialFlags_UseOpacityTexture) != 0 &&
         material.opacityTextureIndex >= 0;

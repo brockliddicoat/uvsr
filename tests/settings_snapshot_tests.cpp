@@ -45,8 +45,19 @@ int main()
             "scene loading must lock renderer settings while leaving interface controls available");
     }
     for (const auto& definition : UiSettingsCommandCatalog)
-        Require(!FormatUiSettingsDomain(definition).empty() && !FormatUiSettingsDefault(definition).empty(),
+        Require(FormatUiSettingsDomain(definition).IsValid() && FormatUiSettingsDefault(definition).IsValid() &&
+            !FormatUiSettingsDomain(definition).View().empty() && !FormatUiSettingsDefault(definition).View().empty(),
             "diagnostic text must format from the canonical typed metadata");
+    auto metadataFixture = find(SettingId::SkyExposure);
+    const std::string boundaryText(SettingsMetadataText::Capacity - 1, 'x');
+    metadataFixture.typedDomain.presentation = boundaryText;
+    const auto exactCapacity = FormatUiSettingsDomain(metadataFixture);
+    Require(exactCapacity.IsValid() && exactCapacity.View() == boundaryText, "metadata lost an exact-capacity value");
+    const std::string oversizedText(SettingsMetadataText::Capacity, 'x');
+    metadataFixture.typedDomain.presentation = oversizedText;
+    const auto exhausted = FormatUiSettingsDomain(metadataFixture);
+    Require(!exhausted.IsValid() && exhausted.Size() == 0 && exhausted.Data()[0] == '\0',
+        "metadata capacity failure silently truncated its value");
     auto invalidCatalog = UiSettingsCommandCatalog;
     std::swap(invalidCatalog[0].bindingIndex, invalidCatalog[1].bindingIndex);
     Require(!ValidateCanonicalSettingsSchema(invalidCatalog), "a setting ID and binding mismatch must reject");
@@ -56,12 +67,12 @@ int main()
     invalidCatalog = UiSettingsCommandCatalog;
     invalidCatalog[1].name = invalidCatalog[0].name;
     Require(!ValidateCanonicalSettingsSchema(invalidCatalog), "duplicate command identity must reject");
-    Require(FormatUiSettingsDomain(find(SettingId::LightingSolution)) == "ray-marching|path-tracing" &&
-            FormatUiSettingsTokenLabel(SettingId::LightingSolution, 0u) == "Ray Tracing",
+    Require(FormatUiSettingsDomain(find(SettingId::LightingSolution)).View() == "ray-marching|path-tracing" &&
+            FormatUiSettingsTokenLabel(SettingId::LightingSolution, 0u).View() == "Ray Tracing",
         "renderer labels must preserve their persisted tokens");
-    Require(FormatUiSettingsTokenLabel(SettingId::NoiseResolution, 0u) == "64x64" &&
-            FormatUiSettingsTokenLabel(SettingId::NoisePattern, 2u) == "Spatiotemporal Blue" &&
-            FormatUiSettingsTokenLabel(SettingId::NoisePattern, 99u).empty(),
+    Require(FormatUiSettingsTokenLabel(SettingId::NoiseResolution, 0u).View() == "64x64" &&
+            FormatUiSettingsTokenLabel(SettingId::NoisePattern, 2u).View() == "Spatiotemporal Blue" &&
+            FormatUiSettingsTokenLabel(SettingId::NoisePattern, 99u).View().empty(),
         "authored enum labels and fallback formatting must remain distinct");
     constexpr SettingsNumberHash knownHash{ 0x0123456789abcdefull, 0xfedcba9876543210ull };
     static_assert(DeriveEngineVersion(knownHash) == EngineVersion{ 0x0123u, 0x4567u, 0x89abu, 0xcdefu });
@@ -191,15 +202,15 @@ int main()
     };
 
     Require(
-        BuildSettingsSnapshotCode({}) ==
+        BuildSettingsSnapshotCode({}).View() ==
             code("cbf29ce4842223256c62272e07bb"),
         "the empty canonical snapshot vector changed");
     Require(
-        BuildSettingsSnapshotCode("a=b\n") ==
+        BuildSettingsSnapshotCode("a=b\n").View() ==
             code("ec8b8c82c37596fba90fe6756c5c"),
         "the single-setting canonical snapshot vector changed");
     Require(
-        BuildSettingsSnapshotCode("ui.skin=amp\n") ==
+        BuildSettingsSnapshotCode("ui.skin=amp\n").View() ==
             code("582ac8a06042865d4c6f64bb61a4"),
         "the UI-skin canonical snapshot vector changed");
     Require(
@@ -209,10 +220,10 @@ int main()
                 code("AAAAAAAAAAAAAAAAAAAAAAAAAAAA")),
         "code validation must require the registered current lowercase version");
 
-    const std::string first = BuildSettingsSnapshotCode(
-        "noise.pattern=spatial-blue\n");
-    const std::string second = BuildSettingsSnapshotCode(
-        "noise.pattern=spatial-white\n");
+    const std::string first = std::string(BuildSettingsSnapshotCode(
+        "noise.pattern=spatial-blue\n").View());
+    const std::string second = std::string(BuildSettingsSnapshotCode(
+        "noise.pattern=spatial-white\n").View());
     Require(first != second,
         "distinct canonical settings must not share this regression vector");
     Require(first.size() == SettingsSnapshotCodeLength &&

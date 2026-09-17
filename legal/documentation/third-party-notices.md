@@ -8,8 +8,10 @@ verified fetched source. renderer packages copy this summary to
 
 ## renderer code and dependencies
 
-- NVIDIA Donut, pinned NVRHI, Dear ImGui, cgltf, GLFW, JsonCpp, stb, and TinyEXR
+- NVIDIA Donut, pinned NVRHI, Dear ImGui, cgltf, GLFW, stb, and TinyEXR
   retain their upstream terms. the package carries each applicable notice.
+- fastgltf retains its MIT license. simdjson retains its Apache 2.0 or MIT
+  license choice. the package carries all three verified license texts.
 - Fast Approximate AA adapts Google Filament under Apache 2.0 and carries the
   indirect G3D and NVIDIA FXAA notices in
   `bin/licenses/Google-Filament-FXAA-Attribution.md`.

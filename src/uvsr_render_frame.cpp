@@ -1,38 +1,41 @@
 #include "uvsr_scene_viewer.h"
-#include "uvsr_renderer_scene.h"
-#include "uvsr_renderer_lighting.h"
-#include "uvsr_renderer_frame.h"
+#include "renderer_nvrhi_message_callback.h"
+#include "renderer_view.h"
+#include "uvsr_renderer_scene_nvrhi.h"
+#include "uvsr_renderer_lighting_nvrhi.h"
+#include "uvsr_renderer_frame_nvrhi.h"
 #include "uvsr_runtime.h"
 #include "uvsr_application.h"
 #include "renderer_log.h"
+#include "renderer_pixel_readback_nvrhi.h"
 #include <donut/app/DeviceManager.h>
 #include <algorithm>
 #include <cmath>
-#include <stdexcept>
+#include <new>
 #include <utility>
 #include "renderer_producer_contract.h"
 #include "renderer_statistics.h"
-#include "renderer_texture_bmp.h"
+#include "renderer_texture_bmp_nvrhi.h"
 #include "windows_executable_path.h"
+#include "windows_path_text.h"
+#include "settings_value.h"
 #include <Windows.h>
 #include <cstdio>
-#include <fstream>
-#include <iterator>
+#if defined(UVSR_BUILD_TESTING)
+#include "file_write.h"
+#include "retained_runtime_capture_file.h"
+#endif
 
 using namespace donut;
-using namespace donut::math;
 using namespace donut::app;
-using namespace donut::vfs;
-using namespace donut::engine;
-using namespace donut::render;
 using namespace uvsr;
 
 namespace
 {
 constexpr float DefaultFlashlightRayBiasMeters = 0.002f;
-bool CopyBmpToClipboard(const std::filesystem::path& fileName)
+bool CopyBmpToClipboard(const wchar_t* fileName)
 {
-    HANDLE file = CreateFileW(fileName.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+    HANDLE file = CreateFileW(fileName, GENERIC_READ, FILE_SHARE_READ, nullptr,
         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE)
         return false;
@@ -100,13 +103,23 @@ struct UvsrSceneViewer::FrameExecution
 {
     UvsrSceneViewer& renderer;
     nvrhi::IFramebuffer* framebuffer;
+    uint64_t errorsBefore = renderer.m_nvrhiMessages.GetErrorCount();
     bool commandOpen = false;
+    // a closed list can still be unsubmitted. failure keeps it terminal until teardown.
+    bool recording = false;
     bool pathTracingSelected{};
     bool pathTracingSceneDomainSupported{};
+#if defined(UVSR_BUILD_TESTING)
+    bool runtimePathDispatched = false;
+    bool runtimePathHistoryReset = false;
+    uint32_t runtimeSkySamplePhase = 0u;
+    uint32_t runtimeDirectionalSamplePhase = 0u;
+    uint32_t runtimeFlashlightSamplePhase = 0u;
+#endif
     DirectX::XMUINT2 presentationSize{};
     DirectX::XMUINT2 renderSize{};
     bool lightingSceneContentChanged{};
-    const std::vector<std::shared_ptr<Light>>* submittedLights{};
+    RendererSceneLightRange submittedLights;
     bool directionalRayVisibilitySelected{};
     bool rayTracedFlashlightShadowSelected{};
     bool rayTracedSkyVisibilitySelected{};
@@ -123,7 +136,7 @@ struct UvsrSceneViewer::FrameExecution
     bool rayTracedFlashlightShadowExpectedToContribute{};
     NoiseTextureBinding skyNoise{};
     NoiseTextureBinding directShadowNoise{};
-    const SpotLight* submittedFlashlight{};
+    RendererSceneHandle submittedFlashlight;
     FlashlightBeamProfile flashlightBeamProfile{};
     bool rayMarchingProducerTopologyReady{};
     bool rayMarchingDiagnostic{};
@@ -135,8 +148,15 @@ struct UvsrSceneViewer::FrameExecution
     RayTracedSkyVisibilityResult skyVisibilityResult{};
     LightingSurfaceView rasterSurface{};
     nvrhi::ITexture* sceneColor{};
+    RendererPixelReadback* recordedReadback = nullptr;
 
-    void Open() { renderer.m_frame->commandList->open(); commandOpen = true; }
+    void Open()
+    {
+        renderer.m_frame->commandList->open();
+        renderer.m_scene->gpuTables.BeginRecording();
+        commandOpen = true;
+        recording = true;
+    }
     bool Fail(const char* pass)
     {
         uvsr::log::error("Required renderer pass failed: %s", pass);
@@ -147,10 +167,27 @@ struct UvsrSceneViewer::FrameExecution
     {
         renderer.EndRendererStage(RendererTimingStage::SceneSetup);
         renderer.EndRendererStage(RendererTimingStage::CompleteFrame);
-        renderer.CompleteRendererTimerFrame();
         renderer.m_frame->commandList->close();
-        renderer.GetDevice()->executeCommandList(renderer.m_frame->commandList);
         commandOpen = false;
+        if (renderer.m_nvrhiMessages.GetErrorCount() != errorsBefore)
+        {
+            return Fail("graphics command recording");
+        }
+        const uint64_t submission = renderer.GetDevice()->executeCommandList(renderer.m_frame->commandList);
+        if (submission == 0)
+            return Fail("graphics queue submission");
+        recording = false;
+        renderer.m_scene->gpuTables.CommitRecording();
+        renderer.CompleteRendererTimerFrame();
+        if (recordedReadback)
+        {
+            auto* submittedReadback = recordedReadback;
+            recordedReadback = nullptr;
+            if (submittedReadback->NotifySubmitted(submission) != RendererReadbackError::None)
+                return Fail("material readback submission");
+        }
+        if (renderer.m_nvrhiMessages.GetErrorCount() != errorsBefore)
+            return Fail("graphics queue execution");
         if (pending)
             renderer.GetDeviceManager()->ReportRenderDisposition(RendererRenderDisposition::Pending);
         return !pending;
@@ -172,15 +209,18 @@ struct UvsrSceneViewer::FrameExecution
     }
     ~FrameExecution()
     {
+        if (!recording)
+            return;
         if (lightingSampleSchedulePrepared)
             renderer.m_lighting->lightingAccumulationPass->CancelPreparedSchedule(lightingSampleSchedule);
-        if (!commandOpen)
-            return;
+        if (recordedReadback)
+            recordedReadback->CancelRecorded();
         auto& frame = *renderer.m_frame;
         const uint32_t slot = frame.rendererTimerFrame % RendererFrameState::TimerLatency;
         for (size_t stage = 0; stage < frame.rendererTimerActive.size(); ++stage)
         {
-            renderer.EndRendererStage(static_cast<RendererTimingStage>(stage));
+            if (commandOpen)
+                renderer.EndRendererStage(static_cast<RendererTimingStage>(stage));
             // Only this frame's free slot can contain unsubmitted queries.
             if (frame.rendererTimerFrameWritable && frame.rendererTimerPending[stage][slot])
             {
@@ -189,21 +229,17 @@ struct UvsrSceneViewer::FrameExecution
                 frame.rendererTimings.available[stage] = false;
             }
         }
-        frame.commandList->close();
+        if (commandOpen)
+            frame.commandList->close();
+        renderer.m_scene->gpuTables.AbortRecording();
         renderer.ResetImageBasedLightingHistory();
     }
 };
 
-void UvsrSceneViewer::PrepareFrameTargets(FrameExecution& execution)
+bool UvsrSceneViewer::PrepareFrameTargets(FrameExecution& execution)
 {
     execution.pathTracingSelected =
         m_ui.Lighting == LightingSolution::PathTracing;
-    if (execution.pathTracingSelected)
-    {
-        EnsurePathTracingPass();
-        if (m_lighting->pathTracingPass)
-            m_lighting->pathTracingPass->PollAcceptedSampleReadback();
-    }
     const PathTracingSceneDomainStatus pathTracingSceneDomainStatus =
         execution.pathTracingSelected
             ? GetPathTracingSceneDomainStatus()
@@ -211,6 +247,14 @@ void UvsrSceneViewer::PrepareFrameTargets(FrameExecution& execution)
     execution.pathTracingSceneDomainSupported =
         pathTracingSceneDomainStatus !=
             PathTracingSceneDomainStatus::Unsupported;
+    const bool pathTracingPassRequired = execution.pathTracingSelected &&
+        execution.pathTracingSceneDomainSupported && m_ui.Representation.allowRayTraversal && m_scene->bindlessLayout;
+    if (execution.pathTracingSelected)
+    {
+        if (!EnsurePathTracingPass(pathTracingPassRequired)) return false;
+        if (m_lighting->pathTracingPass)
+            m_lighting->pathTracingPass->PollAcceptedSampleReadback();
+    }
     int windowWidth, windowHeight;
     GetDeviceManager()->GetWindowDimensions(windowWidth, windowHeight);
     execution.presentationSize = DirectX::XMUINT2{
@@ -220,34 +264,12 @@ void UvsrSceneViewer::PrepareFrameTargets(FrameExecution& execution)
 
     execution.renderSize = execution.presentationSize;
 
-    UpdateFlashlightTransform();
-    execution.lightingSceneContentChanged = false;
-    if (const std::shared_ptr<SceneGraph> sceneGraph =
-            m_scene->world->GetSceneGraph())
-    {
-        const std::shared_ptr<SceneGraphNode>& root =
-            sceneGraph->GetRootNode();
-        const bool pendingContentChanges = root &&
-            (root->GetDirtyFlags() &
-                SceneGraphNode::DirtyFlags::SubgraphContentUpdate) != 0u;
-        execution.lightingSceneContentChanged =
-            sceneGraph->HasPendingStructureChanges() ||
-            sceneGraph->HasPendingTransformChanges() ||
-            pendingContentChanges;
-        for (const std::shared_ptr<Material>& material :
-            sceneGraph->GetMaterials())
-        {
-            execution.lightingSceneContentChanged =
-                execution.lightingSceneContentChanged ||
-                (material && material->dirty);
-        }
-    }
-    m_scene->world->RefreshSceneGraph(GetFrameIndex());
-    // Scene activation keeps both borrowed lists in deterministic light order.
-    execution.submittedLights =
-        ShouldSubmitFlashlight(m_lighting->flashlightTransition) && m_lighting->flashlight
-            ? &m_lighting->editableLights
-            : &m_lighting->sceneLightsWithoutFlashlight;
+    if (!UpdateFlashlightTransform())
+        return execution.Fail("flashlight pose transaction");
+    execution.lightingSceneContentChanged =
+        m_scene->canonical.View().contentRevision != m_scene->lastSubmittedContentRevision;
+    execution.submittedLights = {m_scene->canonical.View(), m_lighting->flashlight,
+        ShouldSubmitFlashlight(m_lighting->flashlightTransition)};
 
     {
         const bool fastApproximateAARequired = m_ui.UsesFastApproximateAA();
@@ -258,70 +280,76 @@ void UvsrSceneViewer::PrepareFrameTargets(FrameExecution& execution)
             execution.presentationSize,
             !execution.pathTracingSelected))
         {
+            std::unique_ptr<RenderTargets> candidate(new (std::nothrow) RenderTargets());
+            if (!candidate || !candidate->Init(
+                    GetDevice(), execution.renderSize,
+                    execution.presentationSize,
+                    true,
+                    !execution.pathTracingSelected))
+                return execution.Fail("render target initialization");
             if (m_lighting->directionalRayVisibilityPass)
                 m_lighting->directionalRayVisibilityPass->ResetBindingCache();
             if (m_lighting->rayTracedFlashlightShadowPass)
                 m_lighting->rayTracedFlashlightShadowPass->ResetBindingCache();
             if (m_lighting->rayTracedSkyVisibilityPass)
                 m_lighting->rayTracedSkyVisibilityPass->ResetBindingCache();
-            m_frame->renderTargets = nullptr;
-            m_frame->bindingCache.Clear();
-            m_frame->renderTargets = std::make_unique<RenderTargets>();
-            if (!m_frame->renderTargets->Init(
-                    GetDevice(), execution.renderSize,
-                    execution.presentationSize,
-                    true,
-                    !execution.pathTracingSelected))
-            {
-                throw std::runtime_error(
-                    "UVSR render targets failed to initialize");
-            }
+            m_frame->renderTargets = std::move(candidate);
 
             needNewPasses = true;
         }
 
-        if (SetupView())
-        {
-            needNewPasses = true;
-        }
+        bool viewChanged = false;
+        if (!SetupView(viewChanged))
+            return execution.Fail("view preparation");
+        needNewPasses = needNewPasses || viewChanged;
 
         if (m_ui.ShaderReloadRequested)
         {
+            WindowsPath directory;
+            WindowsPathResult pathResult;
+            if (!GetExecutableDirectoryWide(directory, pathResult))
+                return execution.Fail("shader reload executable directory");
+            WindowsPath parentDirectory, environmentDirectory;
+            if (!ExecutableDirectoryFromModulePath(directory.Data(), directory.Size(), parentDirectory, pathResult) ||
+                !JoinWindowsRelativePath(parentDirectory.Data(), L"media/environments", environmentDirectory, pathResult))
+                return execution.Fail("shader reload environment directory");
+            m_frame->rendererShaderFactory->ClearCache();
+            // retained environments keep their shader handles across cache clearing.
+            std::unique_ptr<ImageBasedLightingEnvironment> environment(new (std::nothrow) ImageBasedLightingEnvironment(
+                GetDevice(), m_frame->rendererShaderFactory.get(), m_frame->rendererCommonPasses.get(),
+                static_cast<WindowsPath&&>(environmentDirectory)));
+            if (!environment || environment->HasPreparedRadianceFailed())
+                return execution.Fail("shader reload environment initialization");
             const bool recreatePathTracingPass =
                 execution.pathTracingSelected && bool(m_lighting->pathTracingPass);
+            if (recreatePathTracingPass && !EnsurePathTracingPass(pathTracingPassRequired, true)) return false;
             m_lighting->directionalRayVisibilityPass.reset();
             m_lighting->rayTracedFlashlightShadowPass.reset();
             m_lighting->rayTracedSkyVisibilityPass.reset();
-            m_lighting->pathTracingPass.reset();
+            if (!recreatePathTracingPass)
+                m_lighting->pathTracingPass.reset();
             m_lighting->lightingAccumulationPass.reset();
-            m_frame->shaderFactory->ClearCache();
-            m_frame->rendererShaderFactory->ClearCache();
-            if (recreatePathTracingPass)
-                EnsurePathTracingPass();
+            m_lighting->imageBasedLightingEnvironment = std::move(environment);
             InvalidateLightingAccumulationHistory();
-            // Light-probe preprocessing owns shader handles too. Recreate
-            // it only for an explicit shader reload; static IBL otherwise needs no work.
-            m_lighting->imageBasedLightingEnvironment =
-                std::make_unique<ImageBasedLightingEnvironment>(
-                    GetDevice(),
-                    m_frame->rendererShaderFactory,
-                    m_frame->rendererCommonPasses,
-                    GetExecutableDirectoryWide().parent_path() /
-                        "media/environments");
             needNewPasses = true;
         }
 
         if (needNewPasses)
         {
             BeginRenderPassPreparation(false);
-            while (!ProcessRenderPassPreparationStep())
+            PreparationResult result;
+            do
             {
-            }
+                result = ProcessRenderPassPreparationStep();
+            } while (result == PreparationResult::Pending);
+            if (result == PreparationResult::Failed) return false;
         }
         // Fast Approximate is a presentation-only spatial filter. Its
         // resources follow the tone-mapped presentation target.
         if (fastApproximateAARequired && !m_frame->fastApproximateAAPass)
-            CreateFastApproximateAAPass();
+        {
+            if (!CreateFastApproximateAAPass()) return false;
+        }
         else if (!fastApproximateAARequired && m_frame->fastApproximateAAPass)
             m_frame->fastApproximateAAPass.reset();
 
@@ -330,11 +358,10 @@ void UvsrSceneViewer::PrepareFrameTargets(FrameExecution& execution)
 
     if (!execution.pathTracingSelected)
     {
-        EnsureDirectionalRayVisibilityPass();
-        EnsureRayTracedFlashlightShadowPass();
-        EnsureRayTracedSkyVisibilityPass();
+        if (!EnsureDirectionalRayVisibilityPass() || !EnsureRayTracedFlashlightShadowPass() ||
+            !EnsureRayTracedSkyVisibilityPass()) return false;
     }
-
+    return true;
 }
 
 bool UvsrSceneViewer::PrepareWorldRepresentation(FrameExecution& execution)
@@ -357,7 +384,10 @@ bool UvsrSceneViewer::PrepareWorldRepresentation(FrameExecution& execution)
 #endif
     BeginRendererStage(RendererTimingStage::CompleteFrame);
     BeginRendererStage(RendererTimingStage::SceneSetup);
-    m_scene->world->RefreshBuffers(m_frame->commandList, GetFrameIndex());
+    if (!m_scene->gpuTables.RecordMaterials(m_frame->commandList, m_scene->canonical.View()).Succeeded())
+        return execution.Fail("canonical material upload");
+    if (!m_scene->gpuTables.RecordInstances(m_frame->commandList, m_scene->canonical.View()).Succeeded())
+        return execution.Fail("canonical instance upload");
     execution.directionalRayVisibilitySelected =
         !execution.pathTracingSelected &&
         m_ui.Representation.allowRayTraversal &&
@@ -425,9 +455,9 @@ bool UvsrSceneViewer::PrepareWorldRepresentation(FrameExecution& execution)
         m_scene->worldSpaceRepresentation &&
         m_scene->worldSpaceRepresentation->Update(
             m_frame->commandList,
-            m_scene->world.get(),
+            m_scene->canonical.View(),
+            m_scene->gpuTables,
             m_ui.Representation,
-            uint32_t(GetFrameIndex()),
             worldRepresentationSelected);
     if (worldRepresentationSelected)
     {
@@ -453,7 +483,7 @@ bool UvsrSceneViewer::PrepareWorldRepresentation(FrameExecution& execution)
         }
     }
     execution.rayScene = worldRepresentationUpdated
-        ? m_scene->worldSpaceRepresentation->GetRaySceneView(m_scene->world.get())
+        ? m_scene->worldSpaceRepresentation->GetRaySceneView(m_scene->canonical.View(), m_scene->gpuTables)
         : RaySceneView{};
     execution.worldRepresentationReady = bool(execution.rayScene);
     if (worldRepresentationSelected && !execution.worldRepresentationReady)
@@ -595,8 +625,8 @@ bool UvsrSceneViewer::PrepareLightingInputs(FrameExecution& execution)
     }
     execution.submittedFlashlight =
         ShouldSubmitFlashlight(m_lighting->flashlightTransition)
-            ? m_lighting->flashlight.get()
-            : nullptr;
+            ? m_lighting->flashlight
+            : RendererSceneHandle{};
 #if defined(UVSR_BUILD_TESTING)
     m_lighting->flashlightLightingSubmittedThisFrame =
         !execution.pathTracingSelected && execution.submittedFlashlight &&
@@ -644,7 +674,7 @@ bool UvsrSceneViewer::PrepareLightingInputs(FrameExecution& execution)
     SynchronizeLightingAccumulationHistory(
         execution.renderSize.x,
         execution.renderSize.y,
-        *execution.submittedLights,
+        execution.submittedLights,
         execution.rayScene,
         execution.lightingSceneContentChanged,
         execution.skyNoiseSettings,
@@ -707,7 +737,7 @@ bool UvsrSceneViewer::RenderPathTracingFrame(FrameExecution& execution)
     PathTracingResult pathTracingResult;
     {
         PathTracingInputs pathInputs;
-        pathInputs.view = m_frame->view.get();
+        pathInputs.view = &m_frame->view;
         pathInputs.width = execution.presentationSize.x;
         pathInputs.height = execution.presentationSize.y;
         pathInputs.rayScene = execution.rayScene;
@@ -734,13 +764,39 @@ bool UvsrSceneViewer::RenderPathTracingFrame(FrameExecution& execution)
         pathInputs.flashlight = execution.submittedFlashlight;
         pathInputs.flashlightProfile = execution.flashlightBeamProfile;
         pathInputs.historyEpoch = m_lighting->lightingHistoryEpoch;
+#if defined(UVSR_BUILD_TESTING)
+        if (m_frame->runtimeOutputCaptureRequested && m_frame->runtimeCaptureSettlingFrames == 0u)
+        {
+            WindowsPathText captureText;
+            WindowsPathTextResult captureError;
+            if (!GetRuntimeCaptureStem(m_frame->runtimeOutputCapturePath, captureText, captureError))
+            {
+                uvsr::log::error("Runtime capture input label failed (%u, code %u)",
+                    unsigned(captureError.error), captureError.nativeCode);
+                m_frame->FailRuntimeOutputCapture();
+                return false;
+            }
+            const std::string_view capture(captureText.Data(), captureText.Size());
+            if (capture == "case-25-path-history-global-noise-reset-baseline")
+                pathInputs.runtimeInputProbeCase = 25u;
+            else if (capture == "case-26-path-history-material-reset-baseline")
+                pathInputs.runtimeInputProbeCase = 26u;
+            if (pathInputs.runtimeInputProbeCase != 0u)
+                pathInputs.runtimeInputProbeDispatch = m_frame->runtimeCaptureSequence.PathDispatchCount() + 1u;
+        }
+#endif
         BeginRendererStage(RendererTimingStage::PathTransport);
         pathTracingResult = m_lighting->pathTracingPass->Render(
             m_frame->commandList,
             pathInputs);
         EndRendererStage(RendererTimingStage::PathTransport);
+
         m_lighting->pathTransportDispatchedThisFrame =
             pathTracingResult.dispatched;
+#if defined(UVSR_BUILD_TESTING)
+        execution.runtimePathDispatched = pathTracingResult.dispatched;
+        execution.runtimePathHistoryReset = pathTracingResult.historyReset;
+#endif
     }
     m_lighting->selectedLightingTransportState = pathTracingResult
         ? SelectedLightingTransportState::PathTracingActive
@@ -755,7 +811,7 @@ bool UvsrSceneViewer::RenderPathTracingFrame(FrameExecution& execution)
     return true;
 }
 
-bool UvsrSceneViewer::RenderRayVisibility(FrameExecution& execution)
+bool UvsrSceneViewer::RenderFrameGeometry(FrameExecution& execution)
 {
     m_frame->renderTargets->Clear(m_frame->commandList);
 
@@ -771,17 +827,21 @@ bool UvsrSceneViewer::RenderRayVisibility(FrameExecution& execution)
     const bool geometryRendered = RenderGeometry(
         *m_frame->gBufferGeometryPass,
         m_frame->renderTargets->GBufferFramebuffer.Get(),
-        m_frame->view.get(),
+        &m_frame->view,
         "GBufferFill");
     m_frame->submittedMainViewTriangles =
         m_frame->gBufferGeometryPass->GetSubmittedTriangles();
     EndRendererStage(RendererTimingStage::Geometry);
     if (!geometryRendered)
     {
-        throw std::runtime_error(
-            "UVSR G-buffer rendering failed");
+        return FailRender("UVSR G-buffer rendering failed");
     }
 
+    return true;
+}
+
+bool UvsrSceneViewer::RenderRayVisibility(FrameExecution& execution)
+{
     const bool shadowRayDispatchExpected =
         execution.worldRepresentationReady &&
         ((execution.rayTracedFlashlightShadowSelected &&
@@ -801,20 +861,25 @@ bool UvsrSceneViewer::RenderRayVisibility(FrameExecution& execution)
         execution.submittedFlashlight &&
         execution.directShadowNoise)
     {
+        uint32_t flashlightSamplePhase = execution.directShadowNoiseSettings.animate
+            ? uint32_t(m_lighting->rayTracedFlashlightShadowPhase) : 0u;
+#if defined(UVSR_BUILD_TESTING)
+        if (m_frame->runtimeOutputCaptureRequested)
+            flashlightSamplePhase = RuntimeCaptureSequence::SamplePhase();
+        execution.runtimeFlashlightSamplePhase = flashlightSamplePhase;
+#endif
         execution.flashlightShadowResult =
             m_lighting->rayTracedFlashlightShadowPass->RenderFlashlight(
                 m_frame->commandList,
-                *m_frame->view,
+                m_frame->view,
                 execution.rasterSurface,
                 execution.rayScene,
+                execution.submittedLights.scene,
                 execution.submittedFlashlight,
                 execution.flashlightBeamProfile,
                 execution.directShadowNoiseSettings,
                 execution.directShadowNoise.texture,
-                execution.directShadowNoiseSettings.animate
-                    ? uint32_t(
-                        m_lighting->rayTracedFlashlightShadowPhase)
-                    : 0u,
+                flashlightSamplePhase,
                 DefaultFlashlightRayBiasMeters,
                 execution.lightingSampleSchedule,
                 ResolveRayShadowSampleCount(m_ui.DirectionalShadows));
@@ -836,17 +901,24 @@ bool UvsrSceneViewer::RenderRayVisibility(FrameExecution& execution)
         execution.worldRepresentationReady &&
         m_lighting->sunLight)
     {
+        uint32_t directionalSamplePhase = m_ui.Noise.animate ? uint32_t(GetFrameIndex()) : 0u;
+#if defined(UVSR_BUILD_TESTING)
+        if (m_frame->runtimeOutputCaptureRequested)
+            directionalSamplePhase = RuntimeCaptureSequence::SamplePhase();
+        execution.runtimeDirectionalSamplePhase = directionalSamplePhase;
+#endif
         execution.directionalVisibilityResult =
             m_lighting->directionalRayVisibilityPass->RenderDirectional(
                 m_frame->commandList,
                 m_ui.DirectionalShadows,
-                *m_frame->view,
+                m_frame->view,
                 execution.rasterSurface,
                 execution.rayScene,
-                m_lighting->sunLight.get(),
+                execution.submittedLights.scene,
+                m_lighting->sunLight,
                 m_scene->sceneDiagonal,
                 m_ui.Noise, execution.directShadowNoise.texture,
-                m_ui.Noise.animate ? uint32_t(GetFrameIndex()) : 0u,
+                directionalSamplePhase,
                 execution.lightingSampleSchedule);
     }
     m_lighting->directionalRayVisibilityDispatchedThisFrame =
@@ -873,18 +945,23 @@ bool UvsrSceneViewer::RenderRayVisibility(FrameExecution& execution)
     {
         BeginRendererStage(
             RendererTimingStage::SkyVisibilityRayDispatch);
+        uint32_t skySamplePhase = execution.skyNoiseSettings.animate
+            ? uint32_t(m_lighting->rayTracedSkyVisibilityPhase) : 0u;
+#if defined(UVSR_BUILD_TESTING)
+        if (m_frame->runtimeOutputCaptureRequested)
+            skySamplePhase = RuntimeCaptureSequence::SamplePhase();
+        execution.runtimeSkySamplePhase = skySamplePhase;
+#endif
         execution.skyVisibilityResult =
             m_lighting->rayTracedSkyVisibilityPass->RenderSky(
                 m_frame->commandList,
                 m_ui.RayTracedSkyVisibility,
-                *m_frame->view,
+                m_frame->view,
                 execution.rasterSurface,
                 execution.rayScene,
                 execution.skyNoiseSettings,
                 execution.skyNoise.texture,
-                execution.skyNoiseSettings.animate
-                    ? uint32_t(m_lighting->rayTracedSkyVisibilityPhase)
-                    : 0u,
+                skySamplePhase,
                 m_scene->sceneDiagonal,
                 execution.lightingSampleSchedule);
         EndRendererStage(
@@ -922,7 +999,7 @@ bool UvsrSceneViewer::RenderDeferredLighting(FrameExecution& execution)
     const bool applySkyVisibilityToDiffuseIbl = skyVisibility && m_ui.RayTracedSkyVisibility.applyToDiffuseIbl;
     const bool applySkyVisibilityToSpecularIbl = skyVisibility && m_ui.RayTracedSkyVisibility.applyToSpecularIbl;
     PbrDeferredLightingInputs deferredInputs;
-    deferredInputs.view = m_frame->view.get();
+    deferredInputs.view = &m_frame->view;
     deferredInputs.surface = execution.rasterSurface;
     deferredInputs.lights = execution.submittedLights;
     deferredInputs.hardShadows = m_ui.DirectionalShadows.hardShadows;
@@ -975,10 +1052,10 @@ bool UvsrSceneViewer::RenderDeferredLighting(FrameExecution& execution)
 bool UvsrSceneViewer::RenderMaterialSelection(FrameExecution& execution)
 {
     if (m_frame->materialPickPurpose != MaterialPickPurpose::None &&
-        m_frame->materialPickScene != m_scene->world.get())
+        m_frame->materialPickGeneration != m_scene->canonical.View().generation)
     {
         m_frame->materialPickPurpose = MaterialPickPurpose::None;
-        m_frame->materialPickScene = nullptr;
+        m_frame->materialPickGeneration = 0;
         m_ui.ShowMaterialDrawer = false;
     }
     if (m_frame->materialPickPurpose ==
@@ -991,12 +1068,12 @@ bool UvsrSceneViewer::RenderMaterialSelection(FrameExecution& execution)
         if (centerPick.valid)
         {
             m_frame->pickPosition =
-                uint2(centerPick.x, centerPick.y);
+                gpu_contract::Uint2{centerPick.x, centerPick.y};
         }
         else
         {
             m_frame->materialPickPurpose = MaterialPickPurpose::None;
-            m_frame->materialPickScene = nullptr;
+            m_frame->materialPickGeneration = 0;
         }
     }
     if (m_frame->materialPickPurpose != MaterialPickPurpose::None)
@@ -1004,16 +1081,29 @@ bool UvsrSceneViewer::RenderMaterialSelection(FrameExecution& execution)
         if (!m_frame->renderTargets->EnsureMaterialPickingTargets(GetDevice()))
             return execution.Fail("material picking");
         if (!m_frame->materialIdGeometryPass)
-            m_frame->materialIdGeometryPass = CreateGeometryPass(RendererGeometryOutput::MaterialId);
+        {
+            auto candidate = CreateGeometryPass(RendererGeometryOutput::MaterialId);
+            if (!candidate) return false;
+            m_frame->materialIdGeometryPass = std::move(candidate);
+        }
         if (!m_frame->pixelReadback)
-            m_frame->pixelReadback = std::make_unique<RendererPixelReadback>(
-                GetDevice(), m_frame->rendererShaderFactory, m_frame->renderTargets->MaterialIDs);
+        {
+            std::unique_ptr<RendererPixelReadback> candidate(new (std::nothrow) RendererPixelReadback());
+            if (!candidate) return execution.Fail("material readback allocation");
+            const auto shader = m_frame->rendererShaderFactory->CreateShader(
+                "uvsr/renderer_pixel_readback_cs.hlsl", "main", {}, nvrhi::ShaderType::Compute);
+            const RendererReadbackError initialized = RendererPixelReadbackNvrhi::Initialize(
+                *candidate, GetDevice(), m_frame->commandList, shader, m_frame->renderTargets->MaterialIDs);
+            if (initialized != RendererReadbackError::None)
+                return execution.Fail("material readback initialization");
+            m_frame->pixelReadback = std::move(candidate);
+        }
         if (!m_frame->pixelReadback->IsValid())
             return execution.Fail("material picking");
         BeginRendererStage(RendererTimingStage::MaterialPicking);
         m_frame->commandList->clearTextureUInt(
             m_frame->renderTargets->MaterialIDs,
-            nvrhi::AllSubresources, 0xffffu);
+            nvrhi::AllSubresources, RendererInvalidPickId);
         if (m_frame->renderTargets->MaterialIDDepth !=
             m_frame->renderTargets->Depth)
         {
@@ -1033,13 +1123,12 @@ bool UvsrSceneViewer::RenderMaterialSelection(FrameExecution& execution)
         if (!RenderGeometry(
                 *m_frame->materialIdGeometryPass,
                 m_frame->renderTargets->MaterialIDFramebuffer.Get(),
-                m_frame->view.get(),
+                &m_frame->view,
                 "MaterialID"))
         {
             EndRendererStage(
                 RendererTimingStage::MaterialPicking);
-            throw std::runtime_error(
-                "UVSR material-ID rendering failed");
+            return FailRender("UVSR material-ID rendering failed");
         }
 
         const nvrhi::TextureDesc& materialIdDescription =
@@ -1050,16 +1139,17 @@ bool UvsrSceneViewer::RenderMaterialSelection(FrameExecution& execution)
         const uint32_t pickY = std::min(
             m_frame->pickPosition.y,
             materialIdDescription.height - 1u);
-        if (!m_frame->pixelReadback->Capture(
-                m_frame->commandList,
-                pickX,
-                pickY))
+        if (m_frame->pixelReadback->Capture({ pickX, pickY }) != RendererReadbackError::None)
         {
             uvsr::log::error("Material readback capture failed");
             m_frame->materialPickPurpose = MaterialPickPurpose::None;
-            m_frame->materialPickScene = nullptr;
-            m_ui.SelectedMaterial = nullptr;
-            m_ui.SelectedNode = nullptr;
+            m_frame->materialPickGeneration = 0;
+            m_ui.SelectedMaterial = {};
+            m_ui.SelectedNode = {};
+        }
+        else
+        {
+            execution.recordedReadback = m_frame->pixelReadback.get();
         }
         EndRendererStage(RendererTimingStage::MaterialPicking);
     }
@@ -1079,7 +1169,7 @@ bool UvsrSceneViewer::ResolveSceneLighting(FrameExecution& execution)
         const ImageBasedLightingBackgroundRenderResult backgroundResult =
             m_lighting->imageBasedLightingBackgroundPass->Render(
                 m_frame->commandList,
-                *m_frame->view,
+                m_frame->view,
                 m_lighting->imageBasedLightingEnvironment->GetRadianceScale());
         EndRendererStage(RendererTimingStage::EnvironmentBackground);
         if (!backgroundResult.Succeeded())
@@ -1117,7 +1207,7 @@ bool UvsrSceneViewer::ResolveSceneLighting(FrameExecution& execution)
 
 bool UvsrSceneViewer::RenderFramePresentation(FrameExecution& execution)
 {
-    const ICompositeView* postProcessingView = m_frame->view.get();
+    const RendererView* postProcessingView = &m_frame->view;
 
     const bool diagnosticExposureView =
         !execution.pathTracingSelected && execution.rayMarchingDiagnostic;
@@ -1154,7 +1244,8 @@ bool UvsrSceneViewer::RenderFramePresentation(FrameExecution& execution)
         return execution.Fail("auto exposure");
     }
 #if defined(UVSR_BUILD_TESTING)
-    if (m_frame->runtimeOutputCaptureRequested && execution.sceneColor)
+    if (m_frame->runtimeOutputCaptureRequested &&
+        m_frame->runtimeCaptureSequence.IsReady() && execution.sceneColor)
     {
         const nvrhi::TextureDesc& sourceDesc =
             execution.sceneColor->getDesc();
@@ -1279,6 +1370,33 @@ void UvsrSceneViewer::CompleteSceneFrame(FrameExecution& execution)
     if (execution.pathTracingSelected && m_lighting->pathTracingPass)
         m_lighting->pathTracingPass->SubmitAcceptedSampleReadback();
 
+#if defined(UVSR_BUILD_TESTING)
+    if (m_frame->runtimeCaptureDrainBeforeSampling)
+    {
+        m_frame->runtimeCaptureDrainBeforeSampling = false;
+        // match the completion boundary before the first counted sample, not mid-command-list.
+        const bool drained = GetDevice()->waitForIdle();
+        WindowsPathText captureStem;
+        WindowsPathTextResult stemError;
+        if (!GetRuntimeCaptureStem(m_frame->runtimeOutputCapturePath, captureStem, stemError))
+        {
+            uvsr::log::error("Runtime capture drain label failed (%u, code %u)",
+                unsigned(stemError.error), stemError.nativeCode);
+            m_frame->FailRuntimeOutputCapture();
+            return;
+        }
+        std::fprintf(stdout, "{\"event\":\"capture-ready-drain\",\"capture\":\"%s\",\"valid\":%s}\n",
+            captureStem.Data(), drained ? "true" : "false");
+        if (!drained)
+        {
+            uvsr::log::error("Runtime capture completion drain failed");
+            m_frame->runtimeOutputEvidence = RuntimeOutputEvidence{};
+            m_frame->runtimeOutputCaptureRequested = false;
+            return;
+        }
+    }
+#endif
+
     if (execution.flashlightShadowResult.dispatched &&
         execution.flashlightShadowResult.stochastic &&
         execution.directShadowNoiseSettings.animate)
@@ -1292,36 +1410,75 @@ void UvsrSceneViewer::CompleteSceneFrame(FrameExecution& execution)
     }
     if (m_ui.CopyScreenshotToClipboard)
     {
-        const std::filesystem::path screenshotPath = std::filesystem::temp_directory_path()
-            / ("uvsr_screenshot_" + std::to_string(GetCurrentProcessId()) + ".bmp");
+        WindowsPath temporaryDirectory, screenshotPath;
+        WindowsPathResult pathResult;
+        if (!GetTemporaryDirectoryWide(temporaryDirectory, pathResult))
+        {
+            uvsr::log::error("screenshot directory could not be prepared: error %u, native %u",
+                unsigned(pathResult.error), pathResult.nativeCode);
+            return;
+        }
+        wchar_t filename[sizeof(L"uvsr_screenshot_4294967295.bmp") / sizeof(wchar_t)]{};
+        const int length = swprintf_s(filename, sizeof(filename) / sizeof(filename[0]),
+            L"uvsr_screenshot_%lu.bmp", GetCurrentProcessId());
+        if (length <= 0 || size_t(length) >= sizeof(filename) / sizeof(filename[0]))
+        {
+            uvsr::log::error("screenshot filename could not be formatted");
+            return;
+        }
+        if (!JoinWindowsRelativePath(temporaryDirectory.Data(), filename, screenshotPath, pathResult))
+        {
+            uvsr::log::error("screenshot path could not be prepared: error %u, native %u",
+                unsigned(pathResult.error), pathResult.nativeCode);
+            return;
+        }
         const bool saved = uvsr::SaveRendererTextureBmp(
             GetDevice(),
             m_frame->rendererCommonPasses.get(),
             execution.framebufferTexture,
             nvrhi::ResourceStates::RenderTarget,
-            screenshotPath);
-        if (saved && CopyBmpToClipboard(screenshotPath))
+            screenshotPath.Data());
+        if (saved && CopyBmpToClipboard(screenshotPath.Data()))
             uvsr::log::info("Capture copied to clipboard.");
         else
             uvsr::log::error("Failed to copy screenshot to clipboard.");
-        DeleteFileW(screenshotPath.c_str());
+        DeleteFileW(screenshotPath.Data());
         m_ui.CopyScreenshotToClipboard = false;
     }
 
 #if defined(UVSR_BUILD_TESTING)
-    if (m_frame->runtimeOutputCaptureRequested)
+    if (m_frame->runtimeOutputCaptureRequested && m_frame->runtimeCaptureSequence.IsReady())
     {
-        const std::filesystem::path capturePath =
-            m_frame->runtimeOutputCapturePath;
-        std::error_code directoryError;
-        std::filesystem::create_directories(
-            capturePath.parent_path(), directoryError);
+        const WindowsPath& capturePath = m_frame->runtimeOutputCapturePath;
+        FileWriteResult directoryError;
+        const bool directoryReady = PrepareFileParentDirectories(capturePath.Data(), directoryError);
         const bool captured = uvsr::SaveRendererTextureBmp(
             GetDevice(),
             m_frame->rendererCommonPasses.get(),
             execution.framebufferTexture,
             nvrhi::ResourceStates::RenderTarget,
-            capturePath);
+            capturePath.Data());
+
+        // complete the capture before the fixture advances to another scene or action.
+        const bool captureCompleted = GetDevice()->waitForIdle();
+        WindowsPathText captureStem;
+        WindowsPathTextResult stemError;
+        if (!GetRuntimeCaptureStem(capturePath, captureStem, stemError))
+        {
+            uvsr::log::error("Runtime capture drain label failed (%u, code %u)",
+                unsigned(stemError.error), stemError.nativeCode);
+            m_frame->FailRuntimeOutputCapture();
+            return;
+        }
+        std::fprintf(stdout, "{\"event\":\"capture-complete-drain\",\"capture\":\"%s\",\"valid\":%s}\n",
+            captureStem.Data(), captureCompleted ? "true" : "false");
+        if (!captureCompleted)
+        {
+            uvsr::log::error("Runtime capture final completion failed");
+            m_frame->runtimeOutputEvidence = RuntimeOutputEvidence{};
+            m_frame->runtimeOutputCaptureRequested = false;
+            return;
+        }
 
         RuntimeOutputEvidence evidence;
         if (m_frame->runtimeLinearReadbackQueued && m_frame->runtimeLinearReadback)
@@ -1360,49 +1517,27 @@ void UvsrSceneViewer::CompleteSceneFrame(FrameExecution& execution)
             if (pixels)
                 GetDevice()->unmapStagingTexture(m_frame->runtimeLinearReadback);
         }
-        evidence.artifactPath = capturePath.string();
-        std::ifstream input;
-        if (captured)
-            input.open(capturePath, std::ios::binary);
-        const std::vector<unsigned char> encoded{
-            std::istreambuf_iterator<char>(input),
-            std::istreambuf_iterator<char>()
-        };
-        input.close();
-
-        const auto readU32 = [&encoded](size_t offset)
+        evidence.deterministicCapture = true;
+        evidence.capturedPathDispatchCount = m_frame->runtimeCaptureSequence.PathDispatchCount();
+        evidence.capturedSkySamplePhaseValid = m_frame->runtimeCaptureSequence.SkySamplePhaseValid();
+        evidence.capturedSkySamplePhase = m_frame->runtimeCaptureSequence.SkySamplePhase();
+        evidence.capturedRasterProducerMask = m_frame->runtimeCaptureSequence.RasterProducerMask();
+        evidence.capturedDirectionalSamplePhase = m_frame->runtimeCaptureSequence.DirectionalSamplePhase();
+        evidence.capturedFlashlightSamplePhase = m_frame->runtimeCaptureSequence.FlashlightSamplePhase();
+        WindowsPathTextResult artifactError;
+        if (!evidence.artifactPath.Assign(capturePath.Data(), capturePath.Size(),
+                WindowsPathTextForm::Native, WindowsPathTextEncoding::Filesystem, artifactError))
         {
-            if (offset + 4u > encoded.size())
-                return 0u;
-            return uint32_t(encoded[offset]) |
-                (uint32_t(encoded[offset + 1u]) << 8u) |
-                (uint32_t(encoded[offset + 2u]) << 16u) |
-                (uint32_t(encoded[offset + 3u]) << 24u);
-        };
-        const uint32_t pixelOffset = readU32(10u);
-        evidence.width = readU32(18u);
-        evidence.height = readU32(22u);
-        evidence.encodedBytes = encoded.size();
-        if (encoded.size() >= 54u && encoded[0] == 'B' &&
-            encoded[1] == 'M' && pixelOffset < encoded.size() &&
-            evidence.width > 0u && evidence.height > 0u &&
-            !directoryError)
-        {
-            evidence.pixelBytes = encoded.size() - pixelOffset;
-            evidence.minimumByte = 0xffu;
-            for (size_t index = pixelOffset; index < encoded.size(); ++index)
-            {
-                const unsigned char byte = encoded[index];
-                evidence.minimumByte = std::min(
-                    evidence.minimumByte, byte);
-                evidence.maximumByte = std::max(
-                    evidence.maximumByte, byte);
-                evidence.pixelHash ^= uint64_t(byte);
-                evidence.pixelHash *= 1099511628211ull;
-            }
-            evidence.valid = evidence.pixelBytes > 0u;
+            uvsr::log::error("Runtime capture artifact label failed (%u, code %u)",
+                unsigned(artifactError.error), artifactError.nativeCode);
+            m_frame->FailRuntimeOutputCapture();
+            return;
         }
-        m_frame->runtimeOutputEvidence = evidence;
+        RuntimeCaptureFileResult readError;
+        if (!AnalyzeRuntimeCaptureBmp(capturePath.Data(), captured, directoryReady, evidence, readError))
+            uvsr::log::error("Runtime capture file analysis failed (%u, code %u, close %u)",
+                unsigned(readError.error), readError.code, readError.cleanupCode);
+        m_frame->runtimeOutputEvidence = std::move(evidence);
         m_frame->runtimeOutputCaptureRequested = false;
     }
 #endif
@@ -1411,50 +1546,42 @@ void UvsrSceneViewer::CompleteSceneFrame(FrameExecution& execution)
     {
         const MaterialPickPurpose completedPurpose =
             m_frame->materialPickPurpose;
-        const Scene* completedScene = m_frame->materialPickScene;
+        const uint64_t completedGeneration = m_frame->materialPickGeneration;
         m_frame->materialPickPurpose = MaterialPickPurpose::None;
-        m_frame->materialPickScene = nullptr;
-        const std::optional<uvsr::RendererReadbackUint4> pixelValue =
-            m_frame->pixelReadback->ReadUInts();
-        m_ui.SelectedMaterial = nullptr;
-        m_ui.SelectedNode = nullptr;
+        m_frame->materialPickGeneration = 0;
+        RendererReadbackUint4 pixelValue{};
+        const bool pixelAvailable =
+            m_frame->pixelReadback->ReadUInts(pixelValue) == RendererReadbackError::None;
+        m_ui.SelectedMaterial = {};
+        m_ui.SelectedNode = {};
 
+        const auto scene = m_scene->canonical.View();
         const bool completedForCurrentScene =
-            pixelValue && completedScene == m_scene->world.get();
-        if (!pixelValue)
+            pixelAvailable && scene.generation && completedGeneration == scene.generation;
+        if (!pixelAvailable)
             uvsr::log::error("Material readback result was unavailable");
         if (completedForCurrentScene)
         {
-            for (const auto& material :
-                m_scene->world->GetSceneGraph()->GetMaterials())
-            {
-                if (material->materialID == int(pixelValue->x))
-                {
-                    m_ui.SelectedMaterial = material;
-                    break;
-                }
-            }
-
-            for (const auto& instance :
-                m_scene->world->GetSceneGraph()->GetMeshInstances())
-            {
-                if (instance->GetInstanceIndex() == int(pixelValue->y))
-                {
-                    m_ui.SelectedNode =
-                        instance->GetNodeSharedPtr();
-                    break;
-                }
-            }
+            m_ui.SelectedMaterial = FindRendererSceneMaterialSelection(scene, pixelValue.x);
+            if (pixelValue.y < scene.instances.count)
+                m_ui.SelectedNode = {scene.generation, scene.instances.data[pixelValue.y].nodeIndex};
         }
 
         if (completedPurpose ==
             MaterialPickPurpose::RefreshMaterialDrawerSelection)
         {
-            if (m_ui.SelectedMaterial)
+            if (const auto* material = FindRendererSceneMaterial(scene, m_ui.SelectedMaterial))
             {
+                const auto name = RendererSceneText(scene, material->name);
+                SettingsSnapshotText nameText;
+                SettingsSnapshotError error;
+                if (!nameText.Assign({name.count ? name.data : "", name.count}, error))
+                {
+                    uvsr::log::error("center material name could not be retained: %s", error.Message());
+                    return;
+                }
                 uvsr::log::info(
-                    "Center material: %s",
-                    m_ui.SelectedMaterial->name.c_str());
+                    "Center material: %s", nameText.View().data());
             }
         }
         else if (completedForCurrentScene &&
@@ -1463,16 +1590,21 @@ void UvsrSceneViewer::CompleteSceneFrame(FrameExecution& execution)
         {
             if (m_ui.SelectedNode)
             {
-                uvsr::log::info(
-                    "Picked node: %s",
-                    m_ui.SelectedNode->GetPath()
-                        .generic_string().c_str());
+                WindowsPathText path;
+                WindowsPathTextResult result;
+                if (!GetSceneNodePath(m_ui.SelectedNode, path, result))
+                {
+                    uvsr::log::error("picked node path could not be formatted: error %u, native %u",
+                        unsigned(result.error), result.nativeCode);
+                    return;
+                }
+                uvsr::log::info("Picked node: %s", path.Data());
                 PointThirdPersonCameraAt(m_ui.SelectedNode);
             }
             else
             {
                 PointThirdPersonCameraAt(
-                    m_scene->world->GetSceneGraph()->GetRootNode());
+                    RendererSceneHandle{scene.generation, scene.root});
             }
         }
     }
@@ -1486,7 +1618,8 @@ void UvsrSceneViewer::RenderScene(nvrhi::IFramebuffer* framebuffer)
         return;
     }
     FrameExecution execution{ *this, framebuffer };
-    PrepareFrameTargets(execution);
+    if (!PrepareFrameTargets(execution))
+        return;
     if (!PrepareWorldRepresentation(execution) || !PrepareLightingInputs(execution) ||
         !PrepareLightingSchedule(execution))
         return;
@@ -1500,14 +1633,61 @@ void UvsrSceneViewer::RenderScene(nvrhi::IFramebuffer* framebuffer)
     case LightingSolution::RayMarching:
         m_lighting->selectedLightingTransportState = SelectedLightingTransportState::RayMarching;
         m_lighting->reportedPathTransportFailure = false;
-        if (!RenderRayVisibility(execution) || !RenderDeferredLighting(execution))
+        if (!RenderFrameGeometry(execution) || !RenderRayVisibility(execution) ||
+            !RenderDeferredLighting(execution))
             return;
         break;
     }
 
+#if defined(UVSR_BUILD_TESTING)
+    if (m_frame->runtimeOutputCaptureRequested)
+    {
+        bool captureSequenceValid = true;
+        if (m_frame->runtimeCaptureSettlingFrames > 0u)
+        {
+            --m_frame->runtimeCaptureSettlingFrames;
+            if (m_frame->runtimeCaptureSettlingFrames == 0u)
+            {
+                captureSequenceValid = m_frame->runtimeCaptureSequence.Arm(
+                    execution.pathTracingSelected ? RuntimeCapturePathDispatchTarget : 0u,
+                    !execution.pathTracingSelected && execution.skyVisibilityResult.dispatched,
+                    !execution.pathTracingSelected && execution.directionalVisibilityResult.dispatched,
+                    !execution.pathTracingSelected && execution.flashlightShadowResult.dispatched);
+                if (captureSequenceValid && execution.pathTracingSelected)
+                {
+                    m_lighting->pathTracingPass->ResetHistory();
+                    m_frame->runtimeCaptureDrainBeforeSampling = true;
+                }
+            }
+        }
+        else
+        {
+            captureSequenceValid = execution.pathTracingSelected
+                ? m_frame->runtimeCaptureSequence.ObservePath(
+                    execution.runtimePathDispatched, execution.runtimePathHistoryReset)
+                : m_frame->runtimeCaptureSequence.ObserveRaster(
+                    execution.skyVisibilityResult.dispatched, execution.runtimeSkySamplePhase,
+                    execution.directionalVisibilityResult.dispatched, execution.runtimeDirectionalSamplePhase,
+                    execution.flashlightShadowResult.dispatched, execution.runtimeFlashlightSamplePhase);
+        }
+        if (!captureSequenceValid)
+        {
+            uvsr::log::error("Runtime capture changed producer or reset inside its deterministic sequence");
+            m_frame->runtimeOutputEvidence = RuntimeOutputEvidence{};
+            m_frame->runtimeOutputCaptureRequested = false;
+        }
+    }
+#endif
     if (!RenderMaterialSelection(execution) || !ResolveSceneLighting(execution) ||
         !RenderFramePresentation(execution))
         return;
-    execution.Submit();
+    if (!execution.Submit())
+        return;
+    m_scene->lastSubmittedContentRevision = m_scene->canonical.View().contentRevision;
+    if (!m_scene->canonical.AdvancePreviousTransforms().Succeeded())
+    {
+        (void)execution.Fail("previous transform snapshot");
+        return;
+    }
     CompleteSceneFrame(execution);
 }

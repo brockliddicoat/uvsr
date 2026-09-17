@@ -1,16 +1,17 @@
 #pragma once
 
-#include <nvrhi/nvrhi.h>
-
-#include <cstdint>
+#include <stdint.h>
 
 namespace uvsr
 {
-    inline constexpr nvrhi::Format FastApproximateAaColorFormat =
-        nvrhi::Format::RGBA16_FLOAT;
+    struct FastApproximateAaSourceProperties
+    {
+        uint32_t width = 0, height = 0, sampleCount = 0;
+        bool texture2D = false, rgba16Float = false;
+    };
 
     [[nodiscard]] inline bool IsFastApproximateAaSourceCompatible(
-        const nvrhi::TextureDesc& description,
+        const FastApproximateAaSourceProperties& description,
         uint32_t requiredWidth,
         uint32_t requiredHeight,
         bool distinctFromOutput) noexcept
@@ -21,8 +22,7 @@ namespace uvsr
             description.width == requiredWidth &&
             description.height == requiredHeight &&
             description.sampleCount == 1u &&
-            description.dimension == nvrhi::TextureDimension::Texture2D &&
-            description.format == FastApproximateAaColorFormat;
+            description.texture2D && description.rgba16Float;
     }
 
     struct FastApproximateAaViewContract

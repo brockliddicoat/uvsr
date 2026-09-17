@@ -5,7 +5,7 @@
 
 struct RayTracedSkyVisibilityConstants
 {
-    PlanarViewConstants view;
+    RendererViewConstants view;
 
     UVSR_GPU_UINT sampleSequencePhase;
     UVSR_GPU_UINT sampleCount;

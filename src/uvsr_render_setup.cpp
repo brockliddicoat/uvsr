@@ -1,86 +1,64 @@
 #include "uvsr_scene_viewer.h"
-#include "uvsr_renderer_scene.h"
-#include "uvsr_renderer_lighting.h"
-#include "uvsr_renderer_frame.h"
+#include "uvsr_renderer_scene_nvrhi.h"
+#include "uvsr_renderer_lighting_nvrhi.h"
+#include "uvsr_renderer_frame_nvrhi.h"
 #include "uvsr_runtime.h"
 #include "uvsr_application.h"
 #include "renderer_log.h"
+#include "renderer_view_nvrhi.h"
 #include <donut/app/DeviceManager.h>
 #include <algorithm>
 #include <cmath>
-#include <stdexcept>
+#include <new>
 #include <utility>
-#include <donut/engine/CommonRenderPasses.h>
-#include <donut/render/GeometryPasses.h>
 #include <nvrhi/utils.h>
 #include <directx/d3d12.h>
 #include <limits>
+#if defined(UVSR_BUILD_TESTING)
+#include "retained_runtime_capture_file.h"
+#include <stdint.h>
+#include <stdio.h>
+#endif
 
 using namespace donut;
-using namespace donut::math;
 using namespace donut::app;
-using namespace donut::vfs;
-using namespace donut::engine;
-using namespace donut::render;
 using namespace uvsr;
 
-
-
-
-
-
-
-
-auto UvsrSceneViewer::SetupView() -> bool {
-
-        const DirectX::XMUINT2 targetSize =
-            m_frame->renderTargets->GetSize();
-        const float2 renderTargetSize(
-            static_cast<float>(targetSize.x),
-            static_cast<float>(targetSize.y));
-
-        std::shared_ptr<PlanarView> planarView = std::dynamic_pointer_cast<PlanarView, IView>(m_frame->view);
-
-        float verticalFov = dm::radians(m_scene->cameraVerticalFov);
-        // Keep the near plane proportional to scene scale for stable depth.
-        const float sceneScaleNear = std::max(0.1f, m_scene->sceneDiagonal * 0.0005f);
-        const dm::affine3 viewMatrix = GetActiveCamera().GetWorldToViewMatrix();
-
-        bool topologyChanged = false;
-
-        if (!planarView)
-        {
-            m_frame->view = planarView = std::make_shared<PlanarView>();
-            topologyChanged = true;
-        }
-
-        float4x4 projection = perspProjD3DStyleReverse(verticalFov, renderTargetSize.x / renderTargetSize.y, sceneScaleNear);
-
-        planarView->SetViewport(nvrhi::Viewport(
-            renderTargetSize.x,
-            renderTargetSize.y));
-        planarView->SetMatrices(viewMatrix, projection);
-        planarView->UpdateCache();
-
-        return topologyChanged;
+auto UvsrSceneViewer::SetupView(bool& topologyChanged) -> bool {
+        const DirectX::XMUINT2 targetSize = m_frame->renderTargets->GetSize();
+        const float width = float(targetSize.x), height = float(targetSize.y);
+        const float verticalFov = Radians(m_scene->cameraVerticalFov);
+        // keep the near plane proportional to scene scale for stable depth.
+        const float nearPlane = std::max(0.1f, m_scene->sceneDiagonal * 0.0005f);
+        const auto& worldToView = GetActiveCamera().GetWorldToViewMatrix();
+        const auto viewToClip = RendererPerspectiveReverseDepth(verticalFov, width / height, nearPlane);
+        topologyChanged = !m_frame->view.valid;
+        return BuildRendererView({0.f, width, 0.f, height, 0.f, 1.f}, worldToView, viewToClip, {}, m_frame->view);
     }
 
-auto UvsrSceneViewer::CreateFastApproximateAAPass() -> void {
-        m_frame->fastApproximateAAPass =
-            std::make_unique<FastApproximateAAPass>(
-                GetDevice(),
-                m_frame->rendererShaderFactory,
-                m_frame->rendererCommonPasses,
-                m_frame->renderTargets ? m_frame->renderTargets->LdrColor.Get() : nullptr);
-        if (!m_frame->fastApproximateAAPass->IsValid())
-        {
-            uvsr::log::error(
-                "Fast Approximate AA initialization failed; "
-                "the presentation input will be shown unchanged");
-        }
+bool UvsrSceneViewer::FailRender(const char* message)
+{
+    uvsr::log::error("%s", message);
+    GetDeviceManager()->ReportRenderDisposition(RendererRenderDisposition::Failed);
+    return false;
+}
+
+auto UvsrSceneViewer::FailPreparation(const char* message) -> PreparationResult
+{
+    FailRender(message);
+    return PreparationResult::Failed;
+}
+
+auto UvsrSceneViewer::CreateFastApproximateAAPass() -> bool {
+        std::unique_ptr<FastApproximateAAPass> candidate(new (std::nothrow) FastApproximateAAPass(
+            GetDevice(), m_frame->rendererShaderFactory.get(),
+            m_frame->rendererCommonPasses.get(),
+            m_frame->renderTargets ? m_frame->renderTargets->LdrColor.Get() : nullptr));
+        if (!candidate || !candidate->IsValid())
+            return FailRender("Fast Approximate AA initialization failed");
+        m_frame->fastApproximateAAPass = std::move(candidate);
+        return true;
     }
-
-
 
 auto UvsrSceneViewer::CreateGeometryPass(RendererGeometryOutput output) -> std::unique_ptr<RendererGeometryPass> {
         RendererGeometryPassDescription description;
@@ -88,184 +66,136 @@ auto UvsrSceneViewer::CreateGeometryPass(RendererGeometryOutput output) -> std::
         description.whiteWorld =
             output == RendererGeometryOutput::Pbr &&
             m_ui.WhiteWorld != WhiteWorldMode::Off;
-        auto pass = std::make_unique<RendererGeometryPass>(
-            GetDevice(),
-            m_frame->rendererShaderFactory,
-            m_frame->rendererCommonPasses->BlackTexture(),
-            description);
-        if (!pass->IsValid())
+        std::unique_ptr<RendererGeometryPass> candidate(new (std::nothrow) RendererGeometryPass(
+            GetDevice(), m_frame->rendererShaderFactory.get(),
+            m_frame->rendererCommonPasses->BlackTexture(), description));
+        if (!candidate || !candidate->IsValid())
         {
-            throw std::runtime_error(
-                output == RendererGeometryOutput::Pbr
-                    ? "UVSR G-buffer pass failed to initialize"
-                    : "UVSR material-ID pass failed to initialize");
+            FailRender(output == RendererGeometryOutput::Pbr
+                ? "UVSR G-buffer pass failed to initialize"
+                : "UVSR material-ID pass failed to initialize");
+            return nullptr;
         }
-        return pass;
+        return candidate;
     }
 
 auto UvsrSceneViewer::RenderGeometry(
         RendererGeometryPass& pass,
         nvrhi::IFramebuffer* framebuffer,
-        const IView* view,
+        const RendererView* view,
         const char* marker) -> bool {
-        if (!m_frame->commandList || !framebuffer || !view ||
-            !m_scene->world || !m_frame->opaqueDrawStrategy)
-        {
+        if (!m_frame->commandList || !framebuffer || !view || !view->valid || !m_scene->canonical.IsPublished())
             return false;
-        }
-
-        static_assert(
-            static_cast<std::uint8_t>(MaterialDomain::Opaque) ==
-                static_cast<std::uint8_t>(
-                    RendererMaterialDomain::Opaque) &&
-            static_cast<std::uint8_t>(MaterialDomain::AlphaTested) ==
-                static_cast<std::uint8_t>(
-                    RendererMaterialDomain::AlphaTested) &&
-            static_cast<std::uint8_t>(MaterialDomain::AlphaBlended) ==
-                static_cast<std::uint8_t>(
-                    RendererMaterialDomain::AlphaBlended) &&
-            static_cast<std::uint8_t>(MaterialDomain::Transmissive) ==
-                static_cast<std::uint8_t>(
-                    RendererMaterialDomain::Transmissive) &&
-            static_cast<std::uint8_t>(
-                MaterialDomain::TransmissiveAlphaTested) ==
-                static_cast<std::uint8_t>(
-                    RendererMaterialDomain::TransmissiveAlphaTested) &&
-            static_cast<std::uint8_t>(
-                MaterialDomain::TransmissiveAlphaBlended) ==
-                static_cast<std::uint8_t>(
-                    RendererMaterialDomain::TransmissiveAlphaBlended) &&
-            static_cast<std::uint8_t>(MaterialDomain::Count) ==
-                static_cast<std::uint8_t>(
-                    RendererMaterialDomain::Count),
-            "Renderer material-domain ordinals must match the scene ABI");
+        const auto scene = m_scene->canonical.View();
+        if (!m_scene->gpuTables.MaterialsReady(scene))
+            return false;
+        if (!m_scene->draws.Build(scene, view->frustum).Succeeded())
+            return false;
 
         RendererGeometryView geometryView;
-        view->FillPlanarViewConstants(geometryView.constants.view);
+        geometryView.constants.view = view->constants;
         geometryView.framebuffer = framebuffer;
-        geometryView.viewport = view->GetViewportState();
-        geometryView.shadingRate =
-            view->GetVariableRateShadingState();
-        geometryView.frontCounterClockwise = view->IsMirrored();
-        geometryView.reverseDepth = view->IsReverseDepth();
+        geometryView.viewport = RendererViewportNvrhi(*view);
+        geometryView.frontCounterClockwise = view->mirrored;
+        geometryView.reverseDepth = view->reverseDepth;
 
         m_frame->commandList->beginMarker(marker);
+        pass.SetMaterialRevision(scene.materialRevision);
         bool succeeded = pass.BeginView(m_frame->commandList, geometryView);
-        if (succeeded)
+        const auto draws = m_scene->draws.View();
+        for (size_t index = 0; succeeded && index < draws.count; ++index)
         {
-            m_frame->opaqueDrawStrategy->PrepareForView(
-                m_scene->world->GetSceneGraph()->GetRootNode(), *view);
-            while (const DrawItem* item =
-                m_frame->opaqueDrawStrategy->GetNextItem())
+            const auto& item = draws.data[index];
+            nvrhi::IBuffer* indexBuffer = nullptr;
+            nvrhi::IBuffer* vertexBuffer = nullptr;
+            if (!m_scene->gpuTables.GetBuffers(item.buffers, indexBuffer, vertexBuffer) ||
+                !m_scene->gpuTables.InstancesReady(scene))
             {
-                if (!item->instance || !item->mesh || !item->geometry ||
-                    !item->material || !item->buffers ||
-                    item->instance->GetInstanceIndex() < 0)
-                {
-                    succeeded = false;
-                    break;
-                }
-
-                const auto texture = [](const auto& loaded)
-                    -> nvrhi::ITexture*
-                {
-                    return loaded && loaded->texture
-                        ? loaded->texture.Get()
-                        : nullptr;
-                };
-                RendererGeometryMaterial material;
-                material.cacheKey = item->material;
-                material.constants =
-                    item->material->materialConstants.Get();
-                material.textures = {
-                    texture(item->material->baseOrDiffuseTexture),
-                    texture(item->material->metalRoughOrSpecularTexture),
-                    texture(item->material->normalTexture),
-                    texture(item->material->emissiveTexture),
-                    texture(item->material->occlusionTexture),
-                    texture(item->material->transmissionTexture),
-                    texture(item->material->opacityTexture)
-                };
-                material.domain = static_cast<RendererMaterialDomain>(
-                    item->material->domain);
-
-                RendererGeometryBuffers buffers;
-                buffers.cacheKey = item->buffers;
-                buffers.indexBuffer = item->buffers->indexBuffer.Get();
-                buffers.vertexBuffer = item->buffers->vertexBuffer.Get();
-                buffers.instanceBuffer =
-                    item->buffers->instanceBuffer.Get();
-                const auto copyOffset = [](
-                    const nvrhi::BufferRange& range,
-                    std::uint32_t& destination)
-                {
-                    if (range.byteOffset >
-                        std::numeric_limits<std::uint32_t>::max())
-                    {
-                        return false;
-                    }
-                    destination = static_cast<std::uint32_t>(
-                        range.byteOffset);
-                    return true;
-                };
-                succeeded =
-                    copyOffset(item->buffers->getVertexBufferRange(
-                        VertexAttribute::Position),
-                        buffers.positionOffset) &&
-                    copyOffset(item->buffers->getVertexBufferRange(
-                        VertexAttribute::PrevPosition),
-                        buffers.previousPositionOffset) &&
-                    copyOffset(item->buffers->getVertexBufferRange(
-                        VertexAttribute::TexCoord1),
-                        buffers.textureCoordinateOffset) &&
-                    copyOffset(item->buffers->getVertexBufferRange(
-                        VertexAttribute::Normal),
-                        buffers.normalOffset) &&
-                    copyOffset(item->buffers->getVertexBufferRange(
-                        VertexAttribute::Tangent),
-                        buffers.tangentOffset);
-                const std::uint64_t startIndex =
-                    std::uint64_t(item->mesh->indexOffset) +
-                    item->geometry->indexOffsetInMesh;
-                const std::uint64_t startVertex =
-                    std::uint64_t(item->mesh->vertexOffset) +
-                    item->geometry->vertexOffsetInMesh;
-                if (!succeeded ||
-                    startIndex >
-                        std::numeric_limits<std::uint32_t>::max() ||
-                    startVertex >
-                        std::numeric_limits<std::uint32_t>::max())
-                {
-                    succeeded = false;
-                    break;
-                }
-
-                RendererGeometryDraw draw;
-                draw.material = &material;
-                draw.buffers = &buffers;
-                draw.cullMode = item->cullMode;
-                draw.indexCount = item->geometry->numIndices;
-                draw.startIndexLocation =
-                    static_cast<std::uint32_t>(startIndex);
-                draw.startVertexLocation =
-                    static_cast<std::uint32_t>(startVertex);
-                draw.startInstanceLocation =
-                    static_cast<std::uint32_t>(
-                        item->instance->GetInstanceIndex());
-                if (!pass.Submit(draw))
+                succeeded = false;
+                break;
+            }
+            const auto& values = scene.materials.data[item.material].values;
+            RendererGeometryMaterial material;
+            material.cacheKey = &scene.materials.data[item.material];
+            if (!m_scene->gpuTables.GetMaterialBinding(item.material, material.constants, material.constantRange))
+            {
+                succeeded = false;
+                break;
+            }
+            material.domain = values.domain;
+            for (uint32_t slot = 0; slot < RendererGeometryMaterial::TextureCount; ++slot)
+            {
+                const uint32_t textureIndex = values.textures[slot];
+                if (!m_scene->gpuTables.GetTexture(textureIndex, material.textures[slot]))
                 {
                     succeeded = false;
                     break;
                 }
             }
+            if (!succeeded) break;
+
+            RendererGeometryBuffers buffers;
+            buffers.cacheKey = &scene.bufferGroups.data[item.buffers];
+            buffers.indexBuffer = indexBuffer;
+            buffers.vertexBuffer = vertexBuffer;
+            buffers.instanceBuffer = m_scene->gpuTables.InstanceBuffer();
+            const auto& sourceBuffers = scene.bufferGroups.data[item.buffers];
+            const auto copyOffset = [&](RendererSceneVertexAttribute attribute, uint32_t& destination)
+            {
+                const uint64_t offset = sourceBuffers.attributes[uint32_t(attribute)].offset;
+                if (offset > UINT32_MAX) return false;
+                destination = uint32_t(offset);
+                return true;
+            };
+            succeeded = copyOffset(RendererSceneVertexAttribute::Position, buffers.positionOffset) &&
+                copyOffset(RendererSceneVertexAttribute::TexCoord0, buffers.textureCoordinateOffset) &&
+                copyOffset(RendererSceneVertexAttribute::Normal, buffers.normalOffset) &&
+                copyOffset(RendererSceneVertexAttribute::Tangent, buffers.tangentOffset);
+            if (!succeeded) break;
+            const auto& mesh = scene.meshes.data[item.mesh];
+            const auto& geometry = scene.geometries.data[item.geometry];
+            const uint64_t startIndex = uint64_t(mesh.indexOffset) + geometry.indexOffsetInMesh;
+            const uint64_t startVertex = uint64_t(mesh.vertexOffset) + geometry.vertexOffsetInMesh;
+            if (startIndex > UINT32_MAX || startVertex > UINT32_MAX)
+            {
+                succeeded = false;
+                break;
+            }
+            RendererGeometryDraw draw;
+            draw.material = &material;
+            draw.buffers = &buffers;
+            draw.cullMode = values.doubleSided ? nvrhi::RasterCullMode::None : nvrhi::RasterCullMode::Back;
+            draw.indexCount = geometry.indexCount;
+            draw.startIndexLocation = uint32_t(startIndex);
+            draw.startVertexLocation = uint32_t(startVertex);
+            draw.startInstanceLocation = item.instance;
+            succeeded = pass.Submit(draw);
         }
         const bool ended = pass.EndView();
         m_frame->commandList->endMarker();
+#if defined(UVSR_BUILD_TESTING)
+        WindowsPathText captureText;
+        WindowsPathTextResult captureError;
+        if (m_frame->runtimeOutputCaptureRequested &&
+            !GetRuntimeCaptureStem(m_frame->runtimeOutputCapturePath, captureText, captureError))
+        {
+            uvsr::log::error("Runtime capture draw label failed (%u, code %u)",
+                unsigned(captureError.error), captureError.nativeCode);
+            m_frame->FailRuntimeOutputCapture();
+            return false;
+        }
+        const std::string_view capture(captureText.Data(), captureText.Size());
+        if (capture == "case-15-hdr-environment-starry-night-baseline" ||
+            capture == "case-15-hdr-environment-starry-night-reference")
+            fprintf(stdout, "{\"event\":\"capture-draw-order\",\"capture\":\"%s\",\"pass\":\"%s\","
+                "\"valid\":%s,\"materials\":%zu,\"meshes\":%zu,\"geometries\":%zu,\"instances\":%zu,"
+                "\"buffers\":%zu,\"draws\":%zu,\"chunks\":%zu,\"maxChunk\":%zu}\n",
+                captureText.Data(), marker, succeeded && ended ? "true" : "false", scene.materials.count,
+                scene.meshes.count, scene.geometries.count, scene.instances.count, scene.bufferGroups.count,
+                draws.count, m_scene->draws.ChunkCount(), m_scene->draws.MaximumChunk());
+#endif
         return succeeded && ended;
     }
-
-
-
 
 
 auto UvsrSceneViewer::BeginRenderPassPreparation(bool waitForIbl) -> void {
@@ -289,85 +219,97 @@ auto UvsrSceneViewer::BeginRenderPassPreparation(bool waitForIbl) -> void {
             ? RenderPassPreparationStage::GBuffer : RenderPassPreparationStage::FastApproximateAA;
     }
 
-auto UvsrSceneViewer::ProcessRenderPassPreparationStep() -> bool {
+auto UvsrSceneViewer::ProcessRenderPassPreparationStep() -> PreparationResult {
         switch (m_frame->renderPassPreparationStage)
         {
         case RenderPassPreparationStage::Idle:
         case RenderPassPreparationStage::Complete:
-            return true;
+            return PreparationResult::Complete;
 
         case RenderPassPreparationStage::GBuffer:
-            m_frame->gBufferGeometryPass = CreateGeometryPass(RendererGeometryOutput::Pbr);
+        {
+            auto candidate = CreateGeometryPass(RendererGeometryOutput::Pbr);
+            if (!candidate) return PreparationResult::Failed;
+            m_frame->gBufferGeometryPass = std::move(candidate);
             break;
+        }
 
         case RenderPassPreparationStage::DeferredLighting:
+        {
+            std::unique_ptr<LightingAccumulationPass> accumulation;
             if (!m_lighting->lightingAccumulationPass)
-                m_lighting->lightingAccumulationPass = std::make_unique<LightingAccumulationPass>(
-                    GetDevice(), m_frame->rendererShaderFactory);
-            m_lighting->pbrDeferredLightingPass =
-                std::make_unique<PbrDeferredLightingPass>(
-                    GetDevice(), m_frame->rendererCommonPasses);
-            m_lighting->pbrDeferredLightingPass->Init(
-                m_frame->rendererShaderFactory, true);
+            {
+                accumulation.reset(new (std::nothrow) LightingAccumulationPass(
+                    GetDevice(), m_frame->rendererShaderFactory.get()));
+                if (!accumulation)
+                    return FailPreparation("Lighting accumulation allocation failed");
+            }
+            std::unique_ptr<PbrDeferredLightingPass> candidate(new (std::nothrow) PbrDeferredLightingPass(
+                GetDevice(), m_frame->rendererCommonPasses.get()));
+            if (!candidate)
+                return FailPreparation("Deferred lighting allocation failed");
+            candidate->Init(m_frame->rendererShaderFactory.get(), true);
+            if (candidate->DidPipelinePreparationFail())
+                return FailPreparation("Deferred lighting pass failed to initialize");
+            if (accumulation)
+                m_lighting->lightingAccumulationPass = std::move(accumulation);
+            m_lighting->pbrDeferredLightingPass = std::move(candidate);
             break;
+        }
 
         case RenderPassPreparationStage::DeferredLightingPipelines:
             if (!m_lighting->pbrDeferredLightingPass)
-            {
-                throw std::runtime_error(
-                    "Deferred lighting pass is unavailable during pipeline "
-                    "preparation");
-            }
+                return FailPreparation("Deferred lighting pass is unavailable during pipeline preparation");
             if (!m_lighting->pbrDeferredLightingPass->PreparePipelinesStep())
-            {
-                return false;
-            }
-            if (m_lighting->pbrDeferredLightingPass->
-                    DidPipelinePreparationFail() ||
+                return PreparationResult::Pending;
+            if (m_lighting->pbrDeferredLightingPass->DidPipelinePreparationFail() ||
                 !m_lighting->pbrDeferredLightingPass->ArePipelinesReady())
-            {
-                throw std::runtime_error(
-                    "Deferred lighting pipeline preparation failed");
-            }
+                return FailPreparation("Deferred lighting pipeline preparation failed");
             break;
 
         case RenderPassPreparationStage::FastApproximateAA:
-            if (m_ui.UsesFastApproximateAA())
-                CreateFastApproximateAAPass();
+            if (m_ui.UsesFastApproximateAA() && !CreateFastApproximateAAPass())
+                return PreparationResult::Failed;
             break;
 
         case RenderPassPreparationStage::EnvironmentBackground:
-            if (m_frame->renderPassPreparationWaitForIbl &&
-                m_lighting->imageBasedLightingEnvironment &&
-                !m_lighting->imageBasedLightingEnvironment->
-                    IsPreparedRadianceReady())
+        {
+            if (m_frame->renderPassPreparationWaitForIbl && m_lighting->imageBasedLightingEnvironment)
             {
-                return false;
+                if (m_lighting->imageBasedLightingEnvironment->HasPreparedRadianceFailed())
+                    return FailPreparation("Required image-based lighting preparation failed");
+                if (!m_lighting->imageBasedLightingEnvironment->IsPreparedRadianceReady())
+                    return PreparationResult::Pending;
             }
-            m_lighting->imageBasedLightingBackgroundPass =
-                m_frame->renderTargets->RasterLightingEnabled && m_lighting->imageBasedLightingEnvironment
-                    ? std::make_unique<ImageBasedLightingBackgroundPass>(
-                        GetDevice(),
-                        m_frame->rendererShaderFactory,
-                        m_frame->rendererCommonPasses,
-                        m_frame->renderTargets->HdrFramebuffer,
-                        *m_frame->view,
-                        m_lighting->imageBasedLightingEnvironment->
-                            GetRadianceTextureResource())
-                    : nullptr;
+            std::unique_ptr<ImageBasedLightingBackgroundPass> candidate;
+            if (m_frame->renderTargets->RasterLightingEnabled && m_lighting->imageBasedLightingEnvironment)
+            {
+                candidate.reset(new (std::nothrow) ImageBasedLightingBackgroundPass(
+                    GetDevice(), m_frame->rendererShaderFactory.get(),
+                    m_frame->rendererCommonPasses.get(), m_frame->renderTargets->HdrFramebuffer,
+                    m_frame->view, m_lighting->imageBasedLightingEnvironment->GetRadianceTextureResource()));
+                if (!candidate)
+                    return FailPreparation("Image-based lighting background allocation failed");
+            }
+            m_lighting->imageBasedLightingBackgroundPass = std::move(candidate);
             break;
+        }
 
         case RenderPassPreparationStage::ToneMapping:
-            m_frame->autoExposurePass = std::make_unique<AutoExposurePass>(
-                GetDevice(),
-                m_frame->rendererShaderFactory);
-            m_frame->agxToneMappingPass =
-                std::make_unique<AgxToneMappingPass>(
-                    GetDevice(),
-                    m_frame->rendererShaderFactory,
-                    m_frame->rendererCommonPasses,
-                    m_frame->renderTargets->LdrFramebuffer);
+        {
+            std::unique_ptr<AutoExposurePass> exposure(new (std::nothrow) AutoExposurePass(
+                GetDevice(), m_frame->rendererShaderFactory.get()));
+            if (!exposure)
+                return FailPreparation("Auto exposure allocation failed");
+            std::unique_ptr<AgxToneMappingPass> toneMapping(new (std::nothrow) AgxToneMappingPass(
+                GetDevice(), m_frame->rendererShaderFactory.get(),
+                m_frame->rendererCommonPasses.get(), m_frame->renderTargets->LdrFramebuffer));
+            if (!toneMapping || !toneMapping->IsValid())
+                return FailPreparation("AgX tone mapping failed to initialize");
+            m_frame->autoExposurePass = std::move(exposure);
+            m_frame->agxToneMappingPass = std::move(toneMapping);
             break;
+        }
         }
 
         m_frame->renderPassPreparationStage = static_cast<RenderPassPreparationStage>(
@@ -375,18 +317,17 @@ auto UvsrSceneViewer::ProcessRenderPassPreparationStep() -> bool {
         const bool complete = m_frame->renderPassPreparationStage == RenderPassPreparationStage::Complete;
         if (complete)
             m_frame->renderPassPreparationWaitForIbl = false;
-        return complete;
+        return complete ? PreparationResult::Complete : PreparationResult::Pending;
     }
 
-bool UvsrSceneViewer::SetToneMappingLut(uvsr::ToneMappingLut lut, std::string& error)
+bool UvsrSceneViewer::SetToneMappingLut(uvsr::ToneMappingLut lut, uvsr::SettingsSnapshotError& error)
 {
     if (lut == m_ui.ToneMapping.lut)
         return true;
     uvsr::ColorLutResource candidate;
     if (lut != uvsr::ToneMappingLut::None &&
-        !uvsr::LoadColorLutResource(GetDevice(),
-            GetSceneDir().parent_path().parent_path() / "luts" / "kodak" /
-                uvsr::ToneMappingLutFilename(lut), candidate, error))
+        !uvsr::LoadColorLutResource(GetDevice(), m_frame->toneMappingLutDirectory.Data(),
+            lut, candidate, error))
         return false;
     m_frame->toneMappingLut = std::move(candidate);
     m_ui.ToneMapping.lut = lut;

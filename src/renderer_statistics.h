@@ -1,9 +1,9 @@
 #pragma once
 
-#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <string>
+#include <cstring>
 
 namespace uvsr
 {
@@ -15,46 +15,47 @@ namespace uvsr
             uint64_t(instanceCount);
     }
 
-    [[nodiscard]] inline std::string FormatTriangleCount(
-        uint64_t triangleCount)
+    [[nodiscard]] inline bool FormatTriangleCount(
+        uint64_t triangleCount, char (&buffer)[32]) noexcept
     {
-        std::array<char, 32> buffer{};
+        int written = 0;
         if (triangleCount >= 999'950'000'000ull)
         {
-            return "999.9b+ tris";
+            std::memcpy(buffer, "999.9b+ tris", sizeof("999.9b+ tris"));
+            return true;
         }
         if (triangleCount >= 999'950'000ull)
         {
-            std::snprintf(
-                buffer.data(),
-                buffer.size(),
+            written = std::snprintf(
+                buffer,
+                sizeof(buffer),
                 "%.1fb tris",
                 double(triangleCount) / 1'000'000'000.0);
         }
         else if (triangleCount >= 999'950ull)
         {
-            std::snprintf(
-                buffer.data(),
-                buffer.size(),
+            written = std::snprintf(
+                buffer,
+                sizeof(buffer),
                 "%.1fm tris",
                 double(triangleCount) / 1'000'000.0);
         }
         else if (triangleCount >= 1'000ull)
         {
-            std::snprintf(
-                buffer.data(),
-                buffer.size(),
+            written = std::snprintf(
+                buffer,
+                sizeof(buffer),
                 "%.1fk tris",
                 double(triangleCount) / 1'000.0);
         }
         else
         {
-            std::snprintf(
-                buffer.data(),
-                buffer.size(),
+            written = std::snprintf(
+                buffer,
+                sizeof(buffer),
                 "%llu tris",
                 static_cast<unsigned long long>(triangleCount));
         }
-        return buffer.data();
+        return written >= 0 && std::size_t(written) < sizeof(buffer);
     }
 }

@@ -1,5 +1,6 @@
 #include "ui_settings_command_catalog.h"
 #include "settings_snapshot.h"
+#include "settings_snapshot_code.h"
 #include "engine_identity.h"
 #include "auto_exposure_shared.h"
 #include "display_presentation.h"
@@ -10,11 +11,61 @@
 
 #include <charconv>
 #include <limits>
+#include <string.h>
+#include <stdio.h>
 
 namespace uvsr
 {
 namespace
 {
+    constexpr std::string_view DefaultPolicyName(
+        UiSettingsDefaultPolicy policy) noexcept
+    {
+        switch (policy)
+        {
+        case UiSettingsDefaultPolicy::Literal: return "literal";
+        case UiSettingsDefaultPolicy::HighestMemoryAdapter:
+            return "highest-memory-adapter";
+        case UiSettingsDefaultPolicy::RetainedBistro:
+            return "retained-bistro";
+        case UiSettingsDefaultPolicy::EnvironmentExposure:
+            return "environment-exposure";
+        case UiSettingsDefaultPolicy::FxaaQualityProfile:
+            return "fxaa-quality-profile";
+        case UiSettingsDefaultPolicy::SceneDefaultLight:
+            return "scene-default-light";
+        case UiSettingsDefaultPolicy::SceneAuthored:
+            return "scene-authored";
+        case UiSettingsDefaultPolicy::SelectedLightColor:
+            return "selected-light-color";
+        case UiSettingsDefaultPolicy::FlashlightDefault:
+            return "flashlight-default";
+        case UiSettingsDefaultPolicy::NoMaterial: return "no-material";
+        case UiSettingsDefaultPolicy::MaterialAuthored:
+            return "material-authored";
+        }
+        return {};
+    }
+
+    void RejectMetadata(SettingsMetadataText& text) noexcept
+    {
+        text.valid = false;
+        text.length = 0;
+        text.bytes[0] = '\0';
+    }
+
+    void AppendMetadata(SettingsMetadataText& output, std::string_view value) noexcept
+    {
+        if (!output.valid || value.size() >= SettingsMetadataText::Capacity - output.length)
+        {
+            RejectMetadata(output);
+            return;
+        }
+        if (!value.empty()) memcpy(output.bytes + output.length, value.data(), value.size());
+        output.length += value.size();
+        output.bytes[output.length] = '\0';
+    }
+
     [[nodiscard]] constexpr UiSettingsTypedDomain BooleanDomain(
         std::string_view presentation = "on|off") noexcept
     {
@@ -732,6 +783,43 @@ namespace
     {
         return ValidateCatalog(CanonicalCatalog);
     }
+    constexpr bool MetadataFits() noexcept
+    {
+        constexpr size_t capacity = SettingsMetadataText::Capacity;
+        for (const auto& definition : CanonicalCatalog)
+        {
+            const auto& domain = definition.typedDomain;
+            size_t domainSize = domain.presentation.size();
+            if (domain.kind == UiSettingsDomainKind::Enumeration)
+            {
+                domainSize = domain.tokenCount ? domain.tokenCount - 1u : 0u;
+                for (size_t index = 0; index < domain.tokenCount; ++index)
+                {
+                    if (domain.tokens[index].size() >= capacity) return false;
+                    domainSize += domain.tokens[index].size();
+                    if (definition.presentation.tokenLabels[index].size() >= capacity) return false;
+                }
+            }
+            if (domainSize >= capacity) return false;
+            const auto& value = definition.typedDefault.value;
+            size_t anchor = 0;
+            switch (value.kind)
+            {
+            case UiSettingsDefaultValueKind::Boolean: anchor = 3; break;
+            case UiSettingsDefaultValueKind::Integer: anchor = 20; break;
+            case UiSettingsDefaultValueKind::Float: anchor = 64; break;
+            case UiSettingsDefaultValueKind::Vector: anchor = size_t(value.componentCount) * 65; break;
+            case UiSettingsDefaultValueKind::Token:
+            case UiSettingsDefaultValueKind::Selector: anchor = value.text.size(); break;
+            case UiSettingsDefaultValueKind::None: anchor = DefaultPolicyName(definition.typedDefault.policy).size(); break;
+            }
+            const size_t policy = DefaultPolicyName(definition.typedDefault.policy).size();
+            if (anchor >= capacity || policy + anchor + 2 >= capacity) return false;
+        }
+        return true;
+    }
+    static_assert(MetadataFits(), "canonical settings metadata exceeds its output capacity");
+
     static_assert(ValidateCatalog(),
         "The typed settings schema must be complete and unique");
 
@@ -748,166 +836,145 @@ namespace
     const std::uint16_t SettingsSnapshotVersion = CatalogVersion;
     const std::array<char, 5> SettingsSnapshotVersionText = BuildSettingsSnapshotVersionText(CatalogVersion);
 
+    bool ValidateSettingsSnapshotLoadCode(const char* code, size_t length,
+        SettingsSnapshotCodeError& error) noexcept
+    {
+        error = {};
+        if (!code || length != SettingsSnapshotCodeLength ||
+            reinterpret_cast<uintptr_t>(code) > UINTPTR_MAX - length ||
+            !IsSettingsSnapshotCode({code, length}))
+        {
+            constexpr char message[] = "expected a registered 32-character lowercase snapshot code";
+            static_assert(sizeof(message) <= sizeof(error.text));
+            memcpy(error.text, message, sizeof(message));
+            return false;
+        }
+        const std::string_view currentVersion(SettingsSnapshotVersionText.data(), 4u);
+        const std::string_view requestedVersion(code, 4u);
+        if (requestedVersion != currentVersion &&
+            !IsSupportedLegacySettingsSnapshotVersion(requestedVersion))
+        {
+            constexpr char format[] =
+                "snapshot schema %.4s is neither this engine's schema %.4s nor a supported legacy migration";
+            static_assert(sizeof(format) <= sizeof(error.text));
+            const int written = snprintf(error.text, sizeof(error.text), format, code, currentVersion.data());
+            if (written < 0 || size_t(written) >= sizeof(error.text))
+            {
+                constexpr char failure[] = "could not format the snapshot schema diagnostic";
+                memcpy(error.text, failure, sizeof(failure));
+            }
+            return false;
+        }
+        return true;
+    }
+
     bool ValidateCanonicalSettingsSchema(const UiSettingsCatalog& definitions) noexcept
     {
         return ValidateCatalog(definitions);
     }
-    std::string FormatUiSettingsMetadataFloat(
-        float value)
+    SettingsMetadataText FormatUiSettingsMetadataFloat(float value) noexcept
     {
-        char buffer[64]{};
-        const auto result = std::to_chars(
-            buffer,
-            buffer + sizeof(buffer),
-            value,
-            std::chars_format::general,
-            std::numeric_limits<float>::max_digits10);
-        return result.ec == std::errc{}
-            ? std::string(buffer, result.ptr)
-            : std::string{};
+        SettingsMetadataText output;
+        const auto result = std::to_chars(output.bytes, output.bytes + 64, value,
+            std::chars_format::general, std::numeric_limits<float>::max_digits10);
+        if (result.ec != std::errc{}) RejectMetadata(output);
+        else { output.length = size_t(result.ptr - output.bytes); output.bytes[output.length] = '\0'; }
+        return output;
     }
 
-    std::string_view UiSettingsDefaultPolicyName(
-        UiSettingsDefaultPolicy policy) noexcept
+    std::string_view UiSettingsDefaultPolicyName(UiSettingsDefaultPolicy policy) noexcept
     {
-        switch (policy)
-        {
-        case UiSettingsDefaultPolicy::Literal: return "literal";
-        case UiSettingsDefaultPolicy::HighestMemoryAdapter:
-            return "highest-memory-adapter";
-        case UiSettingsDefaultPolicy::RetainedBistro:
-            return "retained-bistro";
-        case UiSettingsDefaultPolicy::EnvironmentExposure:
-            return "environment-exposure";
-        case UiSettingsDefaultPolicy::FxaaQualityProfile:
-            return "fxaa-quality-profile";
-        case UiSettingsDefaultPolicy::SceneDefaultLight:
-            return "scene-default-light";
-        case UiSettingsDefaultPolicy::SceneAuthored:
-            return "scene-authored";
-        case UiSettingsDefaultPolicy::SelectedLightColor:
-            return "selected-light-color";
-        case UiSettingsDefaultPolicy::FlashlightDefault:
-            return "flashlight-default";
-        case UiSettingsDefaultPolicy::NoMaterial: return "no-material";
-        case UiSettingsDefaultPolicy::MaterialAuthored:
-            return "material-authored";
-        }
-        return {};
+        return DefaultPolicyName(policy);
     }
 
-    std::string FormatUiSettingsDomain(
-        const UiSettingsCommandDefinition& definition)
+    SettingsMetadataText FormatUiSettingsDomain(const UiSettingsCommandDefinition& definition) noexcept
     {
-        const UiSettingsTypedDomain& domain = definition.typedDomain;
+        SettingsMetadataText output;
+        const auto& domain = definition.typedDomain;
         if (domain.kind != UiSettingsDomainKind::Enumeration)
-            return std::string(domain.presentation);
-        std::string result;
-        for (std::uint8_t index = 0u; index < domain.tokenCount; ++index)
+            AppendMetadata(output, domain.presentation);
+        else if (domain.tokenCount > domain.tokens.size()) RejectMetadata(output);
+        else for (size_t index = 0; index < domain.tokenCount; ++index)
         {
-            if (!result.empty())
-                result.push_back('|');
-            result.append(domain.tokens[index]);
+            if (output.length) AppendMetadata(output, "|");
+            AppendMetadata(output, domain.tokens[index]);
         }
-        return result;
+        return output;
     }
 
-    std::string FormatUiSettingsTokenLabel(
-        SettingId id,
-        std::size_t tokenIndex)
+    SettingsMetadataText FormatUiSettingsTokenLabel(SettingId id, size_t tokenIndex) noexcept
     {
+        SettingsMetadataText output;
         const UiSettingsCommandDefinition* definition = nullptr;
-        for (const UiSettingsCommandDefinition& candidate :
-            UiSettingsCommandCatalog)
-        {
-            if (candidate.id == id)
-            {
-                definition = &candidate;
-                break;
-            }
-        }
-        if (!definition || tokenIndex >= definition->typedDomain.tokenCount)
-            return {};
-        const std::string_view overrideLabel =
-            definition->presentation.tokenLabels[tokenIndex];
+        for (const auto& candidate : UiSettingsCommandCatalog)
+            if (candidate.id == id) { definition = &candidate; break; }
+        if (!definition || tokenIndex >= definition->typedDomain.tokenCount) return output;
+        const std::string_view overrideLabel = definition->presentation.tokenLabels[tokenIndex];
         if (!overrideLabel.empty())
-            return std::string(overrideLabel);
-        std::string label(definition->typedDomain.tokens[tokenIndex]);
-        bool capitalize = true;
-        for (char& character : label)
         {
-            if (character == '-')
-            {
-                character = ' ';
-                capitalize = true;
-            }
+            AppendMetadata(output, overrideLabel);
+            return output;
+        }
+        AppendMetadata(output, definition->typedDomain.tokens[tokenIndex]);
+        bool capitalize = true;
+        for (size_t index = 0; index < output.length; ++index)
+        {
+            char& character = output.bytes[index];
+            if (character == '-') { character = ' '; capitalize = true; }
             else if (capitalize && character >= 'a' && character <= 'z')
             {
-                character = static_cast<char>(
-                    character - 'a' + 'A');
+                character = char(character - 'a' + 'A');
                 capitalize = false;
             }
-            else
-            {
-                capitalize = false;
-            }
+            else capitalize = false;
         }
-        return label;
+        return output;
     }
 
-    std::string FormatUiSettingsDefaultAnchor(
-        const UiSettingsCommandDefinition& definition)
+    SettingsMetadataText FormatUiSettingsDefaultAnchor(const UiSettingsCommandDefinition& definition) noexcept
     {
-        const UiSettingsDefaultValue& value = definition.typedDefault.value;
+        SettingsMetadataText output;
+        const auto& value = definition.typedDefault.value;
         switch (value.kind)
         {
-        case UiSettingsDefaultValueKind::Boolean:
-            return value.boolean ? "on" : "off";
+        case UiSettingsDefaultValueKind::Boolean: AppendMetadata(output, value.boolean ? "on" : "off"); break;
         case UiSettingsDefaultValueKind::Integer:
-            return std::to_string(value.integer);
-        case UiSettingsDefaultValueKind::Float:
-            return FormatUiSettingsMetadataFloat(value.scalar);
+        {
+            const auto result = std::to_chars(output.bytes, output.bytes + SettingsMetadataText::Capacity - 1, value.integer);
+            if (result.ec != std::errc{}) RejectMetadata(output);
+            else { output.length = size_t(result.ptr - output.bytes); output.bytes[output.length] = '\0'; }
+            break;
+        }
+        case UiSettingsDefaultValueKind::Float: return FormatUiSettingsMetadataFloat(value.scalar);
         case UiSettingsDefaultValueKind::Vector:
-        {
-            std::string result;
-            for (std::uint8_t index = 0u;
-                index < value.componentCount; ++index)
+            if (value.componentCount > value.vector.size()) RejectMetadata(output);
+            else for (size_t index = 0; index < value.componentCount; ++index)
             {
-                if (!result.empty())
-                    result.push_back(' ');
-                result += FormatUiSettingsMetadataFloat(value.vector[index]);
+                if (output.length) AppendMetadata(output, " ");
+                const auto component = FormatUiSettingsMetadataFloat(value.vector[index]);
+                if (!component.IsValid()) { RejectMetadata(output); break; }
+                AppendMetadata(output, component.View());
             }
-            return result;
-        }
+            break;
         case UiSettingsDefaultValueKind::Token:
-        case UiSettingsDefaultValueKind::Selector:
-            return std::string(value.text);
-        case UiSettingsDefaultValueKind::None:
-            return std::string(UiSettingsDefaultPolicyName(
-                definition.typedDefault.policy));
+        case UiSettingsDefaultValueKind::Selector: AppendMetadata(output, value.text); break;
+        case UiSettingsDefaultValueKind::None: AppendMetadata(output, DefaultPolicyName(definition.typedDefault.policy)); break;
         }
-        return {};
+        return output;
     }
 
-    std::string FormatUiSettingsDefault(
-        const UiSettingsCommandDefinition& definition)
+    SettingsMetadataText FormatUiSettingsDefault(const UiSettingsCommandDefinition& definition) noexcept
     {
-        const std::string anchor =
-            FormatUiSettingsDefaultAnchor(definition);
-        if (definition.typedDefault.policy ==
-            UiSettingsDefaultPolicy::Literal)
+        const auto anchor = FormatUiSettingsDefaultAnchor(definition);
+        if (!anchor.IsValid() || definition.typedDefault.policy == UiSettingsDefaultPolicy::Literal) return anchor;
+        SettingsMetadataText output;
+        AppendMetadata(output, DefaultPolicyName(definition.typedDefault.policy));
+        if (anchor.Size())
         {
-            return anchor;
+            AppendMetadata(output, "(");
+            AppendMetadata(output, anchor.View());
+            AppendMetadata(output, ")");
         }
-        std::string result(UiSettingsDefaultPolicyName(
-            definition.typedDefault.policy));
-        if (!anchor.empty())
-        {
-            result.push_back('(');
-            result += anchor;
-            result.push_back(')');
-        }
-        return result;
+        return output;
     }
-
 }

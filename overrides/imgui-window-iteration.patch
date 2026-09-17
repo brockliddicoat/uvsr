@@ -1,0 +1,141 @@
+diff --git a/imgui.cpp b/imgui.cpp
+--- a/imgui.cpp
++++ b/imgui.cpp
+@@ -5610,33 +5610,93 @@
+     return (a->BeginOrderWithinParent - b->BeginOrderWithinParent);
+ }
+ 
+-static void AddWindowToSortBuffer(ImVector<ImGuiWindow*>* out_sorted_windows, ImGuiWindow* window)
+-{
+-    out_sorted_windows->push_back(window);
+-    if (window->Active)
+-    {
+-        int count = window->DC.ChildWindows.Size;
+-        ImQsort(window->DC.ChildWindows.Data, (size_t)count, sizeof(ImGuiWindow*), ChildWindowComparer);
+-        for (int i = 0; i < count; i++)
+-        {
+-            ImGuiWindow* child = window->DC.ChildWindows[i];
+-            if (child->Active)
+-                AddWindowToSortBuffer(out_sorted_windows, child);
+-        }
+-    }
+-}
+-
+-static void AddWindowToDrawData(ImGuiWindow* window, int layer)
++static void InvalidWindowTraversal()
++{
++    // the public window API cannot construct this state. continuing would
++    // publish duplicate draw lists or lose the parent chain.
++    fprintf(stderr, "invalid ImGui window hierarchy\n");
++    IM_ASSERT(0 && "invalid window child hierarchy");
++    abort();
++}
++
++static ImU64 BeginWindowTraversal(int& remaining)
++{
++    ImGuiContext& g = *GImGui;
++    remaining = g.Windows.Size;
++    if (remaining <= 0)
++        InvalidWindowTraversal();
++    if (++g.WindowTraversalSerial == 0)
++    {
++        for (ImGuiWindow* window : g.Windows)
++            window->DC.ChildTraversalSerial = 0;
++        g.WindowTraversalSerial = 1;
++    }
++    return g.WindowTraversalSerial;
++}
++
++static void EnterWindowTraversal(ImGuiWindow* window, ImU64 serial, int& remaining)
++{
++    if (!window || remaining <= 0 || window->DC.ChildTraversalSerial == serial ||
++        window->DC.ChildWindows.Size < 0 || window->DC.ChildWindows.Size > GImGui->Windows.Size)
++        InvalidWindowTraversal();
++    --remaining;
++    window->DC.ChildTraversalSerial = serial;
++    window->DC.ChildTraversalIndex = 0;
++}
++
++static ImGuiWindow* NextWindowChild(ImGuiWindow* window, ImGuiWindow* root, bool visible_only)
++{
++    for (;;)
++    {
++        if (visible_only || window->Active)
++        {
++            const int count = window->DC.ChildWindows.Size;
++            if (count < 0 || count > GImGui->Windows.Size)
++                InvalidWindowTraversal();
++            while (window->DC.ChildTraversalIndex < count)
++            {
++                ImGuiWindow* child = window->DC.ChildWindows[window->DC.ChildTraversalIndex++];
++                if (!child || child->ParentWindow != window)
++                    InvalidWindowTraversal();
++                if (visible_only ? IsWindowActiveAndVisible(child) : child->Active)
++                    return child;
++            }
++        }
++        if (window == root)
++            return NULL;
++        if (!window->ParentWindow)
++            InvalidWindowTraversal();
++        window = window->ParentWindow;
++    }
++}
++
++static void AddWindowToSortBuffer(ImVector<ImGuiWindow*>* out_sorted_windows, ImGuiWindow* root)
++{
++    int remaining;
++    const ImU64 serial = BeginWindowTraversal(remaining);
++    for (ImGuiWindow* window = root; window; window = NextWindowChild(window, root, false))
++    {
++        EnterWindowTraversal(window, serial, remaining);
++        out_sorted_windows->push_back(window);
++        if (window->Active)
++            ImQsort(window->DC.ChildWindows.Data, (size_t)window->DC.ChildWindows.Size, sizeof(ImGuiWindow*), ChildWindowComparer);
++    }
++}
++
++static void AddWindowToDrawData(ImGuiWindow* root, int layer)
+ {
+     ImGuiContext& g = *GImGui;
+     ImGuiViewportP* viewport = g.Viewports[0];
+-    g.IO.MetricsRenderWindows++;
+-    if (window->DrawList->_Splitter._Count > 1)
+-        window->DrawList->ChannelsMerge(); // Merge if user forgot to merge back. Also required in Docking branch for ImGuiWindowFlags_DockNodeHost windows.
+-    ImGui::AddDrawListToDrawDataEx(&viewport->DrawDataP, viewport->DrawDataBuilder.Layers[layer], window->DrawList);
+-    for (ImGuiWindow* child : window->DC.ChildWindows)
+-        if (IsWindowActiveAndVisible(child)) // Clipped children may have been marked not active
+-            AddWindowToDrawData(child, layer);
++    int remaining;
++    const ImU64 serial = BeginWindowTraversal(remaining);
++    for (ImGuiWindow* window = root; window; window = NextWindowChild(window, root, true))
++    {
++        EnterWindowTraversal(window, serial, remaining);
++        g.IO.MetricsRenderWindows++;
++        if (window->DrawList->_Splitter._Count > 1)
++            window->DrawList->ChannelsMerge();
++        ImGui::AddDrawListToDrawDataEx(&viewport->DrawDataP, viewport->DrawDataBuilder.Layers[layer], window->DrawList);
++    }
+ }
+ 
+ static inline int GetWindowDisplayLayer(ImGuiWindow* window)
+diff --git a/imgui_internal.h b/imgui_internal.h
+--- a/imgui_internal.h
++++ b/imgui_internal.h
+@@ -2178,6 +2178,7 @@
+     ImVector<ImGuiWindow*>  Windows;                            // Windows, sorted in display order, back to front
+     ImVector<ImGuiWindow*>  WindowsFocusOrder;                  // Root windows, sorted in focus order, back to front.
+     ImVector<ImGuiWindow*>  WindowsTempSortBuffer;              // Temporary buffer used in EndFrame() to reorder windows so parents are kept before their child
++    ImU64                  WindowTraversalSerial = 0;         // identifies one exclusive parent-link traversal
+     ImVector<ImGuiWindowStackData> CurrentWindowStack;
+     ImGuiStorage            WindowsById;                        // Map window's ImGuiID to ImGuiWindow*
+     int                     WindowsActiveCount;                 // Number of unique windows submitted by frame
+@@ -2562,6 +2563,8 @@
+     ImU32                   TreeHasStackDataDepthMask;      // Store whether given depth has ImGuiTreeNodeStackData data. Could be turned into a ImU64 if necessary.
+     ImU32                   TreeRecordsClippedNodesY2Mask;  // Store whether we should keep recording Y2. Cleared when passing clip max. Equivalent TreeHasStackDataDepthMask value should always be set.
+     ImVector<ImGuiWindow*>  ChildWindows;
++    int                    ChildTraversalIndex = 0;
++    ImU64                  ChildTraversalSerial = 0;          // cursor and duplicate guard, valid only during a window traversal
+     ImGuiStorage*           StateStorage;           // Current persistent per-window storage (store e.g. tree node open/close state)
+     ImGuiOldColumns*        CurrentColumns;         // Current columns set
+     int                     CurrentTableIdx;        // Current table index (into g.Tables)

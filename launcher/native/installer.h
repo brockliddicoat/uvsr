@@ -93,7 +93,9 @@ namespace uvsr::launcher
             bool continuation, const Report& report);
         void RecoverLauncher(std::string_view installation, const std::optional<Json>& renderer, const Report& report);
         void RecoverRenderer(std::string_view installation, const Json& launcher, const Report& report);
-        void ValidateRendererState(const Json& state, std::string_view installation) const;
+        void ValidateRendererState(JsonValue state, std::string_view installation) const;
+        void ValidateRendererState(const Json& state, std::string_view installation) const
+        { ValidateRendererState(state.Root(), installation); }
         void Sweep(std::string_view installation, const std::optional<Json>& renderer, const Json& launcher, const Report& report);
         Result ScheduleUninstall(std::string_view installation, const Report& report);
     public:
@@ -103,7 +105,9 @@ namespace uvsr::launcher
         const Paths& GetPaths() const { return paths; }
         Snapshot Inspect() const;
         LauncherInspection InspectLauncher(std::string_view installation, bool migrate = false) const;
-        void ValidateLauncher(const Json& state, std::string_view installation) const;
+        void ValidateLauncher(JsonValue state, std::string_view installation) const;
+        void ValidateLauncher(const Json& state, std::string_view installation) const
+        { ValidateLauncher(state.Root(), installation); }
         bool DesktopPreference() const;
         void Ready(bool desktop, std::stop_token stop, const Report& report);
         Updates CheckUpdates(bool desktop, std::stop_token stop, const Report& report);

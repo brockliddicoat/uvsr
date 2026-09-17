@@ -1,6 +1,7 @@
 #pragma once
 
-#include "json_document.h"
+#include "json_legacy.h"
+#include "json_output.h"
 
 #include <charconv>
 #include <cstdint>
@@ -17,40 +18,37 @@
 namespace uvsr::contract
 {
     using JsonValue = json::Value;
+    using JsonDocument = json::Document;
 
     [[nodiscard]] inline std::int64_t Integer(
         const JsonValue& value,
         std::string_view description)
     {
         std::int64_t result = 0;
-        const char* first = value.string.data();
-        const char* last = first + value.string.size();
-        const auto parsed = std::from_chars(first, last, result);
-        if (value.kind != JsonValue::Kind::Number ||
-            parsed.ec != std::errc{} || parsed.ptr != last)
+        if (!json::Integer(value, result))
         {
-            throw std::runtime_error(std::string(description) + " is not an int64 integer");
+            throw json::LegacyError(std::string(description) + " is not an int64 integer");
         }
         return result;
     }
 
     inline void ValidateContractValues(const JsonValue& value)
     {
-        if (value.kind == JsonValue::Kind::Null)
-            throw std::runtime_error("null is forbidden in a signed contract");
-        if (value.kind == JsonValue::Kind::Number)
-            (void)Integer(value, "contract value");
-        for (const auto& member : value.object)
-            ValidateContractValues(member.second);
-        for (const auto& item : value.array)
-            ValidateContractValues(item);
+        json::Error error;
+        if (!json::ValidateSigned(value, error)) throw json::LegacyError(error.message);
     }
 
-    [[nodiscard]] inline JsonValue ParseJson(std::string_view text)
+    [[nodiscard]] inline JsonDocument ParseJson(std::string_view text)
     {
-        JsonValue result = json::Parser(text, 16u).Parse();
-        ValidateContractValues(result);
+        JsonDocument result = json::Parse(text, 16u);
+        ValidateContractValues(result.Root());
         return result;
+    }
+
+    [[nodiscard]] inline JsonDocument ParseJson(const json::EncodedText& text)
+    {
+        if (!text.IsValid()) json::Throw(text.Failure());
+        return ParseJson(std::string_view{text.Data(), text.Size()});
     }
 
     inline void RequireExactObject(
@@ -58,74 +56,78 @@ namespace uvsr::contract
         std::initializer_list<std::string_view> expected,
         std::string_view description)
     {
-        if (value.kind != JsonValue::Kind::Object ||
-            value.object.size() != expected.size())
+        if (value.Type() != json::Kind::Object || value.Count() != expected.size())
         {
-            throw std::runtime_error(
+            throw json::LegacyError(
                 std::string(description) + " has unexpected properties");
         }
         for (const std::string_view name : expected)
         {
-            bool found = false;
-            for (const auto& member : value.object)
-                found = found || member.first == name;
-            if (!found)
+            if (!value.Find(json::View(name)).IsValid())
             {
-                throw std::runtime_error(
+                throw json::LegacyError(
                     std::string(description) + " is missing " +
                     std::string(name));
             }
         }
     }
 
-    [[nodiscard]] inline const JsonValue& Member(
+    [[nodiscard]] inline JsonValue Member(
         const JsonValue& value,
         std::string_view name)
     {
-        if (value.kind != JsonValue::Kind::Object)
-            throw std::runtime_error("JSON value is not an object");
-        for (const auto& member : value.object)
-        {
-            if (member.first == name)
-                return member.second;
-        }
-        throw std::runtime_error("missing JSON property " + std::string(name));
+        if (value.Type() != json::Kind::Object)
+            throw json::LegacyError("JSON value is not an object");
+        JsonValue result = value.Find(json::View(name));
+        if (result.IsValid()) return result;
+        throw json::LegacyError("missing JSON property " + std::string(name));
     }
 
-    [[nodiscard]] inline const std::string& String(
+    [[nodiscard]] inline std::string_view String(
         const JsonValue& value,
         std::string_view description)
     {
-        if (value.kind != JsonValue::Kind::String)
-            throw std::runtime_error(std::string(description) + " is not a string");
-        return value.string;
+        if (value.Type() != json::Kind::String)
+            throw json::LegacyError(std::string(description) + " is not a string");
+        return json::Borrow(value.Text());
     }
 
     [[nodiscard]] inline bool Boolean(
         const JsonValue& value,
         std::string_view description)
     {
-        if (value.kind != JsonValue::Kind::Boolean)
-            throw std::runtime_error(std::string(description) + " is not a boolean");
-        return value.boolean;
+        if (value.Type() != json::Kind::Boolean)
+            throw json::LegacyError(std::string(description) + " is not a boolean");
+        return value.Boolean();
     }
+
+    inline JsonValue Member(const JsonDocument& value, std::string_view name)
+    { return Member(value.Root(), name); }
+    inline std::int64_t Integer(const JsonDocument& value, std::string_view description)
+    { return Integer(value.Root(), description); }
+    inline std::string_view String(const JsonDocument& value, std::string_view description)
+    { return String(value.Root(), description); }
+    inline bool Boolean(const JsonDocument& value, std::string_view description)
+    { return Boolean(value.Root(), description); }
+    inline void RequireExactObject(const JsonDocument& value,
+        std::initializer_list<std::string_view> expected, std::string_view description)
+    { RequireExactObject(value.Root(), expected, description); }
 
     [[nodiscard]] inline std::string ReadFile(
         const std::filesystem::path& path,
         std::uintmax_t maximumBytes)
     {
-        if (!std::filesystem::is_regular_file(path))
-            throw std::runtime_error("required file is missing: " + path.string());
-        const std::uintmax_t size = std::filesystem::file_size(path);
-        if (size == 0u || size > maximumBytes)
-            throw std::runtime_error("file size is outside its limit: " + path.string());
-        std::ifstream stream(path, std::ios::binary);
-        if (!stream)
-            throw std::runtime_error("cannot read " + path.string());
-        return {
-            std::istreambuf_iterator<char>(stream),
-            std::istreambuf_iterator<char>()
-        };
+        FileBytes bytes;
+        FileReadResult result;
+        if (!ReadFileBytes(path.c_str(), maximumBytes, bytes, result))
+        {
+            const char* message = result.error == FileReadError::Missing || result.error == FileReadError::NotRegular ?
+                "required file is missing: " : result.error == FileReadError::TooLarge ?
+                "file size is outside its limit: " : "cannot read ";
+            throw json::LegacyError(message + json::PathText(path));
+        }
+        if (!bytes.Size()) throw json::LegacyError("file size is outside its limit: " + json::PathText(path));
+        return {bytes.Data(), bytes.Size()};
     }
 
     [[nodiscard]] inline bool IsLowerHex(std::string_view value, std::size_t size)

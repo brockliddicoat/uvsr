@@ -1,8 +1,6 @@
 #pragma once
 
-#include <cstddef>
-#include <string>
-#include <string_view>
+#include "array_view.h"
 
 namespace uvsr
 {
@@ -14,19 +12,19 @@ namespace uvsr
             : character;
     }
 
-    [[nodiscard]] constexpr bool SceneLightNameEquals(
-        std::string_view left,
-        std::string_view right)
+    [[nodiscard]] inline bool SceneLightNameEquals(
+        ArrayView<const char> left,
+        ArrayView<const char> right)
     {
-        if (left.size() != right.size())
+        if (!left.IsValid() || !right.IsValid() || left.count != right.count)
             return false;
 
-        for (std::size_t characterIndex = 0;
-            characterIndex < left.size();
+        for (size_t characterIndex = 0;
+            characterIndex < left.count;
             ++characterIndex)
         {
-            if (FoldSceneLightNameCharacter(left[characterIndex]) !=
-                FoldSceneLightNameCharacter(right[characterIndex]))
+            if (FoldSceneLightNameCharacter(left.data[characterIndex]) !=
+                FoldSceneLightNameCharacter(right.data[characterIndex]))
             {
                 return false;
             }
@@ -34,24 +32,23 @@ namespace uvsr
         return true;
     }
 
-    // Imported scenes can use inconsistent node casing and the legacy HDRI_SKY
-    // spelling. Normalize only the two renderer-owned light identities; preserve
-    // every authored lamp name verbatim.
-    [[nodiscard]] inline std::string NormalizeSceneLightName(
-        std::string_view name)
+    // normalize only the two renderer-owned identities. other names keep their
+    // original borrowed storage; replacements borrow static literals.
+    [[nodiscard]] inline ArrayView<const char> NormalizeSceneLightName(
+        ArrayView<const char> name)
     {
-        if (SceneLightNameEquals(name, "sun") ||
-            SceneLightNameEquals(name, "sun_1"))
+        if (SceneLightNameEquals(name, {"sun", 3}) ||
+            SceneLightNameEquals(name, {"sun_1", 5}))
         {
-            return "sun_1";
+            return {"sun_1", 5};
         }
 
-        if (SceneLightNameEquals(name, "hdri_sky") ||
-            SceneLightNameEquals(name, "hdri_sky_1"))
+        if (SceneLightNameEquals(name, {"hdri_sky", 8}) ||
+            SceneLightNameEquals(name, {"hdri_sky_1", 10}))
         {
-            return "hdri_sky_1";
+            return {"hdri_sky_1", 10};
         }
 
-        return std::string(name);
+        return name;
     }
 }

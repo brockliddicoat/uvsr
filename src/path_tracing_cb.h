@@ -9,7 +9,7 @@
 
 struct PathTracingConstants
 {
-    PlanarViewConstants view;
+    RendererViewConstants view;
     FlashlightBeamProfileBinding flashlight;
 
     float environmentScale;

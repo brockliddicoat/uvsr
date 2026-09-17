@@ -1,44 +1,32 @@
 #pragma once
 
-#include <nvrhi/nvrhi.h>
-
-#include <cstdint>
+#include <stdint.h>
 
 namespace uvsr
 {
-
-
-    [[nodiscard]] inline constexpr bool
-    IsRendererReceiverTextureDescriptorSupported(
-        const nvrhi::TextureDesc& descriptor) noexcept
+    struct RendererReceiverTextureProperties
     {
-        if (descriptor.width == 0u || descriptor.height == 0u ||
-            descriptor.depth != 1u || descriptor.arraySize != 1u ||
-            descriptor.mipLevels != 1u || descriptor.sampleQuality != 0u ||
-            descriptor.sampleCount != 1u)
-        {
-            return false;
-        }
+        uint32_t width = 0, height = 0, depth = 0, arraySize = 0, mipLevels = 0;
+        uint32_t sampleQuality = 0, sampleCount = 0;
+        bool texture2D = false;
+    };
 
-        return descriptor.dimension == nvrhi::TextureDimension::Texture2D;
+    [[nodiscard]] inline constexpr bool IsRendererReceiverTextureDescriptorSupported(
+        const RendererReceiverTextureProperties& descriptor) noexcept
+    {
+        return descriptor.width != 0 && descriptor.height != 0 && descriptor.depth == 1 &&
+            descriptor.arraySize == 1 && descriptor.mipLevels == 1 && descriptor.sampleQuality == 0 &&
+            descriptor.sampleCount == 1 && descriptor.texture2D;
     }
 
-    [[nodiscard]] inline constexpr bool
-    AreRendererReceiverTextureDescriptorsCompatible(
-        const nvrhi::TextureDesc& depth,
-        const nvrhi::TextureDesc& material,
-        const nvrhi::TextureDesc& normals) noexcept
+    [[nodiscard]] inline constexpr bool AreRendererReceiverTextureDescriptorsCompatible(
+        const RendererReceiverTextureProperties& depth, const RendererReceiverTextureProperties& material,
+        const RendererReceiverTextureProperties& normals) noexcept
     {
-        if (!IsRendererReceiverTextureDescriptorSupported(depth) ||
-            !IsRendererReceiverTextureDescriptorSupported(material) ||
-            !IsRendererReceiverTextureDescriptorSupported(normals))
-        {
-            return false;
-        }
-
-        return material.width == depth.width &&
-            material.height == depth.height &&
-            normals.width == depth.width &&
-            normals.height == depth.height;
+        return IsRendererReceiverTextureDescriptorSupported(depth) &&
+            IsRendererReceiverTextureDescriptorSupported(material) &&
+            IsRendererReceiverTextureDescriptorSupported(normals) &&
+            material.width == depth.width && material.height == depth.height &&
+            normals.width == depth.width && normals.height == depth.height;
     }
 }

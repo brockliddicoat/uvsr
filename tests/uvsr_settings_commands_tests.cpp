@@ -2,6 +2,7 @@
 
 #include "settings_snapshot.h"
 #include "settings_snapshot_decoder.h"
+#include "settings_snapshot_persistence_win32.h"
 
 #include <Windows.h>
 
@@ -32,6 +33,63 @@ namespace
             Fail(message);
     }
 
+    template<class Option, size_t Count>
+    uvsr::SettingsSnapshotOptionSource<Option> OptionSource(const Option (&rows)[Count]) noexcept
+    {
+        return {rows, Count, [](const void* context, size_t index, Option& output, uvsr::SettingsSnapshotError&) noexcept {
+            output = static_cast<const Option*>(context)[index];
+            return true;
+        }};
+    }
+
+    uvsr::DecodedSettings ParseSnapshot(std::string_view text)
+    {
+        uvsr::DecodedSettings result;
+        uvsr::SettingsSnapshotError error;
+        if (!uvsr::ParseSettingsSnapshot(text, result, error)) Fail(error.Message());
+        return result;
+    }
+    uvsr::DecodedSettings CloneSnapshot(const uvsr::DecodedSettings& source)
+    {
+        uvsr::DecodedSettings result;
+        uvsr::SettingsSnapshotError error;
+        if (!source.CloneTo(result, error)) Fail(error.Message());
+        return result;
+    }
+    uvsr::DecodedSettings SnapshotFromValues(const std::map<std::string, std::string, std::less<>>& values)
+    {
+        uvsr::DecodedSettings result;
+        uvsr::SettingsSnapshotError error;
+        for (const auto& [name, value] : values)
+            if (!result.Insert(name, value, error)) Fail(error.Message());
+        return result;
+    }
+    void SetSnapshot(uvsr::DecodedSettings& settings, std::string_view name, std::string_view value)
+    {
+        uvsr::SettingsSnapshotError error;
+        if (!settings.Set(name, value, error)) Fail(error.Message());
+    }
+    std::string SnapshotValue(const uvsr::DecodedSettings& settings, std::string_view name)
+    {
+        const auto* found = settings.Find(name);
+        Require(found != nullptr, "snapshot fixture field is missing");
+        return std::string(found->value);
+    }
+    std::string CanonicalSnapshot(const uvsr::DecodedSettings& settings)
+    {
+        uvsr::SettingsSnapshotError error;
+        uvsr::json::EncodedText output;
+        if (!uvsr::FormatCanonicalSettingsSnapshot(settings, output, error)) Fail(error.Message());
+        return {output.Data(), output.Size()};
+    }
+    std::string CatalogSection(const uvsr::SettingsSnapshotController& controller)
+    {
+        uvsr::SettingsSnapshotError error;
+        uvsr::json::EncodedText output;
+        if (!controller.BuildCatalogSection(output, error)) Fail(error.Message());
+        return {output.Data(), output.Size()};
+    }
+
     std::string FixtureValue(
         const uvsr::UiSettingsCommandDefinition& definition)
     {
@@ -56,11 +114,10 @@ namespace
         if (definition.dynamic)
             return "<unavailable>";
 
-        std::string error;
+        uvsr::SettingsSnapshotError error;
         if (definition.typedDefault.HasValue())
         {
-            const std::string value =
-                uvsr::FormatUiSettingsDefaultAnchor(definition);
+            const std::string value(uvsr::FormatUiSettingsDefaultAnchor(definition).View());
             if (uvsr::ValidateSettingsSnapshotCatalogValue(
                     definition, value, error))
             {
@@ -80,7 +137,7 @@ namespace
             }
         }
         Fail("could not form a valid live fixture for " +
-            std::string(definition.name) + ": " + error);
+            std::string(definition.name) + ": " + std::string(error.MessageView()));
     }
 }
 
@@ -90,20 +147,24 @@ int main()
     for (const auto& definition : UiSettingsCommandCatalog)
     {
         UiSettingsValue declared;
-        if (!GetDeclaredUiSettingsDefaultValue(definition, declared) ||
+        SettingsSnapshotError error;
+        if (!GetDeclaredUiSettingsDefaultValue(definition, declared, error) ||
             definition.kind == UiSettingsCommandKind::DynamicSelection)
             continue;
         UiSettingsValue parsed;
-        std::string error;
         Require(ParseCanonicalUiSettingsValue(definition,
-                FormatUiSettingsDefaultAnchor(definition), parsed, error) && parsed == declared,
+                FormatUiSettingsDefaultAnchor(definition).View(), parsed, error) && parsed == declared,
             "declared typed default must equal its canonical round trip: " + std::string(definition.name));
     }
+    UiSettingsValue amp, ogg, none, selectorNone;
+    SettingsSnapshotError valueError;
+    Require(amp.SetToken("amp", valueError) && ogg.SetToken("ogg", valueError) &&
+        none.SetToken("none", valueError) && selectorNone.SetSelector("none", valueError),
+        "prepare distinct text kinds");
     Require(!(UiSettingsValue::Boolean(true) == UiSettingsValue::Boolean(false)) &&
             !(UiSettingsValue::Integer(1) == UiSettingsValue::Integer(2)) &&
             !(UiSettingsValue::Float(1.f) == UiSettingsValue::Float(2.f)) &&
-            !(UiSettingsValue::Token("amp") == UiSettingsValue::Token("ogg")) &&
-            !(UiSettingsValue::Token("none") == UiSettingsValue::Selector("none")),
+            !(amp == ogg) && !(none == selectorNone),
         "changed values and different kinds must request a mutation");
     const auto vector = UiSettingsValue::Vector({ 1.f, 2.f, 3.f, 0.f }, 3u);
     Require(vector == UiSettingsValue::Vector({ 1.f, 2.f, 3.f, 9.f }, 3u) &&
@@ -116,111 +177,107 @@ int main()
         "integer parsing must consume the complete token");
     Require(!TryParseCommandInteger("17px", integer),
         "integer parsing must reject suffixes");
-    const std::vector<SettingsSnapshotAdapterOption> adapters = {
+    const SettingsSnapshotAdapterOption adapters[] = {
         { 0, "Duplicate GPU" }, { 1, "Duplicate GPU" }
     };
     std::int64_t adapterIndex = -1;
-    std::string canonicalToken;
-    std::string selectorError;
-    std::size_t selectorWrites = 0u;
+    UiSettingsValue canonicalToken;
+    SettingsSnapshotError selectorError;
     Require(!ResolveSettingsSnapshotAdapterToken(
             "Duplicate GPU",
-            adapters,
+            OptionSource(adapters),
             adapterIndex,
             canonicalToken,
             selectorError) &&
-            selectorWrites == 0u &&
             ResolveSettingsSnapshotAdapterToken(
                 "1",
-                adapters,
+                OptionSource(adapters),
                 adapterIndex,
                 canonicalToken,
                 selectorError) &&
-            adapterIndex == 1 && canonicalToken == "1",
+            adapterIndex == 1 && canonicalToken.Text() == "1",
         "duplicate adapter display names must fail without mutation while "
         "the canonical numeric token remains exact");
 
-    const std::vector<SettingsSnapshotSceneOption> scenes = {
+    const SettingsSnapshotSceneOption scenes[] = {
         { "a/main.scene.json", "Duplicate Scene" },
         { "b/main.scene.json", "Duplicate Scene" },
         { "collision.scene.json", "Primary" },
         { "other.scene.json", "collision.scene.json" },
         { "numeric.scene.json", "7" }
     };
-    std::string sceneFile;
+    size_t sceneOrdinal = SIZE_MAX;
     Require(!ResolveSettingsSnapshotSceneToken(
             "Duplicate Scene",
-            scenes,
-            sceneFile,
+            OptionSource(scenes),
+            sceneOrdinal,
             canonicalToken,
             selectorError) &&
-            selectorWrites == 0u &&
             ResolveSettingsSnapshotSceneToken(
                 "b/main.scene.json",
-                scenes,
-                sceneFile,
+                OptionSource(scenes),
+                sceneOrdinal,
                 canonicalToken,
                 selectorError) &&
-            sceneFile == "b/main.scene.json" &&
-            canonicalToken == sceneFile,
+            scenes[sceneOrdinal].fileName == "b/main.scene.json" &&
+            canonicalToken.Text() == scenes[sceneOrdinal].fileName,
         "duplicate scene display names must fail while exact filenames "
         "round-trip canonically");
     Require(ResolveSettingsSnapshotSceneToken(
             "collision.scene.json",
-            scenes,
-            sceneFile,
+            OptionSource(scenes),
+            sceneOrdinal,
             canonicalToken,
             selectorError) &&
-            sceneFile == "collision.scene.json" &&
+            scenes[sceneOrdinal].fileName == "collision.scene.json" &&
             ResolveSettingsSnapshotSceneToken(
                 "7",
-                scenes,
-                sceneFile,
+                OptionSource(scenes),
+                sceneOrdinal,
                 canonicalToken,
                 selectorError) &&
-            sceneFile == "numeric.scene.json",
+            scenes[sceneOrdinal].fileName == "numeric.scene.json",
         "an exact canonical scene filename must outrank a display-name "
         "collision while numeric-looking display names remain friendly input");
-    const std::vector<SettingsSnapshotSceneOption> runtimeScenes = {
+    const SettingsSnapshotSceneOption runtimeScenes[] = {
         {
             "bistro/main.scene.json",
-            "Bistro",
-            "C:/package/media/bistro/main.scene.json"
+            "Bistro"
         }
     };
+    const std::string_view runtimePaths[] = {"C:/package/media/bistro/main.scene.json"};
     Require(ResolveSettingsSnapshotSceneToken(
             "bistro/main.scene.json",
-            runtimeScenes,
-            sceneFile,
+            OptionSource(runtimeScenes),
+            sceneOrdinal,
             canonicalToken,
             selectorError) &&
-            sceneFile == "C:/package/media/bistro/main.scene.json" &&
-            canonicalToken == "bistro/main.scene.json",
+            sceneOrdinal == 0 && runtimePaths[sceneOrdinal] == "C:/package/media/bistro/main.scene.json" &&
+            canonicalToken.Text() == "bistro/main.scene.json",
         "scene snapshots must preserve a relative canonical token while "
         "selecting the exact runtime catalog path");
 
-    const std::vector<SettingsSnapshotLightOption> lights = {
+    const SettingsSnapshotLightOption lights[] = {
         { 0u, "duplicate-light" }, { 1u, "duplicate-light" }
     };
     std::size_t lightIndex = 0u;
     Require(!ResolveSettingsSnapshotLightToken(
             "duplicate-light",
-            lights,
+            OptionSource(lights),
             lightIndex,
             canonicalToken,
             selectorError) &&
-            selectorWrites == 0u &&
             ResolveSettingsSnapshotLightToken(
                 "1:duplicate-light",
-                lights,
+                OptionSource(lights),
                 lightIndex,
                 canonicalToken,
                 selectorError) &&
-            lightIndex == 1u && canonicalToken == "1:duplicate-light",
+            lightIndex == 1u && canonicalToken.Text() == "1:duplicate-light",
         "duplicate light identities must require the stable index:identity "
         "snapshot token");
 
-    const std::vector<SettingsSnapshotMaterialOption> materials = {
+    const SettingsSnapshotMaterialOption materials[] = {
         { 10u, "duplicate-material" },
         { 20u, "duplicate-material" }
     };
@@ -228,66 +285,66 @@ int main()
     std::uint32_t materialId = 0u;
     Require(!ResolveSettingsSnapshotMaterialToken(
             "duplicate-material",
-            materials,
+            OptionSource(materials),
             noMaterial,
             materialId,
             canonicalToken,
             selectorError) &&
-            selectorWrites == 0u &&
             ResolveSettingsSnapshotMaterialToken(
                 "20",
-                materials,
+                OptionSource(materials),
                 noMaterial,
                 materialId,
                 canonicalToken,
                 selectorError) &&
-            !noMaterial && materialId == 20u && canonicalToken == "20" &&
+            !noMaterial && materialId == 20u && canonicalToken.Text() == "20" &&
             ResolveSettingsSnapshotMaterialToken(
                 "none",
-                materials,
+                OptionSource(materials),
                 noMaterial,
                 materialId,
                 canonicalToken,
                 selectorError) &&
-            noMaterial && canonicalToken == "none",
+            noMaterial && canonicalToken.Text() == "none",
         "material snapshots must use an exact runtime id or explicit none");
 
-    std::string adapterGet = FormatSettingsSnapshotAdapterToken(0);
+    UiSettingsValue adapterGet, adapterRoundTrip;
+    Require(FormatSettingsSnapshotAdapterToken(0, adapterGet, selectorError), "prepare adapter GET");
     adapterIndex = 1;
     Require(ResolveSettingsSnapshotAdapterToken(
-            adapterGet,
-            adapters,
+            adapterGet.Text(),
+            OptionSource(adapters),
             adapterIndex,
             canonicalToken,
             selectorError) &&
-            FormatSettingsSnapshotAdapterToken(adapterIndex) == adapterGet,
+            FormatSettingsSnapshotAdapterToken(adapterIndex, adapterRoundTrip, selectorError) && adapterRoundTrip == adapterGet,
         "adapter GET -> select away -> SET token -> GET must be exact");
-    std::string sceneGet = FormatSettingsSnapshotSceneToken(
-        "a/main.scene.json");
-    sceneFile = "b/main.scene.json";
+    UiSettingsValue sceneGet;
+    Require(FormatSettingsSnapshotSceneToken("a/main.scene.json", sceneGet, selectorError), "prepare scene GET");
+    sceneOrdinal = 1;
     Require(ResolveSettingsSnapshotSceneToken(
-            sceneGet,
-            scenes,
-            sceneFile,
+            sceneGet.Text(),
+            OptionSource(scenes),
+            sceneOrdinal,
             canonicalToken,
             selectorError) && canonicalToken == sceneGet,
         "scene GET -> select away -> SET token -> GET must be exact");
-    std::string lightGet = FormatSettingsSnapshotLightToken(
-        0u, "duplicate-light");
+    UiSettingsValue lightGet;
+    Require(FormatSettingsSnapshotLightToken(0u, "duplicate-light", lightGet, selectorError), "prepare light GET");
     lightIndex = 1u;
     Require(ResolveSettingsSnapshotLightToken(
-            lightGet,
-            lights,
+            lightGet.Text(),
+            OptionSource(lights),
             lightIndex,
             canonicalToken,
             selectorError) && canonicalToken == lightGet,
         "light GET -> select away -> SET token -> GET must be exact");
-    std::string materialGet = FormatSettingsSnapshotMaterialToken(
-        false, 10u);
+    UiSettingsValue materialGet;
+    Require(FormatSettingsSnapshotMaterialToken(false, 10u, materialGet, selectorError), "prepare material GET");
     materialId = 20u;
     Require(ResolveSettingsSnapshotMaterialToken(
-            materialGet,
-            materials,
+            materialGet.Text(),
+            OptionSource(materials),
             noMaterial,
             materialId,
             canonicalToken,
@@ -296,19 +353,19 @@ int main()
 
     const std::int64_t maximumAdapter =
         static_cast<std::int64_t>((std::numeric_limits<int>::max)());
-    const std::vector<SettingsSnapshotAdapterOption> boundaryAdapters = {
+    const SettingsSnapshotAdapterOption boundaryAdapters[] = {
         { maximumAdapter, "Maximum Adapter" }
     };
     Require(ResolveSettingsSnapshotAdapterToken(
             std::to_string(maximumAdapter),
-            boundaryAdapters,
+            OptionSource(boundaryAdapters),
             adapterIndex,
             canonicalToken,
             selectorError) &&
             adapterIndex == maximumAdapter &&
             !ResolveSettingsSnapshotAdapterToken(
                 std::to_string(maximumAdapter + 1),
-                boundaryAdapters,
+                OptionSource(boundaryAdapters),
                 adapterIndex,
                 canonicalToken,
                 selectorError),
@@ -316,21 +373,21 @@ int main()
 
     const std::size_t maximumLight =
         (std::numeric_limits<std::size_t>::max)();
-    const std::vector<SettingsSnapshotLightOption> boundaryLights = {
+    const SettingsSnapshotLightOption boundaryLights[] = {
         { maximumLight, "maximum-light" }
     };
     const std::string maximumLightToken =
         std::to_string(maximumLight) + ":maximum-light";
     Require(ResolveSettingsSnapshotLightToken(
             maximumLightToken,
-            boundaryLights,
+            OptionSource(boundaryLights),
             lightIndex,
             canonicalToken,
             selectorError) &&
             lightIndex == maximumLight &&
             !ResolveSettingsSnapshotLightToken(
                 "18446744073709551616:maximum-light",
-                boundaryLights,
+                OptionSource(boundaryLights),
                 lightIndex,
                 canonicalToken,
                 selectorError),
@@ -338,12 +395,12 @@ int main()
 
     const std::uint32_t maximumMaterial =
         (std::numeric_limits<std::uint32_t>::max)();
-    const std::vector<SettingsSnapshotMaterialOption> boundaryMaterials = {
+    const SettingsSnapshotMaterialOption boundaryMaterials[] = {
         { maximumMaterial, "Maximum Material" }
     };
     Require(ResolveSettingsSnapshotMaterialToken(
             std::to_string(maximumMaterial),
-            boundaryMaterials,
+            OptionSource(boundaryMaterials),
             noMaterial,
             materialId,
             canonicalToken,
@@ -351,7 +408,7 @@ int main()
             materialId == maximumMaterial &&
             !ResolveSettingsSnapshotMaterialToken(
                 "4294967296",
-                boundaryMaterials,
+                OptionSource(boundaryMaterials),
                 noMaterial,
                 materialId,
                 canonicalToken,
@@ -367,42 +424,56 @@ int main()
     }
 
     std::size_t writes = 0u;
-    const auto read = [&live](
-        SettingId id,
-        std::string& value,
-        std::string& error)
+    struct RuntimeContext
     {
+        decltype(live)& liveValues;
+        std::size_t& writeCount;
+        bool selectorReady = false;
+        SettingsSnapshotErrorCode readFailure = SettingsSnapshotErrorCode::None;
+        SettingsSnapshotValueReader read = nullptr;
+        SettingsSnapshotValueWriter write = nullptr;
+    } runtime{live, writes};
+    const auto read = [](void* owner,
+        SettingId id,
+        SettingsSnapshotText& value,
+        SettingsSnapshotError& error) noexcept
+    {
+        auto& live = static_cast<RuntimeContext*>(owner)->liveValues;
         const std::string_view name = SettingName(id);
         const auto found = live.find(name);
         if (found == live.end())
         {
-            error = "missing fake live value";
+            error.code = SettingsSnapshotErrorCode::InvalidInput;
+            error.message = "missing fake live value";
             return false;
         }
-        value = found->second;
-        return true;
+        return value.Assign(found->second, error);
     };
-    const auto validate = [](
+    const auto validate = [](void*,
         SettingId id,
         std::string_view value,
         std::string_view,
-        std::string& error)
+        SettingsSnapshotError& error) noexcept
     {
         const UiSettingsCommandDefinition* definition =
             FindSettingsCommandDefinition(id);
-        return definition && IsSettingsSnapshotValue(*definition) &&
+        const bool valid = definition && IsSettingsSnapshotValue(*definition) &&
             ValidateSettingsSnapshotCatalogValue(*definition, value, error);
+        return valid;
     };
-    const auto write = [&live, &writes](
+    const auto write = [](void* owner,
         SettingId id,
         std::string_view value,
-        std::string& error)
+        SettingsSnapshotError& error) noexcept
     {
+        auto& runtime = *static_cast<RuntimeContext*>(owner);
+        auto& live = runtime.liveValues;
+        auto& writes = runtime.writeCount;
         const std::string_view name = SettingName(id);
         const auto found = live.find(name);
         if (found == live.end())
         {
-            error = "missing fake live value";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "missing fake live value", {}};
             return false;
         }
         ++writes;
@@ -410,36 +481,48 @@ int main()
         return true;
     };
 
-    const auto driveImmediate = [&live](
+    const auto driveImmediate = [](void* owner,
         SettingId id,
         std::string_view value,
         bool begin,
         bool,
-        std::string& selectorError)
+        SettingsSnapshotError& selectorError) noexcept
     {
+        auto& live = static_cast<RuntimeContext*>(owner)->liveValues;
         const std::string_view name = SettingName(id);
         if (name == "gpu.adapter" || !begin)
         {
-            selectorError = "unexpected selector transition";
+            selectorError = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "unexpected selector transition", {}};
             return SettingsSnapshotSelectorTransition::Failed;
         }
         live[std::string(name)] = std::string(value);
         return SettingsSnapshotSelectorTransition::Ready;
     };
     SettingsSnapshotRuntimeAccess access{
-        true,
+        true, &runtime,
         validate,
         read,
         read,
         write,
         driveImmediate
     };
-    SettingsSnapshotController controller;
-    controller.Refresh(read);
+    runtime.read = read;
+    runtime.write = write;
+    const auto WithReader = [&runtime](SettingsSnapshotValueReader reader) {
+        SettingsSnapshotRuntimeAccess result;
+        result.context = &runtime;
+        result.readValue = reader;
+        return result;
+    };
+    SettingsSnapshotController controller{SettingsSnapshotCatalogLocation::Installed};
+    {
+        SettingsSnapshotError refreshError;
+        Require(controller.Refresh(WithReader(read), refreshError), "controller refresh failed");
+    }
     const DecodedSettings captured =
-        ParseSettingsSnapshot(controller.Canonical());
+        ParseSnapshot(controller.Canonical());
     Require(
-        captured.size() == live.size() &&
+        captured.Count() == live.size() &&
             IsSettingsSnapshotCode(controller.Code()),
         "controller capture must include the authoritative snapshot catalog");
 
@@ -449,14 +532,17 @@ int main()
         step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
             step.result.changedValueCount == 0u && writes == 0u,
         "an idempotent snapshot must verify without setters");
+    const auto inactive = controller.ContinueStagedApply();
+    Require(inactive.progress == SettingsSnapshotTransactionProgress::Failed &&
+        inactive.result.failureStage == SettingsSnapshotTransactionFailureStage::Configuration && writes == 0,
+        "inactive continuation must reject without using a completed callback context");
 
-    DecodedSettings changedPayload = captured;
+    DecodedSettings changedPayload = CloneSnapshot(captured);
     const std::string previousFill =
-        changedPayload.at("sky.ambient-fill.enabled");
-    changedPayload["sky.ambient-fill.enabled"] =
-        previousFill == "on" ? "off" : "on";
+        SnapshotValue(changedPayload, "sky.ambient-fill.enabled");
+    SetSnapshot(changedPayload, "sky.ambient-fill.enabled", previousFill == "on" ? "off" : "on");
     const std::string changedCanonical =
-        FormatCanonicalSettingsSnapshot(changedPayload);
+        CanonicalSnapshot(changedPayload);
     step = controller.BeginApplyCanonicalStaged(changedCanonical, access);
     Require(
         step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
@@ -464,60 +550,62 @@ int main()
             live.at("sky.ambient-fill.enabled") != previousFill,
         "one mutable value must apply through the staged transaction");
 
-    DecodedSettings missing = changedPayload;
-    missing.erase("sky.ambient-fill.enabled");
+    DecodedSettings missing = CloneSnapshot(changedPayload);
+    (void)missing.Erase("sky.ambient-fill.enabled");
     const std::size_t writesBeforeReject = writes;
     step = controller.BeginApplyCanonicalStaged(
-        FormatCanonicalSettingsSnapshot(missing), access);
+        CanonicalSnapshot(missing), access);
     Require(
         step.progress == SettingsSnapshotTransactionProgress::Failed &&
             writes == writesBeforeReject &&
-            step.result.error.find("missing") != std::string::npos,
+            step.result.error.MessageView().find("missing") != std::string::npos,
         "missing membership must reject before mutation");
 
-    DecodedSettings unknown = changedPayload;
-    unknown.emplace("unknown.fixture.setting", "invalid-fixture-value");
+    DecodedSettings unknown = CloneSnapshot(changedPayload);
+    SetSnapshot(unknown, "unknown.fixture.setting", "invalid-fixture-value");
     step = controller.BeginApplyCanonicalStaged(
-        FormatCanonicalSettingsSnapshot(unknown), access);
+        CanonicalSnapshot(unknown), access);
     Require(
         step.progress == SettingsSnapshotTransactionProgress::Failed &&
             writes == writesBeforeReject &&
-            step.result.error.find("unknown") != std::string::npos,
+            step.result.error.MessageView().find("unknown") != std::string::npos,
         "a retired setting must reject before mutation");
 
-    DecodedSettings selectorPayload = changedPayload;
-    selectorPayload["scene.current"] = "target/main.scene.json";
+    DecodedSettings selectorPayload = CloneSnapshot(changedPayload);
+    SetSnapshot(selectorPayload, "scene.current", "target/main.scene.json");
     step = controller.BeginApplyCanonicalStaged(
-        FormatCanonicalSettingsSnapshot(selectorPayload), access);
+        CanonicalSnapshot(selectorPayload), access);
     Require(
         step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
             step.result.changedValueCount == 1u &&
             live.at("scene.current") == "target/main.scene.json",
         "the controller must drive selectors through its staged path");
 
-    DecodedSettings pendingPayload = selectorPayload;
-    pendingPayload["scene.current"] = "pending/main.scene.json";
-    bool selectorReady = false;
-    access.driveSelector = [&live, &selectorReady](
+    DecodedSettings pendingPayload = CloneSnapshot(selectorPayload);
+    SetSnapshot(pendingPayload, "scene.current", "pending/main.scene.json");
+    runtime.selectorReady = false;
+    access.driveSelector = [](void* owner,
         SettingId id,
         std::string_view value,
         bool begin,
         bool,
-        std::string& selectorError)
+        SettingsSnapshotError& selectorError) noexcept
     {
+        auto& runtime = *static_cast<RuntimeContext*>(owner);
+        auto& live = runtime.liveValues;
         const std::string_view name = SettingName(id);
         if (name != "scene.current")
         {
-            selectorError = "unexpected pending selector";
+            selectorError = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "unexpected pending selector", {}};
             return SettingsSnapshotSelectorTransition::Failed;
         }
-        if (begin || !selectorReady)
+        if (begin || !runtime.selectorReady)
             return SettingsSnapshotSelectorTransition::Pending;
         live[std::string(name)] = std::string(value);
         return SettingsSnapshotSelectorTransition::Ready;
     };
     step = controller.BeginApplyCanonicalStaged(
-        FormatCanonicalSettingsSnapshot(pendingPayload), access);
+        CanonicalSnapshot(pendingPayload), access);
     Require(
         step.progress == SettingsSnapshotTransactionProgress::Pending &&
             controller.HasStagedApply(),
@@ -535,8 +623,8 @@ int main()
                 SettingsSnapshotTransactionFailureStage::Configuration &&
             controller.HasStagedApply(),
         "a second transaction must not replace pending selector work");
-    selectorReady = true;
-    step = controller.ContinueStagedApply(access);
+    runtime.selectorReady = true;
+    step = controller.ContinueStagedApply();
     Require(
         step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
             live.at("scene.current") == "pending/main.scene.json" &&
@@ -545,19 +633,19 @@ int main()
     access.driveSelector = driveImmediate;
 
     DecodedSettings adapterMismatch =
-        ParseSettingsSnapshot(controller.Canonical());
-    adapterMismatch["gpu.adapter"] = "1";
+        ParseSnapshot(controller.Canonical());
+    SetSnapshot(adapterMismatch, "gpu.adapter", "1");
     const auto stateBeforeAdapterMismatch = live;
     const std::size_t writesBeforeAdapterMismatch = writes;
     step = controller.BeginApplyCanonicalStaged(
-        FormatCanonicalSettingsSnapshot(adapterMismatch), access);
+        CanonicalSnapshot(adapterMismatch), access);
     Require(
         step.progress == SettingsSnapshotTransactionProgress::Failed &&
             step.result.failureStage ==
                 SettingsSnapshotTransactionFailureStage::Preflight &&
             live == stateBeforeAdapterMismatch &&
             writes == writesBeforeAdapterMismatch &&
-            step.result.error.find("-adapter") != std::string::npos,
+            step.result.error.MessageView().find("-adapter") != std::string::npos,
         "adapter identity must be a zero mutation startup precondition");
 
     access.sceneReady = false;
@@ -566,7 +654,7 @@ int main()
     Require(
         step.progress == SettingsSnapshotTransactionProgress::Failed &&
             writes == writesBeforeAdapterMismatch &&
-            step.result.error.find("fully loaded scene") != std::string::npos,
+            step.result.error.MessageView().find("fully loaded scene") != std::string::npos,
         "snapshot application must wait for scene readiness");
     access.sceneReady = true;
 
@@ -576,9 +664,10 @@ int main()
         ("uvsr-settings-command-owner-" +
             std::to_string(GetCurrentProcessId()) + ".txt");
     std::filesystem::remove(catalogPath, fileError);
+    SettingsSnapshotError persistError;
     Require(
-        controller.Persist(catalogPath) &&
-            controller.Persist(catalogPath),
+        controller.Persist(catalogPath.c_str(), persistError) &&
+            controller.Persist(catalogPath.c_str(), persistError),
         "catalog persistence must be idempotent");
     std::ifstream input(catalogPath, std::ios::binary);
     const std::string persisted{
@@ -586,11 +675,11 @@ int main()
         std::istreambuf_iterator<char>()
     };
     Require(
-        persisted.find(controller.BuildCatalogSection()) !=
+        persisted.find(CatalogSection(controller)) !=
                 std::string::npos &&
             persisted.find(
-                controller.BuildCatalogSection(),
-                persisted.find(controller.BuildCatalogSection()) + 1u) ==
+                CatalogSection(controller),
+                persisted.find(CatalogSection(controller)) + 1u) ==
                 std::string::npos,
         "catalog must contain one exact framed entry");
 
@@ -610,25 +699,90 @@ int main()
         SetEnvironmentVariableW(L"LOCALAPPDATA", loadRoot.c_str()) != FALSE,
         "test must set its process local catalog root");
 
-    controller.Refresh(read);
+    {
+        SettingsSnapshotError refreshError;
+        Require(controller.Refresh(WithReader(read), refreshError), "controller refresh failed");
+    }
     const std::string currentVersion(SettingsSnapshotVersionText.data(), 4u);
     const std::filesystem::path currentCatalog =
         loadRoot / "UVSR" /
         ("settings-snapshots-v" + currentVersion + ".txt");
-    Require(controller.Persist(currentCatalog),
+    Require(controller.Persist(currentCatalog.c_str(), persistError),
         "current schema fixture must persist");
     step = controller.BeginLoadCodeStaged(controller.Code(), access);
     Require(
         step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
             step.result.changedValueCount == 0u,
         "current schema load must use the staged controller path: " +
-            step.result.error);
+            std::string(step.result.error.MessageView()));
+
+    {
+        const std::string installedCode(controller.Code());
+        const std::string installedCanonical(controller.Canonical());
+        const char* installedData = controller.Canonical().data();
+        const auto writesBeforePolicy = writes;
+        SetSettingsSnapshotWriteRootForTests(nullptr);
+        Require(!controller.PersistToLocalCatalog(persistError) &&
+            persistError.code == SettingsSnapshotErrorCode::Path &&
+            persistError.nativeCode == std::uint32_t(E_FAIL) && persistError.cleanupCode == 0 &&
+            persistError.MessageView() == "cannot locate snapshot catalog local app data directory" &&
+            controller.Code() == installedCode && controller.Canonical() == installedCanonical &&
+            controller.Canonical().data() == installedData,
+            "installed lookup failure must reach the caller without changing the published snapshot");
+        SetSettingsSnapshotWriteRootForTests(loadRoot.c_str());
+        Require(controller.PersistToLocalCatalog(persistError) &&
+            persistError.code == SettingsSnapshotErrorCode::None && persistError.nativeCode == 0 &&
+            persistError.cleanupCode == 0 && persistError.MessageView().empty(),
+            "installed persistence must use the supplied known-folder root and clear the previous error");
+
+        SettingsSnapshotController executableController{SettingsSnapshotCatalogLocation::ExecutableState};
+        const auto changedReader = [](void* owner, SettingId id, SettingsSnapshotText& value, SettingsSnapshotError& error) noexcept {
+            auto& context = *static_cast<RuntimeContext*>(owner);
+            if (!context.read(owner, id, value, error)) return false;
+            if (id == SettingId::SkyAmbientFillEnabled) return value.Assign(value.View() == "on" ? "off" : "on", error);
+            return true;
+        };
+        SettingsSnapshotError refreshError;
+        Require(executableController.Refresh(WithReader(changedReader), refreshError) &&
+            executableController.Code() != installedCode,
+            "executable catalog fixture must have a distinct code without mutating live settings");
+        const std::string executableCode(executableController.Code());
+        const std::string executableCanonical(executableController.Canonical());
+        const char* executableData = executableController.Canonical().data();
+        SetSettingsSnapshotWriteRootForTests(nullptr);
+        Require(executableController.PersistToLocalCatalog(persistError) &&
+            persistError.code == SettingsSnapshotErrorCode::None,
+            "executable catalog persistence must not query the installed known folder");
+
+        auto notReady = access;
+        notReady.sceneReady = false;
+        const auto executableLoad = executableController.BeginLoadCodeStaged(executableCode, notReady);
+        Require(executableLoad.progress == SettingsSnapshotTransactionProgress::Failed &&
+            executableLoad.result.failureStage == SettingsSnapshotTransactionFailureStage::Preflight &&
+            executableLoad.result.error.code == SettingsSnapshotErrorCode::InvalidInput &&
+            executableLoad.result.error.MessageView() == "settings.load requires a fully loaded scene",
+            "executable policy must find its catalog before rejecting scene readiness");
+        const auto installedLoad = controller.BeginLoadCodeStaged(executableCode, notReady);
+        Require(installedLoad.progress == SettingsSnapshotTransactionProgress::Failed &&
+            installedLoad.result.failureStage == SettingsSnapshotTransactionFailureStage::Preflight &&
+            installedLoad.result.error.code == SettingsSnapshotErrorCode::Catalog &&
+            installedLoad.result.error.MessageView() ==
+                "snapshot decode failed: settings snapshot is absent from the catalogs",
+            "installed policy must not discover an executable-only catalog entry");
+        ClearSettingsSnapshotWriteRootForTests();
+        Require(writes == writesBeforePolicy &&
+            controller.Code() == installedCode && controller.Canonical() == installedCanonical &&
+            controller.Canonical().data() == installedData && !controller.HasStagedApply() &&
+            executableController.Code() == executableCode && executableController.Canonical() == executableCanonical &&
+            executableController.Canonical().data() == executableData && !executableController.HasStagedApply(),
+            "catalog policy checks must preserve live settings and both published snapshots");
+    }
 
     const auto appendFixture = [&](std::string_view version,
                                    const DecodedSettings& fixture)
     {
-        const std::string canonical = FormatCanonicalSettingsSnapshot(fixture);
-        const std::string code = BuildSettingsSnapshotCode(canonical, version);
+        const std::string canonical = CanonicalSnapshot(fixture);
+        const std::string code = std::string(BuildSettingsSnapshotCode(canonical, version).View());
         const std::filesystem::path path = loadRoot / "UVSR" /
             ("settings-snapshots-v" + std::string(version) + ".txt");
         std::ofstream output(path, std::ios::binary | std::ios::app);
@@ -638,123 +792,123 @@ int main()
     };
     const auto withRetiredInterface = [](DecodedSettings values, std::string_view skin = "amp")
     {
-        values["ui.skin"] = skin;
-        values["ui.font-family"] = "codex";
+        SetSnapshot(values, "ui.skin", skin);
+        SetSnapshot(values, "ui.font-family", "codex");
         for (const char* name : { "ui.accent.primary", "ui.accent.font", "ui.accent.primary-background" })
-            values[name] = skin == "amp" ? "0.25 0.5 0.75 1" : "<unavailable>";
-        values["ui.accent.secondary"] = "0 0.5 1 1";
-        values["ui.accent.tertiary"] = "0.5 1 0 1";
+            SetSnapshot(values, name, skin == "amp" ? "0.25 0.5 0.75 1" : "<unavailable>");
+        SetSnapshot(values, "ui.accent.secondary", "0 0.5 1 1");
+        SetSnapshot(values, "ui.accent.tertiary", "0.5 1 0 1");
         return values;
     };
     const auto buildLegacyFixture = [&](std::string_view version)
     {
-        DecodedSettings fixture = withRetiredInterface(ParseSettingsSnapshot(controller.Canonical()));
+        DecodedSettings fixture = withRetiredInterface(ParseSnapshot(controller.Canonical()));
         for (const auto& definition : UiSettingsCommandCatalog)
             if (definition.section == UiSettingsCommandSection::Pathing)
-                fixture.erase(std::string(definition.name));
+                (void)fixture.Erase(std::string(definition.name));
         if (version <= "0014")
         {
-            fixture["visibility.enabled"] = "on";
-            fixture["visibility.quality"] = "high";
-            fixture["visibility.estimator"] = "solid-angle";
-            fixture["visibility.resolution"] = "full";
-            fixture["visibility.samples"] = "16";
-            fixture["visibility.radius"] = "3";
-            fixture["visibility.thickness"] = "0.5";
-            fixture["visibility.distribution"] = "2";
-            fixture["visibility.specify-noise"] = "off";
-            fixture["visibility.noise-pattern"] = "spatiotemporal-blue";
-            fixture["visibility.noise-resolution"] = "128x128";
-            fixture["visibility.animate-samples"] = "on";
-            fixture["visibility.ao.enabled"] = "on";
-            fixture["visibility.ao.strength"] = "1";
-            fixture["visibility.ao.precision"] = "16-bit";
-            fixture["visibility.gi.enabled"] = "on";
-            fixture["visibility.gi.intensity"] = "1";
-            fixture["visibility.gi.precision"] = "16-bit";
-            fixture["debug.visibility.view"] = "final";
+            SetSnapshot(fixture, "visibility.enabled", "on");
+            SetSnapshot(fixture, "visibility.quality", "high");
+            SetSnapshot(fixture, "visibility.estimator", "solid-angle");
+            SetSnapshot(fixture, "visibility.resolution", "full");
+            SetSnapshot(fixture, "visibility.samples", "16");
+            SetSnapshot(fixture, "visibility.radius", "3");
+            SetSnapshot(fixture, "visibility.thickness", "0.5");
+            SetSnapshot(fixture, "visibility.distribution", "2");
+            SetSnapshot(fixture, "visibility.specify-noise", "off");
+            SetSnapshot(fixture, "visibility.noise-pattern", "spatiotemporal-blue");
+            SetSnapshot(fixture, "visibility.noise-resolution", "128x128");
+            SetSnapshot(fixture, "visibility.animate-samples", "on");
+            SetSnapshot(fixture, "visibility.ao.enabled", "on");
+            SetSnapshot(fixture, "visibility.ao.strength", "1");
+            SetSnapshot(fixture, "visibility.ao.precision", "16-bit");
+            SetSnapshot(fixture, "visibility.gi.enabled", "on");
+            SetSnapshot(fixture, "visibility.gi.intensity", "1");
+            SetSnapshot(fixture, "visibility.gi.precision", "16-bit");
+            SetSnapshot(fixture, "debug.visibility.view", "final");
         }
         if (version <= "0013")
         {
-            fixture.erase("shadows.ray-traced.hard");
-            fixture.erase("shadows.ray-traced.samples-per-pixel");
+            (void)fixture.Erase("shadows.ray-traced.hard");
+            (void)fixture.Erase("shadows.ray-traced.samples-per-pixel");
         }
         if (version <= "0012")
-            fixture.erase("tonemapper.enabled");
+            (void)fixture.Erase("tonemapper.enabled");
         if (version <= "0011")
             for (const auto& definition : UiSettingsCommandCatalog)
                 if (definition.name.substr(0u, 11u) == "tonemapper.")
-                    fixture.erase(std::string(definition.name));
+                    (void)fixture.Erase(std::string(definition.name));
         if (version <= "000f")
         {
-            fixture["visibility.ao.output-hit-distance"] = "off";
-            fixture["visibility.gi.output-hit-distance"] = "off";
-            fixture["denoising.ao.method"] = "raw";
-            fixture["denoising.ao.radius"] = "4";
-            fixture["denoising.ao.quality"] = "balanced";
-            fixture["denoising.ao.resolution"] = "half";
-            fixture["denoising.ao.history"] = "16";
-            fixture["denoising.ao.disocclusion"] = "0.015625";
-            fixture["denoising.ao.anti-lag"] = "0.5";
-            fixture["denoising.gi.method"] = "raw";
-            fixture["denoising.gi.radius"] = "4";
-            fixture["denoising.gi.quality"] = "balanced";
-            fixture["denoising.gi.resolution"] = "half";
-            fixture["denoising.gi.history"] = "16";
-            fixture["denoising.gi.disocclusion"] = "0.015625";
-            fixture["denoising.gi.anti-lag"] = "0.5";
-            fixture["denoising.shadows.method"] = "raw";
-            fixture["denoising.shadows.radius"] = "4";
-            fixture["denoising.shadows.quality"] = "balanced";
-            fixture["denoising.shadows.resolution"] = "half";
-            fixture["denoising.shadows.disocclusion"] = "0.015625";
-            fixture["denoising.sky.method"] = "raw";
-            fixture["denoising.sky.radius"] = "4";
-            fixture["denoising.sky.quality"] = "balanced";
-            fixture["denoising.sky.resolution"] = "half";
-            fixture["denoising.sky.history"] = "16";
-            fixture["denoising.sky.disocclusion"] = "0.015625";
-            fixture["denoising.sky.anti-lag"] = "0.5";
-            fixture["sky.visibility.output-hit-distance"] = "off";
-            fixture["light.selected.flashlight.output-hit-distance"] = "<unavailable>";
+            SetSnapshot(fixture, "visibility.ao.output-hit-distance", "off");
+            SetSnapshot(fixture, "visibility.gi.output-hit-distance", "off");
+            SetSnapshot(fixture, "denoising.ao.method", "raw");
+            SetSnapshot(fixture, "denoising.ao.radius", "4");
+            SetSnapshot(fixture, "denoising.ao.quality", "balanced");
+            SetSnapshot(fixture, "denoising.ao.resolution", "half");
+            SetSnapshot(fixture, "denoising.ao.history", "16");
+            SetSnapshot(fixture, "denoising.ao.disocclusion", "0.015625");
+            SetSnapshot(fixture, "denoising.ao.anti-lag", "0.5");
+            SetSnapshot(fixture, "denoising.gi.method", "raw");
+            SetSnapshot(fixture, "denoising.gi.radius", "4");
+            SetSnapshot(fixture, "denoising.gi.quality", "balanced");
+            SetSnapshot(fixture, "denoising.gi.resolution", "half");
+            SetSnapshot(fixture, "denoising.gi.history", "16");
+            SetSnapshot(fixture, "denoising.gi.disocclusion", "0.015625");
+            SetSnapshot(fixture, "denoising.gi.anti-lag", "0.5");
+            SetSnapshot(fixture, "denoising.shadows.method", "raw");
+            SetSnapshot(fixture, "denoising.shadows.radius", "4");
+            SetSnapshot(fixture, "denoising.shadows.quality", "balanced");
+            SetSnapshot(fixture, "denoising.shadows.resolution", "half");
+            SetSnapshot(fixture, "denoising.shadows.disocclusion", "0.015625");
+            SetSnapshot(fixture, "denoising.sky.method", "raw");
+            SetSnapshot(fixture, "denoising.sky.radius", "4");
+            SetSnapshot(fixture, "denoising.sky.quality", "balanced");
+            SetSnapshot(fixture, "denoising.sky.resolution", "half");
+            SetSnapshot(fixture, "denoising.sky.history", "16");
+            SetSnapshot(fixture, "denoising.sky.disocclusion", "0.015625");
+            SetSnapshot(fixture, "denoising.sky.anti-lag", "0.5");
+            SetSnapshot(fixture, "sky.visibility.output-hit-distance", "off");
+            SetSnapshot(fixture, "light.selected.flashlight.output-hit-distance", "<unavailable>");
         }
         if (version <= "000d")
-            fixture["gpu.adaptive-sync"] = "nvidia-exclusive";
+            SetSnapshot(fixture, "gpu.adaptive-sync", "nvidia-exclusive");
         if (version >= "000c")
             return fixture;
-        fixture["anti-aliasing.taa.enabled"] = "on";
-        fixture["anti-aliasing.taa.quality"] = "low";
-        fixture["anti-aliasing.taa.jitter-sequence"] = "rotated-grid-4";
-        fixture["anti-aliasing.taa.previous-depth"] = "nearest-texel";
-        fixture["anti-aliasing.taa.temporal-cost"] = "full-quality";
-        fixture["anti-aliasing.taa.history.frames"] = "-1";
-        fixture["anti-aliasing.taa.history.strength"] = "-1";
-        fixture["anti-aliasing.taa.history.storage"] = "temporal-cost";
-        fixture["anti-aliasing.taa.history.weight"] = "temporal-cost";
-        fixture["anti-aliasing.taa.motion-trust"] = "temporal-cost";
-        fixture["anti-aliasing.taa.rectification-clip"] = "temporal-cost";
-        fixture["anti-aliasing.taa.blend-domain"] = "temporal-cost";
-        fixture["anti-aliasing.taa.preset-sharpening"] = "auto";
-        fixture["anti-aliasing.sharpen.enabled"] = "on";
-        fixture["anti-aliasing.sharpen.strength"] = "0.5";
-        fixture["anti-aliasing.msaa.enabled"] = "on";
-        fixture["anti-aliasing.msaa.samples"] = "2x";
+        SetSnapshot(fixture, "anti-aliasing.taa.enabled", "on");
+        SetSnapshot(fixture, "anti-aliasing.taa.quality", "low");
+        SetSnapshot(fixture, "anti-aliasing.taa.jitter-sequence", "rotated-grid-4");
+        SetSnapshot(fixture, "anti-aliasing.taa.previous-depth", "nearest-texel");
+        SetSnapshot(fixture, "anti-aliasing.taa.temporal-cost", "full-quality");
+        SetSnapshot(fixture, "anti-aliasing.taa.history.frames", "-1");
+        SetSnapshot(fixture, "anti-aliasing.taa.history.strength", "-1");
+        SetSnapshot(fixture, "anti-aliasing.taa.history.storage", "temporal-cost");
+        SetSnapshot(fixture, "anti-aliasing.taa.history.weight", "temporal-cost");
+        SetSnapshot(fixture, "anti-aliasing.taa.motion-trust", "temporal-cost");
+        SetSnapshot(fixture, "anti-aliasing.taa.rectification-clip", "temporal-cost");
+        SetSnapshot(fixture, "anti-aliasing.taa.blend-domain", "temporal-cost");
+        SetSnapshot(fixture, "anti-aliasing.taa.preset-sharpening", "auto");
+        SetSnapshot(fixture, "anti-aliasing.sharpen.enabled", "on");
+        SetSnapshot(fixture, "anti-aliasing.sharpen.strength", "0.5");
+        SetSnapshot(fixture, "anti-aliasing.msaa.enabled", "on");
+        SetSnapshot(fixture, "anti-aliasing.msaa.samples", "2x");
         if (version <= "000a")
-            fixture["ui.animations"] = "on";
+            SetSnapshot(fixture, "ui.animations", "on");
         if (version <= "0009")
         {
-            fixture["ui.accent.main"] = "0 0.5 1";
-            fixture["ui.accent.negative"] = "1 0.5 0";
-            fixture["ui.accent.positive"] = "0.5 1 0";
+            SetSnapshot(fixture, "ui.accent.main", "0 0.5 1");
+            SetSnapshot(fixture, "ui.accent.negative", "1 0.5 0");
+            SetSnapshot(fixture, "ui.accent.positive", "0.5 1 0");
         }
         if (version <= "0008")
         {
-            fixture["representation.bvh.build-preference"] = "balanced";
-            fixture["representation.blas.update-mode"] = "rebuild";
-            fixture["representation.tlas.update-mode"] = "refit";
+            SetSnapshot(fixture, "representation.bvh.build-preference", "balanced");
+            SetSnapshot(fixture, "representation.blas.update-mode", "rebuild");
+            SetSnapshot(fixture, "representation.tlas.update-mode", "refit");
         }
         if (version == "0007")
-            fixture["anti-aliasing.msaa.quality"] = "ultra";
+            SetSnapshot(fixture, "anti-aliasing.msaa.quality", "ultra");
         return fixture;
     };
     const auto requireRejected = [&](std::string_view version,
@@ -768,11 +922,53 @@ int main()
         Require(rejected.progress == SettingsSnapshotTransactionProgress::Failed &&
                 rejected.result.failureStage ==
                     SettingsSnapshotTransactionFailureStage::Preflight &&
-                rejected.result.error.find(field) != std::string::npos &&
+                rejected.result.error.MessageView().find(field) != std::string::npos &&
                 live == before && writes == writesBefore,
             "schema " + std::string(version) + " must reject " +
-                std::string(field) + " before mutation: " + rejected.result.error);
+                std::string(field) + " before mutation: " + std::string(rejected.result.error.MessageView()));
     };
+    {
+        auto fixture = withRetiredInterface(ParseSnapshot(controller.Canonical()));
+        SetSnapshot(fixture, "ui.accent.primary", "0.0000000000000000000000000000000000 0 0 1");
+        const auto code = appendFixture("0017", fixture);
+        const auto before = live;
+        const std::string publishedCode(controller.Code());
+        const std::string publishedCanonical(controller.Canonical());
+        unsigned callbacks = 0;
+        auto guarded = access;
+        guarded.context = &callbacks;
+        guarded.validateValue = [](void* context, SettingId, std::string_view,
+            std::string_view, SettingsSnapshotError&) noexcept {
+            ++*static_cast<unsigned*>(context); return false;
+        };
+        guarded.readValue = guarded.readRawValue = [](void* context, SettingId,
+            SettingsSnapshotText&, SettingsSnapshotError&) noexcept {
+            ++*static_cast<unsigned*>(context); return false;
+        };
+        guarded.writeValue = [](void* context, SettingId, std::string_view,
+            SettingsSnapshotError&) noexcept {
+            ++*static_cast<unsigned*>(context); return false;
+        };
+        guarded.driveSelector = [](void* context, SettingId, std::string_view,
+            bool, bool, SettingsSnapshotError&) noexcept {
+            ++*static_cast<unsigned*>(context); return SettingsSnapshotSelectorTransition::Failed;
+        };
+        FailUiSettingsValueAllocationAfter(0);
+        const auto rejected = controller.BeginLoadCodeStaged(code, guarded);
+        ClearUiSettingsValueAllocationFailure();
+        Require(rejected.progress == SettingsSnapshotTransactionProgress::Failed &&
+            rejected.result.failureStage == SettingsSnapshotTransactionFailureStage::Preflight &&
+            rejected.result.error.code == SettingsSnapshotErrorCode::OutOfMemory &&
+            rejected.result.error.MessageView() == "cannot allocate setting value text" &&
+            callbacks == 0 && live == before && !controller.HasStagedApply() &&
+            controller.Code() == publishedCode && controller.Canonical() == publishedCanonical,
+            "legacy scratch OOM must preserve its structured error and published controller state before callbacks");
+        const auto retried = controller.BeginLoadCodeStaged(code, guarded);
+        Require(retried.result.error.code == SettingsSnapshotErrorCode::InvalidInput &&
+            retried.result.error.MessageView() == "schema 23 snapshot has invalid retired setting 'ui.accent.primary'" &&
+            callbacks == 0 && controller.Code() == publishedCode && controller.Canonical() == publishedCanonical,
+            "legacy scratch retry must reach the original semantic rejection without publication");
+    }
     for (const std::string_view version : SupportedLegacySettingsSnapshotVersions)
     {
         if (version >= "0016")
@@ -784,25 +980,26 @@ int main()
                 for (const char* threshold : { "5000", "50" })
                 {
                     retained["pathing.firefly-threshold"] = threshold;
-                    const auto fixture = withRetiredInterface(retained, skin);
+                    const auto fixture = withRetiredInterface(SnapshotFromValues(retained), skin);
                     step = controller.BeginLoadCodeStaged(appendFixture(version, fixture), access);
                     Require(step.progress == SettingsSnapshotTransactionProgress::Succeeded && live == retained,
-                        "retired interface must preserve retained values: " + step.result.error);
-                    for (const auto& [name, value] : fixture)
+                        "retired interface must preserve retained values: " + std::string(step.result.error.MessageView()));
+                    for (size_t entry = 0; entry < fixture.Count(); ++entry)
                     {
+                        const auto& [name, value] = fixture.Entries()[entry];
                         if (retained.count(name)) continue;
-                        auto invalid = fixture;
-                        invalid[name] = "invalid";
+                        auto invalid = CloneSnapshot(fixture);
+                        SetSnapshot(invalid, name, "invalid");
                         requireRejected(version, invalid, name);
-                        invalid.erase(name);
+                        (void)invalid.Erase(name);
                         requireRejected(version, invalid, name);
                     }
-                    auto mismatched = fixture;
-                    mismatched["ui.accent.primary"] = std::string_view(skin) == "amp" ? "<unavailable>" : "0 0 0 1";
+                    auto mismatched = CloneSnapshot(fixture);
+                    SetSnapshot(mismatched, "ui.accent.primary", std::string_view(skin) == "amp" ? "<unavailable>" : "0 0 0 1");
                     requireRejected(version, mismatched, "ui.accent.primary");
                 }
             }
-            step = controller.BeginLoadCodeStaged(appendFixture(version, withRetiredInterface(before)), access);
+            step = controller.BeginLoadCodeStaged(appendFixture(version, withRetiredInterface(SnapshotFromValues(before))), access);
             Require(step.progress == SettingsSnapshotTransactionProgress::Succeeded && live == before,
                 "retired interface migration must round-trip");
             continue;
@@ -811,9 +1008,9 @@ int main()
         for (const std::string_view adaptiveSync : { "off", "vendor-agnostic", "nvidia-exclusive" })
         {
             if (version <= "000d")
-                valid["gpu.adaptive-sync"] = adaptiveSync;
+                SetSnapshot(valid, "gpu.adaptive-sync", adaptiveSync);
             if (version <= "000a")
-                valid["ui.animations"] = adaptiveSync == "off" ? "off" : "on";
+                SetSnapshot(valid, "ui.animations", adaptiveSync == "off" ? "off" : "on");
             auto expected = live;
             expected["pathing.maximum-bounces"] = "3";
             expected["pathing.minimum-bounces"] = "1";
@@ -822,25 +1019,26 @@ int main()
             step = controller.BeginLoadCodeStaged(appendFixture(version, valid), access);
             Require(step.progress == SettingsSnapshotTransactionProgress::Succeeded && live == expected,
                 "schema " + std::string(version) +
-                    " must preserve legacy transport and discard its retired fields: " + step.result.error);
+                    " must preserve legacy transport and discard its retired fields: " + std::string(step.result.error.MessageView()));
         }
-        for (const auto& [name, value] : valid)
+        for (size_t entry = 0; entry < valid.Count(); ++entry)
         {
+            const auto& [name, value] = valid.Entries()[entry];
             if (live.count(name))
                 continue;
-            DecodedSettings missingRetired = valid;
-            missingRetired.erase(name);
+            DecodedSettings missingRetired = CloneSnapshot(valid);
+            (void)missingRetired.Erase(name);
             requireRejected(version, missingRetired, name);
-            DecodedSettings invalid = valid;
-            invalid[name] = name.find("ui.accent.") == 0u ? "0 1.5 0" : "invalid";
+            DecodedSettings invalid = CloneSnapshot(valid);
+            SetSnapshot(invalid, name, name.find("ui.accent.") == 0u ? "0 1.5 0" : "invalid");
             requireRejected(version, invalid, name);
         }
-        DecodedSettings retainedChange = valid;
+        DecodedSettings retainedChange = CloneSnapshot(valid);
         const auto beforeRetainedChange = live;
         const auto retainedExposure = live.at("sky.exposure");
-        retainedChange["sky.exposure"] = retainedExposure == "1" ? "2" : "1";
+        SetSnapshot(retainedChange, "sky.exposure", retainedExposure == "1" ? "2" : "1");
         auto expectedRetainedChange = live;
-        expectedRetainedChange["sky.exposure"] = retainedChange.at("sky.exposure");
+        expectedRetainedChange["sky.exposure"] = SnapshotValue(retainedChange, "sky.exposure");
         step = controller.BeginLoadCodeStaged(appendFixture(version, retainedChange), access);
         Require(step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
                 live == expectedRetainedChange,
@@ -848,16 +1046,16 @@ int main()
         step = controller.BeginLoadCodeStaged(appendFixture(version, valid), access);
         Require(step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
                 live == beforeRetainedChange, "legacy retained value must round-trip");
-        DecodedSettings unexpectedPathing = valid;
-        unexpectedPathing["pathing.maximum-bounces"] = "3";
+        DecodedSettings unexpectedPathing = CloneSnapshot(valid);
+        SetSnapshot(unexpectedPathing, "pathing.maximum-bounces", "3");
         requireRejected(version, unexpectedPathing, "pathing.maximum-bounces");
-        DecodedSettings unexpectedSkin = valid;
-        unexpectedSkin["ui.skin"] = "cap";
+        DecodedSettings unexpectedSkin = CloneSnapshot(valid);
+        SetSnapshot(unexpectedSkin, "ui.skin", "cap");
         for (const char* name : { "ui.accent.primary", "ui.accent.font", "ui.accent.primary-background" })
-            unexpectedSkin[name] = "<unavailable>";
+            SetSnapshot(unexpectedSkin, name, "<unavailable>");
         requireRejected(version, unexpectedSkin, "ui.skin");
-        DecodedSettings unknownLegacy = valid;
-        unknownLegacy["ui.unknown"] = "on";
+        DecodedSettings unknownLegacy = CloneSnapshot(valid);
+        SetSnapshot(unknownLegacy, "ui.unknown", "on");
         requireRejected(version, unknownLegacy, "ui.unknown");
     }
     for (const auto& [quality, samples] :
@@ -866,35 +1064,37 @@ int main()
             { "high", "4x" }, { "ultra", "2x" } }})
     {
         DecodedSettings fixture = buildLegacyFixture("0007");
-        fixture["anti-aliasing.msaa.quality"] = quality;
-        fixture["anti-aliasing.msaa.samples"] = samples;
+        SetSnapshot(fixture, "anti-aliasing.msaa.quality", quality);
+        SetSnapshot(fixture, "anti-aliasing.msaa.samples", samples);
         step = controller.BeginLoadCodeStaged(appendFixture("0007", fixture), access);
         Require(step.progress == SettingsSnapshotTransactionProgress::Succeeded &&
                 live.count("anti-aliasing.msaa.samples") == 0u,
-            "schema 0007 must discard both retired MSAA fields: " + step.result.error);
+            "schema 0007 must discard both retired MSAA fields: " + std::string(step.result.error.MessageView()));
     }
     for (const std::string_view invalid : { "true", "false", "ON", "0", "<unavailable>" })
     {
         DecodedSettings fixture = buildLegacyFixture("000a");
-        fixture["ui.animations"] = invalid;
+        SetSnapshot(fixture, "ui.animations", invalid);
         requireRejected("000a", fixture, "ui.animations");
     }
     DecodedSettings retiredAccent = buildLegacyFixture("000a");
-    retiredAccent["ui.accent.main"] = "0 0.5 1";
+    SetSnapshot(retiredAccent, "ui.accent.main", "0 0.5 1");
     requireRejected("000a", retiredAccent, "ui.accent.main");
-    const DecodedSettings current = ParseSettingsSnapshot(controller.Canonical());
-    for (const auto& [name, value] : buildLegacyFixture("000b"))
+    const DecodedSettings current = ParseSnapshot(controller.Canonical());
+    const auto legacyFields = buildLegacyFixture("000b");
+    for (size_t entry = 0; entry < legacyFields.Count(); ++entry)
     {
-        if (current.count(name)) continue;
-        auto obsolete = current;
-        obsolete[name] = value;
+        const auto& [name, value] = legacyFields.Entries()[entry];
+        if (current.Find(name)) continue;
+        auto obsolete = CloneSnapshot(current);
+        SetSnapshot(obsolete, name, value);
         requireRejected(currentVersion, obsolete, name);
     }
-    DecodedSettings retiredAnimation = current;
-    retiredAnimation["ui.animations"] = "off";
+    DecodedSettings retiredAnimation = CloneSnapshot(current);
+    SetSnapshot(retiredAnimation, "ui.animations", "off");
     requireRejected(currentVersion, retiredAnimation, "ui.animations");
-    DecodedSettings unknownCurrent = current;
-    unknownCurrent["ui.unknown"] = "on";
+    DecodedSettings unknownCurrent = CloneSnapshot(current);
+    SetSnapshot(unknownCurrent, "ui.unknown", "on");
     requireRejected(currentVersion, unknownCurrent, "ui.unknown");
     requireRejected("ffff", current, "registered");
 
@@ -913,9 +1113,154 @@ int main()
                  << controller.Code() << "]\n";
     }
     Require(
-        !controller.Persist(catalogPath),
+        !controller.Persist(catalogPath.c_str(), persistError) && persistError.code == SettingsSnapshotErrorCode::Collision,
         "an existing code with a conflicting payload must fail closed");
     std::filesystem::remove(catalogPath, fileError);
+
+    {
+        const std::string previousCode(controller.Code());
+        const std::string previousCanonical(controller.Canonical());
+        const char* previousData = controller.Canonical().data();
+        const auto changedReader = [](void* owner, SettingId id, SettingsSnapshotText& value, SettingsSnapshotError& error) noexcept {
+            auto& runtime = *static_cast<RuntimeContext*>(owner);
+            if (!runtime.read(owner, id, value, error)) return false;
+            if (id == SettingId::SkyAmbientFillEnabled) return value.Assign(value.View() == "on" ? "off" : "on", error);
+            return true;
+        };
+        SettingsSnapshotError error;
+        const auto reportedReadFailure = [](void* owner, SettingId id, SettingsSnapshotText& value, SettingsSnapshotError& readError) noexcept {
+            auto& runtime = *static_cast<RuntimeContext*>(owner);
+            if (id == SettingId::SkyAmbientFillEnabled)
+            {
+                readError.code = SettingsSnapshotErrorCode::InvalidInput;
+                readError.message = "synthetic typed read failure";
+                return false;
+            }
+            return runtime.read(owner, id, value, readError);
+        };
+        Require(!controller.Refresh(WithReader(reportedReadFailure), error) &&
+            error.code == SettingsSnapshotErrorCode::InvalidInput &&
+            error.MessageView() == "cannot read setting 'sky.ambient-fill.enabled': synthetic typed read failure" &&
+            controller.Code() == previousCode && controller.Canonical() == previousCanonical &&
+            controller.Canonical().data() == previousData,
+            "reported read failure must preserve the snapshot and its reason");
+        json::FailAllocationAfter(0);
+        const bool reported = controller.Refresh(WithReader(reportedReadFailure), error);
+        json::ClearAllocationFailure();
+        Require(!reported && error.code == SettingsSnapshotErrorCode::OutOfMemory &&
+            controller.Canonical().data() == previousData && controller.Code() == previousCode,
+            "read diagnostic allocation failure must preserve the snapshot");
+
+        for (const auto code : {SettingsSnapshotErrorCode::OutOfMemory,
+                SettingsSnapshotErrorCode::Capacity, SettingsSnapshotErrorCode::Format})
+        {
+            runtime.readFailure = code;
+            const auto failedReader = [](void* owner, SettingId, SettingsSnapshotText&, SettingsSnapshotError& failure) noexcept {
+                const auto code = static_cast<RuntimeContext*>(owner)->readFailure;
+                failure.code = code;
+                failure.nativeCode = 91;
+                failure.cleanupCode = 92;
+                failure.message = "checked reader failure";
+                return false;
+            };
+            json::FailAllocationAfter(0);
+            const bool refreshed = controller.Refresh(WithReader(failedReader), error);
+            json::ClearAllocationFailure();
+            Require(!refreshed && error.code == code && error.nativeCode == 91 && error.cleanupCode == 92 &&
+                error.MessageView() == "checked reader failure" && controller.Code() == previousCode &&
+                controller.Canonical().data() == previousData && controller.Canonical() == previousCanonical,
+                "reader storage errors must preserve code, detail and published snapshot without allocating diagnostics");
+        }
+        FailUiSettingsValueAllocationAfter(0);
+        const bool readAllocated = controller.Refresh(WithReader(read), error);
+        ClearUiSettingsValueAllocationFailure();
+        Require(!readAllocated && error.code == SettingsSnapshotErrorCode::OutOfMemory &&
+            controller.Code() == previousCode && controller.Canonical().data() == previousData &&
+            controller.Canonical() == previousCanonical, "checked text capture exhaustion must preserve the snapshot");
+
+        const auto unavailableReader = [](void* owner, SettingId id, SettingsSnapshotText& value, SettingsSnapshotError& readError) noexcept {
+            auto& runtime = *static_cast<RuntimeContext*>(owner);
+            if (id == SettingId::SkyAmbientFillEnabled)
+            {
+                readError = {};
+                return false;
+            }
+            return runtime.read(owner, id, value, readError);
+        };
+        SettingsSnapshotController unavailable{SettingsSnapshotCatalogLocation::Installed};
+        auto expectedUnavailable = ParseSnapshot(previousCanonical);
+        SetSnapshot(expectedUnavailable, "sky.ambient-fill.enabled", "<unavailable>");
+        const std::string expectedCanonical = CanonicalSnapshot(expectedUnavailable);
+        const auto expectedCode = BuildSettingsSnapshotCode(expectedCanonical);
+        Require(unavailable.Refresh(WithReader(unavailableReader), error) && unavailable.Canonical() == expectedCanonical &&
+            unavailable.Code() == expectedCode.View(), "legacy unavailability must retain exact canonical bytes and code");
+        const auto explicitUnavailable = [](void* owner, SettingId id, SettingsSnapshotText& value, SettingsSnapshotError& readError) noexcept {
+            auto& runtime = *static_cast<RuntimeContext*>(owner);
+            if (id == SettingId::SkyAmbientFillEnabled)
+            {
+                return value.Assign("<unavailable>", readError);
+            }
+            return runtime.read(owner, id, value, readError);
+        };
+        Require(unavailable.Refresh(WithReader(explicitUnavailable), error) && unavailable.Canonical() == expectedCanonical &&
+            unavailable.Code() == expectedCode.View(), "explicit unavailability must match the legacy callback");
+        DecodedSettings allUnavailable;
+        for (const auto& definition : UiSettingsCommandCatalog)
+            if (IsSettingsSnapshotValue(definition))
+                Require(allUnavailable.Insert(definition.name, "<unavailable>", error), "prepare absent-reader fixture");
+        const std::string absentCanonical = CanonicalSnapshot(allUnavailable);
+        Require(unavailable.Refresh({}, error) && unavailable.Canonical() == absentCanonical &&
+            unavailable.Code() == BuildSettingsSnapshotCode(absentCanonical).View(),
+            "absent reader must retain the complete all-unavailable snapshot");
+
+        for (size_t allocation : {0u, 1u, 8u, 50u})
+        {
+            FailSettingsSnapshotAllocationAfter(allocation);
+            const bool refreshed = controller.Refresh(WithReader(changedReader), error);
+            ClearSettingsSnapshotAllocationFailure();
+            Require(!refreshed && error.code == SettingsSnapshotErrorCode::OutOfMemory &&
+                controller.Code() == previousCode && controller.Canonical() == previousCanonical &&
+                controller.Canonical().data() == previousData, "failed refresh changed the published snapshot");
+        }
+        json::FailAllocationAfter(0);
+        const bool formatted = controller.Refresh(WithReader(changedReader), error);
+        json::ClearAllocationFailure();
+        Require(!formatted && error.code == SettingsSnapshotErrorCode::OutOfMemory &&
+            controller.Code() == previousCode && controller.Canonical().data() == previousData,
+            "failed canonical formatting changed the published snapshot");
+        Require(controller.Refresh(WithReader(changedReader), error) && controller.Code() != previousCode &&
+            controller.Refresh(WithReader(read), error) && controller.Code() == previousCode,
+            "refresh must recover and retain the exact code after restoration");
+        json::EncodedText section;
+        Require(controller.BuildCatalogSection(section, error), "cannot prepare catalog section");
+        const char* originalSection = section.Data();
+        json::FailAllocationAfter(0);
+        const bool built = controller.BuildCatalogSection(section, error);
+        json::ClearAllocationFailure();
+        Require(!built && error.code == SettingsSnapshotErrorCode::OutOfMemory && section.Data() == originalSection,
+            "failed catalog serialization changed its destination");
+
+        auto changed = ParseSnapshot(controller.Canonical());
+        const std::string previousFill = SnapshotValue(changed, "sky.ambient-fill.enabled");
+        SetSnapshot(changed, "sky.ambient-fill.enabled", previousFill == "on" ? "off" : "on");
+        auto failingRefreshAccess = access;
+        failingRefreshAccess.writeValue = [](void* owner, SettingId id, std::string_view value, SettingsSnapshotError& writeError) noexcept {
+            auto& runtime = *static_cast<RuntimeContext*>(owner);
+            const bool accepted = runtime.write(owner, id, value, writeError);
+            if (accepted) FailSettingsSnapshotAllocationAfter(0);
+            return accepted;
+        };
+        const auto result = controller.BeginApplyCanonicalStaged(CanonicalSnapshot(changed), failingRefreshAccess);
+        ClearSettingsSnapshotAllocationFailure();
+        Require(result.progress == SettingsSnapshotTransactionProgress::Failed &&
+            result.result.failureStage == SettingsSnapshotTransactionFailureStage::Readback &&
+            !result.result.succeeded && !result.result.rollbackAttempted && result.result.changedValueCount == 1 &&
+            live.at("sky.ambient-fill.enabled") != previousFill && controller.Code() == previousCode &&
+            controller.Canonical() == previousCanonical && result.result.error.MessageView().find("settings were applied") != std::string::npos,
+            "post-apply refresh failure must preserve the snapshot and report the actual applied state");
+        Require(controller.Refresh(WithReader(read), error) && controller.Code() != previousCode,
+            "post-apply refresh failure must allow recovery");
+    }
 
     std::cout << "UVSR settings command owner validation passed\n";
     return EXIT_SUCCESS;

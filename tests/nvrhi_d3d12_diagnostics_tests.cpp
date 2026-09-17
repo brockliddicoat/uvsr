@@ -181,9 +181,179 @@ namespace
             "failed final device idle wait was accepted");
     }
 
+#if defined(UVSR_ENGINE_LOG_TEST_HOOKS)
+    void DiagnosticLogFailures(const std::filesystem::path& scratch)
+    {
+        using Failure = EngineDiagnosticLogFailure;
+        using Messages = std::vector<std::pair<log::Severity, std::string>>;
+        Messages messages;
+        const log::Callback downstream{[](void* context, log::Severity severity, const char* message) {
+            static_cast<Messages*>(context)->emplace_back(severity, message ? message : "");
+        }, &messages};
+        log::SetCallback(downstream);
+        const auto restored = [&] {
+            const auto current = log::GetCallback();
+            return current.function == downstream.function && current.context == downstream.context;
+        };
+        Require(!InitializeEngineDiagnosticLog(nullptr) && !InitializeEngineDiagnosticLog(L"") && restored(),
+            "empty log preparation installed or retained a callback");
+        unsigned ordinal = 0;
+        for (const auto failure : {Failure::Allocation, Failure::Open, Failure::Buffer})
+        {
+            const auto path = scratch / ("prepare-" + std::to_string(ordinal++)) / "nested/log.txt";
+            messages.clear();
+            FailEngineDiagnosticLogOnce(failure);
+            Require(!InitializeEngineDiagnosticLog(path.c_str()) && restored() && messages.size() == 1 &&
+                messages[0].first == log::Severity::Warning,
+                "failed log preparation retained state or omitted its error");
+            Require(InitializeEngineDiagnosticLog(path.c_str()), "log preparation did not retry with the same path");
+            log::error("preparation retry");
+            ShutdownEngineDiagnosticLog();
+            Require(restored() && ReadText(path).find("[error] preparation retry") != std::string::npos,
+                "retried log preparation lost the write or callback");
+        }
+        const auto blocked = scratch / "parent-is-file";
+        { std::ofstream file(blocked); file << "preserve parent bytes"; }
+        Require(!InitializeEngineDiagnosticLog((blocked / "child/log.txt").c_str()) && restored() &&
+            ReadText(blocked) == "preserve parent bytes", "log parent failure changed a file or retained state");
+        const auto denied = scratch / "sharing-denied.log";
+        HANDLE reservation = CreateFileW(denied.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+            CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        Require(reservation != INVALID_HANDLE_VALUE, "log sharing reservation failed");
+        const bool deniedOpen = InitializeEngineDiagnosticLog(denied.c_str());
+        CloseHandle(reservation);
+        Require(!deniedOpen && restored(), "exclusive file sharing did not reject log initialization");
+        Require(InitializeEngineDiagnosticLog(denied.c_str()), "log sharing failure did not retry");
+        ShutdownEngineDiagnosticLog();
+
+        const auto root = scratch / "paths";
+        const std::filesystem::path paths[] = {
+            root / L"\u65e5\u5fd7-\u00e9" / "nested/log.txt",
+            root / "made/../dot/log.txt",
+            std::filesystem::relative(root / "relative/new/log.txt"),
+            std::filesystem::path(L"\\\\?\\" + std::filesystem::absolute(root / "extended/new/log.txt").wstring())
+        };
+        for (const auto& path : paths)
+        {
+            Require(InitializeEngineDiagnosticLog(path.c_str()), "a supported native log path was rejected");
+            log::error("native path retry");
+            ShutdownEngineDiagnosticLog();
+            Require(restored() && ReadText(path).find("[error] native path retry") != std::string::npos,
+                "native log path did not retain its bytes");
+        }
+
+        for (const auto failure : {Failure::Write, Failure::Flush, Failure::Close})
+        {
+            const auto path = scratch / ("io-" + std::to_string(ordinal++)) / "log.txt";
+            Require(InitializeEngineDiagnosticLog(path.c_str()), "I/O failure fixture initialization failed");
+            messages.clear();
+            FailEngineDiagnosticLogOnce(failure);
+            if (failure == Failure::Close) ShutdownEngineDiagnosticLog();
+            else log::error("failed file I/O message");
+            log::info("downstream remains available");
+            ShutdownEngineDiagnosticLog();
+            const auto failures = std::count_if(messages.begin(), messages.end(), [](const auto& row) {
+                return row.first == log::Severity::Warning && row.second.find("file I/O failed") != std::string::npos;
+            });
+            Require(failures == 1 && restored() && messages.back().second == "downstream remains available",
+                "file I/O failure did not report once and restore downstream delivery");
+            Require(InitializeEngineDiagnosticLog(path.c_str()), "file I/O failure did not permit a new logging session");
+            log::error("I/O retry complete");
+            ShutdownEngineDiagnosticLog();
+            Require(ReadText(path).find("[error] I/O retry complete") != std::string::npos && restored(),
+                "file I/O retry lost its complete output or callback");
+        }
+        const auto firstWrite = scratch / "first-write/log.txt";
+        FailEngineDiagnosticLogOnce(Failure::Write);
+        Require(!InitializeEngineDiagnosticLog(firstWrite.c_str()) && restored(),
+            "initial log-line failure was reported as successful initialization");
+        Require(InitializeEngineDiagnosticLog(firstWrite.c_str()), "initial write failure did not retry");
+        ShutdownEngineDiagnosticLog();
+
+        const auto timing = scratch / "clock/log.txt";
+        int64_t now = 100'000'000'000;
+        const EngineDiagnosticLogClock clock{[](void* context) noexcept {
+            return *static_cast<int64_t*>(context);
+        }, &now};
+        Require(InitializeEngineDiagnosticLog(timing.c_str(), clock), "clock fixture initialization failed");
+        log::info("buffered line before one second");
+        now += 999'999'999;
+        log::info("buffered line before boundary");
+        Require(ReadText(timing).empty(), "ordinary output flushed before the one-second boundary");
+        ++now;
+        log::info("one-second boundary");
+        Require(ReadText(timing).find("[info] one-second boundary") != std::string::npos,
+            "ordinary output missed the exact one-second flush boundary");
+        log::warning("five-second boundary warning");
+        now += 4'999'999'999;
+        log::warning("five-second boundary warning");
+        ++now;
+        log::warning("five-second boundary warning");
+        const auto clockText = ReadText(timing);
+        Require(CountOccurrences(clockText, "] five-second boundary warning") == 2 &&
+            clockText.find("Previous warning repeated 1 additional times") != std::string::npos,
+            "the borrowed clock changed the exact five-second coalescing boundary");
+        ShutdownEngineDiagnosticLog();
+
+        const auto boundary = scratch / "message-capacity/log.txt";
+        Require(InitializeEngineDiagnosticLog(boundary.c_str(), clock), "message boundary initialization failed");
+        std::string first(4095, 'x'); first.back() = '1';
+        std::string second = first; second.back() = '2';
+        log::warning("%s", first.c_str());
+        ++now;
+        log::warning("%s", second.c_str());
+        ++now;
+        log::warning("%s", second.c_str());
+        log::error("flush full warning keys");
+        ShutdownEngineDiagnosticLog();
+        const auto boundaryText = ReadText(boundary);
+        Require(CountOccurrences(boundaryText, first) == 1 && CountOccurrences(boundaryText, second) == 1 &&
+            CountOccurrences(boundaryText, "Previous warning repeated 1 additional times") == 1 && restored(),
+            "the fixed warning key truncated content or merged distinct final bytes");
+        FailEngineDiagnosticLogOnce(Failure::None);
+        log::SetCallback({});
+        printf("engine log: six preparation/I/O failures, first-write failure, native paths, exact clocks and full warning keys passed\n");
+    }
+#endif
+
+    void AppLocalCore(const char* core, const char* executable)
+    {
+        const auto directory = std::filesystem::absolute(executable).parent_path() / "D3D12";
+        const auto packagedCore = directory / "D3D12Core.dll";
+        Require(!std::filesystem::exists(directory), "app-local core check requires an isolated executable directory");
+        struct ObservedErrors { size_t count = 0u; bool exact = true; } errors;
+        const auto previous = log::GetCallback();
+        log::SetCallback({[](void* context, log::Severity severity, const char* text)
+        {
+            auto& observed = *static_cast<ObservedErrors*>(context);
+            ++observed.count;
+            observed.exact = observed.exact && severity == log::Severity::Error && std::string_view(text) ==
+                "App-local D3D12Core.dll is missing or differs from the pinned Direct3D Agility SDK 1.619.5 runtime";
+        }, &errors});
+        Require(!VerifyAppLocalD3D12Core() && errors.count == 1u && errors.exact,
+            "missing app-local runtime lost its diagnostic");
+        std::filesystem::create_directory(directory);
+        std::filesystem::copy_file(core, packagedCore);
+        Require(VerifyAppLocalD3D12Core() && errors.count == 1u,
+            "native executable directory did not resolve its exact runtime");
+        {
+            std::ofstream shortened(packagedCore, std::ios::binary | std::ios::trunc);
+            shortened << "short";
+            Require(bool(shortened), "cannot prepare short runtime fixture");
+        }
+        Require(!VerifyAppLocalD3D12Core() && errors.count == 2u && errors.exact,
+            "wrong runtime size was accepted or lost its diagnostic");
+        std::filesystem::copy_file(core, packagedCore, std::filesystem::copy_options::overwrite_existing);
+        Require(VerifyAppLocalD3D12Core() && errors.count == 2u,
+            "runtime verification did not release handles or recover after replacement");
+        Require(!VerifyD3D12CoreFile(nullptr) && !VerifyD3D12CoreFile(L"") &&
+            !VerifyD3D12CoreFile(directory.c_str()), "invalid or directory runtime input was accepted");
+        log::SetCallback(previous);
+    }
+
     void DurableLogging(const std::filesystem::path& scratch, const char* core, const char* executable)
     {
-        Require(VerifyD3D12CoreFile(core), "the pinned D3D12Core bytes were rejected");
+        Require(VerifyD3D12CoreFile(std::filesystem::path(core).c_str()), "the pinned D3D12Core bytes were rejected");
         std::filesystem::create_directories(scratch);
         const auto tamperedCore = scratch / "tampered-D3D12Core.dll";
         std::filesystem::copy_file(core, tamperedCore, std::filesystem::copy_options::overwrite_existing);
@@ -191,29 +361,48 @@ namespace
             std::fstream tamper(tamperedCore, std::ios::binary | std::ios::in | std::ios::out);
             tamper.put('\0');
         }
-        Require(!VerifyD3D12CoreFile(tamperedCore), "tampered D3D12Core bytes were accepted");
+        Require(!VerifyD3D12CoreFile(tamperedCore.c_str()), "tampered D3D12Core bytes were accepted");
         std::vector<std::pair<log::Severity, std::string>> messages;
         log::SetMinimumSeverity(log::Severity::Info);
-        log::SetCallback([&](log::Severity severity, const char* message) { messages.emplace_back(severity, message); });
+        log::SetCallback({[](void* context, log::Severity severity, const char* message)
+        {
+            using Messages = std::vector<std::pair<log::Severity, std::string>>;
+            static_cast<Messages*>(context)->emplace_back(severity, message);
+            const log::Callback installed = log::GetCallback();
+            log::SetCallback(installed);
+        }, &messages});
         log::debug("filtered %d", 1);
         log::info("identity %s %d", "value", 7);
         log::warning("warning");
         Require(messages == std::vector<std::pair<log::Severity, std::string>>{
-            {log::Severity::Info, "identity value 7"}, {log::Severity::Warning, "warning"}} && bool(log::GetCallback()),
+            {log::Severity::Info, "identity value 7"}, {log::Severity::Warning, "warning"}} && log::GetCallback().function,
             "minimum severity, printf formatting or readable callback changed");
+        log::info(nullptr);
+        const std::string longMessage(5000, 'x');
+        log::info("%s", longMessage.c_str());
+        Require(messages.size() == 4 && messages[2].second.empty() &&
+            messages[3].second == longMessage.substr(0, 4095) &&
+            log::GetCallback().context == &messages,
+            "empty formatting, bounded message storage or borrowed callback context changed");
         messages.clear();
         RendererNvrhiMessageCallback callback;
+        Require(callback.GetErrorCount() == 0, "new NVRHI callback retained errors");
         const char* detail = "CreateGraphicsPipelineState failed, HRESULT = 0x887a0006\nDRED page-fault VA = 0x1234";
         callback.message(nvrhi::MessageSeverity::Info, "device selected");
         callback.message(nvrhi::MessageSeverity::Warning, "heap pressure");
+        Require(callback.GetErrorCount() == 0, "non-error messages invalidated recording");
         callback.message(nvrhi::MessageSeverity::Error, detail);
+        Require(callback.GetErrorCount() == 1, "void GPU failure did not invalidate recording");
         Require(messages == std::vector<std::pair<log::Severity, std::string>>{
             {log::Severity::Info, "device selected"}, {log::Severity::Warning, "heap pressure"}, {log::Severity::Error, detail}},
             "NVRHI severity mapping or exact HRESULT/DRED text changed");
 
         const auto logPath = scratch / "nested" / "uvsr-engine.log";
         auto now = std::chrono::steady_clock::time_point(std::chrono::seconds(100));
-        Require(InitializeEngineDiagnosticLog(logPath, [&] { return now; }) && std::filesystem::is_regular_file(logPath),
+        Require(InitializeEngineDiagnosticLog(logPath.c_str(), {[](void* context) noexcept {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                static_cast<std::chrono::steady_clock::time_point*>(context)->time_since_epoch()).count();
+        }, &now}) && std::filesystem::is_regular_file(logPath),
             "diagnostic initialization did not create its nested directory and file");
         log::error("urgent flush known answer");
         Require(ReadText(logPath).find("[error] urgent flush known answer") != std::string::npos,
@@ -237,7 +426,7 @@ namespace
         Require(ReadText(logPath) == written && messages.back().second == "restored downstream",
             "shutdown failed to stop file writes or restore the prior callback");
         log::SetCallback({});
-        Require(bool(log::GetCallback()), "empty callback did not restore the direct default");
+        Require(log::GetCallback().function != nullptr, "empty callback did not restore the direct default");
 
         const auto fatalLog = scratch / "fatal-nvrhi.log";
         std::filesystem::remove(fatalLog);
@@ -256,7 +445,7 @@ int main(int argc, char** argv)
     {
         SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
         _set_abort_behavior(0u, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
-        Require(uvsr::InitializeEngineDiagnosticLog(argv[2]), "fatal child could not initialize its durable log");
+        Require(uvsr::InitializeEngineDiagnosticLog(std::filesystem::path(argv[2]).c_str()), "fatal child could not initialize its durable log");
         uvsr::RendererNvrhiMessageCallback{}.message(nvrhi::MessageSeverity::Fatal, FatalMessage);
         return EXIT_SUCCESS;
     }
@@ -416,6 +605,10 @@ int main(int argc, char** argv)
 
     FailureReports();
     ShellPublication();
+    AppLocalCore(argv[2], argv[0]);
     DurableLogging(argv[1], argv[2], argv[0]);
+#if defined(UVSR_ENGINE_LOG_TEST_HOOKS)
+    DiagnosticLogFailures(argv[1]);
+#endif
     return EXIT_SUCCESS;
 }

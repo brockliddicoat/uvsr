@@ -1,6 +1,6 @@
 #include "renderer_environment_math.h"
 #include "image_based_lighting_sources.h"
-#include "json_document.h"
+#include "json_legacy.h"
 #include "noise_settings.h"
 #include "sha256.h"
 
@@ -125,12 +125,12 @@ namespace
             "invalid or zero-energy environment was accepted");
     }
 
-    const uvsr::json::Value& Member(const uvsr::json::Value& value, std::string_view name,
-        uvsr::json::Value::Kind kind)
+    uvsr::json::Value Member(uvsr::json::Value value, std::string_view name,
+        uvsr::json::Kind kind)
     {
-        const auto* member = value.Find(name);
-        Require(member && member->kind == kind, "missing or mistyped noise manifest field");
-        return *member;
+        const auto member = value.Find(uvsr::json::View(name));
+        Require(member.IsValid() && member.Type() == kind, "missing or mistyped noise manifest field");
+        return member;
     }
 
     struct ExpectedNoiseAsset
@@ -182,21 +182,22 @@ namespace
 
     void CheckNoiseAssets(const std::filesystem::path& root)
     {
-        using Kind = uvsr::json::Value::Kind;
-        const auto manifest = uvsr::json::Read(root / "manifest.json", 64u * 1024u);
-        Require(manifest.kind == Kind::Object && manifest.object.size() == 4 &&
-            !Member(manifest, "source", Kind::String).string.empty(), "noise manifest fields changed");
-        Require(Member(manifest, "algorithm", Kind::String).string == "uvsr-spectral-stbn-v1" &&
-            Member(manifest, "seed", Kind::Number).number == 1431720786,
+        using Kind = uvsr::json::Kind;
+        const auto owner = uvsr::json::Read(root / "manifest.json", 64u * 1024u);
+        const auto manifest = owner.Root();
+        Require(manifest.Type() == Kind::Object && manifest.Count() == 4 &&
+            !uvsr::json::Borrow(Member(manifest, "source", Kind::String).Text()).empty(), "noise manifest fields changed");
+        Require(uvsr::json::Borrow(Member(manifest, "algorithm", Kind::String).Text()) == "uvsr-spectral-stbn-v1" &&
+            Member(manifest, "seed", Kind::Number).Number() == 1431720786,
             "retained noise construction identity");
         const auto& assets = Member(manifest, "assets", Kind::Array);
-        Require(assets.kind == Kind::Array && assets.array.size() == ExpectedNoiseAssets.size(),
+        Require(assets.Type() == Kind::Array && assets.Count() == ExpectedNoiseAssets.size(),
             "manifest retains all twelve noise assets");
         std::set<std::string> names;
-        for (const auto& asset : assets.array)
+        for (auto asset = assets.First(); asset.IsValid(); asset = asset.Next())
         {
-            Require(asset.kind == Kind::Object && asset.object.size() == 8, "noise asset fields changed");
-            Require(names.insert(Member(asset, "file", Kind::String).string).second,
+            Require(asset.Type() == Kind::Object && asset.Count() == 8, "noise asset fields changed");
+            Require(names.emplace(uvsr::json::Borrow(Member(asset, "file", Kind::String).Text())).second,
                 "manifest asset names are unique");
         }
         for (const auto& expected : ExpectedNoiseAssets)
@@ -207,20 +208,23 @@ namespace
             Require(std::string(GetNoiseAssetFileName(expected.pattern, expected.resolution)) ==
                 expected.fileName && names.count(expected.fileName) == 1u,
                 "every selectable noise mode maps to a retained asset");
-            const auto entry = std::find_if(assets.array.begin(), assets.array.end(), [&](const auto& asset) {
-                return Member(asset, "file", Kind::String).string == expected.fileName;
-            });
-            Require(entry != assets.array.end(), "retained asset has a manifest entry");
-            Require(Member(*entry, "width", Kind::Number).number == width &&
-                Member(*entry, "height", Kind::Number).number == width &&
-                Member(*entry, "layers", Kind::Number).number == layers &&
-                Member(*entry, "bytes", Kind::Number).number == static_cast<double>(bytes) &&
-                Member(*entry, "format", Kind::String).string == "R8_UNORM" &&
-                Member(*entry, "pattern", Kind::String).string == GetNoisePatternLabel(expected.pattern),
+            auto entry = assets.First();
+            while (entry.IsValid() && uvsr::json::Borrow(Member(entry, "file", Kind::String).Text()) != expected.fileName)
+                entry = entry.Next();
+            Require(entry.IsValid(), "retained asset has a manifest entry");
+            Require(Member(entry, "width", Kind::Number).Number() == width &&
+                Member(entry, "height", Kind::Number).Number() == width &&
+                Member(entry, "layers", Kind::Number).Number() == layers &&
+                Member(entry, "bytes", Kind::Number).Number() == static_cast<double>(bytes) &&
+                uvsr::json::Borrow(Member(entry, "format", Kind::String).Text()) == "R8_UNORM" &&
+                uvsr::json::Borrow(Member(entry, "pattern", Kind::String).Text()) == GetNoisePatternLabel(expected.pattern),
                 "manifest dimensions, format and mode match the renderer's asset selection");
+            Sha256Digest digest;
+            Sha256Result result;
             Require(std::filesystem::file_size(root / expected.fileName) == bytes &&
-                Member(*entry, "sha256", Kind::String).string == expected.sha256 &&
-                Sha256File(root / expected.fileName) == expected.sha256,
+                uvsr::json::Borrow(Member(entry, "sha256", Kind::String).Text()) == expected.sha256 &&
+                Sha256File((root / expected.fileName).c_str(), digest, result) &&
+                std::string_view(digest.text) == expected.sha256,
                 "reviewed spatial and temporal noise bytes are unchanged");
         }
         size_t binaries = 0u;

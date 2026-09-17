@@ -20,7 +20,7 @@ or beside the relevant source or asset.
 - [Dear ImGui](dear-imgui.md)
 - [GLFW](glfw.md)
 - [cgltf](cgltf.md)
-- [JsonCpp](jsoncpp.md)
+- [JsonCpp](jsoncpp.md), historical comparison evidence
 - [stb](stb.md)
 - [TinyEXR](tinyexr.md)
 - [Microsoft DirectX-Headers](microsoft-directx-headers.md)

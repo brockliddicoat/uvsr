@@ -1,5 +1,6 @@
 #include "renderer_gpu_contract.h"
 #include "renderer_pixel_readback_cb.h"
+#include "renderer_pixel_readback.h"
 #include "directional_ray_visibility_cb.h"
 #include "path_tracing_cb.h"
 #include "pbr_deferred_lighting_cb.h"
@@ -38,9 +39,13 @@ GPU_POD(uvsr::gpu_contract::Uint3, 12);
 GPU_POD(uvsr::gpu_contract::Uint4, 16);
 GPU_POD(uvsr::gpu_contract::Float3x4, 48);
 GPU_POD(uvsr::gpu_contract::Float4x4, 64);
-GPU_POD(SceneVertex, 60);
-static_assert(offsetof(SceneVertex, pos) == 0 && offsetof(SceneVertex, prevPos) == 12 &&
-    offsetof(SceneVertex, texCoord) == 24 && offsetof(SceneVertex, normal) == 32 && offsetof(SceneVertex, tangent) == 44);
+GPU_POD(RendererViewConstants, 720);
+GPU_POD(RendererPixelReadbackConstants, 16);
+GPU_POD(uvsr::RendererReadbackUint4, 16);
+GPU_POD(uvsr::RendererPixelReadbackRequest, 8);
+GPU_POD(SceneVertex, 48);
+static_assert(offsetof(SceneVertex, pos) == 0 && offsetof(SceneVertex, texCoord) == 12 &&
+    offsetof(SceneVertex, normal) == 20 && offsetof(SceneVertex, tangent) == 32);
 #undef GPU_POD
 
 static_assert(MaterialDomain_Opaque == 0);
@@ -140,7 +145,8 @@ namespace
         Layouts layouts;
 #define M(member) Member{#member, offsetof(C, member), sizeof(decltype(C::member)), std::extent_v<decltype(C::member)>}
 #define LAYOUT(type, ...) { using C = type; AddLayout<C>(layouts, #type, {__VA_ARGS__}); }
-        LAYOUT(PlanarViewConstants,
+        LAYOUT(RendererMaterialTableEntry, M(material), M(padding));
+        LAYOUT(RendererViewConstants,
             M(matWorldToView), M(matViewToClip), M(matWorldToClip), M(matClipToView), M(matViewToWorld),
             M(matClipToWorld), M(matViewToClipNoOffset), M(matWorldToClipNoOffset), M(matClipToViewNoOffset),
             M(matClipToWorldNoOffset), M(viewportOrigin), M(viewportSize), M(viewportSizeInv),
@@ -181,9 +187,9 @@ namespace
             M(indirectSpecularScale), M(randomOffset), M(padding2), M(noisePattern), M(lights), M(shadows),
             M(lightProbes));
         LAYOUT(GBufferFillConstants,
-            M(view), M(viewPrev));
+            M(view));
         LAYOUT(GBufferPushConstants,
-            M(startInstanceLocation), M(startVertexLocation), M(positionOffset), M(prevPositionOffset),
+            M(startInstanceLocation), M(startVertexLocation), M(positionOffset),
             M(texCoordOffset), M(normalOffset), M(tangentOffset));
         LAYOUT(FlashlightBeamProfile,
             M(beamRightX), M(beamRightY), M(beamRightZ), M(shapeExponent), M(spillInnerCosine),

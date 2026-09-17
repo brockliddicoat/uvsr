@@ -2,22 +2,17 @@
 
 #include <Windows.h>
 
-#include <array>
-#include <atomic>
-#include <cstdarg>
-#include <cstdio>
-#include <cstdlib>
-#include <mutex>
-#include <utility>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 namespace uvsr::log
 {
     namespace
     {
-        constexpr size_t MessageCapacity = 4096u;
-        std::mutex g_CallbackMutex;
-        std::mutex g_OutputMutex;
-        std::atomic<Severity> g_MinimumSeverity{ Severity::Info };
+        SRWLOCK g_CallbackMutex = SRWLOCK_INIT;
+        SRWLOCK g_OutputMutex = SRWLOCK_INIT;
+        LONG g_MinimumSeverity = LONG(Severity::Info);
 
         [[nodiscard]] const char* SeverityName(Severity severity) noexcept
         {
@@ -32,63 +27,63 @@ namespace uvsr::log
             }
         }
 
-        void DefaultCallback(Severity severity, const char* message)
+        void DefaultCallback(void*, Severity severity, const char* message)
         {
-            std::array<char, MessageCapacity> line{};
-            std::snprintf(
-                line.data(), line.size(), "%s: %s",
+            char line[MessageCapacity]{};
+            snprintf(
+                line, sizeof(line), "%s: %s",
                 SeverityName(severity), message ? message : "");
-            std::lock_guard<std::mutex> lock(g_OutputMutex);
-            OutputDebugStringA(line.data());
+            AcquireSRWLockExclusive(&g_OutputMutex);
+            OutputDebugStringA(line);
             OutputDebugStringA("\n");
             FILE* output = severity >= Severity::Error ? stderr : stdout;
-            std::fprintf(output, "%s\n", line.data());
-            std::fflush(output);
+            fprintf(output, "%s\n", line);
+            fflush(output);
+            ReleaseSRWLockExclusive(&g_OutputMutex);
         }
 
-        Callback g_Callback = DefaultCallback;
+        Callback g_Callback{DefaultCallback, nullptr};
 
         [[nodiscard]] bool IsEnabled(Severity severity) noexcept
         {
             return severity == Severity::Fatal ||
-                severity >= g_MinimumSeverity.load(std::memory_order_relaxed);
+                LONG(severity) >= InterlockedCompareExchange(&g_MinimumSeverity, 0, 0);
         }
 
         void Dispatch(Severity severity, const char* format, va_list arguments)
         {
             if (!IsEnabled(severity))
                 return;
-            std::array<char, MessageCapacity> messageBuffer{};
+            char messageBuffer[MessageCapacity]{};
             if (format != nullptr)
             {
-                std::vsnprintf(
-                    messageBuffer.data(), messageBuffer.size(),
+                vsnprintf(
+                    messageBuffer, sizeof(messageBuffer),
                     format, arguments);
             }
-            Callback callback;
-            {
-                std::lock_guard<std::mutex> lock(g_CallbackMutex);
-                callback = g_Callback;
-            }
-            callback(severity, messageBuffer.data());
+            const Callback callback = GetCallback();
+            callback.function(callback.context, severity, messageBuffer);
         }
     }
 
     void SetMinimumSeverity(Severity severity) noexcept
     {
-        g_MinimumSeverity.store(severity, std::memory_order_relaxed);
+        InterlockedExchange(&g_MinimumSeverity, LONG(severity));
     }
 
-    void SetCallback(Callback callback)
+    void SetCallback(Callback callback) noexcept
     {
-        std::lock_guard<std::mutex> lock(g_CallbackMutex);
-        g_Callback = callback ? std::move(callback) : Callback(DefaultCallback);
+        AcquireSRWLockExclusive(&g_CallbackMutex);
+        g_Callback = callback.function ? callback : Callback{DefaultCallback, nullptr};
+        ReleaseSRWLockExclusive(&g_CallbackMutex);
     }
 
-    Callback GetCallback()
+    Callback GetCallback() noexcept
     {
-        std::lock_guard<std::mutex> lock(g_CallbackMutex);
-        return g_Callback;
+        AcquireSRWLockShared(&g_CallbackMutex);
+        const Callback callback = g_Callback;
+        ReleaseSRWLockShared(&g_CallbackMutex);
+        return callback;
     }
 
     void debug(const char* format, ...)
@@ -129,6 +124,6 @@ namespace uvsr::log
         va_start(arguments, format);
         Dispatch(Severity::Fatal, format, arguments);
         va_end(arguments);
-        std::abort();
+        abort();
     }
 }

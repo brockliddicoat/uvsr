@@ -2,8 +2,8 @@
 
 ## record
 
-- Relationship: Dependency Integration
-- Status: Current
+- relationship: historical dependency integration and comparison evidence
+- status: retired from the current build and package mappings
 - Confidence: Confirmed
 - Upstream: [JsonCpp](https://github.com/open-source-parsers/jsoncpp)
 - Revision: `89e2973c754a9c02a49974d839779b151e95afd6` (`1.9.6`)
@@ -13,16 +13,18 @@
 
 ## UVSR relationship
 
-UVSR fetches the immutable upstream `1.9.6` source archive directly and owns
-the narrow static target. Donut's remaining JSON callers consume that target;
-JsonCpp is not first-party code.
+UVSR previously fetched the immutable upstream `1.9.6` source archive directly
+for Donut's JSON callers. those callers and the static target have been retired.
+[captured import controls](../../tests/import_description_fixture.md) preserve
+the independent native comparison results. JsonCpp is upstream code.
 
 ## evidence
 
-- [Direct Pin and Target](../../cmake/DirectThirdParty.cmake)
-- [Retained Donut JSON Wrapper](../../donut/include/donut/core/json.h)
+- [current dependency configuration](../../cmake/DirectThirdParty.cmake)
+- [historical target and license records](C:/Users/brock/OneDrive/Documents/uvsr/work/donut-factor-out-v4/runs/20260909-01/09-core-prune-v1/before-records.json)
 
 ## commercial clearance
 
-The complete upstream choice-of-terms file is installed as
-`bin/licenses/JsonCpp-Public-Domain-or-MIT.txt`.
+the complete upstream choice-of-terms file previously installed as
+`bin/licenses/JsonCpp-Public-Domain-or-MIT.txt` is preserved in the
+[retirement evidence](C:/Users/brock/OneDrive/Documents/uvsr/work/donut-factor-out-v4/runs/20260909-01/09-core-prune-v1/build-before/JsonCpp-Public-Domain-or-MIT.txt).

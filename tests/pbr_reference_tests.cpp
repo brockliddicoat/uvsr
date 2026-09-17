@@ -1,4 +1,4 @@
-#include "direct_light_visibility.h"
+#include "direct_light_visibility_nvrhi.h"
 #include "pbr_lighting_debug_contract.h"
 #include "pbr_material.h"
 #include "pbr_surface_light_contract.h"
@@ -30,13 +30,12 @@ namespace
     void CheckDirectVisibility()
     {
         using namespace uvsr;
-        int textureToken = 0, lightToken = 0, unrelatedToken = 0;
+        int textureToken = 0;
         auto* texture = reinterpret_cast<nvrhi::ITexture*>(&textureToken);
-        auto* light = reinterpret_cast<const donut::engine::Light*>(&lightToken);
-        auto* unrelated = reinterpret_cast<const donut::engine::Light*>(&unrelatedToken);
+        const RendererSceneHandle light{3, 1}, unrelated{3, 2}, stale{4, 1};
         const DirectLightVisibility factor{ texture, light };
         Require(TargetsDirectLight(factor, light) && !TargetsDirectLight(factor, unrelated) &&
-            !TargetsDirectLight({ texture, nullptr }, light) && !DirectLightVisibility{}.IsComplete(),
+            !TargetsDirectLight(factor, stale) && !TargetsDirectLight({ texture, {} }, light) && !DirectLightVisibility{}.IsComplete(),
             "direct visibility escaped its exact light identity");
         const DirectLightVisibilityTextureProperties properties{
             1920, 1080, 1, 1, 1, 1, true, true, true };
@@ -122,10 +121,10 @@ namespace
     void CheckMaterialsAndDebug()
     {
         const float nan = std::numeric_limits<float>::quiet_NaN();
-        PbrMaterialParameters material;
+        PbrImportedMaterialValues material;
         material.baseColor.x = nan; material.metalness = 2; material.perceptualRoughness = -1;
         material.ior = 0; material.emissive.x = -2; material.opacity = nan;
-        ValidatePbrMaterialParameters(material);
+        ValidatePbrImportedMaterial(material);
         Require(material.baseColor.x == 1 && material.metalness == 1 && material.perceptualRoughness == 0 &&
             material.ior == 1 && material.emissive.x == 0 && material.opacity == 1 &&
             PbrIorToF0(1) == 0 && Near(PbrIorToF0(1.5f), .04f),

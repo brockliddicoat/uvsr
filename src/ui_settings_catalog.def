@@ -464,108 +464,108 @@ UVSR_FIELD(MaterialSelectedDomain, "material.selected.domain",
         .Label("alpha-blended", "Alpha-blended")
         .Label("transmissive-alpha-tested", "Transmissive alpha-tested")
         .Label("transmissive-alpha-blended", "Transmissive alpha-blended"),
-    Material, domain,
-        std::array{ MaterialDomain::Opaque,
-        MaterialDomain::AlphaTested,
-        MaterialDomain::AlphaBlended,
-        MaterialDomain::Transmissive,
-        MaterialDomain::TransmissiveAlphaTested,
-        MaterialDomain::TransmissiveAlphaBlended })
+    RendererSceneMaterialValues, domain,
+        std::array{ RendererMaterialDomain::Opaque,
+        RendererMaterialDomain::AlphaTested,
+        RendererMaterialDomain::AlphaBlended,
+        RendererMaterialDomain::Transmissive,
+        RendererMaterialDomain::TransmissiveAlphaTested,
+        RendererMaterialDomain::TransmissiveAlphaBlended })
 UVSR_FIELD(MaterialSelectedDoubleSided, "material.selected.double-sided",
     Value(id, Section::Materials, BooleanDomain("on|off"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true),
-    Material, doubleSided)
+    RendererSceneMaterialValues, doubleSided)
 UVSR_FIELD(MaterialSelectedBaseTextureEnabled, "material.selected.base-texture-enabled",
     Value(id, Section::Materials, BooleanDomain("on|off; requires a base or diffuse texture"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
         .Available(UiSettingsAvailability::BaseTexture),
-    Material, enableBaseOrDiffuseTexture)
+    RendererSceneMaterialValues, enableBaseOrDiffuseTexture)
 UVSR_FIELD(MaterialSelectedBaseColor, "material.selected.base-color",
     Value(id, Section::Materials, Float3Domain(0.0f, 1.0f, "linear rgb float3"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true),
-    Material, baseOrDiffuseColor)
+    RendererSceneMaterialValues, baseOrDiffuseColor)
 UVSR_FIELD(MaterialSelectedMetalSpecularTextureEnabled, "material.selected.metal-specular-texture-enabled",
     Value(id, Section::Materials, BooleanDomain("on|off; requires a metal-rough or specular texture"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
         .Available(UiSettingsAvailability::MetalSpecularTexture),
-    Material, enableMetalRoughOrSpecularTexture)
+    RendererSceneMaterialValues, enableMetalRoughOrSpecularTexture)
 UVSR_FIELD(MaterialSelectedSpecularColor, "material.selected.specular-color",
     Value(id, Section::Materials, Float3Domain(0.0f, 1.0f, "linear rgb float3; specular-gloss model"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
         .Available(UiSettingsAvailability::SpecularGlossMaterial),
-    Material, specularColor)
+    RendererSceneMaterialValues, specularColor)
 UVSR_FIELD(MaterialSelectedMetalness, "material.selected.metalness",
     Value(id, Section::Materials, FloatDomain(0.0f, 1.0f, "float 0..1; metal-rough model"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
         .Available(UiSettingsAvailability::MetalRoughMaterial),
-    Material, metalness)
+    RendererSceneMaterialValues, metalness)
 UVSR_FIELD(MaterialSelectedRoughness, "material.selected.roughness",
     Value(id, Section::Materials, FloatDomain(0.0f, 1.0f, "float 0..1; glossiness alias is one minus roughness"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true),
-    Material, roughness)
+    RendererSceneMaterialValues, roughness)
 UVSR_FIELD(MaterialSelectedOpacity, "material.selected.opacity",
     Value(id, Section::Materials, FloatDomainWithContextMaximum(0.0f, 1.0f, 2.0f, "float 0..1 or 0..2 with a base texture"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
         .Available(UiSettingsAvailability::AlphaBlendedMaterial)
         .ValueAfter(SettingId::MaterialSelectedDomain),
-    Material, opacity)
+    RendererSceneMaterialValues, opacity)
 UVSR_FIELD(MaterialSelectedAlphaCutoff, "material.selected.alpha-cutoff",
     Value(id, Section::Materials, FloatDomain(0.0f, 1.0f, "float 0..1; alpha-tested with base texture"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
         .Available(UiSettingsAvailability::AlphaTestedMaterial)
         .ValueAfter(SettingId::MaterialSelectedDomain),
-    Material, alphaCutoff)
+    RendererSceneMaterialValues, alphaCutoff)
 UVSR_FIELD(MaterialSelectedNormalTextureEnabled, "material.selected.normal-texture-enabled",
     Value(id, Section::Materials, BooleanDomain("on|off; requires a normal texture"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
         .Available(UiSettingsAvailability::NormalTexture),
-    Material, enableNormalTexture)
+    RendererSceneMaterialValues, enableNormalTexture)
 UVSR_FIELD(MaterialSelectedNormalScale, "material.selected.normal-scale",
     Value(id, Section::Materials, FloatDomain(-2.0f, 2.0f, "float -2..2"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), true, true)
         .Available(UiSettingsAvailability::NormalTexture),
-    Material, normalTextureScale)
+    RendererSceneMaterialValues, normalTextureScale)
 UVSR_FIELD(MaterialSelectedOcclusionTextureEnabled, "material.selected.occlusion-texture-enabled",
     Value(id, Section::Materials, BooleanDomain("on|off; requires an occlusion texture"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
         .Available(UiSettingsAvailability::OcclusionTexture),
-    Material, enableOcclusionTexture)
+    RendererSceneMaterialValues, enableOcclusionTexture)
 UVSR_FIELD(MaterialSelectedOcclusionStrength, "material.selected.occlusion-strength",
     Value(id, Section::Materials, FloatDomain(0.0f, 1.0f, "float 0..1; enabled occlusion texture"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
         .Available(UiSettingsAvailability::OcclusionTexture)
         .ValueAfter(SettingId::MaterialSelectedOcclusionTextureEnabled),
-    Material, occlusionStrength)
+    RendererSceneMaterialValues, occlusionStrength)
 UVSR_FIELD(MaterialSelectedEmissiveTextureEnabled, "material.selected.emissive-texture-enabled",
     Value(id, Section::Materials, BooleanDomain("on|off; requires an emissive texture"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
         .Available(UiSettingsAvailability::EmissiveTexture),
-    Material, enableEmissiveTexture)
+    RendererSceneMaterialValues, enableEmissiveTexture)
 UVSR_FIELD(MaterialSelectedEmissiveColor, "material.selected.emissive-color",
     Value(id, Section::Materials, Float3Domain(0.0f, 1.0f, "linear rgb float3"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true),
-    Material, emissiveColor)
+    RendererSceneMaterialValues, emissiveColor)
 UVSR_FIELD(MaterialSelectedEmissiveIntensity, "material.selected.emissive-intensity",
     Value(id, Section::Materials, FloatDomain(0.0f, 1e3f, "float 0..1000"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true),
-    Material, emissiveIntensity)
+    RendererSceneMaterialValues, emissiveIntensity)
 UVSR_FIELD(MaterialSelectedTransmissionTextureEnabled, "material.selected.transmission-texture-enabled",
     Value(id, Section::Materials, BooleanDomain("on|off; transmissive material with transmission texture"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
         .Available(UiSettingsAvailability::TransmissionTexture)
         .ValueAfter(SettingId::MaterialSelectedDomain),
-    Material, enableTransmissionTexture)
+    RendererSceneMaterialValues, enableTransmissionTexture)
 UVSR_FIELD(MaterialSelectedTransmissionFactor, "material.selected.transmission-factor",
     Value(id, Section::Materials, FloatDomain(0.0f, 1.0f, "float 0..1; transmissive material"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
         .Available(UiSettingsAvailability::TransmissiveMaterial)
         .ValueAfter(SettingId::MaterialSelectedDomain),
-    Material, transmissionFactor)
+    RendererSceneMaterialValues, transmissionFactor)
 UVSR_FIELD(MaterialSelectedAlphaMaskTextureEnabled, "material.selected.alpha-mask-texture-enabled",
     Value(id, Section::Materials, BooleanDomain("on|off; requires an opacity texture"),
         ContextDefault(UiSettingsDefaultPolicy::MaterialAuthored), false, true)
         .Available(UiSettingsAvailability::OpacityTexture),
-    Material, enableOpacityTexture)
+    RendererSceneMaterialValues, enableOpacityTexture)
 #ifdef UVSR_DEFAULT_FIELD
 #undef UVSR_DEFAULT_FIELD
 #undef UVSR_FIELD

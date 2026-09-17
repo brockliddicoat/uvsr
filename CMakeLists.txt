@@ -4,6 +4,7 @@ project(UVSR LANGUAGES C CXX)
 
 include(FetchContent)
 include(CTest)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/NoCppExceptions.cmake")
 
 function(uvsr_test target name)
     add_executable(${target} ${ARGN})
@@ -79,11 +80,159 @@ if (UVSR_GIT_SYMBOLIC_REF_RESULT EQUAL 0)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${UVSR_GIT_REF_PATH}")
 endif()
 
+add_library(uvsr_json STATIC src/json_document.cpp)
+target_include_directories(uvsr_json PUBLIC src)
+uvsr_disable_cpp_exceptions(uvsr_json PRIVATE)
+
+add_library(uvsr_file_bytes STATIC src/file_bytes_win32.cpp)
+target_include_directories(uvsr_file_bytes PUBLIC src)
+uvsr_disable_cpp_exceptions(uvsr_file_bytes PRIVATE)
+
+add_library(uvsr_sha256 STATIC src/sha256_win32.cpp)
+target_include_directories(uvsr_sha256 PUBLIC src)
+target_link_libraries(uvsr_sha256 PRIVATE bcrypt)
+target_compile_definitions(uvsr_sha256 PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+uvsr_disable_cpp_exceptions(uvsr_sha256 PRIVATE)
+if (MSVC)
+    target_compile_options(uvsr_sha256 PRIVATE /permissive- /W4 /WX)
+endif()
+
+add_library(uvsr_windows_paths STATIC src/windows_executable_path_win32.cpp src/windows_file_identity_win32.cpp)
+add_library(uvsr_windows_paths_test STATIC EXCLUDE_FROM_ALL src/windows_executable_path_win32.cpp src/windows_file_identity_win32.cpp)
+target_compile_definitions(uvsr_windows_paths_test PRIVATE UVSR_WINDOWS_PATH_TEST_HOOKS=1)
+foreach(target uvsr_windows_paths uvsr_windows_paths_test)
+    target_include_directories(${target} PUBLIC src)
+    target_compile_definitions(${target} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    uvsr_disable_cpp_exceptions(${target} PRIVATE)
+    if (MSVC)
+        target_compile_options(${target} PRIVATE /permissive- /W4 /WX)
+    endif()
+endforeach()
+
+add_library(uvsr_scene_catalog_path STATIC src/scene_catalog_path.cpp)
+add_library(uvsr_windows_path_text STATIC src/windows_path_text_win32.cpp)
+add_library(uvsr_windows_path_text_test STATIC EXCLUDE_FROM_ALL src/windows_path_text_win32.cpp)
+target_compile_definitions(uvsr_windows_path_text_test PUBLIC UVSR_WINDOWS_PATH_TEXT_TEST_HOOKS=1)
+foreach(target uvsr_scene_catalog_path uvsr_windows_path_text uvsr_windows_path_text_test)
+    target_include_directories(${target} PUBLIC src)
+    target_compile_definitions(${target} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    uvsr_disable_cpp_exceptions(${target} PRIVATE)
+    if (MSVC)
+        target_compile_options(${target} PRIVATE /permissive- /W4 /WX)
+    endif()
+endforeach()
+target_link_libraries(uvsr_windows_paths PRIVATE uvsr_scene_catalog_path)
+target_link_libraries(uvsr_windows_paths_test PRIVATE uvsr_scene_catalog_path)
+target_link_libraries(uvsr_windows_path_text PRIVATE uvsr_scene_catalog_path)
+target_link_libraries(uvsr_windows_path_text_test PRIVATE uvsr_scene_catalog_path)
+
+add_library(uvsr_file_write STATIC src/file_write_win32.cpp)
+add_library(uvsr_file_write_test STATIC EXCLUDE_FROM_ALL src/file_write_win32.cpp)
+target_compile_definitions(uvsr_file_write_test PUBLIC UVSR_FILE_WRITE_TEST_HOOKS=1)
+foreach(target uvsr_file_write uvsr_file_write_test)
+    target_include_directories(${target} PUBLIC src)
+    uvsr_disable_cpp_exceptions(${target} PRIVATE)
+    if (MSVC)
+        target_compile_options(${target} PRIVATE /permissive- /W4 /WX)
+    endif()
+endforeach()
+target_link_libraries(uvsr_file_write PRIVATE uvsr_windows_paths)
+target_link_libraries(uvsr_file_write_test PRIVATE uvsr_windows_paths_test)
+
+if(BUILD_TESTING)
+    add_library(uvsr_retained_runtime_output STATIC
+        src/retained_runtime_capture_file.cpp src/retained_runtime_json.cpp
+        src/retained_runtime_semantic.cpp src/retained_runtime_diagnostic.cpp src/retained_runtime_provenance.cpp)
+    target_include_directories(uvsr_retained_runtime_output PUBLIC src)
+    target_compile_definitions(uvsr_retained_runtime_output PRIVATE UVSR_RETAINED_CASE_TEST_HOOKS=1)
+    # final consumers select the production or test settings-value implementation.
+    target_link_libraries(uvsr_retained_runtime_output PUBLIC uvsr_json PRIVATE
+        uvsr_windows_paths uvsr_windows_path_text uvsr_scene_catalog_path)
+    target_compile_definitions(uvsr_retained_runtime_output PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    uvsr_disable_cpp_exceptions(uvsr_retained_runtime_output PRIVATE)
+    if (MSVC)
+        target_compile_options(uvsr_retained_runtime_output PRIVATE /permissive- /W4 /WX)
+        # provenance retains each borrowed getenv value before the next query.
+        set_source_files_properties(src/retained_runtime_provenance.cpp PROPERTIES
+            COMPILE_DEFINITIONS _CRT_SECURE_NO_WARNINGS)
+    endif()
+    # library failure hooks must not select the application's developer paths.
+    target_compile_definitions(uvsr_json PUBLIC UVSR_JSON_TEST_HOOKS=1)
+    target_compile_definitions(uvsr_file_bytes PUBLIC UVSR_FILE_BYTES_TEST_HOOKS=1)
+    uvsr_test(uvsr_json_document_tests uvsr_json_document tests/json_document_tests.cpp)
+    target_link_libraries(uvsr_json_document_tests PRIVATE uvsr_json)
+    uvsr_disable_cpp_exceptions(uvsr_json_document_tests)
+    uvsr_test(uvsr_file_bytes_tests uvsr_file_bytes tests/file_bytes_tests.cpp)
+    target_sources(uvsr_file_bytes_tests PRIVATE tests/noise_texture_asset_tests.cpp src/noise_texture_asset.cpp)
+    target_compile_definitions(uvsr_file_bytes_tests PRIVATE UVSR_WINDOWS_PATH_TEST_HOOKS=1)
+    target_link_libraries(uvsr_file_bytes_tests PRIVATE uvsr_file_bytes uvsr_windows_paths_test uvsr_windows_path_text_test)
+    uvsr_disable_cpp_exceptions(uvsr_file_bytes_tests)
+endif()
+
 add_library(uvsr_settings_catalog STATIC
-    src/settings_catalog.cpp src/settings_contract.cpp src/settings_value.cpp)
+    src/settings_catalog.cpp src/settings_contract.cpp)
 target_include_directories(uvsr_settings_catalog PUBLIC src)
+target_link_libraries(uvsr_settings_catalog PUBLIC uvsr_json)
+uvsr_disable_cpp_exceptions(uvsr_settings_catalog PRIVATE)
 if (MSVC)
     target_compile_options(uvsr_settings_catalog PRIVATE /constexpr:steps100000000)
+endif()
+
+add_library(uvsr_settings_value STATIC src/settings_value.cpp)
+add_library(uvsr_settings_value_test STATIC EXCLUDE_FROM_ALL src/settings_value.cpp)
+target_compile_definitions(uvsr_settings_value_test PUBLIC UVSR_SETTINGS_VALUE_TEST_HOOKS=1)
+foreach(target uvsr_settings_value uvsr_settings_value_test)
+    target_include_directories(${target} PUBLIC src)
+    target_link_libraries(${target} PUBLIC uvsr_settings_catalog)
+    uvsr_disable_cpp_exceptions(${target} PRIVATE)
+    if (MSVC)
+        target_compile_options(${target} PRIVATE /permissive- /W4 /WX /constexpr:steps100000000)
+    endif()
+endforeach()
+if(BUILD_TESTING)
+    uvsr_test(uvsr_settings_value_tests uvsr_settings_value tests/settings_value_tests.cpp)
+    target_link_libraries(uvsr_settings_value_tests PRIVATE uvsr_settings_value_test)
+    uvsr_disable_cpp_exceptions(uvsr_settings_value_tests)
+endif()
+
+add_library(uvsr_settings_controller OBJECT src/uvsr_settings_commands.cpp)
+target_include_directories(uvsr_settings_controller PRIVATE src)
+target_compile_features(uvsr_settings_controller PRIVATE cxx_std_17)
+uvsr_disable_cpp_exceptions(uvsr_settings_controller PRIVATE)
+if (MSVC)
+    target_compile_options(uvsr_settings_controller PRIVATE /permissive- /W4 /WX)
+endif()
+
+add_library(uvsr_settings_snapshot STATIC
+    src/settings_snapshot_storage.cpp src/settings_snapshot_decoder.cpp src/settings_snapshot_catalogs_win32.cpp
+    src/settings_snapshot_persistence_win32.cpp src/settings_snapshot_transaction.cpp src/settings_snapshot_legacy.cpp
+    src/settings_snapshot_selectors.cpp $<TARGET_OBJECTS:uvsr_settings_controller>)
+add_library(uvsr_settings_snapshot_test STATIC EXCLUDE_FROM_ALL
+    src/settings_snapshot_storage.cpp src/settings_snapshot_decoder.cpp src/settings_snapshot_catalogs_win32.cpp
+    src/settings_snapshot_persistence_win32.cpp src/settings_snapshot_transaction.cpp src/settings_snapshot_legacy.cpp
+    src/settings_snapshot_selectors.cpp $<TARGET_OBJECTS:uvsr_settings_controller>)
+target_compile_definitions(uvsr_settings_snapshot_test PUBLIC UVSR_SETTINGS_SNAPSHOT_TEST_HOOKS=1)
+foreach(target uvsr_settings_snapshot uvsr_settings_snapshot_test)
+    target_include_directories(${target} PUBLIC src)
+    target_link_libraries(${target} PUBLIC uvsr_file_bytes PRIVATE ole32 shell32)
+    uvsr_disable_cpp_exceptions(${target} PRIVATE)
+    if (MSVC)
+        target_compile_options(${target} PRIVATE /permissive- /W4 /WX)
+    endif()
+endforeach()
+target_link_libraries(uvsr_settings_snapshot PUBLIC uvsr_settings_value)
+target_link_libraries(uvsr_settings_snapshot_test PUBLIC uvsr_settings_value_test)
+target_link_libraries(uvsr_settings_snapshot PRIVATE uvsr_windows_paths uvsr_file_write)
+target_link_libraries(uvsr_settings_snapshot_test PRIVATE uvsr_windows_paths_test uvsr_file_write_test)
+
+add_library(uvsr_renderer_scene STATIC src/renderer_scene.cpp src/renderer_scene_draw.cpp
+    src/renderer_scene_ray.cpp src/renderer_scene_encoding.cpp src/renderer_scene_material_mode.cpp src/renderer_scene_light.cpp)
+target_include_directories(uvsr_renderer_scene PUBLIC src)
+target_compile_definitions(uvsr_renderer_scene PRIVATE _HAS_EXCEPTIONS=0)
+if (MSVC)
+    target_compile_options(uvsr_renderer_scene PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise)
+else()
+    target_compile_options(uvsr_renderer_scene PRIVATE -fno-exceptions)
 endif()
 
 add_executable(uvsr_build_identity_generator
@@ -131,290 +280,44 @@ foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 endforeach()
 
-function(uvsr_add_mapped_asset_stage target_name staging_root)
-    set(asset_manifest
-        "${CMAKE_CURRENT_BINARY_DIR}/${target_name}.assets")
-    set(asset_manifest_content "")
-    set(staged_outputs)
-    set(staged_outputs_insensitive)
-    set(arguments ${ARGN})
-    while(arguments)
-        list(POP_FRONT arguments source_path)
-        if (NOT arguments)
-            message(FATAL_ERROR "${target_name} has an incomplete asset mapping")
-        endif()
-        list(POP_FRONT arguments relative_path)
-        string(REPLACE "\\" "/" relative_path "${relative_path}")
-        string(TOLOWER "${relative_path}" relative_path_insensitive)
-        list(FIND staged_outputs_insensitive
-            "${relative_path_insensitive}" duplicate_output_index)
-        if (NOT duplicate_output_index EQUAL -1)
-            message(FATAL_ERROR
-                "${target_name} maps duplicate output ${relative_path}")
-        endif()
-        list(APPEND staged_outputs_insensitive
-            "${relative_path_insensitive}")
-        string(APPEND asset_manifest_content
-            "${source_path}\t${relative_path}\n")
-        set(staged_output "${staging_root}/${relative_path}")
-        get_filename_component(staged_directory
-            "${staged_output}" DIRECTORY)
-        add_custom_command(
-            OUTPUT "${staged_output}"
-            COMMAND "${CMAKE_COMMAND}" -E make_directory
-                "${staged_directory}"
-            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                "${source_path}" "${staged_output}"
-            COMMAND "${CMAKE_COMMAND}" -E touch_nocreate
-                "${staged_output}"
-            DEPENDS "${source_path}"
-            COMMENT "Staging ${relative_path}"
-            VERBATIM)
-        list(APPEND staged_outputs "${staged_output}")
-    endwhile()
-    file(GENERATE OUTPUT "${asset_manifest}"
-        CONTENT "${asset_manifest_content}")
-    set(asset_stamp
-        "${CMAKE_CURRENT_BINARY_DIR}/${target_name}.stamp")
-    add_custom_command(
-        OUTPUT "${asset_stamp}"
-        COMMAND "${CMAKE_COMMAND}"
-            "-DUVSR_ASSET_MANIFEST=${asset_manifest}"
-            "-DUVSR_ASSET_STAGING_ROOT=${staging_root}"
-            -DUVSR_ASSET_PURGE_ONLY=ON
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SyncMappedAssets.cmake"
-        COMMAND "${CMAKE_COMMAND}" -E touch "${asset_stamp}"
-        DEPENDS "${asset_manifest}" ${staged_outputs}
-            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SyncMappedAssets.cmake"
-        COMMENT "Purging retired ${target_name} outputs"
-        VERBATIM)
-    add_custom_target("${target_name}" DEPENDS "${asset_stamp}")
-endfunction()
-
-set(UVSR_DONUT_SHADER_STAGING_DIR "${CMAKE_BINARY_DIR}/donut_shaders")
-set(DONUT_SHADERS_OUTPUT_DIR "${UVSR_DONUT_SHADER_STAGING_DIR}")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/RuntimeAssetStage.cmake")
 
 set(DONUT_WITH_DX11 OFF CACHE BOOL "" FORCE)
 set(DONUT_WITH_DX12 ON CACHE BOOL "" FORCE)
 set(DONUT_WITH_VULKAN OFF CACHE BOOL "" FORCE)
 set(DONUT_WITH_AFTERMATH OFF CACHE BOOL "" FORCE)
 
-function(uvsr_copy_lf source destination)
-    file(READ "${source}" content)
-    if (content MATCHES "@[A-Za-z_][A-Za-z0-9_]*@|#[ \t]*cmakedefine")
-        message(FATAL_ERROR "Cannot LF-normalize dependency template: ${source}")
-    endif()
-    configure_file("${source}" "${destination}" @ONLY NEWLINE_STYLE LF)
-endfunction()
-
-# UVSR keeps dependencies pristine. Stage reviewed first-party patches in the
-# build tree and replace only affected target sources.
-function(uvsr_stage_patched_sources
-    source_root
-    patch_files
-    output_root)
-    set(candidate_root "${output_root}.candidate")
-    set(normalized_patch_root "${output_root}.patches")
-    file(REMOVE_RECURSE "${candidate_root}")
-    file(REMOVE_RECURSE "${normalized_patch_root}")
-    file(MAKE_DIRECTORY "${candidate_root}")
-    file(MAKE_DIRECTORY "${normalized_patch_root}")
-    set(expected_files)
-    foreach(relative_path IN LISTS ARGN)
-        get_filename_component(relative_directory
-            "${relative_path}" DIRECTORY)
-        file(MAKE_DIRECTORY
-            "${candidate_root}/${relative_directory}")
-        uvsr_copy_lf("${source_root}/${relative_path}"
-            "${candidate_root}/${relative_path}")
-        list(APPEND expected_files "${relative_path}")
-    endforeach()
-
-    set(patch_index 0)
-    foreach(patch_file IN LISTS patch_files)
-        math(EXPR patch_index "${patch_index} + 1")
-        set(normalized_patch_file "${normalized_patch_root}/${patch_index}.patch")
-        uvsr_copy_lf("${patch_file}" "${normalized_patch_file}")
-        execute_process(
-            COMMAND "${CMAKE_COMMAND}" -E env
-                "GIT_CEILING_DIRECTORIES=${CMAKE_BINARY_DIR}"
-                "${GIT_EXECUTABLE}"
-                -c core.autocrlf=false
-                -c core.eol=lf
-                apply
-                --no-index
-                --unidiff-zero
-                --whitespace=nowarn
-                "${normalized_patch_file}"
-            WORKING_DIRECTORY "${candidate_root}"
-            RESULT_VARIABLE patch_result
-            ERROR_VARIABLE patch_error)
-        if (NOT patch_result EQUAL 0)
-            message(FATAL_ERROR
-                "Failed to stage UVSR dependency override ${patch_file}: "
-                "${patch_error}")
-        endif()
-        set_property(DIRECTORY APPEND PROPERTY
-            CMAKE_CONFIGURE_DEPENDS "${patch_file}")
-    endforeach()
-    file(GLOB_RECURSE existing_files
-        LIST_DIRECTORIES false
-        RELATIVE "${output_root}"
-        "${output_root}/*")
-    foreach(relative_path IN LISTS existing_files)
-        list(FIND expected_files "${relative_path}" expected_index)
-        if (expected_index EQUAL -1)
-            file(REMOVE "${output_root}/${relative_path}")
-        endif()
-    endforeach()
-    foreach(relative_path IN LISTS expected_files)
-        get_filename_component(relative_directory
-            "${relative_path}" DIRECTORY)
-        file(MAKE_DIRECTORY "${output_root}/${relative_directory}")
-        configure_file(
-            "${candidate_root}/${relative_path}"
-            "${output_root}/${relative_path}"
-            COPYONLY)
-    endforeach()
-    file(REMOVE_RECURSE "${candidate_root}")
-    file(REMOVE_RECURSE "${normalized_patch_root}")
-endfunction()
-
-function(uvsr_replace_target_sources
-    target
-    source_root
-    override_root)
-    get_target_property(target_sources "${target}" SOURCES)
-    foreach(relative_path IN LISTS ARGN)
-        set(original_source "${source_root}/${relative_path}")
-        list(FIND target_sources "${original_source}" source_index)
-        set(source_to_remove "${original_source}")
-        if (source_index EQUAL -1)
-            # Donut appends backend sources with target-relative paths.
-            list(FIND target_sources "${relative_path}" source_index)
-            set(source_to_remove "${relative_path}")
-        endif()
-        if (source_index EQUAL -1)
-            message(FATAL_ERROR
-                "Cannot replace ${original_source} in target ${target}")
-        endif()
-        list(REMOVE_ITEM target_sources "${source_to_remove}")
-        list(APPEND target_sources "${override_root}/${relative_path}")
-    endforeach()
-    set_property(TARGET "${target}" PROPERTY SOURCES "${target_sources}")
-
-endfunction()
-
-set(UVSR_DONUT_ENGINE_OVERRIDE_DIR
-    "${CMAKE_BINARY_DIR}/uvsr_donut_engine_overrides")
-set(UVSR_DONUT_ENGINE_PATCH_FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-engine.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-loading.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-shader-factory-direct-blob.patch")
-set(UVSR_DONUT_ENGINE_SOURCES
-    include/donut/engine/Scene.h
-    include/donut/engine/SceneTypes.h
-    include/donut/engine/ThreadPool.h
-    src/engine/GltfImporter.cpp
-    src/engine/Scene.cpp
-    src/engine/ShaderFactory.cpp
-    src/engine/TextureCache.cpp
-    src/engine/ThreadPool.cpp)
-uvsr_stage_patched_sources(
-    "${CMAKE_CURRENT_SOURCE_DIR}/donut"
-    "${UVSR_DONUT_ENGINE_PATCH_FILES}"
-    "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}"
-    ${UVSR_DONUT_ENGINE_SOURCES})
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/PatchedSources.cmake")
 
 set(UVSR_DONUT_APP_OVERRIDE_DIR
     "${CMAKE_BINARY_DIR}/uvsr_donut_app_overrides")
 set(UVSR_DONUT_APP_PATCH_FILES
     "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-app.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-loading-app.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-app-ui-polish.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-render-disposition.patch")
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-render-disposition.patch"
+    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/donut-frame-owner.patch")
 set(UVSR_DONUT_APP_SOURCES
     include/donut/app/DeviceManager_DX12.h
-    src/app/ApplicationBase.cpp
     src/app/DeviceManager.cpp
-    src/app/dx12/DeviceManager_DX12.cpp
-    src/app/UserInterfaceUtils.cpp)
+    src/app/dx12/DeviceManager_DX12.cpp)
 uvsr_stage_patched_sources(
     "${CMAKE_CURRENT_SOURCE_DIR}/donut"
     "${UVSR_DONUT_APP_PATCH_FILES}"
     "${UVSR_DONUT_APP_OVERRIDE_DIR}"
-    include/donut/app/ApplicationBase.h
     include/donut/app/DeviceManager.h
-    include/donut/app/UserInterfaceUtils.h
     ${UVSR_DONUT_APP_SOURCES})
 
-set(UVSR_IMGUI_OVERRIDE_DIR
-    "${CMAKE_BINARY_DIR}/uvsr_imgui_overrides")
-set(UVSR_IMGUI_PATCH_FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/imgui-ui.patch")
-uvsr_stage_patched_sources(
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui"
-    "${UVSR_IMGUI_PATCH_FILES}"
-    "${UVSR_IMGUI_OVERRIDE_DIR}"
-    imgui.cpp
-    imgui.h
-    imgui_draw.cpp
-    imgui_internal.h
-    imgui_tables.cpp
-    imgui_widgets.cpp)
-
-set(UVSR_NVRHI_D3D12_OVERRIDE_DIR
-    "${CMAKE_BINARY_DIR}/uvsr_nvrhi_d3d12_overrides")
-set(UVSR_NVRHI_D3D12_PATCH_FILES
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/nvrhi-stable-directx-headers.patch"
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/nvrhi-d3d12-portability.patch")
-set(UVSR_NVRHI_D3D12_SOURCES
-    src/d3d12/d3d12-constants.cpp
-    src/d3d12/d3d12-buffer.cpp
-    src/d3d12/d3d12-commandlist.cpp
-    src/d3d12/d3d12-compute.cpp
-    src/d3d12/d3d12-descriptor-heap.cpp
-    src/d3d12/d3d12-device.cpp
-    src/d3d12/d3d12-graphics.cpp
-    src/d3d12/d3d12-meshlets.cpp
-    src/d3d12/d3d12-queries.cpp
-    src/d3d12/d3d12-raytracing.cpp
-    src/d3d12/d3d12-resource-bindings.cpp
-    src/d3d12/d3d12-shader.cpp
-    src/d3d12/d3d12-state-tracking.cpp
-    src/d3d12/d3d12-texture.cpp
-    src/d3d12/d3d12-upload.cpp)
-uvsr_stage_patched_sources(
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvrhi"
-    "${UVSR_NVRHI_D3D12_PATCH_FILES}"
-    "${UVSR_NVRHI_D3D12_OVERRIDE_DIR}"
-    src/d3d12/d3d12-backend.h
-    ${UVSR_NVRHI_D3D12_SOURCES})
-set(UVSR_NVRHI_D3D12_DIAGNOSTICS_DIR
-    "${CMAKE_BINARY_DIR}/uvsr_nvrhi_d3d12_diagnostics")
-file(MAKE_DIRECTORY "${UVSR_NVRHI_D3D12_DIAGNOSTICS_DIR}")
-configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/overrides/nvrhi-d3d12-diagnostics.h"
-    "${UVSR_NVRHI_D3D12_DIAGNOSTICS_DIR}/uvsr-d3d12-diagnostics.h"
-    COPYONLY)
-set(UVSR_NVRHI_DIAGNOSTICS_STAGE_RECORDS
-    "${UVSR_NVRHI_D3D12_DIAGNOSTICS_DIR}/uvsr-d3d12-diagnostics.h|1024BEBDC4AF86844547ED3A2DE37452F16430F491F6F4476E725F04506ED2A0")
-set(UVSR_NVRHI_STAGE_TREE_DIGEST
-    "68591065a043935f9d09bda5a7b4c8dc3ed959f645997da0cf70ae78a0e09f5a")
-set(UVSR_IMGUI_STAGE_TREE_DIGEST
-    "980ee9a5cd845bdc8c70364f8989961d5b6e0e945610f572c08d81a0f3979294")
-set(UVSR_TRANSITIONAL_DONUT_ENGINE_STAGE_TREE_DIGEST
-    "0e164755d95956f5247618982d5cbe74be5044fed772b57bef65e48906cc7339")
 set(UVSR_TRANSITIONAL_DONUT_APP_STAGE_TREE_DIGEST
-    "5722132f4dd85a7ec3ca78becb59b6078fdd491411136d909e7883ea0a4d7ab5")
+    "1928ae28b3c476ed5a855c6953cc90b8a5bfb4806c24f1c283571404a2bb3829")
 
-add_library(uvsr_shader_blob STATIC src/shader_blob.cpp)
+add_library(uvsr_shader_blob STATIC src/shader_bytecode.cpp)
 target_include_directories(uvsr_shader_blob PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
 add_executable(uvsr_shader_blob_builder tools/shader_blob_builder.cpp)
-target_link_libraries(uvsr_shader_blob_builder PRIVATE uvsr_shader_blob)
-target_include_directories(uvsr_shader_blob_builder PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_definitions(uvsr_shader_blob_builder PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+uvsr_disable_cpp_exceptions(uvsr_shader_blob_builder)
+if(BUILD_TESTING)
+    target_compile_definitions(uvsr_shader_blob_builder PRIVATE UVSR_BUILD_TESTING=1)
+endif()
 if (MSVC)
     target_compile_options(uvsr_shader_blob_builder PRIVATE
         /permissive- /W4 /WX)
@@ -435,7 +338,7 @@ target_include_directories(uvsr_renderer_package_contract_validator PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/tools"
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(uvsr_renderer_package_contract_validator PRIVATE
-    bcrypt version)
+    uvsr_sha256 version uvsr_json uvsr_file_bytes)
 if (MSVC)
     target_compile_options(uvsr_renderer_package_contract_validator PRIVATE
         /permissive- /W4 /WX)
@@ -448,15 +351,11 @@ if (MSVC)
         /permissive- /W4 /WX)
 endif()
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DirectThirdParty.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DirectImGui.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DirectNVRHI.cmake")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DirectFastgltf.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DirectDonut.cmake")
-uvsr_replace_target_sources(
-    nvrhi_d3d12
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvrhi"
-    "${UVSR_NVRHI_D3D12_OVERRIDE_DIR}"
-    ${UVSR_NVRHI_D3D12_SOURCES})
-target_include_directories(nvrhi_d3d12 PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvrhi/src/d3d12"
-    "${UVSR_NVRHI_D3D12_DIAGNOSTICS_DIR}")
 uvsr_replace_target_sources(
     donut_app
     "${CMAKE_CURRENT_SOURCE_DIR}/donut"
@@ -467,44 +366,70 @@ target_include_directories(donut_app BEFORE PUBLIC
 target_include_directories(donut_app PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${UVSR_NVRHI_D3D12_DIAGNOSTICS_DIR}")
-uvsr_replace_target_sources(
-    donut_engine
-    "${CMAKE_CURRENT_SOURCE_DIR}/donut"
-    "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}"
-    ${UVSR_DONUT_ENGINE_SOURCES})
-target_include_directories(donut_engine BEFORE PUBLIC
-    "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}/include")
+add_library(uvsr_log STATIC src/renderer_log.cpp)
+target_include_directories(uvsr_log PUBLIC src)
+target_compile_features(uvsr_log PRIVATE cxx_std_17)
+target_compile_definitions(uvsr_log PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+# the plain callback contract does not expose a standard-library ABI.
+uvsr_disable_cpp_exceptions(uvsr_log PRIVATE)
 
-FetchContent_Declare(dxc
-    URL
-        "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip"
-    URL_HASH
-        "SHA256=A1E89031421CF3C1FCA6627766AB3020CA4F962AC7E2CAA7FAB2B33A8436151E"
-    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-FetchContent_MakeAvailable(dxc)
-set(UVSR_DXC_FILE_COUNT 37)
-set(UVSR_DXC_TREE_DIGEST
-    "7b1ee9300f50e01c2347316b6dbc0640455231125986d36762743edb0fdbff24")
-set(UVSR_DXC_EXECUTABLE "${dxc_SOURCE_DIR}/bin/x64/dxc.exe")
-if (NOT EXISTS "${UVSR_DXC_EXECUTABLE}")
-    message(FATAL_ERROR "The pinned x64 DXC executable is missing")
-endif()
-file(SHA256 "${UVSR_DXC_EXECUTABLE}" UVSR_DXC_SHA256)
-if (NOT UVSR_DXC_SHA256 STREQUAL
-        "b9cff94181248e080804b385da8964b6319fd07760721baa9053a891cf7a727f")
-    message(FATAL_ERROR "The pinned x64 DXC executable failed SHA-256")
-endif()
-execute_process(
-    COMMAND "${UVSR_DXC_EXECUTABLE}" --version
-    RESULT_VARIABLE dxc_version_result
-    OUTPUT_VARIABLE dxc_version_output
-    ERROR_VARIABLE dxc_version_error)
-if (NOT dxc_version_result EQUAL 0 OR
-    NOT dxc_version_output MATCHES "1\\.9\\.2602")
-    message(FATAL_ERROR
-        "The pinned DXC version is not 1.9.2602: ${dxc_version_error}")
+add_library(uvsr_engine_log STATIC src/engine_diagnostic_log_win32.cpp)
+target_include_directories(uvsr_engine_log PUBLIC src)
+target_link_libraries(uvsr_engine_log PUBLIC uvsr_log)
+target_compile_features(uvsr_engine_log PRIVATE cxx_std_17)
+target_compile_definitions(uvsr_engine_log PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+uvsr_disable_cpp_exceptions(uvsr_engine_log PRIVATE)
+if (BUILD_TESTING)
+    target_compile_definitions(uvsr_engine_log PRIVATE UVSR_ENGINE_LOG_TEST_HOOKS=1)
 endif()
 
+add_library(uvsr_camera STATIC src/camera_controllers.cpp src/renderer_vector_math.cpp)
+target_include_directories(uvsr_camera PUBLIC src)
+target_link_libraries(uvsr_camera PRIVATE glfw)
+uvsr_disable_cpp_exceptions(uvsr_camera PRIVATE)
+if(MSVC)
+    target_compile_options(uvsr_camera PRIVATE /permissive- /W4 /WX /fp:precise)
+endif()
+
+add_library(uvsr_renderer_nvrhi STATIC
+    src/renderer_shader_factory_nvrhi.cpp
+    src/renderer_scene_descriptors_nvrhi.cpp
+    src/pbr_binding_sets_nvrhi.cpp
+    src/renderer_ui_nvrhi.cpp
+    src/renderer_geometry_passes_nvrhi.cpp
+    src/renderer_light_probe_processing_nvrhi.cpp
+    src/renderer_common_passes_nvrhi.cpp
+    src/renderer_pixel_readback_nvrhi.cpp
+    src/renderer_texture_bmp_nvrhi.cpp)
+target_include_directories(uvsr_renderer_nvrhi PUBLIC src)
+target_link_libraries(uvsr_renderer_nvrhi PRIVATE uvsr_shader_blob uvsr_bmp uvsr_log nvrhi imgui)
+target_compile_features(uvsr_renderer_nvrhi PRIVATE cxx_std_17)
+target_compile_definitions(uvsr_renderer_nvrhi PRIVATE NOMINMAX)
+uvsr_disable_cpp_exceptions(uvsr_renderer_nvrhi)
+
+add_library(uvsr_bmp STATIC src/renderer_texture_bmp.cpp)
+target_include_directories(uvsr_bmp PUBLIC src)
+target_compile_features(uvsr_bmp PRIVATE cxx_std_17)
+uvsr_disable_cpp_exceptions(uvsr_bmp)
+
+add_library(uvsr_view STATIC src/renderer_view.cpp)
+target_include_directories(uvsr_view PUBLIC src)
+target_compile_features(uvsr_view PRIVATE cxx_std_17)
+uvsr_disable_cpp_exceptions(uvsr_view)
+
+add_library(uvsr_ui_context STATIC src/renderer_ui_context.cpp src/renderer_ui_input_glfw.cpp)
+target_include_directories(uvsr_ui_context PUBLIC src)
+target_link_libraries(uvsr_ui_context PRIVATE imgui glfw)
+target_compile_features(uvsr_ui_context PRIVATE cxx_std_17)
+target_compile_definitions(uvsr_ui_context PRIVATE NOMINMAX GLFW_INCLUDE_NONE)
+uvsr_disable_cpp_exceptions(uvsr_ui_context)
+if(BUILD_TESTING)
+    target_compile_definitions(uvsr_renderer_nvrhi PRIVATE UVSR_BUILD_TESTING=1)
+    target_compile_definitions(uvsr_ui_context PRIVATE UVSR_BUILD_TESTING=1)
+endif()
+uvsr_disable_cpp_exceptions(uvsr_shader_blob)
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DirectDXC.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DirectXShaderCatalog.cmake")
 
 
@@ -527,42 +452,19 @@ set(UVSR_CORE_SHADER_STAGING_DIR
     "${UVSR_SHADER_STAGING_ROOT}/core")
 set(UVSR_SHADER_CONFIG
     "${CMAKE_CURRENT_SOURCE_DIR}/src/shaders.cfg")
-set(UVSR_DONUT_SHADER_CONFIG
-    "${CMAKE_CURRENT_SOURCE_DIR}/donut/shaders/DonutShaders.cfg")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${UVSR_SHADER_CONFIG}" "${UVSR_DONUT_SHADER_CONFIG}")
-
-uvsr_add_direct_shader_bundle(
-    TARGET donut_shaders
-    CONFIG "${UVSR_DONUT_SHADER_CONFIG}"
-    SOURCE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/donut/shaders"
-    OUTPUT_DIRECTORY "${UVSR_DONUT_SHADER_STAGING_DIR}"
-    EXPECTED_TASKS 51
-    OUTPUTS_VARIABLE UVSR_DONUT_SHADER_OUTPUTS
-    EXCLUDE_SOURCES
-        passes/pixel_readback_cs.hlsl
-        passes/taa_cs.hlsl
-        passes/light_probe.hlsl
-        passes/gbuffer_vs.hlsl
-        passes/material_id_ps.hlsl
-    ENABLE_16BIT_TYPES
-    INCLUDE_DIRECTORIES
-        "${CMAKE_CURRENT_SOURCE_DIR}/donut/include"
-        "${CMAKE_CURRENT_SOURCE_DIR}")
+    "${UVSR_SHADER_CONFIG}")
 uvsr_add_direct_shader_bundle(
     TARGET uvsr_shaders
     CONFIG "${UVSR_SHADER_CONFIG}"
     SOURCE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/src"
     OUTPUT_DIRECTORY "${UVSR_CORE_SHADER_STAGING_DIR}"
-    EXPECTED_TASKS 32
+    EXPECTED_TASKS 35
     OUTPUTS_VARIABLE UVSR_SHADER_OUTPUTS
     OBJECTS_VARIABLE UVSR_SHADER_OBJECTS
     ENABLE_16BIT_TYPES
     INCLUDE_DIRECTORIES
         "${CMAKE_CURRENT_SOURCE_DIR}")
-add_dependencies(donut_engine donut_shaders)
-add_dependencies(donut_render donut_shaders)
-add_dependencies(donut_app donut_shaders)
 
 set(UVSR_DIRECT_DEPENDENCY_VERIFICATION_SCOPE inputs)
 set(UVSR_DIRECT_DEPENDENCY_INVOCATION
@@ -580,50 +482,68 @@ add_custom_target(uvsr_verify_direct_dependency_state
     VERBATIM)
 
 foreach(dependency_target IN ITEMS
-        cgltf stb jsoncpp_static tinyexr glfw imgui
+        cgltf stb tinyexr glfw imgui uvsr_simdjson fastgltf
+        uvsr_stb_image uvsr_tinyexr
         nvrhi nvrhi_d3d12 DirectX-Headers DirectX-Guids
-        donut_shaders uvsr_shaders
-        donut_core donut_engine donut_render donut_app)
+        uvsr_shaders
+        donut_core donut_app)
     if (TARGET "${dependency_target}")
         add_dependencies("${dependency_target}"
             uvsr_verify_direct_dependency_state)
     endif()
 endforeach()
 
+set_source_files_properties(src/camera_collision.cpp PROPERTIES COMPILE_DEFINITIONS "_HAS_EXCEPTIONS=0")
+set_source_files_properties(src/engine_startup.cpp src/uvsr_command_line.cpp src/color_lut.cpp
+    src/gpu_adapter_catalog.cpp src/scene_catalog.cpp src/scene_loading.cpp tests/scene_history_owner_tests.cpp tests/restart_command_line_tests.cpp src/noise_texture_asset.cpp tests/noise_texture_asset_tests.cpp src/world_space_representation_nvrhi.cpp src/image_based_lighting_environment_nvrhi.cpp src/image_based_lighting_radiance.cpp src/image_based_lighting_asset_path_win32.cpp tests/image_based_lighting_owner_tests.cpp src/windows_file_status_win32.cpp src/retained_scene_paths_win32.cpp src/color_lut_asset_path_win32.cpp tests/windows_path_text_tests.cpp src/ui_light_defaults.cpp tests/ui_light_defaults_tests.cpp src/uvsr.cpp src/uvsr_lifecycle.cpp src/uvsr_ui_renderer.cpp src/renderer_frame_donut.cpp src/uvsr_scene_lifecycle.cpp src/uvsr_render_frame.cpp src/uvsr_render_setup.cpp src/uvsr_path_tracing.cpp src/uvsr_ray_visibility.cpp src/uvsr_ui_panels.cpp src/uvsr_display_sync.cpp src/uvsr_ui_commands.cpp
+    PROPERTIES COMPILE_DEFINITIONS "_HAS_EXCEPTIONS=0")
+if (MSVC)
+    set_source_files_properties(src/camera_collision.cpp PROPERTIES COMPILE_OPTIONS "/EHs-c-;/fp:precise")
+    set_source_files_properties(src/engine_startup.cpp src/uvsr_command_line.cpp src/color_lut.cpp
+    src/gpu_adapter_catalog.cpp src/scene_catalog.cpp src/scene_loading.cpp tests/scene_history_owner_tests.cpp tests/restart_command_line_tests.cpp src/noise_texture_asset.cpp tests/noise_texture_asset_tests.cpp src/world_space_representation_nvrhi.cpp src/image_based_lighting_environment_nvrhi.cpp src/image_based_lighting_radiance.cpp src/image_based_lighting_asset_path_win32.cpp tests/image_based_lighting_owner_tests.cpp src/windows_file_status_win32.cpp src/retained_scene_paths_win32.cpp src/color_lut_asset_path_win32.cpp tests/windows_path_text_tests.cpp src/ui_light_defaults.cpp tests/ui_light_defaults_tests.cpp src/uvsr.cpp src/uvsr_lifecycle.cpp src/uvsr_ui_renderer.cpp src/renderer_frame_donut.cpp src/uvsr_scene_lifecycle.cpp src/uvsr_render_frame.cpp src/uvsr_render_setup.cpp src/uvsr_path_tracing.cpp src/uvsr_ray_visibility.cpp src/uvsr_ui_panels.cpp src/uvsr_display_sync.cpp src/uvsr_ui_commands.cpp PROPERTIES COMPILE_OPTIONS
+        "/EHs-c-;/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+    set_property(SOURCE src/color_lut.cpp APPEND PROPERTY COMPILE_OPTIONS /fp:strict)
+else()
+    set_source_files_properties(src/camera_collision.cpp PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+    set_source_files_properties(src/engine_startup.cpp src/uvsr_command_line.cpp src/color_lut.cpp
+    src/gpu_adapter_catalog.cpp src/scene_catalog.cpp src/scene_loading.cpp tests/scene_history_owner_tests.cpp tests/restart_command_line_tests.cpp src/noise_texture_asset.cpp tests/noise_texture_asset_tests.cpp src/world_space_representation_nvrhi.cpp src/image_based_lighting_environment_nvrhi.cpp src/image_based_lighting_radiance.cpp src/image_based_lighting_asset_path_win32.cpp tests/image_based_lighting_owner_tests.cpp src/windows_file_status_win32.cpp src/retained_scene_paths_win32.cpp src/color_lut_asset_path_win32.cpp tests/windows_path_text_tests.cpp src/ui_light_defaults.cpp tests/ui_light_defaults_tests.cpp src/uvsr.cpp src/uvsr_lifecycle.cpp src/uvsr_ui_renderer.cpp src/renderer_frame_donut.cpp src/uvsr_scene_lifecycle.cpp src/uvsr_render_frame.cpp src/uvsr_render_setup.cpp src/uvsr_path_tracing.cpp src/uvsr_ray_visibility.cpp src/uvsr_ui_panels.cpp src/uvsr_display_sync.cpp src/uvsr_ui_commands.cpp PROPERTIES COMPILE_OPTIONS
+        "-fno-exceptions;-include;${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+endif()
+
 add_executable(uvsr-engine WIN32
         "${UVSR_BUILD_IDENTITY_SOURCE}"
         "${UVSR_BUILD_IDENTITY_RESOURCE}"
-        src/auto_exposure.cpp
-        src/agx_tone_mapping_pass.cpp
+        src/auto_exposure_nvrhi.cpp
+        src/agx_tone_mapping_pass_nvrhi.cpp
         src/color_lut.cpp
+        src/color_lut_asset_path_win32.cpp
+        src/ui_light_defaults.cpp
+        src/retained_scene_paths_win32.cpp
+        src/windows_file_status_win32.cpp
         src/camera_collision.cpp
         src/d3d12_agility_exports.cpp
         src/engine_diagnostics.cpp
         src/engine_startup.cpp
-        src/fast_approximate_aa.cpp
-        src/ray_visibility_pass.cpp
-        src/image_based_lighting_background_pass.cpp
-        src/image_based_lighting_environment.cpp
-        src/lighting_accumulation_pass.cpp
-        src/noise_texture_library.cpp
-        src/path_tracing_pass.cpp
-        src/pbr_deferred_lighting_pass.cpp
-        src/renderer_log.cpp
+        src/fast_approximate_aa_nvrhi.cpp
+        src/ray_visibility_pass_nvrhi.cpp
+        src/image_based_lighting_background_pass_nvrhi.cpp
+        src/image_based_lighting_environment_nvrhi.cpp
+        src/image_based_lighting_radiance.cpp
+        src/image_based_lighting_asset_path_win32.cpp
+        src/lighting_accumulation_pass_nvrhi.cpp
+        src/noise_texture_library_nvrhi.cpp
+        src/noise_texture_asset.cpp
+        src/path_tracing_pass_nvrhi.cpp
+        src/pbr_deferred_lighting_pass_nvrhi.cpp
         src/renderer_nvrhi_message_callback.cpp
-        src/renderer_scene_load_worker.cpp
+        src/renderer_scene_load_worker_win32.cpp
         src/renderer_scene_retirement.cpp
-        src/renderer_geometry_passes.cpp
-        src/renderer_light_probe_processing.cpp
-        src/renderer_common_passes.cpp
-        src/renderer_pixel_readback.cpp
-        src/renderer_shader_factory.cpp
-        src/renderer_stb_image.cpp
-        src/renderer_targets.cpp
-        src/renderer_texture_bmp.cpp
+        src/renderer_scene_retirement_nvrhi.cpp
+        src/renderer_targets_nvrhi.cpp
+        src/gpu_adapter_catalog.cpp
         src/scene_catalog.cpp
         src/scene_loading.h
-        src/settings_snapshot_decoder.cpp
-        src/settings_snapshot_transaction.cpp
+        src/scene_loading.cpp
         src/uvsr_application.h
         src/uvsr_command_line.cpp
         src/uvsr_scene_viewer.h
@@ -634,37 +554,44 @@ add_executable(uvsr-engine WIN32
         src/uvsr_path_tracing.cpp
         src/uvsr_ray_visibility.cpp
         src/uvsr_render_frame.cpp
+        src/renderer_frame_donut.cpp
         src/uvsr_render_setup.cpp
         src/uvsr_renderer_state.cpp
         src/uvsr_scene_lifecycle.cpp
-        src/uvsr_settings_commands.cpp
         src/uvsr_ui_commands.cpp
         src/uvsr_ui_panels.cpp
         src/uvsr_ui_renderer.cpp
         src/uvsr_display_sync.cpp
         src/uvsr.cpp
-        src/world_space_representation.cpp
+        src/world_space_representation_nvrhi.cpp
     )
     set_target_properties(uvsr-engine PROPERTIES
         OUTPUT_NAME "uvsr-engine")
     target_include_directories(uvsr-engine BEFORE PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
         "${UVSR_IMGUI_OVERRIDE_DIR}"
-        "${UVSR_DONUT_APP_OVERRIDE_DIR}/include"
-        "${UVSR_DONUT_ENGINE_OVERRIDE_DIR}/include")
+        "${UVSR_DONUT_APP_OVERRIDE_DIR}/include")
     target_link_libraries(uvsr-engine PRIVATE
+        uvsr_ui_context
+        uvsr_renderer_nvrhi
+        uvsr_log
+        uvsr_engine_log
+        uvsr_camera
+        uvsr_view
         uvsr_shader_blob
-        donut_render
         donut_app
-        donut_engine
-        bcrypt
+        imgui
+        uvsr_sha256
+        uvsr_windows_paths
+        uvsr_windows_path_text
+        uvsr_settings_snapshot
         dwmapi)
     target_compile_definitions(uvsr-engine PRIVATE
         "UVSR_D3D12_AGILITY_SDK_VERSION=${UVSR_D3D12_AGILITY_SDK_VERSION}"
         "UVSR_REQUIRED_SHADER_MODEL=${UVSR_SHADER_MODEL_ENCODED}")
 if (BUILD_TESTING)
     target_compile_definitions(uvsr-engine PRIVATE UVSR_BUILD_TESTING=1)
-    target_sources(uvsr-engine PRIVATE src/retained_runtime_diagnostic.cpp)
+    target_link_libraries(uvsr-engine PRIVATE uvsr_retained_runtime_output uvsr_file_write)
 endif()
 add_dependencies(uvsr-engine uvsr_refresh_build_identity)
 add_dependencies(uvsr-engine uvsr_verify_direct_dependency_state)
@@ -684,12 +611,242 @@ add_custom_command(TARGET uvsr-engine POST_BUILD
         VERBATIM)
 add_dependencies(uvsr-engine uvsr_shaders)
 
+add_library(uvsr_renderer_scene_gpu_nvrhi STATIC src/renderer_scene_gpu_nvrhi.cpp)
+target_include_directories(uvsr_renderer_scene_gpu_nvrhi PRIVATE src)
+target_link_libraries(uvsr_renderer_scene_gpu_nvrhi PRIVATE uvsr_renderer_scene uvsr_renderer_nvrhi nvrhi)
+target_compile_definitions(uvsr_renderer_scene_gpu_nvrhi PRIVATE _HAS_EXCEPTIONS=0)
+if(MSVC)
+    target_compile_options(uvsr_renderer_scene_gpu_nvrhi PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise)
+else()
+    target_compile_options(uvsr_renderer_scene_gpu_nvrhi PRIVATE -fno-exceptions)
+endif()
+target_link_libraries(uvsr-engine PRIVATE uvsr_renderer_scene_gpu_nvrhi uvsr_renderer_scene uvsr_file_bytes)
+
+add_library(uvsr_renderer_import STATIC EXCLUDE_FROM_ALL
+    src/renderer_import.cpp src/renderer_import_metadata.cpp src/renderer_import_scene.cpp
+    src/renderer_import_path.cpp src/renderer_import_description.cpp src/renderer_import_composition.cpp
+    src/renderer_import_image.cpp src/renderer_import_dds.cpp src/renderer_import_load.cpp)
+target_include_directories(uvsr_renderer_import PUBLIC src)
+target_link_libraries(uvsr_renderer_import PRIVATE fastgltf::fastgltf simdjson::simdjson uvsr_renderer_scene stb tinyexr uvsr_tinyexr)
+target_compile_definitions(uvsr_renderer_import PRIVATE _HAS_EXCEPTIONS=0)
+if(MSVC)
+    target_compile_options(uvsr_renderer_import PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+else()
+    target_compile_options(uvsr_renderer_import PRIVATE -fno-exceptions
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+endif()
+
+if(WIN32)
+    add_library(uvsr_renderer_import_win32 STATIC EXCLUDE_FROM_ALL
+        src/renderer_import_file_win32.cpp src/renderer_import_load_status_win32.cpp)
+    target_link_libraries(uvsr_renderer_import_win32 PRIVATE uvsr_renderer_import)
+    target_link_libraries(uvsr-engine PRIVATE uvsr_renderer_import_win32)
+    target_include_directories(uvsr_renderer_import_win32 PUBLIC src)
+    target_compile_features(uvsr_renderer_import_win32 PRIVATE cxx_std_17)
+    target_compile_definitions(uvsr_renderer_import_win32 PRIVATE _HAS_EXCEPTIONS=0 NOMINMAX)
+    if(MSVC)
+        target_compile_options(uvsr_renderer_import_win32 PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise
+            "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+    else()
+        target_compile_options(uvsr_renderer_import_win32 PRIVATE -fno-exceptions
+            -include "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+    endif()
+endif()
+
+add_library(uvsr_renderer_scene_resources_nvrhi STATIC EXCLUDE_FROM_ALL src/renderer_scene_resources_nvrhi.cpp)
+target_include_directories(uvsr_renderer_scene_resources_nvrhi PUBLIC src)
+target_link_libraries(uvsr_renderer_scene_resources_nvrhi PRIVATE uvsr_renderer_import nvrhi)
+target_link_libraries(uvsr_renderer_scene_gpu_nvrhi PRIVATE uvsr_renderer_scene_resources_nvrhi)
+target_compile_features(uvsr_renderer_scene_resources_nvrhi PRIVATE cxx_std_17)
+target_compile_definitions(uvsr_renderer_scene_resources_nvrhi PRIVATE _HAS_EXCEPTIONS=0)
+if(MSVC)
+    target_compile_options(uvsr_renderer_scene_resources_nvrhi PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+else()
+    target_compile_options(uvsr_renderer_scene_resources_nvrhi PRIVATE -fno-exceptions
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+endif()
+
 if (BUILD_TESTING)
 
+target_compile_definitions(uvsr_renderer_import PRIVATE UVSR_BUILD_TESTING=1)
+target_compile_definitions(uvsr_renderer_scene_resources_nvrhi PRIVATE UVSR_BUILD_TESTING=1)
+if(WIN32)
+    uvsr_test(uvsr_import_load_tests uvsr_import_load tests/import_load_tests.cpp
+        src/renderer_scene_load_worker_win32.cpp)
+    target_link_libraries(uvsr_import_load_tests PRIVATE uvsr_renderer_import uvsr_renderer_import_win32 stb)
+    target_compile_definitions(uvsr_import_load_tests PRIVATE UVSR_BUILD_TESTING=1 _HAS_EXCEPTIONS=0 NOMINMAX)
+    if(MSVC)
+        target_compile_options(uvsr_import_load_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise
+            "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+    else()
+        target_compile_options(uvsr_import_load_tests PRIVATE -fno-exceptions
+            -include "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+    endif()
+    set_tests_properties(uvsr_import_load PROPERTIES TIMEOUT 30)
+endif()
+
+uvsr_test(uvsr_import_image_tests uvsr_import_image tests/import_image_tests.cpp tests/import_image_fixture.cpp tests/stb_gif_tests.cpp)
+target_link_libraries(uvsr_import_image_tests PRIVATE uvsr_renderer_import stb tinyexr)
+target_compile_definitions(uvsr_import_image_tests PRIVATE UVSR_BUILD_TESTING=1 _HAS_EXCEPTIONS=0 _CRT_SECURE_NO_WARNINGS)
+if(MSVC)
+    target_compile_options(uvsr_import_image_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+else()
+    target_compile_options(uvsr_import_image_tests PRIVATE -fno-exceptions
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+endif()
+set_tests_properties(uvsr_import_image PROPERTIES TIMEOUT 30 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+
+uvsr_test(uvsr_import_composition_tests uvsr_import_composition
+    tests/import_composition_tests.cpp tests/import_composition_reference_tests.cpp)
+target_link_libraries(uvsr_import_composition_tests PRIVATE
+    uvsr_renderer_import uvsr_renderer_import_win32 uvsr_renderer_scene stb uvsr_stb_image)
+target_compile_definitions(uvsr_import_composition_tests PRIVATE UVSR_BUILD_TESTING=1 _HAS_EXCEPTIONS=0 NOMINMAX _CRT_SECURE_NO_WARNINGS)
+if(MSVC)
+    target_compile_options(uvsr_import_composition_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+else()
+    target_compile_options(uvsr_import_composition_tests PRIVATE -fno-exceptions
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+endif()
+set_tests_properties(uvsr_import_composition PROPERTIES TIMEOUT 30 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+
+uvsr_test(uvsr_import_path_tests uvsr_import_path tests/import_path_tests.cpp)
+target_link_libraries(uvsr_import_path_tests PRIVATE uvsr_renderer_import)
+target_compile_definitions(uvsr_import_path_tests PRIVATE UVSR_BUILD_TESTING=1 _HAS_EXCEPTIONS=0)
+if(MSVC)
+    target_compile_options(uvsr_import_path_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+else()
+    target_compile_options(uvsr_import_path_tests PRIVATE -fno-exceptions
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+endif()
+set_tests_properties(uvsr_import_path PROPERTIES TIMEOUT 30)
+
+uvsr_test(uvsr_import_description_tests uvsr_import_description tests/import_description_tests.cpp)
+target_link_libraries(uvsr_import_description_tests PRIVATE uvsr_renderer_import uvsr_renderer_scene)
+target_compile_definitions(uvsr_import_description_tests PRIVATE UVSR_BUILD_TESTING=1 _HAS_EXCEPTIONS=0)
+if(MSVC)
+    target_compile_options(uvsr_import_description_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+else()
+    target_compile_options(uvsr_import_description_tests PRIVATE -fno-exceptions
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+endif()
+set_tests_properties(uvsr_import_description PROPERTIES TIMEOUT 30)
+
+uvsr_test(uvsr_import_geometry_tests uvsr_import_geometry tests/import_geometry_tests.cpp tests/import_geometry_fixture.cpp)
+target_link_libraries(uvsr_import_geometry_tests PRIVATE uvsr_renderer_import uvsr_renderer_scene)
+target_compile_definitions(uvsr_import_geometry_tests PRIVATE UVSR_BUILD_TESTING=1 _HAS_EXCEPTIONS=0 _CRT_SECURE_NO_WARNINGS)
+if(MSVC)
+    target_compile_options(uvsr_import_geometry_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+else()
+    target_compile_options(uvsr_import_geometry_tests PRIVATE -fno-exceptions
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+endif()
+set_tests_properties(uvsr_import_geometry PROPERTIES TIMEOUT 30
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+
+uvsr_test(uvsr_import_material_tests uvsr_import_material tests/import_material_tests.cpp tests/import_material_fixture.cpp)
+target_link_libraries(uvsr_import_material_tests PRIVATE uvsr_renderer_import uvsr_renderer_scene stb uvsr_stb_image)
+target_compile_definitions(uvsr_import_material_tests PRIVATE UVSR_BUILD_TESTING=1 _HAS_EXCEPTIONS=0 _CRT_SECURE_NO_WARNINGS)
+if(MSVC)
+    target_compile_options(uvsr_import_material_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+else()
+    target_compile_options(uvsr_import_material_tests PRIVATE -fno-exceptions
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+endif()
+set_tests_properties(uvsr_import_material PROPERTIES TIMEOUT 30 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+
+uvsr_test(uvsr_import_scene_tests uvsr_import_scene tests/import_scene_tests.cpp tests/import_scene_fixture.cpp)
+target_link_libraries(uvsr_import_scene_tests PRIVATE uvsr_renderer_import uvsr_renderer_scene)
+target_compile_definitions(uvsr_import_scene_tests PRIVATE UVSR_BUILD_TESTING=1 _HAS_EXCEPTIONS=0 _CRT_SECURE_NO_WARNINGS)
+if(MSVC)
+    target_compile_options(uvsr_import_scene_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+else()
+    target_compile_options(uvsr_import_scene_tests PRIVATE -fno-exceptions
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+endif()
+set_tests_properties(uvsr_import_scene PROPERTIES TIMEOUT 30 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+
+uvsr_test(uvsr_import_accessors_tests uvsr_import_accessors tests/import_accessors_tests.cpp)
+target_link_libraries(uvsr_import_accessors_tests PRIVATE uvsr_renderer_import)
+target_compile_definitions(uvsr_import_accessors_tests PRIVATE UVSR_BUILD_TESTING=1 _HAS_EXCEPTIONS=0)
+if(MSVC)
+    target_compile_options(uvsr_import_accessors_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+else()
+    target_compile_options(uvsr_import_accessors_tests PRIVATE -fno-exceptions
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+endif()
+
+uvsr_test(uvsr_import_parser_tests uvsr_import_parser tests/import_parser_tests.cpp)
+target_link_libraries(uvsr_import_parser_tests PRIVATE fastgltf::fastgltf)
+target_compile_definitions(uvsr_import_parser_tests PRIVATE _HAS_EXCEPTIONS=0 SIMDJSON_EXCEPTIONS=0)
+if(MSVC)
+    target_compile_options(uvsr_import_parser_tests PRIVATE /permissive- /W4 /WX /EHs-c-
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+else()
+    target_compile_options(uvsr_import_parser_tests PRIVATE -fno-exceptions
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RequireNoCppExceptions.h")
+endif()
+
+target_compile_definitions(uvsr_renderer_scene_gpu_nvrhi PRIVATE UVSR_BUILD_TESTING=1)
+
+uvsr_test(uvsr_renderer_scene_encoding_tests uvsr_renderer_scene_encoding
+    tests/renderer_scene_encoding_tests.cpp tests/renderer_scene_light_tests.cpp tests/renderer_scene_encoding_fixture.cpp)
+target_link_libraries(uvsr_renderer_scene_encoding_tests PRIVATE uvsr_renderer_scene)
+target_compile_definitions(uvsr_renderer_scene_encoding_tests PRIVATE UVSR_BUILD_TESTING=1 _HAS_EXCEPTIONS=0 _CRT_SECURE_NO_WARNINGS)
+if(MSVC)
+    target_compile_options(uvsr_renderer_scene_encoding_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise)
+else()
+    target_compile_options(uvsr_renderer_scene_encoding_tests PRIVATE -fno-exceptions)
+endif()
+set_tests_properties(uvsr_renderer_scene_encoding PROPERTIES TIMEOUT 30 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+target_compile_definitions(uvsr_renderer_scene PRIVATE UVSR_BUILD_TESTING=1)
+uvsr_test(uvsr_renderer_scene_ray_tests uvsr_renderer_scene_ray tests/renderer_scene_ray_tests.cpp)
+target_link_libraries(uvsr_renderer_scene_ray_tests PRIVATE uvsr_renderer_scene)
+target_compile_definitions(uvsr_renderer_scene_ray_tests PRIVATE UVSR_BUILD_TESTING=1 _HAS_EXCEPTIONS=0)
+if (MSVC)
+    target_compile_options(uvsr_renderer_scene_ray_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise)
+else()
+    target_compile_options(uvsr_renderer_scene_ray_tests PRIVATE -fno-exceptions)
+endif()
+uvsr_test(uvsr_renderer_scene_draw_tests uvsr_renderer_scene_draw tests/renderer_scene_draw_tests.cpp)
+target_link_libraries(uvsr_renderer_scene_draw_tests PRIVATE uvsr_renderer_scene)
+target_compile_definitions(uvsr_renderer_scene_draw_tests PRIVATE UVSR_BUILD_TESTING=1 _HAS_EXCEPTIONS=0)
+if (MSVC)
+    target_compile_options(uvsr_renderer_scene_draw_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise)
+else()
+    target_compile_options(uvsr_renderer_scene_draw_tests PRIVATE -fno-exceptions)
+endif()
+uvsr_test(uvsr_renderer_scene_tests uvsr_renderer_scene
+    tests/renderer_scene_tests.cpp tests/renderer_scene_native_math_tests.cpp tests/renderer_scene_material_mode_tests.cpp)
+target_link_libraries(uvsr_renderer_scene_tests PRIVATE uvsr_renderer_scene)
+target_compile_definitions(uvsr_renderer_scene_tests PRIVATE UVSR_BUILD_TESTING=1 _HAS_EXCEPTIONS=0)
+if (MSVC)
+    target_compile_options(uvsr_renderer_scene_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise)
+else()
+    target_compile_options(uvsr_renderer_scene_tests PRIVATE -fno-exceptions)
+endif()
+set_tests_properties(uvsr_renderer_scene PROPERTIES TIMEOUT 30)
+
 add_executable(uvsr_scene_catalog_tests tests/scene_catalog_tests.cpp
-    src/scene_catalog.cpp src/renderer_scene_load_worker.cpp src/renderer_scene_retirement.cpp)
+    src/scene_catalog.cpp
+    src/renderer_scene_load_worker_win32.cpp src/renderer_scene_retirement.cpp
+    tests/renderer_scene_load_worker_tests.cpp tests/scene_catalog_owner_tests.cpp
+    src/scene_loading.cpp tests/scene_history_owner_tests.cpp
+    src/image_based_lighting_radiance.cpp src/image_based_lighting_asset_path_win32.cpp
+    tests/image_based_lighting_owner_tests.cpp)
+target_compile_definitions(uvsr_scene_catalog_tests PRIVATE UVSR_SCENE_CATALOG_TEST_HOOKS=1 UVSR_SCENE_HISTORY_TEST_HOOKS=1
+    UVSR_IBL_RADIANCE_TEST_HOOKS=1 UVSR_WINDOWS_PATH_TEST_HOOKS=1 _CRT_SECURE_NO_WARNINGS)
 target_include_directories(uvsr_scene_catalog_tests PRIVATE src)
-target_link_libraries(uvsr_scene_catalog_tests PRIVATE nvrhi)
+target_link_libraries(uvsr_scene_catalog_tests PRIVATE uvsr_json uvsr_file_bytes uvsr_windows_paths_test uvsr_stb_image uvsr_windows_path_text_test)
 add_test(NAME uvsr_scene_catalog_reference COMMAND uvsr_scene_catalog_tests
     "${CMAKE_CURRENT_BINARY_DIR}/scene-acceptance-test/$<CONFIG>")
 set_tests_properties(uvsr_scene_catalog_reference PROPERTIES TIMEOUT 30)
@@ -699,14 +856,30 @@ add_executable(uvsr_renderer_gpu_contract_tests
 target_include_directories(uvsr_renderer_gpu_contract_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+add_executable(uvsr_checked_worklist_tests tests/checked_worklist_tests.cpp)
+target_include_directories(uvsr_checked_worklist_tests PRIVATE src)
+add_test(NAME uvsr_checked_worklist COMMAND uvsr_checked_worklist_tests)
+if (MSVC)
+    target_compile_options(uvsr_checked_worklist_tests PRIVATE /permissive- /W4 /WX)
+endif()
+
+add_executable(uvsr_renderer_view_tests
+    tests/renderer_view_tests.cpp)
+target_include_directories(uvsr_renderer_view_tests PRIVATE src "${UVSR_NVRHI_SOURCE_DIR}/include")
+target_link_libraries(uvsr_renderer_view_tests PRIVATE uvsr_view)
+target_compile_definitions(uvsr_renderer_view_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+uvsr_disable_cpp_exceptions(uvsr_renderer_view_tests)
+add_test(NAME uvsr_renderer_view_conventions COMMAND uvsr_renderer_view_tests)
+set_tests_properties(uvsr_renderer_view_conventions PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+
 add_executable(uvsr_renderer_resource_contract_tests
     tests/renderer_resource_contract_tests.cpp tests/receiver_contract_tests.cpp
-    src/renderer_targets.cpp src/renderer_log.cpp src/renderer_texture_bmp.cpp)
+    src/renderer_targets_nvrhi.cpp)
 target_include_directories(uvsr_renderer_resource_contract_tests PRIVATE
     src "${UVSR_DONUT_SOURCE_DIR}/include")
-target_link_libraries(uvsr_renderer_resource_contract_tests PRIVATE nvrhi)
+target_link_libraries(uvsr_renderer_resource_contract_tests PRIVATE uvsr_bmp uvsr_log nvrhi)
 target_compile_definitions(uvsr_renderer_resource_contract_tests PRIVATE
-    UVSR_RENDERER_BMP_ENCODER_ONLY=1 UVSR_REQUIRED_SHADER_MODEL=${UVSR_SHADER_MODEL_ENCODED} NOMINMAX)
+    UVSR_REQUIRED_SHADER_MODEL=${UVSR_SHADER_MODEL_ENCODED} NOMINMAX)
 if (MSVC)
     target_compile_options(uvsr_renderer_resource_contract_tests PRIVATE /permissive- /W4 /WX)
 endif()
@@ -715,13 +888,10 @@ add_test(NAME uvsr_renderer_resources COMMAND uvsr_renderer_resource_contract_te
 
 add_executable(uvsr_retained_runtime_diagnostic_tests
     tests/retained_runtime_diagnostic_tests.cpp
-    src/engine_diagnostics.cpp "${UVSR_BUILD_IDENTITY_SOURCE}"
-    src/retained_runtime_diagnostic.cpp
-    src/renderer_log.cpp
-    src/settings_snapshot_decoder.cpp
-    src/settings_snapshot_transaction.cpp
-    src/uvsr_settings_commands.cpp)
-target_link_libraries(uvsr_retained_runtime_diagnostic_tests PRIVATE ole32 shell32)
+    src/engine_diagnostics.cpp "${UVSR_BUILD_IDENTITY_SOURCE}")
+target_link_libraries(uvsr_retained_runtime_diagnostic_tests PRIVATE
+    uvsr_log uvsr_windows_path_text uvsr_retained_runtime_output ole32 shell32)
+target_compile_definitions(uvsr_retained_runtime_diagnostic_tests PRIVATE UVSR_RETAINED_CASE_TEST_HOOKS=1)
 add_dependencies(uvsr_retained_runtime_diagnostic_tests uvsr_refresh_build_identity)
 target_include_directories(uvsr_retained_runtime_diagnostic_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -733,8 +903,6 @@ add_test(
 
 uvsr_test(uvsr_pbr_tests uvsr_pbr_reference
     tests/pbr_reference_tests.cpp)
-
-target_link_libraries(uvsr_pbr_tests PRIVATE donut_core)
 
 uvsr_test(uvsr_path_tracing_semantic_tests uvsr_path_tracing_semantic_reference
     tests/path_tracing_semantic_tests.cpp)
@@ -749,20 +917,19 @@ uvsr_test(uvsr_flashlight_tests uvsr_flashlight_reference
     tests/flashlight_tests.cpp)
 
 uvsr_test(uvsr_command_line_tests uvsr_command_line_reference
-    tests/uvsr_command_line_tests.cpp
-    src/settings_snapshot_decoder.cpp
+    tests/uvsr_command_line_tests.cpp tests/restart_command_line_tests.cpp
     src/uvsr_command_line.cpp)
 
-target_link_libraries(uvsr_command_line_tests PRIVATE bcrypt)
+target_link_libraries(uvsr_command_line_tests PRIVATE uvsr_sha256 uvsr_windows_paths_test)
 target_compile_definitions(uvsr_command_line_tests PRIVATE
-    UVSR_BUILD_TESTING=1)
+    UVSR_BUILD_TESTING=1 UVSR_WINDOWS_PATH_TEST_HOOKS=1 UVSR_RESTART_COMMAND_LINE_TEST_HOOKS=1)
 
 uvsr_test(uvsr_command_line_production_tests uvsr_command_line_production_reference
-    tests/uvsr_command_line_tests.cpp
-    src/settings_snapshot_decoder.cpp
+    tests/uvsr_command_line_tests.cpp tests/restart_command_line_tests.cpp
     src/uvsr_command_line.cpp)
 
-target_link_libraries(uvsr_command_line_production_tests PRIVATE bcrypt)
+target_link_libraries(uvsr_command_line_production_tests PRIVATE uvsr_sha256 uvsr_windows_paths_test)
+target_compile_definitions(uvsr_command_line_production_tests PRIVATE UVSR_WINDOWS_PATH_TEST_HOOKS=1 UVSR_RESTART_COMMAND_LINE_TEST_HOOKS=1)
 if (MSVC)
     foreach(target uvsr_command_line_tests uvsr_command_line_production_tests)
         target_compile_options(${target} PRIVATE /permissive- /W4 /WX)
@@ -770,35 +937,45 @@ if (MSVC)
 endif()
 
 uvsr_test(uvsr_settings_commands_tests uvsr_settings_commands_reference
-    tests/uvsr_settings_commands_tests.cpp
-    src/renderer_log.cpp
-    src/settings_snapshot_decoder.cpp
-    src/settings_snapshot_transaction.cpp
-    src/uvsr_settings_commands.cpp)
+    tests/uvsr_settings_commands_tests.cpp)
 
-target_link_libraries(uvsr_settings_commands_tests PRIVATE ole32 shell32)
+# executable-policy fixtures own their catalog beside this test binary.
+set_target_properties(uvsr_settings_commands_tests PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-bin/settings-commands")
+foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+    set_target_properties(uvsr_settings_commands_tests PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_CURRENT_BINARY_DIR}/test-bin/settings-commands/${config}")
+endforeach()
+target_link_libraries(uvsr_settings_commands_tests PRIVATE uvsr_windows_paths uvsr_log ole32 shell32)
 
 add_executable(uvsr_nvrhi_d3d12_diagnostics_tests
     tests/nvrhi_d3d12_diagnostics_tests.cpp
-    src/engine_startup.cpp src/renderer_log.cpp src/renderer_nvrhi_message_callback.cpp)
+    src/engine_startup.cpp src/renderer_nvrhi_message_callback.cpp)
 target_include_directories(uvsr_nvrhi_d3d12_diagnostics_tests PRIVATE src
     "${CMAKE_CURRENT_SOURCE_DIR}/overrides"
     "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvrhi/include"
     "${UVSR_DIRECTX_HEADERS_SOURCE_DIR}/include/directx")
 target_link_libraries(uvsr_nvrhi_d3d12_diagnostics_tests PRIVATE
-    nvrhi Microsoft::DirectX-Headers bcrypt d3d12 ole32 shell32)
+    uvsr_engine_log uvsr_sha256 uvsr_windows_paths nvrhi Microsoft::DirectX-Headers d3d12 ole32 shell32)
 target_compile_definitions(uvsr_nvrhi_d3d12_diagnostics_tests PRIVATE NOMINMAX)
+if (BUILD_TESTING)
+    target_compile_definitions(uvsr_nvrhi_d3d12_diagnostics_tests PRIVATE UVSR_ENGINE_LOG_TEST_HOOKS=1)
+endif()
 if (MSVC)
     target_compile_options(uvsr_nvrhi_d3d12_diagnostics_tests PRIVATE
         /permissive- /W4 /WX)
 endif()
 add_test(
     NAME uvsr_nvrhi_d3d12_diagnostics
-    COMMAND uvsr_nvrhi_d3d12_diagnostics_tests
-        "${CMAKE_CURRENT_BINARY_DIR}/backend-diagnostics/$<CONFIG>"
-        "${UVSR_D3D12_AGILITY_CORE_DLL}")
+    COMMAND "${CMAKE_COMMAND}"
+        "-DUVSR_TEST_EXECUTABLE=$<TARGET_FILE:uvsr_nvrhi_d3d12_diagnostics_tests>"
+        "-DUVSR_TEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/backend-diagnostics/$<CONFIG>"
+        "-DUVSR_D3D12_CORE=${UVSR_D3D12_AGILITY_CORE_DLL}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TestD3D12Diagnostics.cmake")
 
-add_executable(uvsr_display_controls_tests tests/display_controls_tests.cpp src/color_lut.cpp)
+add_executable(uvsr_display_controls_tests tests/display_controls_tests.cpp src/color_lut.cpp
+    tests/windows_path_text_tests.cpp src/color_lut_asset_path_win32.cpp
+    tests/ui_light_defaults_tests.cpp src/ui_light_defaults.cpp)
 target_include_directories(
     uvsr_display_controls_tests
     PRIVATE
@@ -806,6 +983,8 @@ target_include_directories(
         "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvrhi/include"
 )
 target_compile_features(uvsr_display_controls_tests PRIVATE cxx_std_17)
+target_link_libraries(uvsr_display_controls_tests PRIVATE uvsr_json uvsr_file_bytes uvsr_windows_path_text_test uvsr_windows_paths_test)
+target_compile_definitions(uvsr_display_controls_tests PRIVATE UVSR_COLOR_LUT_TEST_HOOKS=1 UVSR_WINDOWS_PATH_TEST_HOOKS=1 UVSR_UI_LIGHT_DEFAULTS_TEST_HOOKS=1)
 if (MSVC)
     target_compile_options(uvsr_display_controls_tests PRIVATE
         /permissive- /W4 /WX)
@@ -817,8 +996,29 @@ add_test(NAME uvsr_display_controls COMMAND uvsr_display_controls_tests
 uvsr_test(uvsr_camera_controls_tests uvsr_camera_controls_reference
     tests/camera_controls_tests.cpp src/camera_collision.cpp)
 
-target_link_libraries(uvsr_camera_controls_tests PRIVATE donut_app)
-target_include_directories(uvsr_camera_controls_tests SYSTEM PRIVATE "${UVSR_DONUT_SOURCE_DIR}/include")
+add_executable(uvsr_camera_collision_tests
+    tests/camera_collision_tests.cpp src/camera_collision.cpp)
+target_include_directories(uvsr_camera_collision_tests PRIVATE src)
+target_compile_definitions(uvsr_camera_collision_tests PRIVATE _HAS_EXCEPTIONS=0 UVSR_BUILD_TESTING=1)
+add_test(NAME uvsr_camera_collision_structure COMMAND uvsr_camera_collision_tests)
+
+# this consumer links only the portable scene owner and collision code.
+# native include paths or renderer libraries would defeat the boundary check.
+add_executable(uvsr_renderer_scene_portable_tests
+    tests/renderer_scene_portable_tests.cpp src/camera_collision.cpp)
+target_link_libraries(uvsr_renderer_scene_portable_tests PRIVATE uvsr_renderer_scene)
+target_compile_definitions(uvsr_renderer_scene_portable_tests PRIVATE _HAS_EXCEPTIONS=0)
+add_test(NAME uvsr_renderer_scene_portable COMMAND uvsr_renderer_scene_portable_tests)
+if (MSVC)
+    target_compile_options(uvsr_camera_collision_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise)
+    target_compile_options(uvsr_renderer_scene_portable_tests PRIVATE /permissive- /W4 /WX /EHs-c- /fp:precise /showIncludes)
+else()
+    target_compile_options(uvsr_camera_collision_tests PRIVATE -fno-exceptions)
+    target_compile_options(uvsr_renderer_scene_portable_tests PRIVATE -fno-exceptions)
+endif()
+
+target_link_libraries(uvsr_camera_controls_tests PRIVATE uvsr_camera glfw)
+uvsr_disable_cpp_exceptions(uvsr_camera_controls_tests)
 foreach(target uvsr_scene_catalog_tests uvsr_camera_controls_tests)
     target_compile_definitions(${target} PRIVATE NOMINMAX)
     if (MSVC)
@@ -840,30 +1040,78 @@ target_include_directories(
 
 uvsr_test(uvsr_settings_snapshot_decoder_tests uvsr_settings_snapshot_decoder_reference
     tests/settings_snapshot_decoder_tests.cpp
-    src/settings_snapshot_decoder.cpp)
+)
 
 uvsr_test(uvsr_settings_snapshot_transaction_tests uvsr_settings_snapshot_transaction_reference
-    tests/settings_snapshot_transaction_tests.cpp
-    src/settings_snapshot_transaction.cpp)
+    tests/settings_snapshot_transaction_tests.cpp)
 
 uvsr_test(uvsr_settings_snapshot_values_tests uvsr_settings_snapshot_values_reference
-    tests/settings_snapshot_values_tests.cpp
-    src/settings_snapshot_transaction.cpp)
+    tests/settings_snapshot_values_tests.cpp)
 
 add_executable(uvsr_settings_snapshot_decoder
     tools/settings_snapshot_decoder.cpp
-    src/settings_snapshot_decoder.cpp)
+)
 target_include_directories(
     uvsr_settings_snapshot_decoder
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(uvsr_settings_snapshot_decoder PRIVATE uvsr_settings_snapshot)
+uvsr_disable_cpp_exceptions(uvsr_settings_snapshot_decoder)
+uvsr_disable_cpp_exceptions(uvsr_settings_snapshot_decoder_tests)
+target_compile_definitions(uvsr_settings_snapshot_decoder_tests PRIVATE UVSR_WINDOWS_PATH_TEST_HOOKS=1)
+foreach(target uvsr_retained_runtime_diagnostic_tests uvsr_command_line_tests
+        uvsr_command_line_production_tests uvsr_settings_commands_tests
+        uvsr_settings_snapshot_decoder_tests uvsr_settings_snapshot_transaction_tests
+        uvsr_settings_snapshot_values_tests)
+    target_link_libraries(${target} PRIVATE uvsr_settings_snapshot_test)
+endforeach()
+
+if (BUILD_TESTING)
+    uvsr_test(uvsr_settings_snapshot_selectors_tests uvsr_settings_snapshot_selectors
+        tests/settings_snapshot_selectors_tests.cpp)
+    target_link_libraries(uvsr_settings_snapshot_selectors_tests PRIVATE uvsr_settings_snapshot_test)
+    uvsr_disable_cpp_exceptions(uvsr_settings_snapshot_selectors_tests)
+    if (MSVC)
+        target_compile_options(uvsr_settings_snapshot_selectors_tests PRIVATE /permissive- /W4 /WX)
+    endif()
+    uvsr_test(uvsr_settings_snapshot_legacy_tests uvsr_settings_snapshot_legacy
+        tests/settings_snapshot_legacy_tests.cpp)
+    target_link_libraries(uvsr_settings_snapshot_legacy_tests PRIVATE uvsr_settings_snapshot_test)
+    uvsr_disable_cpp_exceptions(uvsr_settings_snapshot_legacy_tests)
+    if (MSVC)
+        target_compile_options(uvsr_settings_snapshot_legacy_tests PRIVATE /permissive- /W4 /WX)
+    endif()
+    uvsr_test(uvsr_settings_snapshot_persistence_tests uvsr_settings_snapshot_persistence
+        tests/settings_snapshot_persistence_tests.cpp)
+    target_link_libraries(uvsr_settings_snapshot_persistence_tests PRIVATE uvsr_settings_snapshot_test uvsr_file_write_test)
+    target_compile_definitions(uvsr_settings_snapshot_persistence_tests PRIVATE UVSR_WINDOWS_PATH_TEST_HOOKS=1)
+    uvsr_disable_cpp_exceptions(uvsr_settings_snapshot_persistence_tests)
+    if (MSVC)
+        target_compile_options(uvsr_settings_snapshot_persistence_tests PRIVATE /permissive- /W4 /WX)
+    endif()
+    uvsr_test(uvsr_file_write_tests uvsr_file_write tests/file_write_tests.cpp)
+    target_link_libraries(uvsr_file_write_tests PRIVATE uvsr_file_write_test uvsr_file_bytes)
+    target_compile_definitions(uvsr_file_write_tests PRIVATE UVSR_WINDOWS_PATH_TEST_HOOKS=1)
+    uvsr_disable_cpp_exceptions(uvsr_file_write_tests)
+    if (MSVC)
+        target_compile_options(uvsr_file_write_tests PRIVATE /permissive- /W4 /WX)
+    endif()
+    uvsr_test(uvsr_settings_snapshot_storage_tests uvsr_settings_snapshot_storage
+        tests/settings_snapshot_storage_tests.cpp)
+    target_link_libraries(uvsr_settings_snapshot_storage_tests PRIVATE uvsr_settings_snapshot_test)
+    uvsr_disable_cpp_exceptions(uvsr_settings_snapshot_storage_tests)
+    if (MSVC)
+        target_compile_options(uvsr_settings_snapshot_storage_tests PRIVATE /permissive- /W4 /WX)
+    endif()
+endif()
 
 add_executable(uvsr_legal_inventory_validator
     tools/legal_inventory_validator.cpp)
-target_link_libraries(uvsr_legal_inventory_validator PRIVATE bcrypt)
+target_link_libraries(uvsr_legal_inventory_validator PRIVATE uvsr_sha256)
 
 add_executable(uvsr_launcher_feed_contract_validator
     tools/launcher_feed_contract_validator.cpp)
 target_include_directories(uvsr_launcher_feed_contract_validator PRIVATE src)
+target_link_libraries(uvsr_launcher_feed_contract_validator PRIVATE uvsr_json uvsr_file_bytes)
 if (MSVC)
     target_compile_options(uvsr_launcher_feed_contract_validator PRIVATE
         /permissive- /W4 /WX)
@@ -918,25 +1166,17 @@ target_link_libraries(
 
 endif()
 
-# Donut builds a larger catalog outside the runtime tree. This inventory is the
-# only owner of staged and packaged shader membership.
+# this inventory owns staged and packaged shader membership. native test-oracle
+# shaders are compiled separately and never enter the runtime tree.
 set(UVSR_RUNTIME_SHADER_INVENTORY
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/runtime-shader-inventory.def")
 uvsr_read_runtime_shader_inventory(
     "${UVSR_RUNTIME_SHADER_INVENTORY}"
     UVSR_RUNTIME_SHADER_PACKAGE_PATHS)
-set(UVSR_ROOT_SHADERS)
-set(UVSR_PASS_SHADERS)
 set(UVSR_APP_SHADERS)
 set(UVSR_RUNTIME_SHADER_BYPRODUCTS)
 foreach(package_path IN LISTS UVSR_RUNTIME_SHADER_PACKAGE_PATHS)
     if (package_path MATCHES
-            "^bin/shaders/framework/dxil/passes/([A-Za-z0-9_]+)\\.bin$")
-        list(APPEND UVSR_PASS_SHADERS "${CMAKE_MATCH_1}")
-    elseif(package_path MATCHES
-            "^bin/shaders/framework/dxil/([A-Za-z0-9_]+)\\.bin$")
-        list(APPEND UVSR_ROOT_SHADERS "${CMAKE_MATCH_1}")
-    elseif(package_path MATCHES
             "^bin/shaders/uvsr/dxil/([A-Za-z0-9_]+)\\.bin$")
         list(APPEND UVSR_APP_SHADERS "${CMAKE_MATCH_1}")
     else()
@@ -997,7 +1237,6 @@ add_custom_target(uvsr_stage_runtime_shaders
         "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
     COMMAND ${CMAKE_COMMAND}
         "-DUVSR_RUNTIME_SHADER_INVENTORY=${UVSR_RUNTIME_SHADER_INVENTORY}"
-        "-DUVSR_FRAMEWORK_SHADER_SOURCE_ROOT=${UVSR_DONUT_SHADER_STAGING_DIR}"
         "-DUVSR_APP_SHADER_SOURCE_ROOT=${UVSR_CORE_SHADER_STAGING_DIR}"
         "-DUVSR_RUNTIME_SHADER_ALLOWED_PARENT=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
         "-DUVSR_RUNTIME_SHADER_ROOT=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
@@ -1008,7 +1247,7 @@ add_custom_target(uvsr_stage_runtime_shaders
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SyncRuntimeShaderBundle.cmake"
     COMMENT "Synchronizing the exact UVSR runtime shader inventory"
     VERBATIM)
-add_dependencies(uvsr_stage_runtime_shaders donut_shaders uvsr_shaders)
+add_dependencies(uvsr_stage_runtime_shaders uvsr_shaders)
 add_dependencies(uvsr-engine uvsr_stage_runtime_shaders)
 
 foreach(target uvsr-engine uvsr_build_identity_generator
@@ -1018,9 +1257,10 @@ endforeach()
 
 if (BUILD_TESTING)
     add_executable(uvsr_shader_bundle_tests
-        tests/shader_bundle_tests.cpp src/renderer_shader_factory.cpp)
+        tests/shader_bundle_tests.cpp tests/shader_blob_fixture.cpp)
     target_include_directories(uvsr_shader_bundle_tests PRIVATE src)
-    target_link_libraries(uvsr_shader_bundle_tests PRIVATE uvsr_shader_blob nvrhi)
+    target_link_libraries(uvsr_shader_bundle_tests PRIVATE uvsr_renderer_nvrhi uvsr_shader_blob nvrhi)
+    uvsr_disable_cpp_exceptions(uvsr_shader_bundle_tests)
     add_dependencies(uvsr_shader_bundle_tests uvsr_shader_blob_builder
         uvsr_stage_runtime_shaders uvsr_renderer_gpu_contract_tests)
     if (MSVC)
@@ -1028,7 +1268,6 @@ if (BUILD_TESTING)
     endif()
     add_test(NAME uvsr_shader_bundle_contract COMMAND uvsr_shader_bundle_tests
         "${UVSR_RUNTIME_SHADER_INVENTORY}"
-        "${UVSR_DONUT_SHADER_STAGING_DIR}"
         "${UVSR_CORE_SHADER_STAGING_DIR}"
         "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/shaders"
         "$<TARGET_FILE:uvsr_shader_blob_builder>"
@@ -1048,14 +1287,51 @@ if (BUILD_TESTING)
         uvsr_runtime_shader_sync_reference PROPERTIES LABELS "runtime;production;shaders")
     set_tests_properties(uvsr_shader_reflection PROPERTIES DEPENDS uvsr_shader_bundle_contract)
 
+    set(UVSR_SCENE_INSTANCE_PROBE "${CMAKE_CURRENT_BINARY_DIR}/test-scene-instance-probe.dxil")
+    add_custom_command(OUTPUT "${UVSR_SCENE_INSTANCE_PROBE}"
+        COMMAND "${UVSR_DXC_EXECUTABLE}" -T cs_6_6 -E main -WX -Zpr
+            -I "${CMAKE_CURRENT_SOURCE_DIR}/src" -Fo "${UVSR_SCENE_INSTANCE_PROBE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/renderer_scene_instance_probe.hlsl"
+        DEPENDS tests/renderer_scene_instance_probe.hlsl src/renderer_gpu_contract.h
+            src/renderer_gpu_scalar.h src/renderer_view_contract.h
+        VERBATIM)
+    add_custom_target(uvsr_scene_instance_probe DEPENDS "${UVSR_SCENE_INSTANCE_PROBE}")
+    # the direct test object supplies the hook; the engine keeps the plain archive member.
     add_executable(uvsr_renderer_common_passes_tests
+        src/renderer_common_passes_nvrhi.cpp
         tests/renderer_common_passes_tests.cpp
-        src/renderer_common_passes.cpp
-        src/renderer_shader_factory.cpp
-        src/renderer_log.cpp)
+        tests/renderer_gpu_fixture.cpp
+        tests/renderer_ui_tests.cpp
+        tests/renderer_binding_tests.cpp
+        tests/nvrhi_descriptor_failure_tests.cpp
+        tests/renderer_scene_retirement_tests.cpp
+        tests/renderer_targets_tests.cpp
+        tests/import_skin_gpu_tests.cpp
+        tests/import_upload_gpu_tests.cpp
+        tests/renderer_scene_gpu_tests.cpp
+        src/renderer_scene_load_worker_win32.cpp
+        src/renderer_targets_nvrhi.cpp
+        src/renderer_scene_retirement.cpp
+        src/renderer_scene_retirement_nvrhi.cpp
+        src/world_space_representation_nvrhi.cpp)
     target_include_directories(uvsr_renderer_common_passes_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_include_directories(uvsr_renderer_common_passes_tests SYSTEM PRIVATE
+        "$<TARGET_PROPERTY:glfw,INTERFACE_INCLUDE_DIRECTORIES>")
+    set_source_files_properties(tests/nvrhi_descriptor_failure_tests.cpp PROPERTIES
+        INCLUDE_DIRECTORIES "${UVSR_NVRHI_D3D12_OVERRIDE_DIR}/src/d3d12;${CMAKE_CURRENT_SOURCE_DIR}/third_party/nvrhi/src/d3d12")
+    target_compile_definitions(uvsr_renderer_common_passes_tests PRIVATE
+        UVSR_BLIT_PIPELINE_TEST_HOOKS=1 UVSR_RENDER_TARGETS_TEST_FAILURES=1 _HAS_EXCEPTIONS=0 NOMINMAX _CRT_SECURE_NO_WARNINGS)
     target_link_libraries(uvsr_renderer_common_passes_tests PRIVATE
+        uvsr_ui_context
+        uvsr_log
+        uvsr_renderer_nvrhi
+        uvsr_view
+        uvsr_renderer_scene_gpu_nvrhi
+        uvsr_renderer_import
+        uvsr_renderer_scene_resources_nvrhi
+        stb
+        imgui
         uvsr_shader_blob
         nvrhi
         nvrhi_d3d12
@@ -1065,17 +1341,23 @@ if (BUILD_TESTING)
         dxgi)
     target_compile_features(
         uvsr_renderer_common_passes_tests PRIVATE cxx_std_17)
+    uvsr_disable_cpp_exceptions(uvsr_renderer_common_passes_tests PRIVATE)
+    set_source_files_properties(tests/renderer_scene_gpu_tests.cpp tests/import_upload_gpu_tests.cpp tests/import_skin_gpu_tests.cpp tests/renderer_ui_tests.cpp PROPERTIES
+        COMPILE_DEFINITIONS "UVSR_BUILD_TESTING=1")
     if (MSVC)
         target_compile_options(uvsr_renderer_common_passes_tests PRIVATE
-            /permissive- /W4 /WX)
+            /permissive- /W4 /WX /EHs-c- /fp:precise)
+    else()
+        target_compile_options(uvsr_renderer_common_passes_tests PRIVATE -fno-exceptions)
     endif()
     add_dependencies(uvsr_renderer_common_passes_tests
+        uvsr_scene_instance_probe
         uvsr_stage_runtime_shaders
         uvsr_stage_d3d12_runtime)
     add_test(
         NAME uvsr_renderer_common_passes_reference
         COMMAND uvsr_renderer_common_passes_tests
-            "${UVSR_RUNTIME_APP_SHADER_DIR}")
+            "${UVSR_RUNTIME_APP_SHADER_DIR}" "${UVSR_SCENE_INSTANCE_PROBE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     set_tests_properties(
         uvsr_renderer_common_passes_reference
         PROPERTIES
@@ -1096,7 +1378,7 @@ add_executable(uvsr_scene_asset_contract_tests
 target_include_directories(uvsr_scene_asset_contract_tests
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(uvsr_scene_asset_contract_tests
-    PRIVATE cgltf stb bcrypt)
+    PRIVATE cgltf stb uvsr_sha256 uvsr_json uvsr_file_bytes uvsr_scene_catalog_path)
 target_compile_definitions(uvsr_scene_asset_contract_tests PRIVATE
     NOMINMAX _CRT_SECURE_NO_WARNINGS)
 add_test(
@@ -1272,4 +1554,24 @@ if (NOT BUILD_TESTING)
             uvsr_stage_media
         COMMENT "Creating the strict production renderer package"
         VERBATIM)
+endif()
+
+foreach(image_consumer IN ITEMS uvsr-engine uvsr_import_load_tests uvsr_import_image_tests
+        uvsr_renderer_common_passes_tests)
+    if(TARGET ${image_consumer})
+        target_link_libraries(${image_consumer} PRIVATE uvsr_stb_image)
+    endif()
+endforeach()
+
+if(BUILD_TESTING)
+    add_executable(uvsr_shader_factory_tests tests/shader_factory_tests.cpp)
+    target_link_libraries(uvsr_shader_factory_tests PRIVATE uvsr_renderer_nvrhi nvrhi)
+    target_compile_definitions(uvsr_shader_factory_tests PRIVATE UVSR_BUILD_TESTING=1 NOMINMAX)
+    uvsr_disable_cpp_exceptions(uvsr_shader_factory_tests)
+    set(UVSR_SHADER_FACTORY_TEST_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/shader-factory-test")
+    file(MAKE_DIRECTORY "${UVSR_SHADER_FACTORY_TEST_DIRECTORY}")
+    add_test(NAME uvsr_shader_factory COMMAND uvsr_shader_factory_tests "${UVSR_SHADER_FACTORY_TEST_DIRECTORY}")
+    uvsr_test(uvsr_imgui_window_tests uvsr_imgui_window tests/imgui_window_tests.cpp)
+    target_link_libraries(uvsr_imgui_window_tests PRIVATE imgui)
+    uvsr_disable_cpp_exceptions(uvsr_imgui_window_tests)
 endif()

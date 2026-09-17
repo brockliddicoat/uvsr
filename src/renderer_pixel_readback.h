@@ -22,44 +22,64 @@
 
 #pragma once
 
-#include "renderer_pixel_readback_cb.h"
-#include "renderer_resource_contract.h"
-
-#include <nvrhi/nvrhi.h>
-
-#include <cstdint>
-#include <memory>
-#include <optional>
+#include <stdint.h>
 
 namespace uvsr
 {
-    class RendererShaderFactory;
+    struct RendererReadbackUint4
+    {
+        uint32_t x;
+        uint32_t y;
+        uint32_t z;
+        uint32_t w;
+    };
+
+    struct RendererPixelReadbackRequest
+    {
+        uint32_t x;
+        uint32_t y;
+    };
+
+    enum class RendererReadbackError : uint8_t
+    {
+        None,
+        InvalidInput,
+        Uninitialized,
+        Busy,
+        NotSubmitted,
+        AllocationFailed,
+        ResourceCreationFailed,
+        SubmissionFailed,
+        MapFailed
+    };
+
+    struct RendererPixelReadbackNvrhi;
 
     class RendererPixelReadback final
     {
     public:
-        RendererPixelReadback(
-            nvrhi::IDevice* device,
-            const std::shared_ptr<RendererShaderFactory>& shaderFactory,
-            nvrhi::ITexture* inputTexture);
+        RendererPixelReadback() = default;
+        ~RendererPixelReadback();
+        RendererPixelReadback(const RendererPixelReadback&) = delete;
+        RendererPixelReadback& operator=(const RendererPixelReadback&) = delete;
+        RendererPixelReadback(RendererPixelReadback&&) = delete;
+        RendererPixelReadback& operator=(RendererPixelReadback&&) = delete;
 
-        [[nodiscard]] bool IsValid() const;
-        bool Capture(
-            nvrhi::ICommandList* commandList,
-            std::uint32_t x,
-            std::uint32_t y);
-        [[nodiscard]] std::optional<RendererReadbackUint4> ReadUInts();
+        [[nodiscard]] bool IsValid() const noexcept;
+        // records one mip-0, slice-0 integer texel on the list retained at creation.
+        [[nodiscard]] RendererReadbackError Capture(RendererPixelReadbackRequest request);
+        // token must be the exact nonzero graphics submission of that same list.
+        // it establishes ordering, not GPU completion or a cross-queue identity.
+        [[nodiscard]] RendererReadbackError NotifySubmitted(uint64_t token) noexcept;
+        // blocking after submission. output is unchanged on failure; one read attempt
+        // consumes the request. the backend owns the completion wait and unmapping.
+        [[nodiscard]] RendererReadbackError ReadUInts(RendererReadbackUint4& output);
+        // only for an abandoned, never-submitted list. cannot undo GPU work.
+        void CancelRecorded() noexcept;
 
     private:
-        nvrhi::DeviceHandle m_Device;
-        nvrhi::ShaderHandle m_Shader;
-        nvrhi::ComputePipelineHandle m_Pipeline;
-        nvrhi::BindingLayoutHandle m_BindingLayout;
-        nvrhi::BindingSetHandle m_BindingSet;
-        nvrhi::BufferHandle m_ConstantBuffer;
-        nvrhi::BufferHandle m_IntermediateBuffer;
-        nvrhi::BufferHandle m_ReadbackBuffer;
-        RendererPixelReadbackInitializationContract m_Initialization;
-        bool m_CapturePending = false;
+        friend struct RendererPixelReadbackNvrhi;
+        struct State;
+        State* m_State = nullptr;
     };
 }

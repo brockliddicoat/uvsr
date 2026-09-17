@@ -1,0 +1,275 @@
+diff --git a/src/d3d12/d3d12-backend.h b/src/d3d12/d3d12-backend.h
+--- a/src/d3d12/d3d12-backend.h
++++ b/src/d3d12/d3d12-backend.h
+@@ -667,7 +667,7 @@
+ 
+         ~BindingSet() override;
+ 
+-        void createDescriptors();
++        bool createDescriptors();
+ 
+         const BindingSetDesc* getDesc() const override { return &desc; }
+         IBindingLayout* getLayout() const override { return layout; }
+diff --git a/src/d3d12/d3d12-descriptor-heap.cpp b/src/d3d12/d3d12-descriptor-heap.cpp
+--- a/src/d3d12/d3d12-descriptor-heap.cpp
++++ b/src/d3d12/d3d12-descriptor-heap.cpp
+@@ -24,6 +24,10 @@
+ 
+ namespace nvrhi::d3d12
+ {
++#if defined(UVSR_NVRHI_DESCRIPTOR_TEST_FAILURES)
++    bool UvsrFailDescriptorAllocation(const StaticDescriptorHeap* heap);
++    bool UvsrFailDescriptorHeapCreation(const StaticDescriptorHeap* heap);
++#endif
+     
+     StaticDescriptorHeap::StaticDescriptorHeap(const Context& context)
+         : m_Context(context)
+@@ -32,15 +36,20 @@
+     
+     HRESULT StaticDescriptorHeap::allocateResources(D3D12_DESCRIPTOR_HEAP_TYPE heapType, uint32_t numDescriptors, bool shaderVisible)
+     {
+-        m_Heap = nullptr;
+-        m_ShaderVisibleHeap = nullptr;
++        // a failed growth must preserve existing descriptors and heap handles.
++        RefCountPtr<ID3D12DescriptorHeap> heap;
++        RefCountPtr<ID3D12DescriptorHeap> shaderVisibleHeap;
+ 
+         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+         heapDesc.Type = heapType;
+         heapDesc.NumDescriptors = numDescriptors;
+         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+ 
+-        HRESULT hr = m_Context.device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_Heap));
++#if defined(UVSR_NVRHI_DESCRIPTOR_TEST_FAILURES)
++        if (UvsrFailDescriptorHeapCreation(this))
++            return E_OUTOFMEMORY;
++#endif
++        HRESULT hr = m_Context.device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&heap));
+ 
+         if (FAILED(hr))
+             return hr;
+@@ -49,20 +58,27 @@
+         {
+             heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+ 
+-            hr = m_Context.device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_ShaderVisibleHeap));
++#if defined(UVSR_NVRHI_DESCRIPTOR_TEST_FAILURES)
++            if (UvsrFailDescriptorHeapCreation(this))
++                return E_OUTOFMEMORY;
++#endif
++            hr = m_Context.device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&shaderVisibleHeap));
+ 
+             if (FAILED(hr))
+                 return hr;
+-
+-            m_StartCpuHandleShaderVisible = m_ShaderVisibleHeap->GetCPUDescriptorHandleForHeapStart();
+-            m_StartGpuHandleShaderVisible = m_ShaderVisibleHeap->GetGPUDescriptorHandleForHeapStart();
+-        }
+-
++        }
++
++        m_AllocatedDescriptors.resize(numDescriptors);
++        m_Heap = heap;
++        m_ShaderVisibleHeap = shaderVisibleHeap;
++        m_StartCpuHandleShaderVisible = shaderVisibleHeap
++            ? shaderVisibleHeap->GetCPUDescriptorHandleForHeapStart() : D3D12_CPU_DESCRIPTOR_HANDLE{};
++        m_StartGpuHandleShaderVisible = shaderVisibleHeap
++            ? shaderVisibleHeap->GetGPUDescriptorHandleForHeapStart() : D3D12_GPU_DESCRIPTOR_HANDLE{};
+         m_NumDescriptors = heapDesc.NumDescriptors;
+         m_HeapType = heapDesc.Type;
+         m_StartCpuHandle = m_Heap->GetCPUDescriptorHandleForHeapStart();
+         m_Stride = m_Context.device->GetDescriptorHandleIncrementSize(heapDesc.Type);
+-        m_AllocatedDescriptors.resize(m_NumDescriptors);
+ 
+         return S_OK;
+     }
+@@ -97,9 +113,9 @@
+ 
+             newSize = std::min(newSize, maxSize);
+ 
+-            if (newSize < minRequiredSize)
+-                return E_OUTOFMEMORY;
+-        }
++        }
++        if (newSize < minRequiredSize)
++            return E_OUTOFMEMORY;
+ 
+         RefCountPtr<ID3D12DescriptorHeap> oldHeap = m_Heap; 
+ 
+@@ -121,6 +137,19 @@
+     DescriptorIndex StaticDescriptorHeap::allocateDescriptors(uint32_t count)
+     {
+         std::lock_guard lockGuard(m_Mutex);
++
++#if defined(UVSR_NVRHI_DESCRIPTOR_TEST_FAILURES)
++        if (UvsrFailDescriptorAllocation(this))
++        {
++            m_Context.error("Failed to grow a descriptor heap!");
++            return c_InvalidDescriptorIndex;
++        }
++#endif
++        if (count == 0 || count > c_InvalidDescriptorIndex - m_NumDescriptors)
++        {
++            m_Context.error("Invalid descriptor allocation size");
++            return c_InvalidDescriptorIndex;
++        }
+ 
+         DescriptorIndex foundIndex = 0;
+         uint32_t freeCount = 0;
+@@ -176,6 +205,11 @@
+ 
+         if (count == 0)
+             return;
++        if (baseIndex >= m_NumDescriptors || count > m_NumDescriptors - baseIndex || count > m_NumAllocatedDescriptors)
++        {
++            m_Context.error("Invalid descriptor release range");
++            return;
++        }
+ 
+         for (DescriptorIndex index = baseIndex; index < baseIndex + count; index++)
+         {
+diff --git a/src/d3d12/d3d12-graphics.cpp b/src/d3d12/d3d12-graphics.cpp
+--- a/src/d3d12/d3d12-graphics.cpp
++++ b/src/d3d12/d3d12-graphics.cpp
+@@ -268,6 +268,11 @@
+             assert(texture->desc.height == fb->rtHeight);
+ 
+             DescriptorIndex index = m_Resources.renderTargetViewHeap.allocateDescriptor();
++            if (index == c_InvalidDescriptorIndex)
++            {
++                delete fb;
++                return nullptr;
++            }
+ 
+             const D3D12_CPU_DESCRIPTOR_HANDLE descriptorHandle = m_Resources.renderTargetViewHeap.getCpuHandle(index);
+             texture->createRTV(descriptorHandle.ptr, attachment.format, attachment.subresources);
+@@ -283,6 +288,11 @@
+             assert(texture->desc.height == fb->rtHeight);
+ 
+             DescriptorIndex index = m_Resources.depthStencilViewHeap.allocateDescriptor();
++            if (index == c_InvalidDescriptorIndex)
++            {
++                delete fb;
++                return nullptr;
++            }
+ 
+             const D3D12_CPU_DESCRIPTOR_HANDLE descriptorHandle = m_Resources.depthStencilViewHeap.getCpuHandle(index);
+             texture->createDSV(descriptorHandle.ptr, desc.depthAttachment.subresources, desc.depthAttachment.isReadOnly);
+diff --git a/src/d3d12/d3d12-resource-bindings.cpp b/src/d3d12/d3d12-resource-bindings.cpp
+--- a/src/d3d12/d3d12-resource-bindings.cpp
++++ b/src/d3d12/d3d12-resource-bindings.cpp
+@@ -67,7 +67,7 @@
+         return false;
+     }
+     
+-    void BindingSet::createDescriptors()
++    bool BindingSet::createDescriptors()
+     {
+         // Process the volatile constant buffers: they occupy one root parameter each
+         for (const std::pair<RootParameterIndex, D3D12_ROOT_DESCRIPTOR1>& parameter : layout->rootParametersVolatileCB)
+@@ -97,6 +97,8 @@
+         if (layout->descriptorTableSizeSamplers > 0)
+         {
+             DescriptorIndex descriptorTableBaseIndex = m_Resources.samplerHeap.allocateDescriptors(layout->descriptorTableSizeSamplers);
++            if (descriptorTableBaseIndex == c_InvalidDescriptorIndex)
++                return false;
+             descriptorTableSamplers = descriptorTableBaseIndex;
+             rootParameterIndexSamplers = layout->rootParameterSamplers;
+             descriptorTableValidSamplers = true;
+@@ -149,6 +151,8 @@
+         if (layout->descriptorTableSizeSRVetc > 0)
+         {
+             DescriptorIndex descriptorTableBaseIndex = m_Resources.shaderResourceViewHeap.allocateDescriptors(layout->descriptorTableSizeSRVetc);
++            if (descriptorTableBaseIndex == c_InvalidDescriptorIndex)
++                return false;
+             descriptorTableSRVetc = descriptorTableBaseIndex;
+             rootParameterIndexSRVetc = layout->rootParameterSRVetc;
+             descriptorTableValidSRVetc = true;
+@@ -351,6 +355,7 @@
+ 
+             m_Resources.shaderResourceViewHeap.copyToShaderVisibleHeap(descriptorTableBaseIndex, layout->descriptorTableSizeSRVetc);
+         }
++        return true;
+     }
+ 
+     BindingLayoutHandle Device::createBindingLayout(const BindingLayoutDesc& desc)
+@@ -373,7 +378,11 @@
+         BindingLayout* pipelineLayout = checked_cast<BindingLayout*>(_layout);
+         ret->layout = pipelineLayout;
+ 
+-        ret->createDescriptors();
++        if (!ret->createDescriptors())
++        {
++            delete ret;
++            return nullptr;
++        }
+ 
+         return BindingSetHandle::Create(ret);
+     }
+@@ -390,9 +399,11 @@
+ 
+     BindingSet::~BindingSet()
+     {
+-        m_Resources.shaderResourceViewHeap.releaseDescriptors(descriptorTableSRVetc, layout->descriptorTableSizeSRVetc);
++        if (descriptorTableValidSRVetc)
++            m_Resources.shaderResourceViewHeap.releaseDescriptors(descriptorTableSRVetc, layout->descriptorTableSizeSRVetc);
+     
+-        m_Resources.samplerHeap.releaseDescriptors(descriptorTableSamplers, layout->descriptorTableSizeSamplers);
++        if (descriptorTableValidSamplers)
++            m_Resources.samplerHeap.releaseDescriptors(descriptorTableSamplers, layout->descriptorTableSizeSamplers);
+     }
+ 
+     bool DescriptorTable::isSamplerTable() const
+@@ -1022,29 +1033,28 @@
+             return;
+         }
+ 
+-        uint32_t originalFirst = descriptorTable->firstDescriptor;
+-        if (!keepContents && descriptorTable->capacity > 0)
+-        {
+-            heap.releaseDescriptors(descriptorTable->firstDescriptor, descriptorTable->capacity);
+-        }
+-
+-        descriptorTable->firstDescriptor = heap.allocateDescriptors(newSize);
++        const uint32_t originalFirst = descriptorTable->firstDescriptor;
++        const uint32_t replacementFirst = heap.allocateDescriptors(newSize);
++        if (replacementFirst == c_InvalidDescriptorIndex)
++            return;
+ 
+         if (keepContents && descriptorTable->capacity > 0)
+         {
+             m_Context.device->CopyDescriptorsSimple(descriptorTable->capacity,
+-                heap.getCpuHandle(descriptorTable->firstDescriptor),
++                heap.getCpuHandle(replacementFirst),
+                 heap.getCpuHandle(originalFirst),
+                 heapType);
+ 
+             m_Context.device->CopyDescriptorsSimple(descriptorTable->capacity,
+-                heap.getCpuHandleShaderVisible(descriptorTable->firstDescriptor),
++                heap.getCpuHandleShaderVisible(replacementFirst),
+                 heap.getCpuHandle(originalFirst),
+                 heapType);
+ 
++        }
++        if (descriptorTable->capacity > 0)
+             heap.releaseDescriptors(originalFirst, descriptorTable->capacity);
+-        }
+-
++
++        descriptorTable->firstDescriptor = replacementFirst;
+         descriptorTable->capacity = newSize;
+     }
+ 
+diff --git a/src/d3d12/d3d12-texture.cpp b/src/d3d12/d3d12-texture.cpp
+--- a/src/d3d12/d3d12-texture.cpp
++++ b/src/d3d12/d3d12-texture.cpp
+@@ -146,7 +146,8 @@
+             m_Resources.depthStencilViewHeap.releaseDescriptor(pair.second);
+ 
+         for (auto index : m_ClearMipLevelUAVs)
+-            m_Resources.shaderResourceViewHeap.releaseDescriptor(index);
++            if (index != c_InvalidDescriptorIndex)
++                m_Resources.shaderResourceViewHeap.releaseDescriptor(index);
+ 
+         for (auto pair : m_CustomSRVs)
+             m_Resources.shaderResourceViewHeap.releaseDescriptor(pair.second);

@@ -1,6 +1,37 @@
 #include "uvsr_ui_internal.h"
+#include "renderer_scene_records.h"
 
 #include <type_traits>
+
+namespace
+{
+    void ReportPersistenceFailure(const SettingsSnapshotError& error, const char* code) noexcept
+    {
+        if (error.code == SettingsSnapshotErrorCode::Collision)
+            uvsr::log::warning("Settings snapshot catalog contains a conflicting entry for %s", code);
+        else
+            uvsr::log::warning("Could not persist the settings snapshot catalog: %s (native error %lu)",
+                error.Message(), static_cast<unsigned long>(error.nativeCode));
+        if (error.cleanupCode)
+            uvsr::log::warning("Settings snapshot temporary cleanup also failed (native error %lu)",
+                static_cast<unsigned long>(error.cleanupCode));
+    }
+
+    bool RejectUnchangedCommandMutation(
+        std::string_view path,
+        SettingsSnapshotError& error) noexcept
+    {
+        error = ComposeSettingsSnapshotError({"No change: ", path, " already has the requested value."});
+        return false;
+    }
+
+    bool ReportSettingsValueError(SettingsSnapshotError& failure, SettingsSnapshotError& error) noexcept
+    {
+        error = std::move(failure);
+        return false;
+    }
+
+}
 
 auto UIRenderer::IsCommandRuntimeMutationLocked(
         const UiSettingsCommandDefinition& definition) const -> bool {
@@ -11,11 +42,10 @@ auto UIRenderer::IsCommandRuntimeMutationLocked(
 
 auto UIRenderer::CheckCommandMutationAllowed(
         const UiSettingsCommandDefinition& definition,
-        std::string& error) const -> bool {
+        SettingsSnapshotError& error) const -> bool {
         if (IsCommandRuntimeMutationLocked(definition))
         {
-            error =
-                "This setting cannot change while a scene is loading.";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "This setting cannot change while a scene is loading.", {}};
             return false;
         }
         return true;
@@ -60,25 +90,25 @@ auto UIRenderer::ApplyLightingSolution(
     }
 
 auto UIRenderer::ResetAllSettingsToFactoryDefaults(
-        std::string& resetError) -> bool {
-        resetError.clear();
+        SettingsSnapshotError& resetError) -> bool {
+        resetError = {};
         if (m_app->IsSceneBusy())
         {
-            resetError =
-                "Factory settings cannot be restored while a scene is loading.";
+            resetError = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "Factory settings cannot be restored while a scene is loading.", {}};
             return false;
         }
         bool succeeded = true;
         const auto reportFailure = [&resetError, &succeeded](
             const UiSettingsCommandDefinition& definition,
-            std::string_view error)
+            const SettingsSnapshotError& error)
         {
             succeeded = false;
-            const std::string message = std::string(definition.name) +
-                ": " + std::string(error);
-            if (resetError.empty())
-                resetError = message;
-            std::fprintf(stderr, "settings-reset: %s\n", message.c_str());
+            auto message = ComposeSettingsSnapshotError({definition.name, ": ", error.MessageView()},
+                error.code == SettingsSnapshotErrorCode::None ? SettingsSnapshotErrorCode::InvalidInput : error.code,
+                error.nativeCode, error.cleanupCode);
+            std::fprintf(stderr, "settings-reset: %s\n", message.Message());
+            if (resetError.MessageView().empty())
+                resetError = std::move(message);
         };
         for (const UiSettingsCommandDefinition& definition :
             UiSettingsCommandCatalog)
@@ -94,14 +124,16 @@ auto UIRenderer::ResetAllSettingsToFactoryDefaults(
             if (!globalFlashlight && !IsSettingAvailable(definition.id))
                 continue;
             UiSettingsValue defaultValue;
-            std::string error;
+            SettingsSnapshotError error;
+            SettingsSnapshotError valueError;
             const bool globalFlashlightColor = globalFlashlight &&
                 definition.id == SettingId::LightSelectedColor;
             const bool resolved = globalFlashlightColor
-                ? GetDeclaredUiSettingsDefaultValue(definition, defaultValue)
+                ? GetDeclaredUiSettingsDefaultValue(definition, defaultValue, valueError)
                 : ResolveSettingDefaultValue(definition, defaultValue, error);
             if (!resolved)
             {
+                if (globalFlashlightColor) error = std::move(valueError);
                 reportFailure(definition, error);
                 continue;
             }
@@ -125,12 +157,16 @@ auto UIRenderer::ResetAllSettingsToFactoryDefaults(
             if (!DispatchTypedSetting(
                     definition, &defaultValue, applied, error, false, true))
             {
-                if (error.rfind("No change: ", 0u) != 0u)
+                if (error.MessageView().rfind("No change: ", 0u) != 0u)
                     reportFailure(definition, error);
                 continue;
             }
         }
-        m_app->ResetFactorySettingsRuntimeState();
+        if (!m_app->ResetFactorySettingsRuntimeState())
+        {
+            succeeded = false;
+            if (resetError.MessageView().empty()) resetError = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "renderer runtime reset failed", {}};
+        }
         m_StatisticsEffect =
             static_cast<int>(StatisticsEffect::CompleteRenderer);
         m_PerformanceCollapsedRequest = true;
@@ -141,8 +177,8 @@ auto UIRenderer::ResetAllSettingsToFactoryDefaults(
 
 auto UIRenderer::RunAction(
         ActionId id,
-        std::string& error) -> bool {
-        error.clear();
+        SettingsSnapshotError& error) -> bool {
+        error = {};
         switch (id)
         {
         case ActionId::OpenSceneFolder:
@@ -150,13 +186,13 @@ auto UIRenderer::RunAction(
             const HINSTANCE result = ShellExecuteW(
                 nullptr,
                 L"open",
-                m_app->GetSceneDir().c_str(),
+                m_app->GetSceneDir().data(),
                 nullptr,
                 nullptr,
                 SW_SHOWNORMAL);
             if (reinterpret_cast<std::intptr_t>(result) > 32)
                 return true;
-            error = "Windows could not open the scene folder.";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "Windows could not open the scene folder.", {}};
             return false;
         }
         case ActionId::ResetSettings:
@@ -173,137 +209,70 @@ auto UIRenderer::RunAction(
         case ActionId::Invalid:
             break;
         }
-        error = "Unknown settings action.";
+        error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "Unknown settings action.", {}};
         return false;
     }
 
-auto UIRenderer::GetDefaultCommandLight() const -> std::shared_ptr<Light> {
-        const auto& lights = m_app->GetEditableLights();
-        std::shared_ptr<Light> selected =
-            m_app->GetPrimaryDirectionalLight();
-        if (!selected ||
-            std::find(lights.begin(), lights.end(), selected) ==
-                lights.end())
-        {
-            selected = lights.empty() ? nullptr : lights.front();
-        }
-        return selected;
+auto UIRenderer::GetDefaultCommandLight() const -> RendererSceneHandle {
+        const auto lights = m_app->GetEditableLights();
+        const auto selected = m_app->GetPrimaryDirectionalLight();
+        return lights.Ordinal(selected) != InvalidSceneIndex ? selected : lights.At(0);
     }
 
-auto UIRenderer::EnsureCommandSelectedLight() -> std::shared_ptr<Light> {
-        const auto& lights = m_app->GetEditableLights();
-        if (lights.empty())
-        {
-            m_SelectedLight.reset();
-            return nullptr;
-        }
-        if (std::find(
-                lights.begin(), lights.end(), m_SelectedLight) ==
-            lights.end())
-        {
+auto UIRenderer::EnsureCommandSelectedLight() -> RendererSceneHandle {
+        const auto lights = m_app->GetEditableLights();
+        if (lights.Ordinal(m_SelectedLight) == InvalidSceneIndex)
             m_SelectedLight = GetDefaultCommandLight();
-        }
         return m_SelectedLight;
     }
 
-auto UIRenderer::GetCommandLightDefaults(
-        const std::shared_ptr<Light>& light) -> const LightDefaultState& {
-        const auto& lights = m_app->GetEditableLights();
-        const auto selected = std::find(
-            lights.begin(), lights.end(), light);
-        const size_t index =
-            static_cast<size_t>(std::distance(lights.begin(), selected));
-        const std::string key =
-            m_app->GetCurrentSceneName() + "\n" +
-            std::to_string(index) + "\n" +
-            light->GetName();
-        const auto capture = [](const Light& source)
+auto UIRenderer::GetCommandLightDefaults(RendererSceneHandle light,
+        UiLightDefaults& output, SettingsSnapshotError& error) -> bool {
+        const auto lights = m_app->GetEditableLights();
+        const auto* record = m_app->GetSceneLight(light);
+        if (!record)
         {
-            LightDefaultState result;
-            result.type = source.GetLightType();
-            result.direction = source.GetDirection();
-            result.color = source.color;
-            switch (result.type)
-            {
-            case UVSR_LIGHT_TYPE_DIRECTIONAL:
-            {
-                const auto& directional =
-                    static_cast<const DirectionalLight&>(source);
-                result.irradiance = directional.irradiance;
-                result.angularSize = directional.angularSize;
-                break;
-            }
-            case UVSR_LIGHT_TYPE_POINT:
-            {
-                const auto& point =
-                    static_cast<const PointLight&>(source);
-                result.radius = point.radius;
-                result.intensity = point.intensity;
-                break;
-            }
-            case UVSR_LIGHT_TYPE_SPOT:
-            {
-                const auto& spot =
-                    static_cast<const SpotLight&>(source);
-                result.radius = spot.radius;
-                result.intensity = spot.intensity;
-                result.innerAngle = spot.innerAngle;
-                result.outerAngle = spot.outerAngle;
-                break;
-            }
-            default:
-                break;
-            }
-            return result;
-        };
-        return m_LightDefaults.try_emplace(
-            key,
-            capture(*light)).first->second;
+            output = {};
+            return true;
+        }
+        const uint32_t index = lights.Ordinal(light);
+        const auto scene = m_app->GetCurrentSceneName();
+        const auto name = m_app->GetSceneLightNameView(light);
+        UiLightDefaults result;
+        result.type = record->kind;
+        (void)m_app->ReadSceneLightDirection(light, result.direction);
+        const auto& values = record->values;
+        result.color = {values.color.x, values.color.y, values.color.z};
+        result.irradiance = values.irradiance;
+        result.angularSize = values.angularSize;
+        result.radius = values.radius;
+        result.intensity = values.intensity;
+        result.innerAngle = values.innerAngle;
+        result.outerAngle = values.outerAngle;
+        UiLightDefaultsError cacheError;
+        if (m_LightDefaults.ReadOrCapture({scene.data(), scene.size(), index, name.data(), name.size()},
+                result, output, cacheError))
+            return true;
+        error = {cacheError == UiLightDefaultsError::Allocation ? SettingsSnapshotErrorCode::OutOfMemory :
+            cacheError == UiLightDefaultsError::Capacity ? SettingsSnapshotErrorCode::Capacity :
+            SettingsSnapshotErrorCode::InvalidInput, 0, 0, "Could not capture light defaults.", {}};
+        return false;
     }
 
-auto UIRenderer::GetCommandLightAngles(
-        const double3& storedDirection,
-        bool directional) -> std::pair<float, float> {
-        double3 direction = normalize(storedDirection);
-        if (directional)
-            direction = -direction;
-        const float azimuth = degrees(float(
-            std::atan2(direction.z, direction.x)));
-        const float elevation = degrees(float(std::asin(
-            std::clamp(direction.y, -1.0, 1.0))));
-        return { azimuth, elevation };
+auto UIRenderer::IsCommandMaterialTransmissive(RendererMaterialDomain domain) -> bool {
+        return domain == RendererMaterialDomain::Transmissive ||
+            domain == RendererMaterialDomain::TransmissiveAlphaTested ||
+            domain == RendererMaterialDomain::TransmissiveAlphaBlended;
     }
 
-auto UIRenderer::MakeCommandLightDirection(
-        float azimuthDegrees,
-        float elevationDegrees,
-        bool directional) -> double3 {
-        const double azimuth = radians(double(azimuthDegrees));
-        const double elevation = radians(double(elevationDegrees));
-        const double horizontal = std::cos(elevation);
-        double3 direction(
-            std::cos(azimuth) * horizontal,
-            std::sin(elevation),
-            std::sin(azimuth) * horizontal);
-        if (directional)
-            direction = -direction;
-        return normalize(direction);
+auto UIRenderer::IsCommandMaterialAlphaTested(RendererMaterialDomain domain) -> bool {
+        return domain == RendererMaterialDomain::AlphaTested ||
+            domain == RendererMaterialDomain::TransmissiveAlphaTested;
     }
 
-auto UIRenderer::IsCommandMaterialTransmissive(MaterialDomain domain) -> bool {
-        return domain == MaterialDomain::Transmissive ||
-            domain == MaterialDomain::TransmissiveAlphaTested ||
-            domain == MaterialDomain::TransmissiveAlphaBlended;
-    }
-
-auto UIRenderer::IsCommandMaterialAlphaTested(MaterialDomain domain) -> bool {
-        return domain == MaterialDomain::AlphaTested ||
-            domain == MaterialDomain::TransmissiveAlphaTested;
-    }
-
-auto UIRenderer::IsCommandMaterialAlphaBlended(MaterialDomain domain) -> bool {
-        return domain == MaterialDomain::AlphaBlended ||
-            domain == MaterialDomain::TransmissiveAlphaBlended;
+auto UIRenderer::IsCommandMaterialAlphaBlended(RendererMaterialDomain domain) -> bool {
+        return domain == RendererMaterialDomain::AlphaBlended ||
+            domain == RendererMaterialDomain::TransmissiveAlphaBlended;
     }
 
 namespace
@@ -314,7 +283,8 @@ namespace
         const UiSettingsValue* requested,
         Field& current,
         UiSettingsValue& result,
-        std::string& error)
+        SettingsSnapshotError& error,
+        SettingsSnapshotErrorCode* = nullptr) noexcept
     {
         const auto read = [](const Field& field) {
             if constexpr (std::is_same_v<Field, bool>)
@@ -325,7 +295,7 @@ namespace
                 return UiSettingsValue::Float(field);
             else
             {
-                static_assert(std::is_same_v<Field, float3>);
+                static_assert(std::is_same_v<Field, gpu_contract::Float3>);
                 return UiSettingsValue::Vector({ field.x, field.y, field.z, 0.f }, 3u);
             }
         };
@@ -339,7 +309,7 @@ namespace
                 result.kind == UiSettingsValueKind::Integer ? "an integer value" :
                 result.kind == UiSettingsValueKind::Float ? "a numeric value" :
                 result.componentCount == 3u ? "a three component vector" : "a four component vector";
-            error = std::string(definition.name) + " expects " + shape + ".";
+            error = ComposeSettingsSnapshotError({definition.name, " expects ", shape, "."});
             return false;
         }
         Field candidate;
@@ -350,12 +320,12 @@ namespace
         else if constexpr (std::is_same_v<Field, float>)
             candidate = requested->scalar;
         else
-            candidate = float3(requested->vector[0], requested->vector[1], requested->vector[2]);
-        const UiSettingsValue next = read(candidate);
+            candidate = {requested->vector[0], requested->vector[1], requested->vector[2]};
+        UiSettingsValue next = read(candidate);
         if (next == result)
             return RejectUnchangedCommandMutation(definition.name, error);
         current = candidate;
-        result = next;
+        result = std::move(next);
         return true;
     }
     template<typename Enum, std::size_t Count>
@@ -365,13 +335,13 @@ namespace
         Enum& current,
         const std::array<Enum, Count>& values,
         UiSettingsValue& result,
-        std::string& error,
-        bool allowSameValueMutation = false)
+        SettingsSnapshotError& error,
+        SettingsSnapshotErrorCode* valueFailure = nullptr,
+        bool allowSameValueMutation = false) noexcept
     {
         if (definition.typedDomain.tokenCount != Count)
         {
-            error = std::string(definition.name) +
-                " has a mismatched typed token binding.";
+            error = ComposeSettingsSnapshotError({definition.name, " has a mismatched typed token binding."});
             return false;
         }
         std::size_t index = Count;
@@ -379,13 +349,12 @@ namespace
         {
             if (requested->kind != UiSettingsValueKind::Token)
             {
-                error = std::string(definition.name) +
-                    " expects a token value.";
+                error = ComposeSettingsSnapshotError({definition.name, " expects a token value."});
                 return false;
             }
             for (std::size_t candidate = 0u; candidate < Count; ++candidate)
             {
-                if (definition.typedDomain.tokens[candidate] == requested->text)
+                if (definition.typedDomain.tokens[candidate] == requested->Text())
                 {
                     index = candidate;
                     break;
@@ -393,13 +362,11 @@ namespace
             }
             if (index == Count)
             {
-                error = std::string(definition.name) +
-                    " has an unknown token.";
+                error = ComposeSettingsSnapshotError({definition.name, " has an unknown token."});
                 return false;
             }
             if (current == values[index] && !allowSameValueMutation)
                 return RejectUnchangedCommandMutation(definition.name, error);
-            current = values[index];
         }
         else
         {
@@ -413,13 +380,19 @@ namespace
             }
             if (index == Count)
             {
-                error = std::string(definition.name) +
-                    " has an unknown live token.";
+                error = ComposeSettingsSnapshotError({definition.name, " has an unknown live token."});
                 return false;
             }
         }
-        result = UiSettingsValue::Token(
-            std::string(definition.typedDomain.tokens[index]));
+        UiSettingsValue prepared;
+        SettingsSnapshotError valueError;
+        if (!prepared.SetToken(definition.typedDomain.tokens[index], valueError))
+        {
+            if (valueFailure) *valueFailure = valueError.code;
+            return ReportSettingsValueError(valueError, error);
+        }
+        if (requested) current = values[index];
+        result = std::move(prepared);
         return true;
     }
     template<typename State>
@@ -428,7 +401,8 @@ namespace
         const UiSettingsValue* requested,
         State& state,
         UiSettingsValue& value,
-        std::string& error)
+        SettingsSnapshotError& error,
+        SettingsSnapshotErrorCode* valueFailure = nullptr) noexcept
     {
         switch (definition.id)
         {
@@ -436,7 +410,7 @@ namespace
 #define UVSR_FIELD(symbol, name, metadata, owner, ...) \
         case SettingId::symbol: \
             if constexpr (std::is_same_v<State, owner>) \
-                return BindTyped(definition, requested, state.__VA_ARGS__, value, error); \
+                return BindTyped(definition, requested, state.__VA_ARGS__, value, error, valueFailure); \
             break;
 #include "ui_settings_catalog.def"
 #undef UVSR_FIELD
@@ -451,25 +425,35 @@ auto UIRenderer::DispatchTypedSetting(
         const UiSettingsCommandDefinition& definition,
         const UiSettingsValue* requested,
         UiSettingsValue& value,
-        std::string& error,
+        SettingsSnapshotError& error,
         bool allowLatentMutation,
-        bool deferMutationEffects) -> bool {
+        bool deferMutationEffects,
+        SettingsSnapshotErrorCode* valueFailure) -> bool {
+        if (valueFailure) *valueFailure = SettingsSnapshotErrorCode::None;
+        SettingsSnapshotError selectorError;
+        const auto reportSelectorError = [&] {
+            if (valueFailure) *valueFailure = selectorError.code;
+            return ReportSettingsValueError(selectorError, error);
+        };
+        const auto acceptFormatted = [&](bool formatted) {
+            return AcceptFormattedSelector(formatted, value, selectorError) || reportSelectorError();
+        };
         const auto bindUIData = [&] {
-            return BindCatalogField(definition, requested, m_ui, value, error);
+            return BindCatalogField(definition, requested, m_ui, value, error, valueFailure);
         };
         const auto bindFastApproximateAaSettings = [&] {
-            return BindCatalogField(definition, requested, m_ui.AntiAliasing.fastApproximate, value, error);
+            return BindCatalogField(definition, requested, m_ui.AntiAliasing.fastApproximate, value, error, valueFailure);
         };
         const auto bindPathTracingSettings = [&] {
             auto candidate = m_ui.PathTracing;
-            if (!BindCatalogField(definition, requested, candidate, value, error))
+            if (!BindCatalogField(definition, requested, candidate, value, error, valueFailure))
                 return false;
             if (requested)
             {
                 if (definition.id == SettingId::PathingMinimumBounces &&
                     candidate.minimumBounces > candidate.maximumBounces)
                 {
-                    error = "minimum bounces must not exceed maximum bounces";
+                    error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "minimum bounces must not exceed maximum bounces", {}};
                     return false;
                 }
                 candidate.minimumBounces = std::min(candidate.minimumBounces, candidate.maximumBounces);
@@ -479,27 +463,30 @@ auto UIRenderer::DispatchTypedSetting(
         };
         const auto bindFlashlightSettings = [&] {
             FlashlightSettings candidate = m_ui.Flashlight;
-            const bool handled = BindCatalogField(definition, requested, candidate, value, error);
+            const bool handled = BindCatalogField(definition, requested, candidate, value, error, valueFailure);
             if (handled && requested)
                 m_ui.Flashlight = SanitizeFlashlightSettings(candidate);
             return handled;
         };
-        const auto bindMaterial = [&] {
-            const std::shared_ptr<Material> material = m_ui.SelectedMaterial;
+        const auto bindRendererSceneMaterialValues = [&] {
+            const auto* material = m_app->GetSceneMaterial(m_ui.SelectedMaterial);
             if (!material)
             {
-                error = "No scene material is selected.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "No scene material is selected.", {}};
                 return false;
             }
             if (requested && !allowLatentMutation && !IsSettingAvailable(definition.id))
             {
-                error = "setting is not available in the current context";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "setting is not available in the current context", {}};
                 return false;
             }
-            Material candidate = *material;
-            const bool handled = BindCatalogField(definition, requested, candidate, value, error);
-            if (handled && requested)
-                *material = candidate;
+            auto candidate = material->values;
+            const bool handled = BindCatalogField(definition, requested, candidate, value, error, valueFailure);
+            if (handled && requested && !m_app->SetSceneMaterial(m_ui.SelectedMaterial, candidate))
+            {
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "scene material transaction failed", {}};
+                return false;
+            }
             return handled;
         };
         switch (definition.id)
@@ -515,7 +502,7 @@ auto UIRenderer::DispatchTypedSetting(
             ToneMappingLut candidate = m_ui.ToneMapping.lut;
             if (!BindTyped(definition, requested, candidate,
                     std::array{ ToneMappingLut::None, ToneMappingLut::Print2383,
-                        ToneMappingLut::Portra400, ToneMappingLut::Ektar100 }, value, error))
+                        ToneMappingLut::Portra400, ToneMappingLut::Ektar100 }, value, error, valueFailure))
                 return false;
             return !requested || m_app->SetToneMappingLut(candidate, error);
         }
@@ -524,7 +511,7 @@ auto UIRenderer::DispatchTypedSetting(
             bool candidate = m_SettingsCollapsedRequest.value_or(
                 m_SettingsCollapsed);
             if (!BindTyped(
-                    definition, requested, candidate, value, error))
+                    definition, requested, candidate, value, error, valueFailure))
             {
                 return false;
             }
@@ -539,7 +526,7 @@ auto UIRenderer::DispatchTypedSetting(
         {
             bool candidate = m_ui.ShowMaterialDrawer;
             if (!BindTyped(
-                    definition, requested, candidate, value, error))
+                    definition, requested, candidate, value, error, valueFailure))
             {
                 return false;
             }
@@ -553,7 +540,7 @@ auto UIRenderer::DispatchTypedSetting(
             if (!BindTyped(
                     definition, requested, candidate,
                     std::array{ LightingSolution::RayMarching,
-                        LightingSolution::PathTracing }, value, error))
+                        LightingSolution::PathTracing }, value, error, valueFailure))
             {
                 return false;
             }
@@ -565,35 +552,36 @@ auto UIRenderer::DispatchTypedSetting(
         {
             if (!requested)
             {
-                value = UiSettingsValue::Selector(
-                    FormatSettingsSnapshotAdapterToken(
-                        m_ui.ActiveGpuAdapterIndex));
-                return true;
+                return acceptFormatted(FormatSettingsSnapshotAdapterToken(
+                    m_ui.ActiveGpuAdapterIndex, value, selectorError));
             }
             if (requested->kind != UiSettingsValueKind::Selector)
             {
-                error = "gpu.adapter expects a selector value.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "gpu.adapter expects a selector value.", {}};
                 return false;
             }
-            std::vector<SettingsSnapshotAdapterOption> options;
-            options.reserve(m_ui.GpuAdapterChoices.size());
-            for (const GpuAdapterChoice& adapter : m_ui.GpuAdapterChoices)
-                options.push_back({ adapter.adapterIndex, adapter.name });
+            const SettingsSnapshotOptionSource<SettingsSnapshotAdapterOption> options{
+                &m_ui.GpuAdapterChoices, m_ui.GpuAdapterChoices.Count(),
+                [](const void* context, size_t index, SettingsSnapshotAdapterOption& option, SettingsSnapshotError&) noexcept {
+                    const auto& adapter = (*static_cast<const GpuAdapterCatalog*>(context))[index];
+                    option = {adapter.adapterIndex, adapter.name};
+                    return true;
+                }};
             std::int64_t requestedIndex = -1;
-            std::string canonical;
+            UiSettingsValue canonical;
             if (!ResolveSettingsSnapshotAdapterToken(
-                    requested->text, options, requestedIndex,
-                    canonical, error))
+                    requested->Text(), options, requestedIndex,
+                    canonical, selectorError))
             {
-                return false;
+                return reportSelectorError();
             }
             if (requestedIndex == m_ui.ActiveGpuAdapterIndex)
                 return RejectUnchangedCommandMutation(definition.name, error);
+            value = std::move(canonical);
             g_RestartAdapterIndex = static_cast<int>(requestedIndex);
             g_RestartRequested = true;
             glfwSetWindowShouldClose(
                 GetDeviceManager()->GetWindow(), GLFW_TRUE);
-            value = UiSettingsValue::Selector(std::move(canonical));
             return true;
         }
         case SettingId::CameraMode:
@@ -602,7 +590,7 @@ auto UIRenderer::DispatchTypedSetting(
             if (!BindTyped(
                     definition, requested, candidate,
                     std::array{ CameraMode::ThirdPerson, CameraMode::Static },
-                    value, error))
+                    value, error, valueFailure))
             {
                 return false;
             }
@@ -614,44 +602,44 @@ auto UIRenderer::DispatchTypedSetting(
         {
             if (!requested)
             {
-                const SceneCatalogEntry* scene = FindSceneCatalogEntry(
-                    m_app->GetAvailableScenes(), m_app->GetCurrentSceneName());
+                const SceneCatalogEntry* scene = m_app->GetCurrentSceneCatalogEntry();
                 if (!scene)
                 {
-                    error = "scene.current is not a canonical catalog filename.";
+                    error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "scene.current is not a canonical catalog filename.", {}};
                     return false;
                 }
-                value = UiSettingsValue::Selector(
-                    FormatSettingsSnapshotSceneToken(MakeSceneDisplayName(
-                        m_app->GetSceneDir(), scene->FileName)));
-                return true;
+                return acceptFormatted(FormatSettingsSnapshotSceneToken(
+                    scene->CommandName, value, selectorError));
             }
             if (requested->kind != UiSettingsValueKind::Selector)
             {
-                error = "scene.current expects a selector value.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "scene.current expects a selector value.", {}};
                 return false;
             }
-            std::vector<SettingsSnapshotSceneOption> options;
-            options.reserve(m_app->GetAvailableScenes().size());
-            for (const SceneCatalogEntry& scene : m_app->GetAvailableScenes())
-            {
-                options.push_back({
-                    FormatSettingsSnapshotSceneToken(MakeSceneDisplayName(
-                        m_app->GetSceneDir(), scene.FileName)),
-                    scene.DisplayName, scene.FileName });
-            }
-            std::string requestedFileName;
-            std::string canonical;
+            const auto& scenes = m_app->GetAvailableScenes();
+            const SettingsSnapshotOptionSource<SettingsSnapshotSceneOption> options{
+                &scenes, scenes.Count(),
+                [](const void* context, size_t index, SettingsSnapshotSceneOption& option, SettingsSnapshotError&) noexcept {
+                    const auto& scene = (*static_cast<const SceneCatalog*>(context))[index];
+                    SettingsSnapshotError ignored;
+                    const bool canonical = ValidateSettingsSnapshotSelectorToken(SettingId::SceneCurrent, scene.CommandName, ignored);
+                    option = {canonical ? std::string_view(scene.CommandName) : std::string_view{}, scene.DisplayName};
+                    return true;
+                }};
+            size_t requestedOrdinal = 0;
+            UiSettingsValue canonical;
             if (!ResolveSettingsSnapshotSceneToken(
-                    requested->text, options, requestedFileName,
-                    canonical, error))
+                    requested->Text(), options, requestedOrdinal,
+                    canonical, selectorError))
             {
-                return false;
+                return reportSelectorError();
             }
+            const auto& requestedFileName = scenes[requestedOrdinal].FileName;
             if (requestedFileName == m_app->GetCurrentSceneName())
                 return RejectUnchangedCommandMutation(definition.name, error);
-            m_app->SetCurrentSceneName(requestedFileName);
-            value = UiSettingsValue::Selector(std::move(canonical));
+            if (!m_app->SetCurrentSceneName(requestedFileName, error))
+                return false;
+            value = std::move(canonical);
             return true;
         }
         case SettingId::AntiAliasingFxaaQuality:
@@ -666,7 +654,7 @@ auto UIRenderer::DispatchTypedSetting(
                         AntiAliasingQuality::Medium,
                         AntiAliasingQuality::High,
                         AntiAliasingQuality::Ultra },
-                    value, error, custom))
+                    value, error, valueFailure, custom))
             {
                 return false;
             }
@@ -684,12 +672,15 @@ auto UIRenderer::DispatchTypedSetting(
                     definition, requested, mode,
                     std::array{ WhiteWorldMode::Off, WhiteWorldMode::On,
                         WhiteWorldMode::PreserveDetail,
-                        WhiteWorldMode::PreserveLighting }, value, error))
+                        WhiteWorldMode::PreserveLighting }, value, error, valueFailure))
             {
                 return false;
             }
-            if (requested)
-                m_app->SetWhiteWorldMode(mode);
+            if (requested && !m_app->SetWhiteWorldMode(mode))
+            {
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "scene material batch transaction failed", {}};
+                return false;
+            }
             return true;
         }
         case SettingId::DebugPbrFilter:
@@ -709,7 +700,7 @@ auto UIRenderer::DispatchTypedSetting(
                         PbrLightingDebugView::CombinedEnvironment,
                         PbrLightingDebugView::SpecularOcclusion,
                         PbrLightingDebugView::EnvironmentMip,
-                        PbrLightingDebugView::SkyVisibility }, value, error))
+                        PbrLightingDebugView::SkyVisibility }, value, error, valueFailure))
             {
                 return false;
             }
@@ -727,7 +718,7 @@ auto UIRenderer::DispatchTypedSetting(
                         ImageBasedLightingSource::Kloppenheim07Night,
                         ImageBasedLightingSource::QwantaniStarryNight,
                         ImageBasedLightingSource::QuadrangleCloudy },
-                    value, error))
+                    value, error, valueFailure))
             {
                 return false;
             }
@@ -758,35 +749,35 @@ auto UIRenderer::DispatchTypedSetting(
             {
             case SettingId::SkyVisibilityEnabled:
                 handled = BindTyped(
-                    definition, requested, candidate.enabled, value, error);
+                    definition, requested, candidate.enabled, value, error, valueFailure);
                 break;
             case SettingId::SkyVisibilityDiffuseIbl:
                 handled = BindTyped(
                     definition, requested, candidate.applyToDiffuseIbl,
-                    value, error);
+                    value, error, valueFailure);
                 break;
             case SettingId::SkyVisibilitySpecularIbl:
                 handled = BindTyped(
                     definition, requested, candidate.applyToSpecularIbl,
-                    value, error);
+                    value, error, valueFailure);
                 break;
             case SettingId::SkyVisibilitySamplesPerPixel:
                 handled = BindTyped(
                     definition, requested, candidate.sampleRateLog2,
                     std::array<std::int32_t, 7>{ 0, 1, 2, 3, 4, 5, 6 },
-                    value, error);
+                    value, error, valueFailure);
                 break;
             case SettingId::SkyVisibilitySpecifyNoise:
                 handled = BindTyped(
                     definition, requested, candidate.noise.specifyNoise,
-                    value, error);
+                    value, error, valueFailure);
                 break;
             case SettingId::SkyVisibilityNoisePattern:
                 handled = BindTyped(
                     definition, requested, candidate.noise.custom.pattern,
                     std::array{ NoisePattern::SpatialWhite,
                         NoisePattern::SpatialBlue,
-                        NoisePattern::SpatiotemporalBlue }, value, error);
+                        NoisePattern::SpatiotemporalBlue }, value, error, valueFailure);
                 break;
             case SettingId::SkyVisibilityNoiseResolution:
                 handled = BindTyped(
@@ -794,12 +785,12 @@ auto UIRenderer::DispatchTypedSetting(
                     std::array{ NoiseResolution::Size64,
                         NoiseResolution::Size128,
                         NoiseResolution::Size256,
-                        NoiseResolution::Size512 }, value, error);
+                        NoiseResolution::Size512 }, value, error, valueFailure);
                 break;
             case SettingId::SkyVisibilityAnimateSamples:
                 handled = BindTyped(
                     definition, requested, candidate.noise.custom.animate,
-                    value, error);
+                    value, error, valueFailure);
                 break;
             case SettingId::SkyVisibilityMaxDistance:
                 handled = BindTyped(
@@ -809,11 +800,11 @@ auto UIRenderer::DispatchTypedSetting(
                         RayVisibilityMaxDistance::Meters16,
                         RayVisibilityMaxDistance::Meters8,
                         RayVisibilityMaxDistance::Meters4,
-                        RayVisibilityMaxDistance::Meters2 }, value, error);
+                        RayVisibilityMaxDistance::Meters2 }, value, error, valueFailure);
                 break;
             case SettingId::SkyVisibilityRayBias:
                 handled = BindTyped(
-                    definition, requested, candidate.rayBias, value, error);
+                    definition, requested, candidate.rayBias, value, error, valueFailure);
                 break;
             default:
                 break;
@@ -822,17 +813,17 @@ auto UIRenderer::DispatchTypedSetting(
                 return handled;
             if (!IsRayTracedSkyVisibilityConfigurationSupported(candidate))
             {
-                error = "The requested ray traced sky visibility configuration is not supported.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "The requested ray traced sky visibility configuration is not supported.", {}};
                 return false;
             }
             if (candidate.enabled && !m_app->SupportsRayTracedSkyVisibility())
             {
-                error = "Ray-traced sky visibility requires DXR 1.1 support.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "Ray-traced sky visibility requires DXR 1.1 support.", {}};
                 return false;
             }
             if (!IsValidNoiseSettings(candidate.noise.custom))
             {
-                error = "The requested sky visibility noise configuration is invalid.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "The requested sky visibility noise configuration is invalid.", {}};
                 return false;
             }
             m_ui.RayTracedSkyVisibility = candidate;
@@ -840,62 +831,69 @@ auto UIRenderer::DispatchTypedSetting(
         }
         case SettingId::LightSelected:
         {
-            const auto& lights = m_app->GetEditableLights();
-            const std::shared_ptr<Light> selected = EnsureCommandSelectedLight();
-            const auto indexOf = [&lights](const std::shared_ptr<Light>& light)
-                -> std::optional<std::size_t>
-            {
-                const auto found = std::find(lights.begin(), lights.end(), light);
-                if (found == lights.end())
-                    return std::nullopt;
-                return static_cast<std::size_t>(
-                    std::distance(lights.begin(), found));
-            };
+            const auto lights = m_app->GetEditableLights();
+            const auto selected = lights.Ordinal(m_SelectedLight) == InvalidSceneIndex
+                ? GetDefaultCommandLight() : m_SelectedLight;
             if (!requested)
             {
-                const auto index = indexOf(selected);
-                if (!selected || !index)
+                const uint32_t index = lights.Ordinal(selected);
+                if (!selected || index == InvalidSceneIndex)
                 {
-                    error = "The current scene has no selected light.";
+                    error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "The current scene has no selected light.", {}};
                     return false;
                 }
-                value = UiSettingsValue::Selector(
-                    FormatSettingsSnapshotLightToken(
-                        *index, selected->GetName()));
+                if (!acceptFormatted(FormatSettingsSnapshotLightToken(
+                        index, m_app->GetSceneLightNameView(selected), value, selectorError))) return false;
+                m_SelectedLight = selected;
                 return true;
             }
             if (requested->kind != UiSettingsValueKind::Selector)
             {
-                error = "light.selected expects a selector value.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "light.selected expects a selector value.", {}};
                 return false;
             }
-            std::vector<SettingsSnapshotLightOption> options;
-            options.reserve(lights.size());
-            for (std::size_t index = 0u; index < lights.size(); ++index)
+            struct LightSource
             {
-                if (lights[index])
-                    options.push_back({ index, lights[index]->GetName() });
-            }
+                const UvsrSceneViewer* app;
+                RendererSceneLightRange lights;
+            } source{m_app, lights};
+            const SettingsSnapshotOptionSource<SettingsSnapshotLightOption> options{
+                &source, lights.Count(),
+                [](const void* context, size_t index, SettingsSnapshotLightOption& option, SettingsSnapshotError&) noexcept {
+                    const auto& source = *static_cast<const LightSource*>(context);
+                    option = {index, source.app->GetSceneLightNameView(source.lights.At(uint32_t(index)))};
+                    return true;
+                }};
             std::size_t requestedIndex = 0u;
-            std::string canonical;
+            UiSettingsValue canonical;
             if (!ResolveSettingsSnapshotLightToken(
-                    requested->text, options, requestedIndex,
-                    canonical, error) || requestedIndex >= lights.size())
+                    requested->Text(), options, requestedIndex,
+                    canonical, selectorError))
             {
-                return false;
+                return reportSelectorError();
             }
-            if (lights[requestedIndex] == selected)
+            if (requestedIndex >= lights.Count()) return false;
+            if (lights.At(uint32_t(requestedIndex)) == selected)
+            {
+                if (m_SelectedLight != selected)
+                {
+                    value = std::move(canonical);
+                    m_SelectedLight = selected;
+                }
                 return RejectUnchangedCommandMutation(definition.name, error);
-            m_SelectedLight = lights[requestedIndex];
-            GetCommandLightDefaults(m_SelectedLight);
-            value = UiSettingsValue::Selector(std::move(canonical));
+            }
+            const auto candidate = lights.At(uint32_t(requestedIndex));
+            UiLightDefaults defaults;
+            if (!GetCommandLightDefaults(candidate, defaults, error)) return false;
+            value = std::move(canonical);
+            m_SelectedLight = candidate;
             return true;
         }
         case SettingId::LightSelectedFlashlightEnabled:
         {
             bool candidate = m_ui.FlashlightEnabled;
             if (!BindTyped(
-                    definition, requested, candidate, value, error))
+                    definition, requested, candidate, value, error, valueFailure))
             {
                 return false;
             }
@@ -914,26 +912,25 @@ auto UIRenderer::DispatchTypedSetting(
         case SettingId::LightSelectedInnerAngle:
         case SettingId::LightSelectedOuterAngle:
         {
-            const std::shared_ptr<Light> selected = EnsureCommandSelectedLight();
+            const auto selected = EnsureCommandSelectedLight();
             if (!selected)
             {
-                error = "The current scene has no selected light.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "The current scene has no selected light.", {}};
                 return false;
             }
             if (m_app->IsFlashlight(selected))
             {
                 if (definition.id != SettingId::LightSelectedColor)
                 {
-                    error = std::string(definition.name) +
-                        " is not an editable generic flashlight property.";
+                    error = ComposeSettingsSnapshotError({definition.name, " is not an editable generic flashlight property."});
                     return false;
                 }
-                float3 color(
+                gpu_contract::Float3 color{
                     m_ui.Flashlight.colorLinearRed,
                     m_ui.Flashlight.colorLinearGreen,
-                    m_ui.Flashlight.colorLinearBlue);
+                    m_ui.Flashlight.colorLinearBlue};
                 if (!BindTyped(
-                        definition, requested, color, value, error))
+                        definition, requested, color, value, error, valueFailure))
                 {
                     return false;
                 }
@@ -945,115 +942,98 @@ auto UIRenderer::DispatchTypedSetting(
                 }
                 return true;
             }
-            const int type = selected->GetLightType();
-            const bool directional = type == UVSR_LIGHT_TYPE_DIRECTIONAL;
-            const bool spot = type == UVSR_LIGHT_TYPE_SPOT;
-            const bool pointOrSpot = type == UVSR_LIGHT_TYPE_POINT || spot;
+            const auto* light = m_app->GetSceneLight(selected);
+            if (!light) { error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "selected light is not in the active scene", {}}; return false; }
+            const bool directional = light->kind == RendererSceneLightKind::Directional;
+            const bool spot = light->kind == RendererSceneLightKind::Spot;
+            const bool pointOrSpot = light->kind == RendererSceneLightKind::Point || spot;
             if (definition.id == SettingId::LightSelectedAzimuth ||
                 definition.id == SettingId::LightSelectedElevation)
             {
                 if (!directional && !spot)
                 {
-                    error = std::string(definition.name) +
-                        " requires a directional or spot light.";
+                    error = ComposeSettingsSnapshotError({definition.name, " requires a directional or spot light."});
                     return false;
                 }
-                auto [azimuth, elevation] = GetCommandLightAngles(
-                    selected->GetDirection(), directional);
-                float& component = definition.id == SettingId::LightSelectedAzimuth
-                    ? azimuth : elevation;
-                if (!BindTyped(
-                        definition, requested, component, value, error))
+                RendererSceneLightDirection direction;
+                if (!m_app->ReadSceneLightDirection(selected, direction))
                 {
+                    error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "selected light is not in the active scene", {}};
                     return false;
                 }
+                auto [azimuth, elevation] = GetRendererSceneLightAngles(direction, directional);
+                float& component = definition.id == SettingId::LightSelectedAzimuth ? azimuth : elevation;
+                if (!BindTyped(definition, requested, component, value, error, valueFailure)) return false;
                 if (requested)
                 {
-                    selected->SetDirection(MakeCommandLightDirection(
-                        azimuth, elevation, directional));
+                    const RendererSceneLightDirection candidate = MakeRendererSceneLightDirection(azimuth, elevation, directional);
+                    if (!m_app->SetSceneLightPose(selected, nullptr, &candidate))
+                    {
+                        error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "scene light direction transaction failed", {}};
+                        return false;
+                    }
                 }
                 return true;
             }
+            RendererSceneLightValues candidate;
+            if (!m_app->ReadSceneLightValues(selected, candidate))
+            {
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "selected light is not in the active scene", {}};
+                return false;
+            }
+            const auto commit = [&]
+            {
+                if (!requested || m_app->SetSceneLightValues(selected, candidate)) return true;
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "scene light transaction failed", {}};
+                return false;
+            };
             if (definition.id == SettingId::LightSelectedColor)
-                return BindTyped(
-                    definition, requested, selected->color, value, error);
+            {
+                gpu_contract::Float3 color{candidate.color.x, candidate.color.y, candidate.color.z};
+                if (!BindTyped(definition, requested, color, value, error, valueFailure)) return false;
+                candidate.color = {color.x, color.y, color.z};
+                return commit();
+            }
             if (definition.id == SettingId::LightSelectedIrradiance ||
                 definition.id == SettingId::LightSelectedAngularSize)
             {
                 if (!directional)
                 {
-                    error = std::string(definition.name) +
-                        " requires a directional light.";
+                    error = ComposeSettingsSnapshotError({definition.name, " requires a directional light."});
                     return false;
                 }
-                auto& light = static_cast<DirectionalLight&>(*selected);
-                float& property =
-                    definition.id == SettingId::LightSelectedIrradiance
-                    ? light.irradiance : light.angularSize;
-                return BindTyped(
-                    definition, requested, property, value, error);
+                float& property = definition.id == SettingId::LightSelectedIrradiance
+                    ? candidate.irradiance : candidate.angularSize;
+                return BindTyped(definition, requested, property, value, error, valueFailure) && commit();
             }
             if (definition.id == SettingId::LightSelectedRadius ||
                 definition.id == SettingId::LightSelectedIntensity)
             {
                 if (!pointOrSpot)
                 {
-                    error = std::string(definition.name) +
-                        " requires a point or spot light.";
+                    error = ComposeSettingsSnapshotError({definition.name, " requires a point or spot light."});
                     return false;
                 }
-                float* property = nullptr;
-                if (type == UVSR_LIGHT_TYPE_POINT)
-                {
-                    auto& light = static_cast<PointLight&>(*selected);
-                    property = definition.id == SettingId::LightSelectedRadius
-                        ? &light.radius : &light.intensity;
-                }
-                else
-                {
-                    auto& light = static_cast<SpotLight&>(*selected);
-                    property = definition.id == SettingId::LightSelectedRadius
-                        ? &light.radius : &light.intensity;
-                }
-                return BindTyped(
-                    definition, requested, *property, value, error);
+                float& property = definition.id == SettingId::LightSelectedRadius ? candidate.radius : candidate.intensity;
+                return BindTyped(definition, requested, property, value, error, valueFailure) && commit();
             }
             if (!spot)
             {
-                error = std::string(definition.name) +
-                    " requires a spot light.";
+                error = ComposeSettingsSnapshotError({definition.name, " requires a spot light."});
                 return false;
             }
-            auto& light = static_cast<SpotLight&>(*selected);
-            float candidate = definition.id == SettingId::LightSelectedInnerAngle
-                ? light.innerAngle : light.outerAngle;
-            if (!BindTyped(
-                    definition, requested, candidate, value, error))
+            float& property = definition.id == SettingId::LightSelectedInnerAngle ? candidate.innerAngle : candidate.outerAngle;
+            if (!BindTyped(definition, requested, property, value, error, valueFailure)) return false;
+            if (requested && candidate.innerAngle > candidate.outerAngle)
             {
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, definition.id == SettingId::LightSelectedInnerAngle
+                    ? "The inner spot angle cannot exceed the outer angle."
+                    : "The outer spot angle cannot be below the inner angle.", {}};
                 return false;
             }
-            if (!requested)
-                return true;
-            if (definition.id == SettingId::LightSelectedInnerAngle)
-            {
-                if (candidate > light.outerAngle)
-                {
-                    error = "The inner spot angle cannot exceed the outer angle.";
-                    return false;
-                }
-                light.innerAngle = candidate;
-            }
-            else
-            {
-                if (candidate < light.innerAngle)
-                {
-                    error = "The outer spot angle cannot be below the inner angle.";
-                    return false;
-                }
-                light.outerAngle = candidate;
-            }
-            return true;
+            return commit();
         }
+
         case SettingId::ShadowsRayTracedEnabled:
         case SettingId::ShadowsRayTracedMaxDistance:
         case SettingId::ShadowsRayTracedRayBias:
@@ -1062,7 +1042,7 @@ auto UIRenderer::DispatchTypedSetting(
             bool handled = false;
             if (definition.id == SettingId::ShadowsRayTracedEnabled)
                 handled = BindTyped(
-                    definition, requested, candidate.enabled, value, error);
+                    definition, requested, candidate.enabled, value, error, valueFailure);
             else if (definition.id == SettingId::ShadowsRayTracedMaxDistance)
                 handled = BindTyped(
                     definition, requested, candidate.maxDistance,
@@ -1071,25 +1051,25 @@ auto UIRenderer::DispatchTypedSetting(
                         RayVisibilityMaxDistance::Meters16,
                         RayVisibilityMaxDistance::Meters8,
                         RayVisibilityMaxDistance::Meters4,
-                        RayVisibilityMaxDistance::Meters2 }, value, error);
+                        RayVisibilityMaxDistance::Meters2 }, value, error, valueFailure);
             else
                 handled = BindTyped(
-                    definition, requested, candidate.rayBias, value, error);
+                    definition, requested, candidate.rayBias, value, error, valueFailure);
             if (!handled || !requested)
                 return handled;
             if (!IsDirectionalShadowSettingsValid(candidate))
             {
-                error = "The requested directional shadow configuration is invalid.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "The requested directional shadow configuration is invalid.", {}};
                 return false;
             }
             if (candidate.enabled && !m_app->HasPrimaryDirectionalLight())
             {
-                error = "Directional ray shadows require a primary directional light.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "Directional ray shadows require a primary directional light.", {}};
                 return false;
             }
             if (candidate.enabled && !m_app->SupportsDirectionalRayVisibility())
             {
-                error = "Directional ray shadows require DXR 1.1 support.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "Directional ray shadows require DXR 1.1 support.", {}};
                 return false;
             }
             m_ui.DirectionalShadows = candidate;
@@ -1097,90 +1077,75 @@ auto UIRenderer::DispatchTypedSetting(
         }
         case SettingId::MaterialSelected:
         {
-            const std::shared_ptr<Scene> scene = m_app->GetScene();
-            if (!scene || !scene->GetSceneGraph())
+            const auto scene = m_app->GetSceneView();
+            if (!scene.generation)
             {
-                error = "No loaded scene provides material controls.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "No loaded scene provides material controls.", {}};
                 return false;
             }
-            const auto& materials = scene->GetSceneGraph()->GetMaterials();
             if (!requested)
             {
-                if (!m_ui.SelectedMaterial)
+                const auto* material = FindRendererSceneMaterial(scene, m_ui.SelectedMaterial);
+                if (!material)
                 {
-                    value = UiSettingsValue::Selector(
-                        FormatSettingsSnapshotMaterialToken(true));
-                    return true;
+                    return acceptFormatted(FormatSettingsSnapshotMaterialToken(true, 0, value, selectorError));
                 }
-                if (m_ui.SelectedMaterial->materialID < 0)
+                if (material->selectionId == InvalidSceneIndex)
                 {
-                    error = "The selected material has an invalid id.";
+                    error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "The selected material has an invalid id.", {}};
                     return false;
                 }
-                value = UiSettingsValue::Selector(
-                    FormatSettingsSnapshotMaterialToken(
-                        false, static_cast<std::uint32_t>(
-                            m_ui.SelectedMaterial->materialID)));
-                return true;
+                return acceptFormatted(FormatSettingsSnapshotMaterialToken(false, material->selectionId, value, selectorError));
             }
             if (requested->kind != UiSettingsValueKind::Selector)
             {
-                error = "material.selected expects a selector value.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "material.selected expects a selector value.", {}};
                 return false;
             }
-            std::vector<SettingsSnapshotMaterialOption> options;
-            options.reserve(materials.size());
-            for (const std::shared_ptr<Material>& material : materials)
-            {
-                if (material && material->materialID >= 0)
-                {
-                    options.push_back({
-                        static_cast<std::uint32_t>(material->materialID),
-                        material->name });
-                }
-            }
+            const SettingsSnapshotOptionSource<SettingsSnapshotMaterialOption> options{
+                &scene, scene.materials.count,
+                [](const void* context, size_t index, SettingsSnapshotMaterialOption& option, SettingsSnapshotError&) noexcept {
+                    const auto& scene = *static_cast<const RendererSceneView*>(context);
+                    const auto& material = scene.materials.data[index];
+                    if (material.selectionId == InvalidSceneIndex)
+                        option = {material.selectionId, {}, false};
+                    else
+                    {
+                        const auto name = RendererSceneText(scene, material.name);
+                        option = {material.selectionId, name.count ? std::string_view(name.data, name.count) : std::string_view{}};
+                    }
+                    return true;
+                }};
             bool none = false;
             std::uint32_t requestedId = 0u;
-            std::string canonical;
-            if (!ResolveSettingsSnapshotMaterialToken(
-                    requested->text, options, none, requestedId,
-                    canonical, error))
-            {
-                return false;
-            }
+            UiSettingsValue canonical;
+            if (!ResolveSettingsSnapshotMaterialToken(requested->Text(), options, none, requestedId, canonical, selectorError))
+                return reportSelectorError();
             if (none)
             {
                 if (!m_ui.SelectedMaterial)
                     return RejectUnchangedCommandMutation(definition.name, error);
-                m_ui.SelectedMaterial.reset();
-                m_ui.SelectedNode.reset();
-                value = UiSettingsValue::Selector(std::move(canonical));
+                value = std::move(canonical);
+                m_ui.SelectedMaterial = {};
+                m_ui.SelectedNode = {};
                 return true;
             }
-            auto match = std::find_if(
-                materials.begin(), materials.end(),
-                [requestedId](const std::shared_ptr<Material>& material)
-                {
-                    return material && material->materialID >= 0 &&
-                        static_cast<std::uint32_t>(material->materialID) ==
-                            requestedId;
-                });
-            if (match == materials.end())
+            const auto match = FindRendererSceneMaterialSelection(scene, requestedId);
+            if (!match)
             {
-                error = "Resolved material is not owned by this scene.";
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "Resolved material is not uniquely owned by this scene.", {}};
                 return false;
             }
-            if (*match == m_ui.SelectedMaterial)
+            if (match == m_ui.SelectedMaterial)
                 return RejectUnchangedCommandMutation(definition.name, error);
-            m_ui.SelectedMaterial = *match;
-            value = UiSettingsValue::Selector(std::move(canonical));
+            value = std::move(canonical);
+            m_ui.SelectedMaterial = match;
             return true;
         }
         default:
             break;
         }
-        error = "typed setting operation is missing for '" +
-            std::string(definition.name) + "'.";
+        error = ComposeSettingsSnapshotError({"typed setting operation is missing for '", definition.name, "'."});
         return false;
     }
 
@@ -1237,7 +1202,7 @@ auto UIRenderer::ApplySettingMutationEffects(
             m_ui.SelectedMaterial;
         if (notifiedMaterial)
         {
-            m_app->NotifyMaterialCommandChanged(m_ui.SelectedMaterial);
+            m_app->NotifyMaterialCommandChanged();
         }
         if (hasEffect(UiSettingsMutationEffect::RendererHistory) &&
             !notifiedMaterial)
@@ -1249,7 +1214,7 @@ auto UIRenderer::ApplySettingMutationEffects(
 auto UIRenderer::ResolveSettingDefaultValue(
         const UiSettingsCommandDefinition& definition,
         UiSettingsValue& value,
-        std::string& error) -> bool {
+        SettingsSnapshotError& error) -> bool {
         if (definition.id == SettingId::PathingMinimumBounces)
         {
             value = UiSettingsValue::Integer(std::min(
@@ -1262,9 +1227,14 @@ auto UIRenderer::ResolveSettingDefaultValue(
         case UiSettingsDefaultPolicy::RetainedBistro:
         case UiSettingsDefaultPolicy::FlashlightDefault:
         case UiSettingsDefaultPolicy::NoMaterial:
-            if (GetDeclaredUiSettingsDefaultValue(definition, value))
+        {
+            SettingsSnapshotError valueError;
+            if (GetDeclaredUiSettingsDefaultValue(definition, value, valueError))
                 return true;
+            if (valueError.code == SettingsSnapshotErrorCode::OutOfMemory)
+                return ReportSettingsValueError(valueError, error);
             break;
+        }
         case UiSettingsDefaultPolicy::EnvironmentExposure:
             value = UiSettingsValue::Float(
                 GetImageBasedLightingSourceInfo(m_ui.EnvironmentSource)
@@ -1279,24 +1249,22 @@ auto UIRenderer::ResolveSettingDefaultValue(
         }
         case UiSettingsDefaultPolicy::SceneDefaultLight:
         {
-            const auto& lights = m_app->GetEditableLights();
-            const std::shared_ptr<Light> selected = GetDefaultCommandLight();
-            const auto found = std::find(lights.begin(), lights.end(), selected);
-            if (selected && found != lights.end())
+            const auto lights = m_app->GetEditableLights();
+            const auto selected = GetDefaultCommandLight();
+            const uint32_t index = lights.Ordinal(selected);
+            if (selected && index != InvalidSceneIndex)
             {
-                value = UiSettingsValue::Selector(
-                    FormatSettingsSnapshotLightToken(
-                        static_cast<std::size_t>(
-                            std::distance(lights.begin(), found)),
-                        selected->GetName()));
-                return true;
+                SettingsSnapshotError valueError;
+                return AcceptFormattedSelector(FormatSettingsSnapshotLightToken(
+                        index, m_app->GetSceneLightNameView(selected), value, valueError), value, valueError) ||
+                    ReportSettingsValueError(valueError, error);
             }
             break;
         }
         case UiSettingsDefaultPolicy::SceneAuthored:
         case UiSettingsDefaultPolicy::SelectedLightColor:
         {
-            const std::shared_ptr<Light> selected = EnsureCommandSelectedLight();
+            const auto selected = EnsureCommandSelectedLight();
             if (!selected)
                 break;
             if (definition.typedDefault.policy ==
@@ -1312,20 +1280,19 @@ auto UIRenderer::ResolveSettingDefaultValue(
                     0.f }, 3u);
                 return true;
             }
-            const LightDefaultState& defaults =
-                GetCommandLightDefaults(selected);
+            UiLightDefaults defaults;
+            if (!GetCommandLightDefaults(selected, defaults, error)) return false;
             switch (definition.id)
             {
             case SettingId::LightSelectedAzimuth:
             case SettingId::LightSelectedElevation:
             {
-                const bool directional = selected->GetLightType() ==
-                    UVSR_LIGHT_TYPE_DIRECTIONAL;
-                const auto angles = GetCommandLightAngles(
+                const bool directional = defaults.type == RendererSceneLightKind::Directional;
+                const auto angles = GetRendererSceneLightAngles(
                     defaults.direction, directional);
                 value = UiSettingsValue::Float(
                     definition.id == SettingId::LightSelectedAzimuth
-                        ? angles.first : angles.second);
+                        ? angles.azimuth : angles.elevation);
                 return true;
             }
             case SettingId::LightSelectedColor:
@@ -1352,53 +1319,60 @@ auto UIRenderer::ResolveSettingDefaultValue(
         }
         case UiSettingsDefaultPolicy::MaterialAuthored:
         {
-            const std::shared_ptr<Material> material = m_ui.SelectedMaterial;
-            const Material* original = material
-                ? m_app->GetOriginalMaterial(material)
-                : nullptr;
-            if (!original)
+            const auto* material = m_app->GetSceneMaterial(m_ui.SelectedMaterial);
+            if (!material)
                 break;
-            Material defaults = *original;
+            auto defaults = material->originalValues;
             return BindCatalogField(definition, nullptr, defaults, value, error);
         }
         case UiSettingsDefaultPolicy::HighestMemoryAdapter:
             break;
         }
-        error = "No contextual default is available for '" +
-            std::string(definition.name) + "'.";
+        error = ComposeSettingsSnapshotError({"No contextual default is available for '", definition.name, "'."});
         return false;
     }
 
 auto UIRenderer::ReadSettingValue(
         SettingId id,
-        std::string& value,
-        std::string& error) -> bool {
-        const UiSettingsCommandDefinition* definition =
-            FindSettingsCommandDefinition(id);
+        SettingsSnapshotText& value,
+        SettingsSnapshotError& error) -> bool {
+        error = {};
+        const UiSettingsCommandDefinition* definition = FindSettingsCommandDefinition(id);
         if (!definition || definition->kind == UiSettingsCommandKind::Action)
         {
-            error = "unknown setting id";
+            error.code = SettingsSnapshotErrorCode::InvalidInput;
+            error.message = "unknown setting id";
+            return false;
+        }
+        if (!IsSettingAvailable(id))
+        {
+            error.code = SettingsSnapshotErrorCode::InvalidInput;
+            error.message = "setting is not available in the current context";
             return false;
         }
         UiSettingsValue typed;
-        return ReadSettingValue(id, typed, error) &&
-            FormatUiSettingsValue(*definition, typed, value, error);
+        if (!DispatchTypedSetting(*definition, nullptr, typed, error))
+        {
+            if (error.code == SettingsSnapshotErrorCode::None) error.code = SettingsSnapshotErrorCode::InvalidInput;
+            return false;
+        }
+        return FormatUiSettingsValue(*definition, typed, value, error);
     }
 
 auto UIRenderer::ReadSettingValue(
         SettingId id,
         UiSettingsValue& value,
-        std::string& error) -> bool {
+        SettingsSnapshotError& error) -> bool {
         const UiSettingsCommandDefinition* definition =
             FindSettingsCommandDefinition(id);
         if (!definition || definition->kind == UiSettingsCommandKind::Action)
         {
-            error = "unknown setting id";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "unknown setting id", {}};
             return false;
         }
         if (!IsSettingAvailable(id))
         {
-            error = "setting is not available in the current context";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "setting is not available in the current context", {}};
             return false;
         }
         return DispatchTypedSetting(*definition, nullptr, value, error);
@@ -1407,27 +1381,28 @@ auto UIRenderer::ReadSettingValue(
 auto UIRenderer::ApplySettingValue(
         SettingId id,
         std::string_view canonicalValue,
-        std::string& error) -> bool {
+        SettingsSnapshotError& error) -> bool {
         const UiSettingsCommandDefinition* definition =
             FindSettingsCommandDefinition(id);
         if (!definition || definition->kind == UiSettingsCommandKind::Action ||
             !definition->Supports(UiSettingsCommandVerb::Set))
         {
-            error = "setting is not mutable";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "setting is not mutable", {}};
             return false;
         }
         SettingsSnapshotValidationContext context;
-        if (id == SettingId::MaterialSelectedOpacity && m_ui.SelectedMaterial)
+        if (const auto* material = m_app->GetSceneMaterial(m_ui.SelectedMaterial);
+            id == SettingId::MaterialSelectedOpacity && material)
         {
             context.hasMaterialBaseTexture = true;
-            context.materialHasBaseTexture = static_cast<bool>(
-                m_ui.SelectedMaterial->baseOrDiffuseTexture);
+            context.materialHasBaseTexture = material->values.textures[uint32_t(RendererSceneMaterialTextureSlot::BaseOrDiffuse)] != InvalidSceneIndex;
         }
         UiSettingsValue typed;
+        SettingsSnapshotError valueError;
         if (!ParseCanonicalUiSettingsValue(
-                *definition, canonicalValue, typed, error, context))
+                *definition, canonicalValue, typed, valueError, context))
         {
-            return false;
+            return ReportSettingsValueError(valueError, error);
         }
         return ApplySettingValue(id, typed, error);
     }
@@ -1435,42 +1410,43 @@ auto UIRenderer::ApplySettingValue(
 auto UIRenderer::ApplySettingValue(
         SettingId id,
         const UiSettingsValue& requested,
-        std::string& error,
+        SettingsSnapshotError& error,
         bool deferMutationEffects) -> bool {
         const UiSettingsCommandDefinition* definition =
             FindSettingsCommandDefinition(id);
         if (!definition || definition->kind == UiSettingsCommandKind::Action ||
             !definition->Supports(UiSettingsCommandVerb::Set))
         {
-            error = "setting is not mutable";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "setting is not mutable", {}};
             return false;
         }
         if (!CheckCommandMutationAllowed(*definition, error) ||
             !IsSettingAvailable(id))
         {
-            if (error.empty())
-                error = "setting is not available in the current context";
+            if (error.MessageView().empty())
+                error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "setting is not available in the current context", {}};
             return false;
         }
         SettingsSnapshotValidationContext context;
-        if (id == SettingId::MaterialSelectedOpacity && m_ui.SelectedMaterial)
+        if (const auto* material = m_app->GetSceneMaterial(m_ui.SelectedMaterial);
+            id == SettingId::MaterialSelectedOpacity && material)
         {
             context.hasMaterialBaseTexture = true;
-            context.materialHasBaseTexture = static_cast<bool>(
-                m_ui.SelectedMaterial->baseOrDiffuseTexture);
+            context.materialHasBaseTexture = material->values.textures[uint32_t(RendererSceneMaterialTextureSlot::BaseOrDiffuse)] != InvalidSceneIndex;
         }
+        SettingsSnapshotError valueError;
         if (definition->kind != UiSettingsCommandKind::DynamicSelection &&
-            !ValidateUiSettingsValue(*definition, requested, error, context))
+            !ValidateUiSettingsValue(*definition, requested, valueError, context))
         {
-            return false;
+            return ReportSettingsValueError(valueError, error);
         }
         UiSettingsValue applied;
         const bool succeeded = DispatchTypedSetting(
             *definition, &requested, applied, error,
             false, deferMutationEffects);
-        if (!succeeded && error.rfind("No change: ", 0u) == 0u)
+        if (!succeeded && error.MessageView().rfind("No change: ", 0u) == 0u)
         {
-            error.clear();
+            error = {};
             return true;
         }
         if (succeeded && !deferMutationEffects)
@@ -1480,13 +1456,13 @@ auto UIRenderer::ApplySettingValue(
 
 auto UIRenderer::ResetSettingValue(
         SettingId id,
-        std::string& error) -> bool {
+        SettingsSnapshotError& error) -> bool {
         const UiSettingsCommandDefinition* definition =
             FindSettingsCommandDefinition(id);
         if (!definition || definition->kind == UiSettingsCommandKind::Action ||
             !definition->Supports(UiSettingsCommandVerb::Reset))
         {
-            error = "setting has no reset operation";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "setting has no reset operation", {}};
             return false;
         }
         if (!CheckCommandMutationAllowed(*definition, error))
@@ -1502,8 +1478,9 @@ auto UIRenderer::IsSettingAvailable(SettingId id) const -> bool {
             FindSettingsCommandDefinition(id);
         if (!definition)
             return false;
-        const std::shared_ptr<Light>& light = m_SelectedLight;
-        const std::shared_ptr<Material>& material = m_ui.SelectedMaterial;
+        const auto* light = m_app->GetSceneLight(m_SelectedLight);
+        const auto* selectedMaterial = m_app->GetSceneMaterial(m_ui.SelectedMaterial);
+        const auto* material = selectedMaterial ? &selectedMaterial->values : nullptr;
         switch (definition->availability)
         {
         case UiSettingsAvailability::Always:
@@ -1511,26 +1488,23 @@ auto UIRenderer::IsSettingAvailable(SettingId id) const -> bool {
         case UiSettingsAvailability::SelectedLight:
             return static_cast<bool>(light);
         case UiSettingsAvailability::DirectionalOrSpotLight:
-            return light && !m_app->IsFlashlight(light) &&
-                (light->GetLightType() == LightType_Directional ||
-                 light->GetLightType() == LightType_Spot);
+            return light && !m_app->IsFlashlight(m_SelectedLight) &&
+                (light->kind == RendererSceneLightKind::Directional || light->kind == RendererSceneLightKind::Spot);
         case UiSettingsAvailability::DirectionalLight:
-            return light && light->GetLightType() == LightType_Directional;
+            return light && light->kind == RendererSceneLightKind::Directional;
         case UiSettingsAvailability::PointOrSpotLight:
-            return light && !m_app->IsFlashlight(light) &&
-                (light->GetLightType() == LightType_Point ||
-                 light->GetLightType() == LightType_Spot);
+            return light && !m_app->IsFlashlight(m_SelectedLight) &&
+                (light->kind == RendererSceneLightKind::Point || light->kind == RendererSceneLightKind::Spot);
         case UiSettingsAvailability::SpotLight:
-            return light && !m_app->IsFlashlight(light) &&
-                light->GetLightType() == LightType_Spot;
+            return light && !m_app->IsFlashlight(m_SelectedLight) && light->kind == RendererSceneLightKind::Spot;
         case UiSettingsAvailability::SelectedFlashlight:
-            return light && m_app->IsFlashlight(light);
+            return light && m_app->IsFlashlight(m_SelectedLight);
         case UiSettingsAvailability::SelectedMaterial:
             return static_cast<bool>(material);
         case UiSettingsAvailability::BaseTexture:
-            return material && material->baseOrDiffuseTexture;
+            return material && (material->textures[uint32_t(RendererSceneMaterialTextureSlot::BaseOrDiffuse)] != InvalidSceneIndex);
         case UiSettingsAvailability::MetalSpecularTexture:
-            return material && material->metalRoughOrSpecularTexture;
+            return material && (material->textures[uint32_t(RendererSceneMaterialTextureSlot::MetalRoughOrSpecular)] != InvalidSceneIndex);
         case UiSettingsAvailability::SpecularGlossMaterial:
             return material && material->useSpecularGlossModel;
         case UiSettingsAvailability::MetalRoughMaterial:
@@ -1539,37 +1513,37 @@ auto UIRenderer::IsSettingAvailable(SettingId id) const -> bool {
             return material && IsCommandMaterialAlphaBlended(material->domain);
         case UiSettingsAvailability::AlphaTestedMaterial:
             return material && IsCommandMaterialAlphaTested(material->domain) &&
-                material->baseOrDiffuseTexture;
+                (material->textures[uint32_t(RendererSceneMaterialTextureSlot::BaseOrDiffuse)] != InvalidSceneIndex);
         case UiSettingsAvailability::NormalTexture:
-            return material && material->normalTexture;
+            return material && (material->textures[uint32_t(RendererSceneMaterialTextureSlot::Normal)] != InvalidSceneIndex);
         case UiSettingsAvailability::OcclusionTexture:
-            return material && material->occlusionTexture;
+            return material && (material->textures[uint32_t(RendererSceneMaterialTextureSlot::Occlusion)] != InvalidSceneIndex);
         case UiSettingsAvailability::EmissiveTexture:
-            return material && material->emissiveTexture;
+            return material && (material->textures[uint32_t(RendererSceneMaterialTextureSlot::Emissive)] != InvalidSceneIndex);
         case UiSettingsAvailability::TransmissiveMaterial:
             return material && IsCommandMaterialTransmissive(material->domain);
         case UiSettingsAvailability::TransmissionTexture:
             return material && IsCommandMaterialTransmissive(material->domain) &&
-                material->transmissionTexture;
+                (material->textures[uint32_t(RendererSceneMaterialTextureSlot::Transmission)] != InvalidSceneIndex);
         case UiSettingsAvailability::OpacityTexture:
-            return material && material->opacityTexture;
+            return material && (material->textures[uint32_t(RendererSceneMaterialTextureSlot::Opacity)] != InvalidSceneIndex);
         }
         return false;
     }
 
 auto UIRenderer::IsSettingAtContextualDefault(
         SettingId id,
-        std::string& error) -> bool {
+        SettingsSnapshotError& error) -> bool {
         const UiSettingsCommandDefinition* definition =
             FindSettingsCommandDefinition(id);
         if (!definition || !definition->Supports(UiSettingsCommandVerb::Reset))
         {
-            error = "setting has no contextual reset default";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "setting has no contextual reset default", {}};
             return false;
         }
         if (!IsSettingAvailable(id))
         {
-            error = "setting is not available in the current context";
+            error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "setting is not available in the current context", {}};
             return false;
         }
 
@@ -1583,293 +1557,284 @@ auto UIRenderer::IsSettingAtContextualDefault(
         return current == expected;
     }
 
-auto UIRenderer::MakeSettingsSnapshotRuntimeAccess() -> SettingsSnapshotRuntimeAccess {
-        SettingsSnapshotRuntimeAccess access;
-        access.sceneReady =
-            !m_app->IsSceneBusy() && m_app->IsSceneLoaded();
-        access.validateValue =
-            [this](SettingId id,
-               std::string_view requestedValue,
-               std::string_view dependencySelector,
-               std::string& validationError)
-            {
-                const UiSettingsCommandDefinition* definition =
-                    FindSettingsCommandDefinition(id);
-                if (!definition ||
-                    !IsSettingsSnapshotValue(*definition))
-                {
-                    validationError =
-                        "setting is absent from the live SnapshotCatalog";
-                    return false;
-                }
-
-                SettingsSnapshotValidationContext context;
-                if (id == SettingId::MaterialSelectedOpacity)
-                {
-                    std::shared_ptr<Material> target = m_ui.SelectedMaterial;
-                    if (!dependencySelector.empty())
-                    {
-                        target.reset();
-                        const std::shared_ptr<Scene> scene = m_app->GetScene();
-                        if (scene && scene->GetSceneGraph())
-                        {
-                            for (const std::shared_ptr<Material>& material :
-                                scene->GetSceneGraph()->GetMaterials())
-                            {
-                                if (material && material->materialID >= 0 &&
-                                    FormatSettingsSnapshotMaterialToken(false,
-                                        static_cast<std::uint32_t>(material->materialID)) ==
-                                        dependencySelector)
-                                {
-                                    target = material;
-                                    break;
-                                }
-                            }
-                        }
-                        if (!target && dependencySelector != "none")
-                        {
-                            // A different scene's material is validated again after selection.
-                            context.hasMaterialBaseTexture = true;
-                            context.materialHasBaseTexture = true;
-                        }
-                    }
-                    if (target)
-                    {
-                        context.hasMaterialBaseTexture = true;
-                        context.materialHasBaseTexture =
-                            static_cast<bool>(target->baseOrDiffuseTexture);
-                    }
-                }
-                return ValidateSettingsSnapshotCatalogValue(
-                    *definition,
-                    requestedValue,
-                    validationError,
-                    context);
-            };
-
-        const auto readSnapshotValue =
-            [this](SettingId id,
-                   bool raw,
-                   std::string& liveValue,
-                   std::string& readError)
-            {
-                const UiSettingsCommandDefinition* definition =
-                    FindSettingsCommandDefinition(id);
-                if (!definition ||
-                    !IsSettingsSnapshotValue(*definition))
-                {
-                    readError =
-                        "setting is absent from the live SnapshotCatalog";
-                    return false;
-                }
-
-                const bool latentRead = raw ||
-                    definition->snapshotRead ==
-                        UiSettingsSnapshotReadPolicy::LatentValue;
-                if (!latentRead)
-                {
-                    if (ReadSettingValue(id, liveValue, readError))
-                        return true;
-                    if (!IsSettingAvailable(id))
-                    {
-                        liveValue = "<unavailable>";
-                        readError.clear();
-                        return true;
-                    }
-                    return false;
-                }
-                if (raw &&
-                    definition->storage ==
-                        UiSettingsStoragePolicy::ContextOnly &&
-                    !IsSettingAvailable(id))
-                {
-                    liveValue = "<unavailable>";
-                    readError.clear();
-                    return true;
-                }
-
-                UiSettingsValue typed;
-                if (DispatchTypedSetting(
-                        *definition,
-                        nullptr,
-                        typed,
-                        readError,
-                        latentRead) &&
-                    FormatUiSettingsValue(
-                        *definition,
-                        typed,
-                        liveValue,
-                        readError))
-                {
-                    return true;
-                }
-                if (definition->dynamic)
-                {
-                    liveValue = "<unavailable>";
-                    readError.clear();
-                    return true;
-                }
-                return false;
-            };
-        access.readValue =
-            [readSnapshotValue](SettingId id,
-               std::string& liveValue,
-               std::string& readError)
-            {
-                return readSnapshotValue(
-                    id, false, liveValue, readError);
-            };
-        access.readRawValue =
-            [readSnapshotValue](SettingId id,
-               std::string& liveValue,
-               std::string& readError)
-            {
-                return readSnapshotValue(
-                    id, true, liveValue, readError);
-            };
-        access.writeValue =
-            [this](SettingId id,
-                   std::string_view requestedValue,
-                   std::string& writeError)
-            {
-                const UiSettingsCommandDefinition* definition =
-                    FindSettingsCommandDefinition(id);
-                if (!definition ||
-                    !IsSettingsSnapshotValue(*definition) ||
-                    definition->kind ==
-                        UiSettingsCommandKind::DynamicSelection ||
-                    !definition->Supports(UiSettingsCommandVerb::Set))
-                {
-                    writeError =
-                        "setting is not a mutable SnapshotCatalog value";
-                    return false;
-                }
-                if (definition->storage != UiSettingsStoragePolicy::Latent)
-                    return ApplySettingValue(id, requestedValue, writeError);
-                if (!CheckCommandMutationAllowed(*definition, writeError))
-                    return false;
-
-                SettingsSnapshotValidationContext context;
-                if (id == SettingId::MaterialSelectedOpacity &&
-                    m_ui.SelectedMaterial)
-                {
-                    context.hasMaterialBaseTexture = true;
-                    context.materialHasBaseTexture = static_cast<bool>(
-                        m_ui.SelectedMaterial->baseOrDiffuseTexture);
-                }
-                UiSettingsValue typed;
-                if (!ParseCanonicalUiSettingsValue(
-                        *definition,
-                        requestedValue,
-                        typed,
-                        writeError,
-                        context))
-                {
-                    return false;
-                }
-                UiSettingsValue applied;
-                const bool succeeded = DispatchTypedSetting(
-                    *definition,
-                    &typed,
-                    applied,
-                    writeError,
-                    true);
-                if (!succeeded &&
-                    writeError.rfind("No change: ", 0u) == 0u)
-                {
-                    writeError.clear();
-                    return true;
-                }
-                if (succeeded)
-                    ApplySettingMutationEffects(*definition);
-                return succeeded;
-            };
-        access.driveSelector =
-            [this](SettingId id,
-                   std::string_view canonicalToken,
-                   bool begin,
-                   bool rollback,
-                   std::string& selectorError)
-            {
-                const auto ready = [&]
-                {
-                    std::string current;
-                    if (ReadSettingValue(id, current, selectorError) && current == canonicalToken)
-                        return SettingsSnapshotSelectorTransition::Ready;
-                    if (selectorError.empty())
-                        selectorError = id == SettingId::SceneCurrent
-                            ? "loaded scene did not publish the requested canonical token"
-                            : "selector did not publish its canonical token";
-                    return SettingsSnapshotSelectorTransition::Failed;
-                };
-                if (!begin)
-                {
-                    if (id != SettingId::SceneCurrent)
-                    {
-                        selectorError =
-                            "selector remained pending without a poll contract";
-                        return SettingsSnapshotSelectorTransition::Failed;
-                    }
-                    if (m_app->IsSceneBusy())
-                        return SettingsSnapshotSelectorTransition::Pending;
-                    if (m_app->HasSceneLoadFailure() ||
-                        !m_app->IsSceneLoaded())
-                    {
-                        selectorError = "selected scene failed to load";
-                        return SettingsSnapshotSelectorTransition::Failed;
-                    }
-                    return ready();
-                }
-
-                try
-                {
-                    if (!ApplySettingValue(
-                            id, canonicalToken, selectorError))
-                    {
-                        return SettingsSnapshotSelectorTransition::Failed;
-                    }
-                    if (id != SettingId::SceneCurrent)
-                        return ready();
-                }
-                catch (const std::exception& exception)
-                {
-                    selectorError = std::string(
-                        rollback ? "selector rollback threw: " :
-                            "selector apply threw: ") + exception.what();
-                    return SettingsSnapshotSelectorTransition::Failed;
-                }
-                return SettingsSnapshotSelectorTransition::Pending;
-            };
-        return access;
+bool UIRenderer::ValidateSettingsSnapshotValue(SettingId id, std::string_view requestedValue,
+    std::string_view dependencySelector, SettingsSnapshotError& validationError) noexcept
+{
+    const UiSettingsCommandDefinition* definition =
+        FindSettingsCommandDefinition(id);
+    if (!definition ||
+        !IsSettingsSnapshotValue(*definition))
+    {
+        validationError = {SettingsSnapshotErrorCode::InvalidInput, 0, 0,
+            "setting is absent from the live SnapshotCatalog", {}};
+        return false;
     }
 
-auto UIRenderer::RefreshSettingsSnapshot() -> void {
-        m_SettingsSnapshots.Refresh(
-            MakeSettingsSnapshotRuntimeAccess().readValue);
+    SettingsSnapshotValidationContext context;
+    if (id == SettingId::MaterialSelectedOpacity)
+    {
+        const auto* target = m_app->GetSceneMaterial(m_ui.SelectedMaterial);
+        if (!dependencySelector.empty())
+        {
+            target = nullptr;
+            const auto scene = m_app->GetSceneView();
+            if (scene.generation)
+            {
+                for (size_t index = 0; index < scene.materials.count; ++index)
+                {
+                    const auto& material = scene.materials.data[index];
+                    if (material.selectionId == InvalidSceneIndex) continue;
+                    UiSettingsValue selector;
+                    if (!FormatSettingsSnapshotMaterialToken(false, material.selectionId, selector, validationError)) return false;
+                    if (selector.Text() == dependencySelector)
+                    {
+                        target = &material;
+                        break;
+                    }
+                }
+            }
+            if (!target && dependencySelector != "none")
+            {
+                // A different scene's material is validated again after selection.
+                context.hasMaterialBaseTexture = true;
+                context.materialHasBaseTexture = true;
+            }
+        }
+        if (target)
+        {
+            context.hasMaterialBaseTexture = true;
+            context.materialHasBaseTexture =
+                target->values.textures[uint32_t(RendererSceneMaterialTextureSlot::BaseOrDiffuse)] != InvalidSceneIndex;
+        }
+    }
+    return ValidateSettingsSnapshotCatalogValue(
+        *definition,
+        requestedValue,
+        validationError,
+        context);
+}
+
+bool UIRenderer::ReadSettingsSnapshotValue(SettingId id, bool raw, SettingsSnapshotText& liveValue,
+    SettingsSnapshotError& readError) noexcept
+{
+    readError = {};
+    const UiSettingsCommandDefinition* definition = FindSettingsCommandDefinition(id);
+    if (!definition || !IsSettingsSnapshotValue(*definition))
+    {
+        readError.code = SettingsSnapshotErrorCode::InvalidInput;
+        readError.message = "setting is absent from the live SnapshotCatalog";
+        return false;
+    }
+    const bool latentRead = raw ||
+        definition->snapshotRead == UiSettingsSnapshotReadPolicy::LatentValue;
+    if (!latentRead)
+    {
+        if (ReadSettingValue(id, liveValue, readError)) return true;
+        if (readError.code == SettingsSnapshotErrorCode::InvalidInput && !IsSettingAvailable(id))
+            return liveValue.Assign("<unavailable>", readError);
+        return false;
+    }
+    if (raw && definition->storage == UiSettingsStoragePolicy::ContextOnly && !IsSettingAvailable(id))
+        return liveValue.Assign("<unavailable>", readError);
+
+    UiSettingsValue typed;
+    SettingsSnapshotError dispatchError;
+    SettingsSnapshotErrorCode dispatchFailure = SettingsSnapshotErrorCode::None;
+    const bool dispatched = DispatchTypedSetting(*definition, nullptr, typed,
+        dispatchError, latentRead, false, &dispatchFailure);
+    if (dispatched && FormatUiSettingsValue(*definition, typed, liveValue, readError))
+        return true;
+    // checked formatter failures differ from an unavailable dynamic setting.
+    if (dispatchFailure != SettingsSnapshotErrorCode::None ||
+        (!dispatched && dispatchError.code != SettingsSnapshotErrorCode::None &&
+            dispatchError.code != SettingsSnapshotErrorCode::InvalidInput))
+    {
+        readError = std::move(dispatchError);
+        return false;
+    }
+    if (readError.code != SettingsSnapshotErrorCode::None &&
+        readError.code != SettingsSnapshotErrorCode::InvalidInput)
+        return false;
+    if (definition->dynamic) return liveValue.Assign("<unavailable>", readError);
+    if (!dispatched)
+    {
+        readError = std::move(dispatchError);
+        if (readError.code == SettingsSnapshotErrorCode::None) readError.code = SettingsSnapshotErrorCode::InvalidInput;
+        return false;
+    }
+    return false;
+}
+
+bool UIRenderer::WriteSettingsSnapshotValue(SettingId id, std::string_view requestedValue,
+    SettingsSnapshotError& error) noexcept
+{
+    error = {};
+    const UiSettingsCommandDefinition* definition =
+        FindSettingsCommandDefinition(id);
+    if (!definition ||
+        !IsSettingsSnapshotValue(*definition) ||
+        definition->kind ==
+            UiSettingsCommandKind::DynamicSelection ||
+        !definition->Supports(UiSettingsCommandVerb::Set))
+    {
+        error = {SettingsSnapshotErrorCode::InvalidInput, 0, 0,
+            "setting is not a mutable SnapshotCatalog value", {}};
+        return false;
+    }
+    if (definition->storage != UiSettingsStoragePolicy::Latent)
+    {
+        const bool succeeded = ApplySettingValue(id, requestedValue, error);
+        if (!succeeded && error.code == SettingsSnapshotErrorCode::None) error.code = SettingsSnapshotErrorCode::InvalidInput;
+        return succeeded;
+    }
+    if (!CheckCommandMutationAllowed(*definition, error)) return false;
+
+    SettingsSnapshotValidationContext context;
+    if (const auto* material = m_app->GetSceneMaterial(m_ui.SelectedMaterial);
+        id == SettingId::MaterialSelectedOpacity && material)
+    {
+        context.hasMaterialBaseTexture = true;
+        context.materialHasBaseTexture = material->values.textures[uint32_t(RendererSceneMaterialTextureSlot::BaseOrDiffuse)] != InvalidSceneIndex;
+    }
+    UiSettingsValue typed;
+    SettingsSnapshotError valueError;
+    if (!ParseCanonicalUiSettingsValue(
+            *definition,
+            requestedValue,
+            typed,
+            valueError,
+            context))
+    {
+        error = std::move(valueError);
+        return false;
+    }
+    UiSettingsValue applied;
+    const bool succeeded = DispatchTypedSetting(
+        *definition,
+        &typed,
+        applied,
+        error,
+        true);
+    if (!succeeded &&
+        error.MessageView().rfind("No change: ", 0u) == 0u)
+    {
+        error = {};
+        return true;
+    }
+    if (succeeded)
+        ApplySettingMutationEffects(*definition);
+    else if (error.code == SettingsSnapshotErrorCode::None)
+        error.code = SettingsSnapshotErrorCode::InvalidInput;
+    return succeeded;
+}
+
+SettingsSnapshotSelectorTransition UIRenderer::DriveSettingsSnapshotSelector(SettingId id,
+    std::string_view canonicalToken, bool begin, bool /*rollback*/, SettingsSnapshotError& selectorError) noexcept
+{
+    // staged apply and rollback drive only these checked selector owners.
+    if (id != SettingId::SceneCurrent && id != SettingId::LightSelected && id != SettingId::MaterialSelected)
+    {
+        selectorError = {SettingsSnapshotErrorCode::InvalidInput, 0, 0,
+            "setting does not support staged selection", {}};
+        return SettingsSnapshotSelectorTransition::Failed;
+    }
+    const auto ready = [&]
+    {
+        SettingsSnapshotText current;
+        SettingsSnapshotError readError;
+        if (ReadSettingValue(id, current, readError) && current.View() == canonicalToken)
+            return SettingsSnapshotSelectorTransition::Ready;
+        if (readError.code != SettingsSnapshotErrorCode::None)
+            selectorError = std::move(readError);
+        if (selectorError.MessageView().empty())
+            selectorError = {SettingsSnapshotErrorCode::InvalidInput, 0, 0,
+                id == SettingId::SceneCurrent ? "loaded scene did not publish the requested canonical token"
+                    : "selector did not publish its canonical token", {}};
+        return SettingsSnapshotSelectorTransition::Failed;
+    };
+    if (!begin)
+    {
+        if (id != SettingId::SceneCurrent)
+        {
+            selectorError = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "selector remained pending without a poll contract", {}};
+            return SettingsSnapshotSelectorTransition::Failed;
+        }
+        if (m_app->IsSceneBusy())
+            return SettingsSnapshotSelectorTransition::Pending;
+        if (m_app->HasSceneLoadFailure() ||
+            !m_app->IsSceneLoaded())
+        {
+            selectorError = {SettingsSnapshotErrorCode::InvalidInput, 0, 0, "selected scene failed to load", {}};
+            return SettingsSnapshotSelectorTransition::Failed;
+        }
+        return ready();
+    }
+
+    if (!ApplySettingValue(id, canonicalToken, selectorError))
+    {
+        if (selectorError.code == SettingsSnapshotErrorCode::None) selectorError.code = SettingsSnapshotErrorCode::InvalidInput;
+        return SettingsSnapshotSelectorTransition::Failed;
+    }
+    if (id != SettingId::SceneCurrent)
+        return ready();
+    return SettingsSnapshotSelectorTransition::Pending;
+}
+
+auto UIRenderer::MakeSettingsSnapshotRuntimeAccess() -> SettingsSnapshotRuntimeAccess
+{
+    return {
+        !m_app->IsSceneBusy() && m_app->IsSceneLoaded(),
+        this,
+        [](void* context, SettingId id, std::string_view requested,
+            std::string_view dependency, SettingsSnapshotError& error) noexcept {
+            return static_cast<UIRenderer*>(context)->ValidateSettingsSnapshotValue(id, requested, dependency, error);
+        },
+        [](void* context, SettingId id, SettingsSnapshotText& value, SettingsSnapshotError& error) noexcept {
+            return static_cast<UIRenderer*>(context)->ReadSettingsSnapshotValue(id, false, value, error);
+        },
+        [](void* context, SettingId id, SettingsSnapshotText& value, SettingsSnapshotError& error) noexcept {
+            return static_cast<UIRenderer*>(context)->ReadSettingsSnapshotValue(id, true, value, error);
+        },
+        [](void* context, SettingId id, std::string_view requested, SettingsSnapshotError& error) noexcept {
+            return static_cast<UIRenderer*>(context)->WriteSettingsSnapshotValue(id, requested, error);
+        },
+        [](void* context, SettingId id, std::string_view token, bool begin, bool rollback,
+            SettingsSnapshotError& error) noexcept {
+            return static_cast<UIRenderer*>(context)->DriveSettingsSnapshotSelector(id, token, begin, rollback, error);
+        }
+    };
+}
+
+auto UIRenderer::RefreshSettingsSnapshot() -> bool {
+        SettingsSnapshotError error;
+        if (m_SettingsSnapshots.Refresh(MakeSettingsSnapshotRuntimeAccess(), error)) return true;
+        uvsr::log::warning("Could not refresh the settings snapshot: %s", error.Message());
+        return false;
     }
 
 auto UIRenderer::CopySettingsSnapshot() -> void {
-        if (!m_SettingsSnapshots.PersistToLocalCatalog())
+        if (!RefreshSettingsSnapshot()) return;
+        SettingsSnapshotError error;
+        if (!m_SettingsSnapshots.PersistToLocalCatalog(error))
         {
+            ReportPersistenceFailure(error, m_SettingsSnapshots.Code().data());
             uvsr::log::warning(
                 "The settings snapshot code was not copied because its "
                 "local catalog entry could not be saved.");
             return;
         }
-        ImGui::SetClipboardText(m_SettingsSnapshots.Code().c_str());
+        ImGui::SetClipboardText(m_SettingsSnapshots.Code().data());
     }
 
 auto UIRenderer::FailStartupSettingsSnapshot(
-        std::string_view code,
-        std::string_view error) -> void {
+        std::string_view code, std::string_view error) -> void {
         g_RestartRequested = false;
         g_RestartAdapterIndex = -1;
         g_StartupSettingsSnapshotFailed = true;
         uvsr::log::error(
             "Startup settings snapshot %s failed: %s",
-            code.empty() ? "<none>" : std::string(code).c_str(),
-            error.empty() ? "settings snapshot transaction failed" :
-                std::string(error).c_str());
+            code.empty() ? "<none>" : code.data(),
+            error.empty() ? "settings snapshot transaction failed" : error.data());
         glfwSetWindowShouldClose(
             GetDeviceManager()->GetWindow(), GLFW_TRUE);
     }
@@ -1878,30 +1843,26 @@ auto UIRenderer::HandleStagedSettingsSnapshotStep(
         const SettingsSnapshotTransactionStep& step) -> void {
         if (step.progress == SettingsSnapshotTransactionProgress::Pending)
             return;
-        const std::string code = m_PendingSettingsSnapshotCode;
+        const SettingsSnapshotText code = static_cast<SettingsSnapshotText&&>(m_PendingSettingsSnapshotCode);
         const bool failed =
             step.progress == SettingsSnapshotTransactionProgress::Failed;
-        const std::string terminalError = step.result.error.empty()
-            ? "settings snapshot transaction failed"
-            : step.result.error;
-        m_PendingSettingsSnapshotCode.clear();
+        const std::string_view terminalError = step.result.error.MessageView();
         if (failed)
         {
-            FailStartupSettingsSnapshot(code, terminalError);
+            FailStartupSettingsSnapshot(code.View(), terminalError);
             return;
         }
 
         uvsr::log::info(
             "Loaded startup settings snapshot %s (%zu values changed)",
-            code.c_str(), step.result.changedValueCount);
+            code.View().data(), step.result.changedValueCount);
     }
 
 auto UIRenderer::TryApplyStartupSettingsSnapshot() -> void {
         if (m_SettingsSnapshots.HasStagedApply())
         {
             HandleStagedSettingsSnapshotStep(
-                m_SettingsSnapshots.ContinueStagedApply(
-                    MakeSettingsSnapshotRuntimeAccess()));
+                m_SettingsSnapshots.ContinueStagedApply());
             return;
         }
         if (m_app->IsSceneBusy() || !m_app->IsSceneLoaded())
@@ -1916,7 +1877,14 @@ auto UIRenderer::TryApplyStartupSettingsSnapshot() -> void {
         }
 
         m_StartupSettingsSnapshotAttempted = true;
-        m_PendingSettingsSnapshotCode = m_StartupSettingsSnapshotCode;
+        SettingsSnapshotText pending;
+        SettingsSnapshotError error;
+        if (!pending.Assign(m_StartupSettingsSnapshotCode, error))
+        {
+            FailStartupSettingsSnapshot(m_StartupSettingsSnapshotCode, error.MessageView());
+            return;
+        }
+        m_PendingSettingsSnapshotCode = static_cast<SettingsSnapshotText&&>(pending);
         HandleStagedSettingsSnapshotStep(
             m_SettingsSnapshots.BeginLoadCodeStaged(
                 m_StartupSettingsSnapshotCode,
@@ -1924,16 +1892,134 @@ auto UIRenderer::TryApplyStartupSettingsSnapshot() -> void {
     }
 
 #if defined(UVSR_BUILD_TESTING)
+namespace
+{
+    class SettingsContractFailures
+    {
+    public:
+        void Add(std::initializer_list<std::string_view> parts) noexcept
+        {
+            if (m_Count == SIZE_MAX) m_StorageFailed = true;
+            else ++m_Count;
+            if (m_StorageFailed) return;
+            SettingsSnapshotText message;
+            SettingsSnapshotError error;
+            if (!message.AssignParts(parts, error))
+            {
+                m_StorageFailed = true;
+                return;
+            }
+            // preserve the former per-message %s boundary, including later records.
+            const auto visible = message.View().substr(0, message.View().find('\0'));
+            if (!m_Text.AssignParts({m_Text.View(), "settings-contract: ", visible, "\n"}, error))
+                m_StorageFailed = true;
+        }
+
+        bool Report() const noexcept
+        {
+            if (!m_Count && !m_StorageFailed) return false;
+            const auto text = m_Text.View();
+            if (!text.empty()) std::fwrite(text.data(), 1, text.size(), stderr);
+            if (m_StorageFailed)
+                std::fprintf(stderr, "settings-contract: could not retain the complete failure transcript\n");
+            std::fprintf(stderr, "settings-contract: FAILED (%zu mismatches)\n", m_Count);
+            return true;
+        }
+
+    private:
+        SettingsSnapshotText m_Text;
+        size_t m_Count = 0;
+        bool m_StorageFailed = false;
+    };
+
+    bool PrepareSettingsContractPath(const wchar_t* directory, DWORD processId, WindowsPath& path) noexcept
+    {
+        wchar_t basename[38]; // prefix, ten DWORD digits, .txt and terminator.
+        if (swprintf_s(basename, L"uvsr-settings-contract-%lu.txt", processId) < 0)
+            return false;
+        WindowsPathResult result;
+        return JoinWindowsRelativePath(directory, basename, path, result);
+    }
+
+    bool SettingsContractDeleteFallback(DWORD error) noexcept
+    {
+        return error == ERROR_INVALID_PARAMETER || error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED;
+    }
+
+    DWORD SetSettingsContractDeleteFlag(HANDLE file) noexcept
+    {
+        FILE_DISPOSITION_INFO_EX extended{FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS};
+        if (SetFileInformationByHandle(file, FileDispositionInfoEx, &extended, sizeof(extended)))
+            return ERROR_SUCCESS;
+        const DWORD error = GetLastError();
+        if (!SettingsContractDeleteFallback(error)) return error;
+        FILE_DISPOSITION_INFO basic{TRUE};
+        return SetFileInformationByHandle(file, FileDispositionInfo, &basic, sizeof(basic)) ? ERROR_SUCCESS : GetLastError();
+    }
+
+    bool RemoveSettingsContractEntry(const wchar_t* path) noexcept
+    {
+        constexpr DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+        constexpr DWORD flags = FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT;
+        HANDLE file = CreateFileW(path, DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+            share, nullptr, OPEN_EXISTING, flags, nullptr);
+        const bool canChangeAttributes = file != INVALID_HANDLE_VALUE;
+        if (!canChangeAttributes)
+        {
+            const DWORD error = GetLastError();
+            if (error == ERROR_ACCESS_DENIED)
+            {
+                file = CreateFileW(path, DELETE, share, nullptr, OPEN_EXISTING, flags, nullptr);
+                if (file == INVALID_HANDLE_VALUE) return false;
+            }
+            else
+            {
+                return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ||
+                    error == ERROR_BAD_NETPATH || error == ERROR_INVALID_NAME ||
+                    error == ERROR_DIRECTORY || error == ERROR_NETNAME_DELETED;
+            }
+        }
+        // the former filesystem cleanup also deletes directories, reparse entries and readonly files.
+        const bool removed = [file, canChangeAttributes]() noexcept {
+            FILE_DISPOSITION_INFO_EX extended{FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS |
+                FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE};
+            if (SetFileInformationByHandle(file, FileDispositionInfoEx, &extended, sizeof(extended)))
+                return true;
+            if (!SettingsContractDeleteFallback(GetLastError())) return false;
+            DWORD error = SetSettingsContractDeleteFlag(file);
+            if (error == ERROR_SUCCESS) return true;
+            if (error != ERROR_ACCESS_DENIED || !canChangeAttributes) return false;
+            FILE_BASIC_INFO attributes;
+            if (!GetFileInformationByHandleEx(file, FileBasicInfo, &attributes, sizeof(attributes)) ||
+                !(attributes.FileAttributes & FILE_ATTRIBUTE_READONLY))
+                return false;
+            attributes.FileAttributes ^= FILE_ATTRIBUTE_READONLY;
+            if (!SetFileInformationByHandle(file, FileBasicInfo, &attributes, sizeof(attributes)))
+                return false;
+            error = SetSettingsContractDeleteFlag(file);
+            if (error == ERROR_SUCCESS) return true;
+            if (error == ERROR_ACCESS_DENIED)
+            {
+                attributes.FileAttributes |= FILE_ATTRIBUTE_READONLY;
+                (void)SetFileInformationByHandle(file, FileBasicInfo, &attributes, sizeof(attributes));
+            }
+            return false;
+        }();
+        const bool closed = CloseHandle(file) != FALSE;
+        return removed && closed;
+    }
+}
+
 auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
-        std::vector<std::string> failures;
-        const auto fail = [&](std::string message) { failures.push_back(std::move(message)); };
+        SettingsContractFailures failures;
+        const auto fail = [&](std::initializer_list<std::string_view> parts) { failures.Add(parts); };
         if (m_app->IsSceneBusy() || !m_app->IsSceneLoaded())
-            fail("default scene did not finish loading");
-        const auto isExpectedNoChange = [](std::string_view error) {
-            return error.rfind("No change: ", 0u) == 0u;
+            fail({"default scene did not finish loading"});
+        const auto isExpectedNoChange = [](const SettingsSnapshotError& error) {
+            return error.MessageView().rfind("No change: ", 0u) == 0u;
         };
         const auto checkDefault = [&](const UiSettingsCommandDefinition& definition,
-            bool read, const std::string& value, const std::string& error) {
+            bool read, std::string_view value, const SettingsSnapshotError& error) {
             bool matches = false;
             switch (definition.typedDefault.policy)
             {
@@ -1947,17 +2033,26 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
                 break;
             }
             case UiSettingsDefaultPolicy::RetainedBistro:
-                matches = read && NormalizeCommandAscii(m_app->GetCurrentSceneName(), true)
-                    .find("bistrointeriorretextured") != std::string::npos;
+                matches = read && ContainsNormalizedCommandAscii(m_app->GetCurrentSceneName(), "bistrointeriorretextured", true);
                 break;
             case UiSettingsDefaultPolicy::SceneDefaultLight:
             {
-                const auto selected = EnsureCommandSelectedLight();
-                const auto& lights = m_app->GetEditableLights();
-                const auto position = std::find(lights.begin(), lights.end(), selected);
-                matches = read && selected && selected == GetDefaultCommandLight() &&
-                    position != lights.end() && value == FormatSettingsSnapshotLightToken(
-                        static_cast<size_t>(std::distance(lights.begin(), position)), selected->GetName());
+                const auto lights = m_app->GetEditableLights();
+                const auto selected = lights.Ordinal(m_SelectedLight) == InvalidSceneIndex
+                    ? GetDefaultCommandLight() : m_SelectedLight;
+                const uint32_t position = lights.Ordinal(selected);
+                bool prepared = true;
+                matches = read && selected && selected == GetDefaultCommandLight() && position != InvalidSceneIndex;
+                if (matches)
+                {
+                    UiSettingsValue selector;
+                    SettingsSnapshotError selectorError;
+                    prepared = AcceptFormattedSelector(FormatSettingsSnapshotLightToken(
+                        position, m_app->GetSceneLightNameView(selected), selector, selectorError), selector, selectorError);
+                    if (!prepared) fail({selectorError.MessageView()});
+                    matches = prepared && value == selector.Text();
+                }
+                if (prepared) m_SelectedLight = selected;
                 break;
             }
             case UiSettingsDefaultPolicy::SceneAuthored:
@@ -1966,23 +2061,23 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
                 break;
             case UiSettingsDefaultPolicy::NoMaterial:
                 matches = read && !m_ui.SelectedMaterial &&
-                    value == FormatUiSettingsDefaultAnchor(definition);
+                    value == FormatUiSettingsDefaultAnchor(definition).View();
                 break;
             case UiSettingsDefaultPolicy::MaterialAuthored:
                 matches = !m_ui.SelectedMaterial;
                 break;
             case UiSettingsDefaultPolicy::Literal:
-                matches = read && value == FormatUiSettingsDefaultAnchor(definition);
+                matches = read && value == FormatUiSettingsDefaultAnchor(definition).View();
                 break;
             case UiSettingsDefaultPolicy::EnvironmentExposure:
             case UiSettingsDefaultPolicy::FxaaQualityProfile:
             case UiSettingsDefaultPolicy::FlashlightDefault:
                 matches = !IsSettingAvailable(definition.id) ||
-                    (read && value == FormatUiSettingsDefaultAnchor(definition));
+                    (read && value == FormatUiSettingsDefaultAnchor(definition).View());
                 break;
             }
             if (!matches)
-                fail(std::string(definition.name) + " default mismatch: " + value + " / " + error);
+                fail({definition.name, " default mismatch: ", value, " / ", error.MessageView()});
         };
         for (const auto& definition : UiSettingsCommandCatalog)
         {
@@ -1994,86 +2089,130 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
                 policy == UiSettingsDefaultPolicy::FlashlightDefault ||
                 policy == UiSettingsDefaultPolicy::MaterialAuthored;
             const bool resettable = definition.Supports(UiSettingsCommandVerb::Reset);
-            std::tuple<bool, std::string, std::string> first;
+            bool firstRead = false;
+            SettingsSnapshotText firstValue;
+            SettingsSnapshotError firstError;
             for (unsigned attempt = 0u; attempt < (resettable ? 2u : 1u); ++attempt)
             {
-                std::string error;
+                SettingsSnapshotError error;
                 if (resettable && !ResetSettingValue(definition.id, error) &&
                     !isExpectedNoChange(error) && !mayBeUnavailable)
-                    fail(std::string(definition.name) + " RESET failed: " + error);
-                std::string value;
-                error.clear();
-                const bool read = ReadSettingValue(definition.id, value, error);
-                checkDefault(definition, read, value, error);
-                const auto current = std::make_tuple(read, value, error);
+                    fail({definition.name, " RESET failed: ", error.MessageView()});
+                SettingsSnapshotText value;
+                SettingsSnapshotError readError;
+                const bool read = ReadSettingValue(definition.id, value, readError);
+                error = std::move(readError);
+                checkDefault(definition, read, value.View(), error);
                 if (attempt == 0u)
-                    first = current;
-                else if (first != current)
-                    fail(std::string(definition.name) + " was not stable after a second RESET");
+                {
+                    firstRead = read;
+                    firstValue = std::move(value);
+                    firstError = std::move(error);
+                }
+                else if (firstRead != read || firstValue.View() != value.View() ||
+                    firstError.MessageView() != error.MessageView())
+                    fail({definition.name, " was not stable after a second RESET"});
             }
         }
 
         DecodedSettings serialized;
+        SettingsSnapshotError snapshotError;
+        bool snapshotReady = true;
         for (const auto& definition : UiSettingsCommandCatalog)
         {
             if (!IsSettingsSnapshotValue(definition))
                 continue;
-            std::string value;
-            std::string error;
-            if (!ReadSettingValue(definition.id, value, error))
-                value = "<unavailable>";
-            serialized.emplace(definition.name, std::move(value));
+            SettingsSnapshotText value;
+            SettingsSnapshotError readError;
+            if (!ReadSettingValue(definition.id, value, readError))
+            {
+                if (readError.code != SettingsSnapshotErrorCode::InvalidInput || IsSettingAvailable(definition.id))
+                {
+                    fail({"snapshot value read failed: ", readError.MessageView()});
+                    snapshotReady = false;
+                    break;
+                }
+                if (!value.Assign("<unavailable>", snapshotError))
+                {
+                    fail({"snapshot unavailable value failed: ", snapshotError.MessageView()});
+                    snapshotReady = false;
+                    break;
+                }
+            }
+            if (!serialized.Insert(definition.name, value.View(), snapshotError))
+            {
+                fail({"snapshot serialization failed: ", snapshotError.Message()});
+                snapshotReady = false;
+                break;
+            }
         }
-        const std::string expectedCanonical = FormatCanonicalSettingsSnapshot(serialized);
-        RefreshSettingsSnapshot();
-        if (m_SettingsSnapshots.Canonical() != expectedCanonical)
-            fail("snapshot serialization membership or values drifted");
-        if (!IsSettingsSnapshotCode(m_SettingsSnapshots.Code()) ||
-            BuildSettingsSnapshotCode(expectedCanonical) != m_SettingsSnapshots.Code())
-            fail("snapshot code did not identify its canonical payload");
-        const wchar_t* temporaryDirectory = _wgetenv(L"TEMP");
-        if (!temporaryDirectory || temporaryDirectory[0] == L'\0')
-            fail("TEMP is unavailable for the snapshot save round trip");
-        else
+        json::EncodedText expectedText;
+        if (snapshotReady && !FormatCanonicalSettingsSnapshot(serialized, expectedText, snapshotError))
         {
-            const auto path = std::filesystem::path(temporaryDirectory) /
-                (L"uvsr-settings-contract-" + std::to_wstring(GetCurrentProcessId()) + L".txt");
-            if (!m_SettingsSnapshots.Persist(path))
-                fail("snapshot save failed");
-            const auto saved = ReadMatchingSettingsSnapshots(path, m_SettingsSnapshots.Code());
-            std::error_code removeError;
-            std::filesystem::remove(path, removeError);
-            if (saved != std::vector<std::string>{ expectedCanonical } || removeError)
-                fail("saved snapshot did not decode to its exact canonical payload");
+            fail({"snapshot formatting failed: ", snapshotError.Message()});
+            snapshotReady = false;
+        }
+        if (snapshotReady)
+        {
+            const std::string_view expectedCanonical(expectedText.Data(), expectedText.Size());
+            if (!RefreshSettingsSnapshot()) fail({"snapshot refresh failed"});
+            if (m_SettingsSnapshots.Canonical() != expectedCanonical)
+                fail({"snapshot serialization membership or values drifted"});
+            if (!IsSettingsSnapshotCode(m_SettingsSnapshots.Code()) ||
+                BuildSettingsSnapshotCode(expectedCanonical).View() != m_SettingsSnapshots.Code())
+                fail({"snapshot code did not identify its canonical payload"});
+            const wchar_t* temporaryDirectory = _wgetenv(L"TEMP");
+            if (!temporaryDirectory || temporaryDirectory[0] == L'\0')
+                fail({"TEMP is unavailable for the snapshot save round trip"});
             else
             {
-                const auto applied = m_SettingsSnapshots.BeginApplyCanonicalStaged(
-                    saved.front(), MakeSettingsSnapshotRuntimeAccess());
-                RefreshSettingsSnapshot();
-                if (applied.progress != SettingsSnapshotTransactionProgress::Succeeded ||
-                    applied.result.changedValueCount != 0u || m_SettingsSnapshots.Canonical() != saved.front())
-                    fail("saved snapshot was not an idempotent live transaction: " + applied.result.error);
+                WindowsPath path;
+                if (!PrepareSettingsContractPath(temporaryDirectory, GetCurrentProcessId(), path))
+                    fail({"could not prepare the snapshot save round trip path"});
+                else
+                {
+                    if (!m_SettingsSnapshots.Persist(path.Data(), snapshotError))
+                    {
+                        ReportPersistenceFailure(snapshotError, m_SettingsSnapshots.Code().data());
+                        fail({"snapshot save failed"});
+                    }
+                    SettingsSnapshotMatches saved;
+                    const bool readSaved = ReadMatchingSettingsSnapshots(path.Data(), m_SettingsSnapshots.Code(), saved, snapshotError);
+                    const bool removed = RemoveSettingsContractEntry(path.Data());
+                    if (!readSaved || saved.Count() != 1 || saved.Text(0) != expectedCanonical || !removed)
+                        fail({"saved snapshot did not decode to its exact canonical payload"});
+                    else
+                    {
+                        const auto applied = m_SettingsSnapshots.BeginApplyCanonicalStaged(
+                            saved.Text(0), MakeSettingsSnapshotRuntimeAccess());
+                        if (!RefreshSettingsSnapshot()) fail({"snapshot refresh failed"});
+                        if (applied.progress != SettingsSnapshotTransactionProgress::Succeeded ||
+                            applied.result.changedValueCount != 0u || m_SettingsSnapshots.Canonical() != saved.Text(0))
+                            fail({"saved snapshot was not an idempotent live transaction: ", applied.result.error.MessageView()});
+                    }
+                }
             }
+
         }
 
         const auto tokenValue = [](SettingId id, std::size_t index) {
-            return UiSettingsValue::Token(std::string(FindSettingsCommandDefinition(id)->typedDomain.tokens[index]));
+            return FindSettingsCommandDefinition(id)->typedDomain.tokens[index];
         };
         const auto applySentinel = [&]
         (
             SettingId id,
-            UiSettingsValue value,
+            const auto& value,
             bool allowNoChange = false
         )
         {
-            std::string error;
+            SettingsSnapshotError error;
             if (ApplySettingValue(id, value, error) ||
                 allowNoChange && isExpectedNoChange(error))
             {
                 return true;
             }
-            fail("Reset All sentinel SET failed for " +
-                std::string(SettingName(id)) + ": " + error);
+            fail({"Reset All sentinel SET failed for ",
+                SettingName(id), ": ", error.MessageView()});
             return false;
         };
         const auto readSentinel = [&]
@@ -2082,11 +2221,11 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
             UiSettingsValue& value
         )
         {
-            std::string error;
+            SettingsSnapshotError error;
             if (ReadSettingValue(id, value, error))
                 return true;
-            fail("Reset All sentinel GET failed for " +
-                std::string(SettingName(id)) + ": " + error);
+            fail({"Reset All sentinel GET failed for ",
+                SettingName(id), ": ", error.MessageView()});
             return false;
         };
         const auto nextHistoryEpoch = [](uint64_t epoch)
@@ -2104,8 +2243,8 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
                 m_app->GetLightingHistoryEpochForRuntimeDiagnostic();
             if (after != nextHistoryEpoch(before))
             {
-                fail(std::string(label) +
-                    " did not invalidate renderer history exactly once");
+                fail({label,
+                    " did not invalidate renderer history exactly once"});
             }
         };
 
@@ -2129,40 +2268,33 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
             SettingId::MaterialEditorVisible,
             UiSettingsValue::Boolean(true));
 
-        std::shared_ptr<Material> materialSentinel;
-        const std::shared_ptr<Scene> scene = m_app->GetScene();
-        if (scene && scene->GetSceneGraph())
+        const RendererSceneMaterial* materialSentinel = nullptr;
+        const auto materialScene = m_app->GetSceneView();
+        for (size_t index = 0; index < materialScene.materials.count; ++index)
         {
-            const auto& materials = scene->GetSceneGraph()->GetMaterials();
-            auto found = std::find_if(
-                materials.begin(), materials.end(),
-                [](const std::shared_ptr<Material>& material)
-                {
-                    return material && material->materialID >= 0 &&
-                        material->normalTexture;
-                });
-            if (found != materials.end())
-                materialSentinel = *found;
+            const auto& material = materialScene.materials.data[index];
+            if (material.selectionId != InvalidSceneIndex &&
+                material.values.textures[uint32_t(RendererSceneMaterialTextureSlot::Normal)] != InvalidSceneIndex &&
+                (!materialSentinel || material.selectionId < materialSentinel->selectionId))
+                materialSentinel = &material;
         }
         if (!materialSentinel)
         {
-            fail("Reset All sentinel found no material with a normal texture");
+            fail({"Reset All sentinel found no material with a normal texture"});
         }
         else
         {
             const uint64_t selectionEpoch =
                 m_app->GetLightingHistoryEpochForRuntimeDiagnostic();
-            if (applySentinel(
-                    SettingId::MaterialSelected,
-                    UiSettingsValue::Selector(
-                        FormatSettingsSnapshotMaterialToken(
-                            false,
-                            static_cast<std::uint32_t>(
-                                materialSentinel->materialID)))) &&
+            UiSettingsValue selector;
+            SettingsSnapshotError selectorError;
+            const bool prepared = FormatSettingsSnapshotMaterialToken(false, materialSentinel->selectionId, selector, selectorError);
+            if (!prepared) fail({selectorError.MessageView()});
+            if (prepared && applySentinel(SettingId::MaterialSelected, selector) &&
                 m_app->GetLightingHistoryEpochForRuntimeDiagnostic() !=
                     selectionEpoch)
             {
-                fail("material selection invalidated renderer history");
+                fail({"material selection invalidated renderer history"});
             }
             const uint64_t materialEpoch =
                 m_app->GetLightingHistoryEpochForRuntimeDiagnostic();
@@ -2175,65 +2307,68 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
             }
         }
 
-        const auto& lights = m_app->GetEditableLights();
-        std::size_t flashlightIndex = lights.size();
-        std::size_t directionalIndex = lights.size();
-        for (std::size_t index = 0u; index < lights.size(); ++index)
+        const auto lights = m_app->GetEditableLights();
+        uint32_t flashlightIndex = lights.Count();
+        uint32_t directionalIndex = lights.Count();
+        for (uint32_t index = 0u; index < lights.Count(); ++index)
         {
-            if (!lights[index])
-                continue;
-            if (m_app->IsFlashlight(lights[index]))
+            const auto light = lights.At(index);
+            const auto* record = m_app->GetSceneLight(light);
+            if (!record) continue;
+            if (m_app->IsFlashlight(light))
                 flashlightIndex = index;
-            else if (directionalIndex == lights.size() &&
-                lights[index]->GetLightType() == UVSR_LIGHT_TYPE_DIRECTIONAL)
+            else if (directionalIndex == lights.Count() && record->kind == RendererSceneLightKind::Directional)
             {
                 directionalIndex = index;
             }
         }
-        if (flashlightIndex == lights.size() ||
-            directionalIndex == lights.size())
+        if (flashlightIndex == lights.Count() || directionalIndex == lights.Count())
         {
-            fail("Reset All sentinel requires flashlight and directional lights");
+            fail({"Reset All sentinel requires flashlight and directional lights"});
         }
         else
         {
-            applySentinel(
-                SettingId::LightSelected,
-                UiSettingsValue::Selector(
-                    FormatSettingsSnapshotLightToken(
-                        flashlightIndex,
-                        lights[flashlightIndex]->GetName())),
-                true);
-            const uint64_t flashlightEpoch =
-                m_app->GetLightingHistoryEpochForRuntimeDiagnostic();
-            if (applySentinel(
-                    SettingId::LightSelectedFlashlightEnabled,
-                    UiSettingsValue::Boolean(true)))
+            UiSettingsValue flashlightSelector, directionalSelector;
+            SettingsSnapshotError selectorError;
+            if (!AcceptFormattedSelector(FormatSettingsSnapshotLightToken(flashlightIndex,
+                    m_app->GetSceneLightNameView(lights.At(flashlightIndex)), flashlightSelector, selectorError), flashlightSelector, selectorError) ||
+                !AcceptFormattedSelector(FormatSettingsSnapshotLightToken(directionalIndex,
+                    m_app->GetSceneLightNameView(lights.At(directionalIndex)), directionalSelector, selectorError), directionalSelector, selectorError))
+                fail({selectorError.MessageView()});
+            else
             {
-                expectSingleHistoryMutation(
-                    flashlightEpoch, "flashlight state mutation");
+                applySentinel(
+                    SettingId::LightSelected,
+                    flashlightSelector,
+                    true);
+                const uint64_t flashlightEpoch =
+                    m_app->GetLightingHistoryEpochForRuntimeDiagnostic();
+                if (applySentinel(
+                        SettingId::LightSelectedFlashlightEnabled,
+                        UiSettingsValue::Boolean(true)))
+                {
+                    expectSingleHistoryMutation(
+                        flashlightEpoch, "flashlight state mutation");
+                }
+                applySentinel(
+                    SettingId::LightSelectedFlashlightBrightness,
+                    UiSettingsValue::Float(500.f));
+                applySentinel(
+                    SettingId::LightSelectedColor,
+                    UiSettingsValue::Vector(
+                        { 0.1f, 0.2f, 0.3f, 0.f }, 3u));
+                applySentinel(
+                    SettingId::LightSelected,
+                    directionalSelector,
+                    true);
+                applySentinel(
+                    SettingId::LightSelectedAngularSize,
+                    UiSettingsValue::Float(0.75f));
+                applySentinel(
+                    SettingId::LightSelectedColor,
+                    UiSettingsValue::Vector(
+                        { 0.2f, 0.3f, 0.4f, 0.f }, 3u));
             }
-            applySentinel(
-                SettingId::LightSelectedFlashlightBrightness,
-                UiSettingsValue::Float(500.f));
-            applySentinel(
-                SettingId::LightSelectedColor,
-                UiSettingsValue::Vector(
-                    { 0.1f, 0.2f, 0.3f, 0.f }, 3u));
-            applySentinel(
-                SettingId::LightSelected,
-                UiSettingsValue::Selector(
-                    FormatSettingsSnapshotLightToken(
-                        directionalIndex,
-                        lights[directionalIndex]->GetName())),
-                true);
-            applySentinel(
-                SettingId::LightSelectedAngularSize,
-                UiSettingsValue::Float(0.75f));
-            applySentinel(
-                SettingId::LightSelectedColor,
-                UiSettingsValue::Vector(
-                    { 0.2f, 0.3f, 0.4f, 0.f }, 3u));
         }
 
         applySentinel(
@@ -2262,7 +2397,7 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
             if (m_app->GetNoiseSamplingPhasesForRuntimeDiagnostic() !=
                     std::array<uint64_t, 2>{ 13u, 0u })
             {
-                fail("sky noise mutation reset unrelated sampling phases");
+                fail({"sky noise mutation reset unrelated sampling phases"});
             }
         }
         applySentinel(
@@ -2290,7 +2425,7 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
                 ImageBasedLightingSource::Kloppenheim07Night)
                     .defaultExposureStops))
         {
-            fail("typed environment selection did not apply source exposure");
+            fail({"typed environment selection did not apply source exposure"});
         }
 
         constexpr std::array PreservedSentinelIds = {
@@ -2318,15 +2453,15 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
         m_app->ClearShaderReloadRequestForRuntimeDiagnostic();
         const uint64_t factoryResetEpoch =
             m_app->GetLightingHistoryEpochForRuntimeDiagnostic();
-        std::string factoryResetError;
+        SettingsSnapshotError factoryResetError;
         if (!ResetAllSettingsToFactoryDefaults(factoryResetError))
-            fail("Reset All sentinel failed: " + factoryResetError);
+            fail({"Reset All sentinel failed: ", factoryResetError.MessageView()});
         expectSingleHistoryMutation(factoryResetEpoch, "Reset All");
         if (m_app->GetNoiseSamplingPhasesForRuntimeDiagnostic() !=
                 std::array<uint64_t, 2>{ 0u, 0u } ||
             !m_app->IsShaderReloadRequestedForRuntimeDiagnostic())
         {
-            fail("Reset All did not reset sampling phases and shader reload");
+            fail({"Reset All did not reset sampling phases and shader reload"});
         }
         for (std::size_t index = 0u;
             index < PreservedSentinelIds.size(); ++index)
@@ -2335,8 +2470,8 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
             if (readSentinel(PreservedSentinelIds[index], actual) &&
                 !(actual == preservedSentinels[index]))
             {
-                fail("Reset All changed preserved sentinel " +
-                    std::string(SettingName(PreservedSentinelIds[index])));
+                fail({"Reset All changed preserved sentinel ",
+                    SettingName(PreservedSentinelIds[index])});
             }
         }
         UiSettingsValue sceneAfterReset;
@@ -2344,12 +2479,12 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
         if (readSentinel(SettingId::SceneCurrent, sceneAfterReset) &&
             !(sceneAfterReset == sceneSentinel))
         {
-            fail("Reset All changed the active scene");
+            fail({"Reset All changed the active scene"});
         }
         if (readSentinel(SettingId::GpuAdapter, adapterAfterReset) &&
             !(adapterAfterReset == adapterSentinel))
         {
-            fail("Reset All changed the active adapter");
+            fail({"Reset All changed the active adapter"});
         }
         const RetainedRuntimeCameraPose cameraAfterReset =
             m_app->CaptureRetainedRuntimeCameraPose();
@@ -2362,7 +2497,7 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
             cameraAfterReset.verticalFovDegrees !=
                 cameraSentinel.verticalFovDegrees)
         {
-            fail("Reset All changed the active camera pose");
+            fail({"Reset All changed the active camera pose"});
         }
         constexpr std::array ResetSentinelIds = {
             SettingId::UiOverrideVisualMaxes,
@@ -2375,33 +2510,25 @@ auto UIRenderer::VerifyCanonicalSettingsContract() -> int {
         };
         for (const SettingId id : ResetSentinelIds)
         {
-            std::string error;
+            SettingsSnapshotError error;
             if (!IsSettingAtContextualDefault(id, error))
             {
-                fail("Reset All did not restore " +
-                    std::string(SettingName(id)) + ": " + error);
+                fail({"Reset All did not restore ",
+                    SettingName(id), ": ", error.MessageView()});
             }
         }
         if (m_ui.FlashlightEnabled != DefaultFlashlightEnabled ||
             m_ui.Flashlight != DefaultFlashlightSettings)
         {
-            fail("Reset All did not restore global flashlight defaults");
+            fail({"Reset All did not restore global flashlight defaults"});
         }
 
-        if (!failures.empty())
-        {
-            for (const std::string& failure : failures)
-                std::fprintf(stderr, "settings-contract: %s\n", failure.c_str());
-            std::fprintf(stderr,
-                "settings-contract: FAILED (%zu mismatches)\n",
-                failures.size());
-            return 1;
-        }
+        if (failures.Report()) return 1;
         std::fprintf(stdout,
             "settings-contract: PASS (%zu persisted descriptors, "
             "%s)\n",
-            serialized.size(),
-            m_SettingsSnapshots.Code().c_str());
+            serialized.Count(),
+            m_SettingsSnapshots.Code().data());
         return 0;
     }
 #endif
