@@ -53,7 +53,9 @@ target_compile_definitions(donut_app PUBLIC
     DONUT_WITH_VULKAN=0
     DONUT_WITH_AFTERMATH=0
     DONUT_WITH_STREAMLINE=0)
-target_compile_definitions(donut_app PRIVATE DONUT_FORCE_DISCRETE_GPU=0)
+target_compile_definitions(donut_app PRIVATE
+    DONUT_FORCE_DISCRETE_GPU=0
+    UVSR_WITH_NVRHI_VALIDATION=$<BOOL:${NVRHI_WITH_VALIDATION}>)
 
 foreach(target donut_core donut_app)
     set_target_properties("${target}" PROPERTIES FOLDER "Donut")

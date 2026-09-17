@@ -307,7 +307,7 @@ uvsr_stage_patched_sources(
     ${UVSR_DONUT_APP_SOURCES})
 
 set(UVSR_TRANSITIONAL_DONUT_APP_STAGE_TREE_DIGEST
-    "1928ae28b3c476ed5a855c6953cc90b8a5bfb4806c24f1c283571404a2bb3829")
+    "8f33819b5f72b0fa4447cbb15b1b5c09bef0bc81c1aeae511722f0ba2351d0da")
 
 add_library(uvsr_shader_blob STATIC src/shader_bytecode.cpp)
 target_include_directories(uvsr_shader_blob PUBLIC

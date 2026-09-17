@@ -73,7 +73,15 @@ diff --git a/include/donut/app/DeviceManager_DX12.h b/include/donut/app/DeviceMa
 index 271c96c27b1edab11488be46129ebf7fed7115fe..330f2c91dbee27c5a01a3bc1d5295f44dccb4fe7 100644
 --- a/include/donut/app/DeviceManager_DX12.h
 +++ b/include/donut/app/DeviceManager_DX12.h
-@@ -52,6 +52,8 @@ protected:
+@@ -31,7 +31,6 @@
+ #include <dxgidebug.h>
+ 
+ #include <nvrhi/d3d12.h>
+-#include <nvrhi/validation.h>
+ 
+ class DeviceManager_DX12 : public donut::app::DeviceManager
+ {
+@@ -52,6 +51,8 @@ protected:
      std::vector<nvrhi::TextureHandle>               m_RhiSwapChainBuffers;
      nvrhi::RefCountPtr<ID3D12Fence>                 m_FrameFence;
      std::vector<HANDLE>                             m_FrameFenceEvents;
@@ -82,7 +90,7 @@ index 271c96c27b1edab11488be46129ebf7fed7115fe..330f2c91dbee27c5a01a3bc1d5295f44
  
      UINT64                                          m_FrameCount = 1;
  
-@@ -101,7 +103,11 @@ protected:
+@@ -101,7 +102,11 @@ protected:
      uint32_t GetBackBufferCount() override;
      bool BeginFrame() override;
      bool Present() override;
@@ -302,16 +310,29 @@ index c92cd3991415b90f0337914a1055723d25b201e8..4153fad0c320bf5f07473eea498c9c59
  #include <vector>
  
  #include <donut/app/DeviceManager.h>
-@@ -57,6 +58,8 @@ freely, subject to the following restrictions:
+@@ -57,6 +58,11 @@ freely, subject to the following restrictions:
  
  
  #include <sstream>
 +#include "uvsr-d3d12-diagnostics.h"
 +#include "display_presentation.h"
++#if UVSR_WITH_NVRHI_VALIDATION
++#include <nvrhi/validation.h>
++#endif
  
  #if DONUT_WITH_STREAMLINE
  #include <StreamlineIntegration.h>
-@@ -424,6 +427,7 @@ bool DeviceManager_DX12::CreateSwapChain()
+@@ -326,4 +332,9 @@ bool DeviceManager_DX12::CreateDevice()
+     if (m_DeviceParams.enableNvrhiValidationLayer)
+     {
++#if UVSR_WITH_NVRHI_VALIDATION
+         m_NvrhiDevice = nvrhi::validation::createValidationLayer(m_NvrhiDevice);
++#else
++        log::error("NVRHI validation is unavailable in this build");
++        return false;
++#endif
+     }
+@@ -424,6 +435,7 @@ bool DeviceManager_DX12::CreateSwapChain()
      for(UINT bufferIndex = 0; bufferIndex < m_SwapChainDesc.BufferCount; bufferIndex++)
      {
          m_FrameFenceEvents.push_back( CreateEvent(nullptr, false, true, nullptr) );
@@ -319,7 +340,7 @@ index c92cd3991415b90f0337914a1055723d25b201e8..4153fad0c320bf5f07473eea498c9c59
      }
  
      return true;
-@@ -431,20 +435,18 @@ bool DeviceManager_DX12::CreateSwapChain()
+@@ -431,20 +443,18 @@ bool DeviceManager_DX12::CreateSwapChain()
  
  void DeviceManager_DX12::DestroyDeviceAndSwapChain()
  {
@@ -344,7 +365,7 @@ index c92cd3991415b90f0337914a1055723d25b201e8..4153fad0c320bf5f07473eea498c9c59
  
      if (m_SwapChain)
      {
-@@ -489,29 +491,94 @@ bool DeviceManager_DX12::CreateRenderTargets()
+@@ -489,29 +499,94 @@ bool DeviceManager_DX12::CreateRenderTargets()
      return true;
  }
  
@@ -453,7 +474,7 @@ index c92cd3991415b90f0337914a1055723d25b201e8..4153fad0c320bf5f07473eea498c9c59
  
      if (!m_NvrhiDevice)
          return;
-@@ -540,9 +607,60 @@ void DeviceManager_DX12::ResizeSwapChain()
+@@ -540,9 +615,60 @@ void DeviceManager_DX12::ResizeSwapChain()
  bool DeviceManager_DX12::BeginFrame()
  {
      auto bufferIndex = m_SwapChain->GetCurrentBackBufferIndex();
@@ -515,7 +536,7 @@ index c92cd3991415b90f0337914a1055723d25b201e8..4153fad0c320bf5f07473eea498c9c59
      return true;
  }
  
-@@ -576,15 +694,86 @@ bool DeviceManager_DX12::Present()
+@@ -576,15 +702,86 @@ bool DeviceManager_DX12::Present()
      auto bufferIndex = m_SwapChain->GetCurrentBackBufferIndex();
  
      UINT presentFlags = 0;
