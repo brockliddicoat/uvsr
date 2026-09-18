@@ -12,11 +12,11 @@ the inspected revisions are listed in [notices](../NOTICES.md). refresh them onc
 | --- | --- | --- |
 | S0 | device and tool inventory, inspiration study, project contracts, and nine shader-language and backend probes | actual probe runs, explicit capability limits, and first scoped failures |
 | S1 | one useful Rust graphics vertical slice with ordinary shaders and structured report output | device, shader, resource, submission, readback, retirement, and image evidence from native Rust backend logic |
-| S2 | correct Rust-GPU physical-pointer representation and operations | upstream compiletests and difftests, full-width ABI and overflow regressions |
+| S2 | correct RustGPU physical-pointer representation and operations | upstream compiletests and difftests, full-width ABI and overflow regressions |
 | S3 | reusable native descriptor-heap helpers and compiler support | real heap instructions, optimizer and validator survival, deterministic resource access |
 | S4 | Rust cube and readback through the framework and Rust shaders in NoGraphicsAPI | exact shader identity, combined pointer and heap behavior, project-owned expected-result agreement |
 | S5 | complete required project API and backend behavior | per-feature contract mapping and executed backend reports |
-| S6 | focused Rust-GPU contribution packet | complete promised checklist, reviewable commits, documentation, and full relevant CI |
+| S6 | focused RustGPU contribution packet | complete promised checklist, reviewable commits, documentation, and full relevant CI |
 | S7 | Rust, Slang, and HLSL support across applicable backends | resource, layout, stage, execution, and result proof by cell |
 | S8 | selected shader regression coverage and human and agent test access | real results, trustworthy oracles, queryable reports, and seeded usability evaluation |
 
@@ -34,7 +34,7 @@ S2 and S3 can proceed independently of the complete framework. S7 and S8 begin w
 ## Current Uncertainties
 
 - available devices and required Vulkan 1.4 extensions.
-- complete physical-pointer semantics and target layout in Rust-GPU.
+- complete physical-pointer semantics and target layout in RustGPU.
 - native descriptor-heap support through compilation and optimization.
 - Rust shader translation and ABI compatibility on DirectX 12 and Metal.
 - Slang binding adaptation across the selected project layouts.

@@ -36,8 +36,6 @@ assets/noise/*.bin -diff -text
 /cmake/NRDConfig.hlsli.in text eol=lf
 /cmake/NRDRetainedShaders.cfg text eol=lf
 /assets/environments/README.md text eol=lf
-/legal/documentation/google-filament-fxaa.md text eol=lf
-/legal/documentation/third-party-notices.md text eol=lf
 /legal/licenses/IOLITE-AgX-MIT.txt text eol=lf
 /legal/licenses/Microsoft-DirectX-Graphics-Samples-MIT.txt text eol=lf
 

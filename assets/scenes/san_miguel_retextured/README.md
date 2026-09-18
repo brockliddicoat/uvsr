@@ -20,7 +20,7 @@ the supplied notice permits research and educational use with attribution. it
 does not record a general commercial grant. San Miguel is therefore a
 commercial distribution blocker unless the relevant rights holders grant
 separate permission or the scene is replaced. the
-[legal record](../../../legal/documentation/san-miguel-2-1.md) owns that
+[legal record](../../../legal/san-miguel.md) owns that
 clearance boundary.
 
 ## conversion

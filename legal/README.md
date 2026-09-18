@@ -13,16 +13,16 @@ research references. third-party material retains its own terms.
 
 ## Fonts
 
-- [Microsoft Segoe UI](documentation/microsoft-segoe-ui-fonts.md), local
+- [Microsoft Segoe UI](segoe-ui.md), local
   Windows-sourced fonts with no recorded redistribution license.
 
 ## Scene Assets
 
-- [Amazon Lumberyard Bistro](documentation/amazon-lumberyard-bistro.md),
+- [Amazon Lumberyard Bistro](bistro.md),
   attribution and the immediate source GLB's unresolved chain of title.
-- [San Miguel](documentation/san-miguel-2-1.md), supplied research and
+- [San Miguel](san-miguel.md), supplied research and
   educational use restrictions.
-- [San Miguel Camera Data](documentation/pbrt-v4-scenes-san-miguel-camera.md),
+- [San Miguel Camera Data](san-miguel-camera.md),
   the separate provenance of the initial camera.
 
 ## Distribution Review

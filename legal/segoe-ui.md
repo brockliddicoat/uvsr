@@ -5,7 +5,7 @@
 - Owner: Microsoft Corporation.
 - Source: the developer's Windows-installed Segoe UI fonts.
 - Local files: `segoeui.ttf`, `seguisb.ttf`, and `segoeuib.ttf` in
-  [`assets/fonts/segoe-ui`](../../assets/fonts/segoe-ui/README.md).
+  [`assets/fonts/segoe-ui`](../assets/fonts/segoe-ui/README.md).
 - Governing terms: the applicable Microsoft product license and the notices
   embedded in the original font files.
 - Distribution status: no separate redistribution license is recorded. font

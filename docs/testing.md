@@ -47,7 +47,7 @@ set a duration budget for each tier. after a broad failure, rerun the exact case
 
 ## Upstream Compiler Tests
 
-Rust-GPU changes need focused compile-pass, compile-fail, disassembly, validation, optimizer-survival, layout, and runtime consumer tests. place generic compiler regressions upstream. keep framework and NoGraphicsAPI integration tests in this project. passing isolated compiler tests does not prove the actual consumer path.
+RustGPU changes need focused compile-pass, compile-fail, disassembly, validation, optimizer-survival, layout, and runtime consumer tests. place generic compiler regressions upstream. keep framework and NoGraphicsAPI integration tests in this project. passing isolated compiler tests does not prove the actual consumer path.
 
 ## Retained Scene Fixtures
 

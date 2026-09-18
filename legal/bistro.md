@@ -25,11 +25,11 @@ license notices are unchanged.
 
 ## Evidence
 
-- [scene overview](../../assets/scenes/bistro_interior_retextured/README.md)
-- [source provenance](../../assets/scenes/bistro_interior_retextured/source-provenance.json)
-- [bundled license](../../assets/scenes/bistro_interior_retextured/LICENSE.txt)
-- [buffer repack report](../../assets/scenes/bistro_interior_retextured/components/buffer-repack-report.json)
-- [scene cleanup report](../../assets/scenes/bistro_interior_retextured/scene-cleanup-report.json)
+- [scene overview](../assets/scenes/bistro_interior_retextured/README.md)
+- [source provenance](../assets/scenes/bistro_interior_retextured/source-provenance.json)
+- [bundled license](../assets/scenes/bistro_interior_retextured/LICENSE.txt)
+- [buffer repack report](../assets/scenes/bistro_interior_retextured/components/buffer-repack-report.json)
+- [scene cleanup report](../assets/scenes/bistro_interior_retextured/scene-cleanup-report.json)
 - packaging commit `f7c0c87d8cba6880428fbc34400eb2882fb5182e`
 
 ## Commercial Clearance
