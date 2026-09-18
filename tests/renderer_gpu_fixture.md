@@ -38,7 +38,14 @@ cross-adapter filtering and conversion rounding without weakening source-image,
 native-mip, compressed-texture, layout, or ownership checks.
 
 each of the 12 UI cases records its size, scale, scaling mode, format, atlas
-dimensions, exact atlas, draw hash and exact rendered pixels. the native draw
+dimensions, exact atlas, draw hash and exact rendered pixels. the exact UI
+control applies when Segoe UI Semibold is
+`2d9b22d71f72de2823fee5d9c8bc1b0fc32b2577c4c27b9ec6abdbb8df0e1731`
+and Segoe UI Bold is
+`aeb9e4a6ec5cc59f4d72df8189032d7dbb28f45161cf1552174818b5465dac4e`.
+the test logs both installed font identities. a different Windows font revision
+still renders every case twice and requires byte-exact repetition, but does not
+claim equivalence to the inapplicable captured font control. the native draw
 hash is captured before rendering: Donut scales clip rectangles in place.
 the [capture correction](C:/Users/brock/OneDrive/Documents/uvsr/work/donut-factor-out-v4/runs/20260909-01/09-gpu-controls-v1/reference-02/correction.json)
 changes only that hash in the two framebuffer-scaling cases. all captured pixels

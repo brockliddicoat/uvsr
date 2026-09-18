@@ -1330,6 +1330,7 @@ if (BUILD_TESTING)
         uvsr_renderer_scene_gpu_nvrhi
         uvsr_renderer_import
         uvsr_renderer_scene_resources_nvrhi
+        uvsr_sha256
         stb
         imgui
         uvsr_shader_blob

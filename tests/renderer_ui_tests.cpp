@@ -1,5 +1,6 @@
 #include "renderer_ui_context.h"
 #include "renderer_ui_nvrhi.h"
+#include "sha256.h"
 #include "renderer_shader_factory_nvrhi.h"
 #include "renderer_texture_bmp.h"
 #include "renderer_ui_input_glfw.h"
@@ -32,6 +33,10 @@ namespace uvsr
         static nvrhi::IResource* Vertices(RendererUiNvrhi& owner) { return owner.m_VertexBuffer.Get(); }
         static nvrhi::IResource* Indices(RendererUiNvrhi& owner) { return owner.m_IndexBuffer.Get(); }
         static size_t VertexCapacity(RendererUiNvrhi& owner) { return owner.m_VertexCapacity; }
+        static const unsigned char* FontData(RendererUiContext& owner, unsigned index)
+            { return index < 2 ? owner.m_Fonts[index].data : nullptr; }
+        static size_t FontSize(RendererUiContext& owner, unsigned index)
+            { return index < 2 ? size_t(owner.m_Fonts[index].size) : 0; }
         static bool OversizedGeometry(RendererUiNvrhi& owner, bool indices)
         {
             ImDrawData data;
@@ -104,6 +109,25 @@ namespace
             }
         }
         return value;
+    }
+
+    bool CapturedFontFiles(RendererUiContext& context)
+    {
+        constexpr const char* captured[] = {
+            "2d9b22d71f72de2823fee5d9c8bc1b0fc32b2577c4c27b9ec6abdbb8df0e1731",
+            "aeb9e4a6ec5cc59f4d72df8189032d7dbb28f45161cf1552174818b5465dac4e"};
+        bool exact = true;
+        for (unsigned index = 0; index < 2; ++index)
+        {
+            Sha256Digest digest;
+            Sha256Result result;
+            Require(Sha256(Access::FontData(context, index), Access::FontSize(context, index), digest, result),
+                "Windows UI font hash");
+            printf("UI font %u SHA-256: %s%s\n", index, digest.text,
+                strcmp(digest.text, captured[index]) ? " (not captured revision)" : " (captured revision)");
+            exact &= strcmp(digest.text, captured[index]) == 0;
+        }
+        return exact;
     }
 
     void Atlas(Bytes& output, int& width, int& height)
@@ -252,6 +276,12 @@ void TestRendererUi(nvrhi::IDevice* device, ID3D12Device* nativeDevice,
         Access::FailFontAllocation(UINT_MAX);
         Require(context.LoadWindowsFonts(), "font allocation retry failed");
     }
+    bool capturedFontFiles = false;
+    {
+        RendererUiContext context;
+        Require(context.LoadWindowsFonts(), "font identity fixture");
+        capturedFontFiles = CapturedFontFiles(context);
+    }
     struct Case { int width, height; float scale; bool explicitScaling; nvrhi::Format format; };
     const Case cases[] = {
         {640,480,1.f,true,nvrhi::Format::RGBA8_UNORM}, {640,480,1.25f,true,nvrhi::Format::RGBA8_UNORM},
@@ -293,13 +323,19 @@ void TestRendererUi(nvrhi::IDevice* device, ID3D12Device* nativeDevice,
         const uint32_t key[]{caseIndex, uint32_t(test.width), uint32_t(test.height), scaleBits, uint32_t(test.explicitScaling), uint32_t(test.format)};
         Require(!memcmp(key, expectedKey, sizeof(key)), "original UI case inputs");
         const uint32_t referenceAtlasWidth = expectedKey[6], referenceAtlasHeight = expectedKey[7];
-        Require(referenceAtlasWidth == uint32_t(candidateAtlasWidth) && referenceAtlasHeight == uint32_t(candidateAtlasHeight),
-            "font atlas dimensions match captured RegisteredFont");
-        Bytes referenceAtlas; referenceAtlas.Allocate(candidateAtlas.size);
+        Bytes referenceAtlas; referenceAtlas.Allocate(size_t(referenceAtlasWidth) * referenceAtlasHeight * 4);
         reference.Read(referenceAtlas.data, referenceAtlas.size);
-        Require(memcmp(referenceAtlas.data, candidateAtlas.data, candidateAtlas.size) == 0, "font atlas differs from captured RegisteredFont");
+        if (capturedFontFiles)
+        {
+            Require(referenceAtlasWidth == uint32_t(candidateAtlasWidth) && referenceAtlasHeight == uint32_t(candidateAtlasHeight),
+                "font atlas dimensions match captured RegisteredFont");
+            Require(referenceAtlas.size == candidateAtlas.size &&
+                memcmp(referenceAtlas.data, candidateAtlas.data, candidateAtlas.size) == 0,
+                "font atlas differs from captured RegisteredFont");
+        }
         uint64_t referenceDrawHash; reference.Read(&referenceDrawHash, sizeof(referenceDrawHash));
-        Require(referenceDrawHash == candidateDrawHash, "owned UI draw data differs from captured font registration");
+        if (capturedFontFiles)
+            Require(referenceDrawHash == candidateDrawHash, "owned UI draw data differs from captured font registration");
         Bytes control; control.Allocate(candidate.size); reference.Read(control.data, control.size);
         if (target.bytesPerPixel == 4)
         {
@@ -316,14 +352,16 @@ void TestRendererUi(nvrhi::IDevice* device, ID3D12Device* nativeDevice,
         DrawUi(context.BodyFont(), context.HeaderFont(), fontScale); context.Render();
         Require(gpu.Render(target.framebuffer), "repeat owned UI draw");
         Bytes repeated; target.Read(device, repeated);
-        Require(repeated.size == control.size && memcmp(repeated.data, control.data, control.size) == 0,
-            "owned UI pixels are not repeatable against the fixed control");
-        Require(control.size == candidate.size && memcmp(control.data, candidate.data, control.size) == 0,
-            "owned UI pixels differ from captured GPU rendering");
-        printf("UI case %u: %dx%d scale %.2f explicit %d format %u, atlas %dx%d, draw %016llx, pixels %016llx exact\n",
+        Require(repeated.size == candidate.size && memcmp(repeated.data, candidate.data, candidate.size) == 0,
+            "owned UI pixels are not repeatable");
+        if (capturedFontFiles)
+            Require(control.size == candidate.size && memcmp(control.data, candidate.data, control.size) == 0,
+                "owned UI pixels differ from captured GPU rendering");
+        printf("UI case %u: %dx%d scale %.2f explicit %d format %u, atlas %dx%d, draw %016llx, pixels %016llx %s\n",
             caseIndex, test.width, test.height, test.scale, int(test.explicitScaling), unsigned(test.format),
             candidateAtlasWidth, candidateAtlasHeight, static_cast<unsigned long long>(candidateDrawHash),
-            static_cast<unsigned long long>(Hash(14695981039346656037ull, candidate.data, candidate.size)));
+            static_cast<unsigned long long>(Hash(14695981039346656037ull, candidate.data, candidate.size)),
+            capturedFontFiles ? "exact captured reference" : "exact repeat with different Windows font revision");
         if (caseIndex == 0)
         {
             Require(context.BeginFrame(test.width, test.height, 1,1,1.f/60.f,true), "unfocused frame");
