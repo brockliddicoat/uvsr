@@ -3,7 +3,7 @@
 ![host: Rust](https://img.shields.io/badge/host-Rust-000000?logo=rust&logoColor=white&style=flat)
 ![shaders: Rust | Slang | HLSL](https://img.shields.io/badge/shaders-Rust%20%7C%20Slang%20%7C%20HLSL-C62828?style=flat)
 ![backends: DirectX 12 | Vulkan 1.4 | Metal 4](https://img.shields.io/badge/backends-DirectX%2012%20%7C%20Vulkan%201.4%20%7C%20Metal%204-4C8F20?style=flat)
-[![license: Polyform Noncommercial](https://img.shields.io/badge/license-polyform_noncommercial-8250DF?style=flat)](LICENSE.md)
+[![license: Polyfrom Noncommercial](https://img.shields.io/badge/license-Polyfrom%20Noncommercial-8250DF?style=flat)](LICENSE.md)
 
 this repository is the working home for a lightweight Rust graphics framework with explicit DirectX 12, Vulkan 1.4, and Metal 4 backends. the finished system is intended to make Rust, Slang, and HLSL equally usable shader languages, expose modern bindless and GPU-pointer capabilities without hiding native behavior, and provide one conformance system for interactive review and automated diagnosis.
 
@@ -67,4 +67,4 @@ the planning baseline is ready for implementation. there is not yet a Rust works
 
 read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before changing the repository. use one purpose-named task branch, commit coherent verified checkpoints, and open the pull request directly into `main`. do not create merge-only branches.
 
-first-party material remains under the [PolyForm Noncommercial License](LICENSE.md). upstream projects and retained assets keep their own licenses and notices. review [notices](NOTICES.md) before importing code, translating shaders, or redistributing scene data.
+first-party material remains under the [Polyfrom Noncommercial License](LICENSE.md). upstream projects and retained assets keep their own licenses and notices. review [notices](NOTICES.md) before importing code, translating shaders, or redistributing scene data.

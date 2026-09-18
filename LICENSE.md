@@ -1,6 +1,6 @@
 Required Notice: UVSR | https://github.com/brockliddicoat/uvsr
 
-# PolyForm Noncommercial License 1.0.0
+# Polyfrom Noncommercial License 1.0.0
 
 <https://polyformproject.org/licenses/noncommercial/1.0.0>
 

@@ -12,7 +12,7 @@ no third-party implementation has been copied or translated into the new Rust pr
 | [ShaderToHuman](https://github.com/electronicarts/ShaderToHuman) | `d6f98b7d67da802053cd9c702082fa741dec42e7` | shader example, golden regression, and documentation-presentation inspiration |
 | [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross) | `a9193e76134de63810ee1a57b5343f236d6ff102` | shader translation feasibility reference |
 
-the repository's [PolyForm Noncommercial license](LICENSE.md) covers first-party material only. it does not replace upstream licenses or grant rights the project does not control.
+the repository's [Polyfrom Noncommercial license](LICENSE.md) covers first-party material only. it does not replace upstream licenses or grant rights the project does not control.
 
 ## retained scene assets
 
