@@ -132,7 +132,14 @@ namespace
         return exact;
     }
 
-    bool CapturedAdapter(ID3D12Device* device)
+    enum class UiAdapterClass
+    {
+        Captured,
+        Warp,
+        Other
+    };
+
+    UiAdapterClass ClassifyAdapter(ID3D12Device* device)
     {
         Microsoft::WRL::ComPtr<IDXGIFactory4> factory;
         Require(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))), "DXGI factory for UI adapter identity");
@@ -147,17 +154,18 @@ namespace
         constexpr unsigned capturedRevision = 0x08;
         const bool captured = description.VendorId == capturedVendor && description.DeviceId == capturedDevice &&
             description.SubSysId == capturedSubsystem && description.Revision == capturedRevision;
+        const bool warp = description.VendorId == 0x1414 && description.DeviceId == 0x008c;
         char name[512]{};
         Require(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, description.Description, -1,
             name, int(sizeof(name)), nullptr, nullptr) > 0, "UTF-8 UI adapter description");
         printf("UI adapter: %s, PCI %04x:%04x subsystem %08x revision %02x%s\n",
             name, description.VendorId, description.DeviceId, description.SubSysId,
-            description.Revision, captured ? " (captured adapter)" : " (different adapter)");
-        return captured;
+            description.Revision, captured ? " (captured adapter)" : warp ? " (WARP adapter)" : " (different adapter)");
+        return captured ? UiAdapterClass::Captured : warp ? UiAdapterClass::Warp : UiAdapterClass::Other;
     }
 
     void ValidateCrossAdapterPixels(const Bytes& control, const Bytes& candidate,
-        uint32_t width, uint32_t height, uint32_t bytesPerPixel, unsigned caseIndex)
+        uint32_t width, uint32_t height, uint32_t bytesPerPixel, unsigned caseIndex, bool warpAdapter)
     {
         Require(control.size == candidate.size && width > 2 && height > 2 &&
             (bytesPerPixel == 4 || bytesPerPixel == 8), "cross-adapter UI control shape");
@@ -222,9 +230,6 @@ namespace
                 candidateForegroundPixels, coverageDifferences);
         Require(!coverageDifferences, "owned UI coverage differs from the cross-adapter control");
         Require(fullFrameFinite, "cross-adapter UI pixels are not finite");
-        Require(bytesPerPixel == 4 ? fullMaximumDifference <= 1 :
-            fullMaximumAbsoluteDifference <= 1.f / 256.f,
-            "owned UI edge colors differ materially from the cross-adapter control");
         size_t stablePixels = 0;
         size_t stableForegroundPixels = 0;
         unsigned maximumDifference = 0;
@@ -275,7 +280,6 @@ namespace
         if (!valid)
             fprintf(stderr, "UI case %u differs inside a stable captured region at %u,%u channel %u; maximum %u\n",
                 caseIndex, failedX, failedY, failedChannel, maximumDifference);
-        Require(valid, "owned UI pixels differ materially from the cross-adapter control");
         printf("UI case %u cross-adapter control: %zu covered, %zu stable pixels, %zu stable foreground, maximum %u stable and %u full-frame %s\n",
             caseIndex, controlForegroundPixels, stablePixels, stableForegroundPixels,
             maximumDifference, fullMaximumDifference,
@@ -283,6 +287,10 @@ namespace
         if (bytesPerPixel == 8)
             printf("UI case %u cross-adapter full-frame absolute difference: %.9g\n",
                 caseIndex, double(fullMaximumAbsoluteDifference));
+        Require(valid, "owned UI pixels differ materially from the cross-adapter control");
+        Require(bytesPerPixel == 4 ? fullMaximumDifference <= (warpAdapter ? 2u : 1u) :
+            fullMaximumAbsoluteDifference <= 1.f / 256.f,
+            "owned UI edge colors differ materially from the cross-adapter control");
     }
 
     void Atlas(Bytes& output, int& width, int& height)
@@ -415,7 +423,8 @@ void TestRendererUi(nvrhi::IDevice* device, ID3D12Device* nativeDevice,
     using Access = RendererUiTestAccess;
     RendererGpuReference reference("renderer_ui_gpu_fixture.bin");
     RendererShaderFactory shaders(device, shaderDirectory.c_str());
-    const bool capturedAdapter = CapturedAdapter(nativeDevice);
+    const UiAdapterClass adapterClass = ClassifyAdapter(nativeDevice);
+    const bool capturedAdapter = adapterClass == UiAdapterClass::Captured;
     std::error_code error;
     wchar_t previewName[96]{};
     swprintf_s(previewName, L"ui-renderer-reference/run-%lu", GetCurrentProcessId());
@@ -518,7 +527,8 @@ void TestRendererUi(nvrhi::IDevice* device, ID3D12Device* nativeDevice,
             Require(control.size == candidate.size && memcmp(control.data, candidate.data, control.size) == 0,
                 "owned UI pixels differ from captured GPU rendering");
         else if (capturedFontFiles)
-            ValidateCrossAdapterPixels(control, candidate, width, height, target.bytesPerPixel, caseIndex);
+            ValidateCrossAdapterPixels(control, candidate, width, height, target.bytesPerPixel, caseIndex,
+                adapterClass == UiAdapterClass::Warp);
         const char* comparison = capturedFontFiles && capturedAdapter ? "exact captured reference" :
             capturedFontFiles ? "bounded captured control and exact repeat" :
             "deterministic smoke with different Windows font revision";

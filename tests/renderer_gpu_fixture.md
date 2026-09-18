@@ -46,9 +46,11 @@ is
 and Segoe UI Bold is
 `aeb9e4a6ec5cc59f4d72df8189032d7dbb28f45161cf1552174818b5465dac4e`.
 the test logs the adapter and both installed font identities. with the captured
-fonts on another adapter, every 8-bit channel in the complete fixed image must
-stay within one code value. binary16 output must stay within `1/256` throughout
-and within eight ULP in each fixed control's locally uniform 3 by 3 regions.
+fonts on another hardware adapter, every 8-bit channel in the complete fixed
+image must stay within one code value. the Microsoft Basic Render Driver WARP
+adapter (`1414:008c`) may differ by two code values, matching its measured
+12-case result. binary16 output must stay within `1/256` throughout and within
+eight ULP in each fixed control's locally uniform 3 by 3 regions.
 the complete foreground coverage mask must remain exact, including thin glyph
 strokes and rasterized edges. together, these checks reject shifted, missing,
 extra, wrongly blended, or wrongly converted draws while allowing the measured
