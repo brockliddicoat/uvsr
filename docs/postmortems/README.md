@@ -1,12 +1,12 @@
-# lessons from UVSR delta
+# Lessons from UVSR Delta
 
-UVSR delta was a long graphics experiment built with substantial help from coding agents. its preserved implementation contains useful work, but it also records how plausible graphics ideas, large inherited frameworks, weak visual oracles, and unbounded agent goals can consume a great deal of time without producing a dependable product.
+UVSR Delta was a long graphics experiment built with substantial help from coding agents. its preserved implementation contains useful work, but it also records how plausible graphics ideas, large inherited frameworks, weak visual oracles, and unbounded agent goals can consume a great deal of time without producing a dependable product.
 
 these postmortems turn that history into guidance for people and LLMs doing graphics programming. the lessons apply across programming languages, graphics APIs, engines, and agent systems. they are organized by failure mode rather than by date so a future contributor can find the relevant rule before repeating an experiment.
 
 start with the [experiment verdict catalog](experiment-catalog.md). it splits the old documents into their actual subprojects and says which formulations were fundamentally flawed, which need a redesigned scope, which remain retryable with a better harness, which were sound but strategically retired, and which never produced enough evidence for a verdict. a better model can improve implementation quality, but it cannot repair missing information or a contradictory contract.
 
-## how to read the evidence
+## How to Read the Evidence
 
 each document separates three kinds of statement:
 
@@ -16,7 +16,7 @@ each document separates three kinds of statement:
 
 an old passing test proves only what that test asserted. an old failure is useful evidence, but it is not a permanent ban on the underlying technique. hardware, compilers, algorithms, and project needs can change. a revival should begin with a new hypothesis and a new measurement rather than with restoration of the old implementation.
 
-## lesson index
+## Lesson Index
 
 | topic | central lesson |
 | --- | --- |
@@ -30,7 +30,7 @@ an old passing test proves only what that test asserted. an old failure is usefu
 | [CRASH-HOLD](crash-hold.md) | contain a machine-level failure without guessing its cause or turning blocked integration gates into passes |
 | [historical source map](source-map.md) | every preserved postmortem and supporting document maps to its retained lesson |
 
-## repository role
+## Repository Role
 
 this repository is intended to improve future AI-assisted graphics work, including work that uses a different language, API, renderer, or model. the new Rust project should encode the lessons in small owned contracts, bounded experiments, structured results, and explicit retirement criteria.
 

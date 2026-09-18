@@ -1,4 +1,4 @@
-# bundled scenes
+# Bundled Scenes
 
 the repository retains exactly two converted scenes as future graphics fixtures:
 
@@ -16,6 +16,9 @@ the new Rust project has not yet defined a runtime asset manifest or asserted
 that either scene loads. future code must consume the recorded files directly
 and must not infer provenance or legal terms from directory contents.
 
-the scene data is protected byte for byte. a replacement or repaired asset must
-update its adjacent provenance, generated reports, future runtime inventory,
-and legal record in the same change.
+the scene data is protected. a replacement or repaired asset must update its
+adjacent provenance, add a report identifying the original and current bytes,
+and update the affected inventory and legal record in the same change. retain
+original conversion reports as historical evidence. Bistro's
+[cleanup report](bistro_interior_retextured/scene-cleanup-report.json) records
+its subsequent object removals without changing the original binary buffers.
