@@ -8,6 +8,9 @@ compiler records, shaders, D3D12 runtime and Windows font files. the
 preserve the control libraries and source. capture uses the original default
 `D3D12CreateDevice` adapter selection. these are exact controls for the recorded
 inputs, not a claim of identical rasterization on every device or driver.
+the hosted developer and production renderer builds select the captured v143
+14.44 compiler family even when the runner's default Visual Studio generator
+changes.
 
 | fixture | records | bytes | SHA-256 |
 | --- | ---: | ---: | --- |

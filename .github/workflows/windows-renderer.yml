@@ -101,7 +101,7 @@ jobs:
             throw "Developer configure did not inherit Python-unavailable PATH."
           }
           $dev = Join-Path $env:RUNNER_TEMP "uvsr-renderer-dev"
-          cmake -S . -B $dev -A x64 -DBUILD_TESTING=ON -DUVSR_RENDERER_RELEASE_SEQUENCE=16
+          cmake -S . -B $dev -A x64 -T "v143,version=14.44" -DBUILD_TESTING=ON -DUVSR_RENDERER_RELEASE_SEQUENCE=16
           if ($LASTEXITCODE -ne 0) { throw "Developer configure failed." }
           "UVSR_DEV_BUILD=$dev" >> $env:GITHUB_ENV
 
@@ -117,7 +117,7 @@ jobs:
         shell: pwsh
         run: |
           $production = Join-Path $env:RUNNER_TEMP "uvsr-renderer-production"
-          cmake -S . -B $production -A x64 -DBUILD_TESTING=OFF -DUVSR_RENDERER_RELEASE_SEQUENCE=16
+          cmake -S . -B $production -A x64 -T "v143,version=14.44" -DBUILD_TESTING=OFF -DUVSR_RENDERER_RELEASE_SEQUENCE=16
           if ($LASTEXITCODE -ne 0) { throw "Production configure failed." }
           "UVSR_PRODUCTION_BUILD=$production" >> $env:GITHUB_ENV
 
