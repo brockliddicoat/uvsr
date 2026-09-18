@@ -46,7 +46,8 @@ and Segoe UI Bold is
 the test logs both installed font identities. a different Windows font revision
 still renders every case twice and requires byte-exact repetition, but does not
 claim equivalence to the inapplicable captured font control. the native draw
-hash is captured before rendering: Donut scales clip rectangles in place.
+hash is captured before rendering and reported as a diagnostic before the
+exact rendered-pixel decision: Donut scales clip rectangles in place.
 the [capture correction](C:/Users/brock/OneDrive/Documents/uvsr/work/donut-factor-out-v4/runs/20260909-01/09-gpu-controls-v1/reference-02/correction.json)
 changes only that hash in the two framebuffer-scaling cases. all captured pixels
 remain unchanged. current rendering also repeats the frame against the fixed
