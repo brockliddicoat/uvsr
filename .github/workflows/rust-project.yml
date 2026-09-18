@@ -35,6 +35,8 @@ jobs:
             'docs/testing.md',
             'docs/upstream.md',
             'docs/postmortems/README.md',
+            'docs/postmortems/crash-hold.md',
+            'docs/postmortems/experiment-catalog.md',
             'docs/postmortems/source-map.md',
             'assets/scenes/bistro_interior_retextured/LICENSE.txt',
             'assets/scenes/bistro_interior_retextured/source-provenance.json',

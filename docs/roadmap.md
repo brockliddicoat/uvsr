@@ -25,7 +25,7 @@ S2 and S3 can proceed independently of the complete framework. S7 and S8 begin w
 ## first checkpoint
 
 1. choose isolated implementation, dependency, build, and result directories.
-2. inventory available D3D12, Vulkan, and Metal tools and test devices.
+2. inventory available DirectX 12, Vulkan 1.4, and Metal tools and test devices.
 3. study the pinned inspirations and write the first project-owned device, shader, lifetime, and result contracts.
 4. run the nine minimal shader-language and backend feasibility probes.
 5. implement one native vertical slice and emit a stable machine-readable result.
@@ -33,10 +33,10 @@ S2 and S3 can proceed independently of the complete framework. S7 and S8 begin w
 
 ## current uncertainties
 
-- available devices and required Vulkan extensions.
+- available devices and required Vulkan 1.4 extensions.
 - complete physical-pointer semantics and target layout in rust-gpu.
 - native descriptor-heap support through compilation and optimization.
-- Rust shader translation and ABI compatibility on D3D12 and Metal.
+- Rust shader translation and ABI compatibility on DirectX 12 and Metal.
 - Slang binding adaptation across the selected project layouts.
 - portable shader-regression fixtures and consistent color handling.
 
