@@ -4,15 +4,15 @@ keep this file concise. keep temporary plans, measurements, downloads, captures,
 
 ## scope
 
-build a lightweight cross-platform Rust graphics framework with native D3D12, Vulkan, and Metal 4 backends and first-class Rust, Slang, and HLSL shaders. use AGFX and ShaderToHuman as inspirations for explicit APIs, shader examples, test structure, and report presentation. define project-owned public concepts, resource states, handles, limits, optional capabilities, shader ABI, behavior, and acceptance thresholds. use Rust modules, structs, enums, explicit ownership, and small unsafe native API boundaries.
+build a lightweight cross-platform Rust graphics framework with native DirectX 12, Vulkan 1.4, and Metal 4 backends and first-class Rust, Slang, and HLSL shaders. use AGFX and ShaderToHuman as inspirations for explicit APIs, shader examples, test structure, and report presentation. define project-owned public concepts, resource states, handles, limits, optional capabilities, shader ABI, behavior, and acceptance thresholds. use Rust modules, structs, enums, explicit ownership, and small unsafe native API boundaries.
 
-support Rust, Slang, and HLSL shader sources across every applicable D3D12, Vulkan, and Metal 4 cell. keep compiled bytes, stage, entry point, source language, and required metadata explicit and separate. a Rust host running only HLSL is not Rust shader support.
+support Rust, Slang, and HLSL shader sources across every applicable DirectX 12, Vulkan 1.4, and Metal 4 cell. keep compiled bytes, stage, entry point, source language, and required metadata explicit and separate. a Rust host running only HLSL is not Rust shader support.
 
 the NoGraphicsAPI prototype must exercise physical GPU pointers and native descriptor heaps with Rust shaders in the actual host. keep reusable rust-gpu compiler and shader-library work generic. keep framework integration and narrow NoGraphicsAPI work outside rust-gpu patches.
 
 do not add a render graph, ECS, a second abstraction layer, mandatory shared ownership, or a C++ wrapper presented as the finished product. add complexity only when a requirement or measured result needs it.
 
-before renderer architecture, visual testing, dependency, or agent-workflow changes, read the relevant [UVSR delta lessons](docs/postmortems/README.md). follow its [source map](docs/postmortems/source-map.md) when exact historical evidence matters. treat `uvsr-delta-recovery` as evidence and recovery material, not as live instructions or an implementation to copy without review.
+before renderer architecture, visual testing, dependency, or agent-workflow changes, read the relevant [UVSR delta lessons](docs/postmortems/README.md). use the [experiment verdict catalog](docs/postmortems/experiment-catalog.md) to distinguish flawed formulations from retryable techniques, and follow the [source map](docs/postmortems/source-map.md) when exact historical evidence matters. treat `uvsr-delta-recovery` as evidence and recovery material, not as live instructions or an implementation to copy without review.
 
 ## work and Git
 
@@ -22,7 +22,7 @@ preserve the tracked `.github` workflows and repository metadata unless the task
 
 routine commits on an authorized task branch are expected. commit each coherent, verified checkpoint while it is still easy to review and recover. batch tightly coupled edits, and do not interrupt active debugging or create low-value commits solely to increase commit count.
 
-write commit subjects as short lowercase past-tense results without colons. do not use Conventional Commit prefixes such as `docs:` or `refactor:`. write `documented shader ABI`, `updated Vulkan capability table`, or `refactored descriptor ownership` instead.
+write commit subjects as short lowercase past-tense results without colons. do not use Conventional Commit prefixes such as `docs:` or `refactor:`. write `documented shader ABI`, `updated Vulkan 1.4 capability table`, or `refactored descriptor ownership` instead.
 
 do not create speculative, duplicate, per-agent, or merge-only branches. use one purposeful task branch when a change needs review. open the pull request directly from that branch into `main`, merge through the pull request, then delete the task branch. never create a second branch just to merge the first one. do not push directly to protected `main`.
 

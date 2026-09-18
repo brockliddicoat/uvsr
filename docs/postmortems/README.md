@@ -4,6 +4,8 @@ UVSR delta was a long graphics experiment built with substantial help from codin
 
 these postmortems turn that history into guidance for people and LLMs doing graphics programming. the lessons apply across programming languages, graphics APIs, engines, and agent systems. they are organized by failure mode rather than by date so a future contributor can find the relevant rule before repeating an experiment.
 
+start with the [experiment verdict catalog](experiment-catalog.md). it splits the old documents into their actual subprojects and says which formulations were fundamentally flawed, which need a redesigned scope, which remain retryable with a better harness, which were sound but strategically retired, and which never produced enough evidence for a verdict. a better model can improve implementation quality, but it cannot repair missing information or a contradictory contract.
+
 ## how to read the evidence
 
 each document separates three kinds of statement:
@@ -18,12 +20,14 @@ an old passing test proves only what that test asserted. an old failure is usefu
 
 | topic | central lesson |
 | --- | --- |
+| [experiment verdict catalog](experiment-catalog.md) | every distinct experiment receives a plain verdict, failure mechanism, and honest retry boundary |
 | [rendering strategy](rendering-strategy.md) | compare complete pipelines at equal time and quality, and treat missing screen-space information as unknown |
 | [visual verification](visual-verification.md) | make GPU and image results queryable as compact text without reducing correctness to one score |
 | [architecture and dependencies](architecture-and-dependencies.md) | understand and own the contracts at every framework boundary before translating or replacing it |
 | [agent workflow](agent-workflow.md) | give agents bounded goals, competence gates, stop rules, and exact evidence identities |
 | [experiment design](experiment-design.md) | prove one mechanism before adding settings, variants, persistence, and UI |
 | [product and runtime](product-and-runtime.md) | compilation, runtime, visual, performance, package, and release evidence are separate |
+| [CRASH-HOLD](crash-hold.md) | contain a machine-level failure without guessing its cause or turning blocked integration gates into passes |
 | [historical source map](source-map.md) | every preserved postmortem and supporting document maps to its retained lesson |
 
 ## repository role

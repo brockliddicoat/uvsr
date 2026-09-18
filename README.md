@@ -1,11 +1,11 @@
 # cross-platform Rust GPU framework
 
-![host: Rust](https://img.shields.io/badge/host-Rust-000000?logo=rust&logoColor=white)
-![shaders: Rust | Slang | HLSL](https://img.shields.io/badge/shaders-Rust%20%7C%20Slang%20%7C%20HLSL-C62828)
-![backends: D3D12 | Vulkan | Metal 4](https://img.shields.io/badge/backends-D3D12%20%7C%20Vulkan%20%7C%20Metal%204-4C8F20)
-[![license: Polyform Noncommercial](https://img.shields.io/badge/license-polyform_noncommercial-8250DF)](LICENSE.md)
+![host: Rust](https://img.shields.io/badge/host-Rust-000000?logo=rust&logoColor=white&style=flat)
+![shaders: Rust | Slang | HLSL](https://img.shields.io/badge/shaders-Rust%20%7C%20Slang%20%7C%20HLSL-C62828?style=flat)
+![backends: DirectX 12 | Vulkan 1.4 | Metal 4](https://img.shields.io/badge/backends-DirectX%2012%20%7C%20Vulkan%201.4%20%7C%20Metal%204-4C8F20?style=flat)
+[![license: Polyform Noncommercial](https://img.shields.io/badge/license-polyform_noncommercial-8250DF?style=flat)](LICENSE.md)
 
-this repository is the working home for a lightweight Rust graphics framework with explicit D3D12, Vulkan, and Metal 4 backends. the finished system is intended to make Rust, Slang, and HLSL equally usable shader languages, expose modern bindless and GPU-pointer capabilities without hiding native behavior, and provide one conformance system for interactive review and automated diagnosis.
+this repository is the working home for a lightweight Rust graphics framework with explicit DirectX 12, Vulkan 1.4, and Metal 4 backends. the finished system is intended to make Rust, Slang, and HLSL equally usable shader languages, expose modern bindless and GPU-pointer capabilities without hiding native behavior, and provide one conformance system for interactive review and automated diagnosis.
 
 [AGFX](https://github.com/AmelieHeinrich/agfx) and [ShaderToHuman](https://github.com/electronicarts/ShaderToHuman) are design and testing inspirations. their explicit APIs, shader examples, golden-image tests, structured results, and report presentation inform the project, but they are not direct implementation sources or compatibility specifications. this project defines and tests its own Rust contracts.
 
@@ -17,9 +17,9 @@ the project plans to support shaders authored in Rust, Slang, and HLSL across ea
 
 | platform | backend | Rust | Slang | HLSL |
 | --- | --- | :---: | :---: | :---: |
-| Windows | D3D12 | planned | planned | planned |
-| Linux | Vulkan | planned | planned | planned |
-| macOS | Metal 4 | planned | planned | planned |
+| Windows | DirectX 12 | planned | planned | planned |
+| Linux | Vulkan 1.4 | planned | planned | planned |
+| MacOS | Metal 4 | planned | planned | planned |
 
 compiled bytes, shader stage, entry point, source language, and required backend metadata remain explicit. a Rust host that executes only HLSL does not count as Rust shader support.
 
@@ -36,7 +36,7 @@ the detailed contracts live in [architecture](docs/architecture.md), [testing](d
 
 ## lessons from UVSR delta
 
-the repository also preserves what people and LLMs can learn from UVSR delta. its experiments exposed recurring problems in rendering strategy, visual verification, dependency ownership, agent competence, test duration, product evidence, and feature growth. the [postmortem index](docs/postmortems/README.md) reorganizes every historical postmortem into general guidance that applies across languages and graphics APIs.
+the repository also preserves what people and LLMs can learn from UVSR delta. its experiments exposed recurring problems in rendering strategy, visual verification, dependency ownership, agent competence, test duration, product evidence, and feature growth. the [postmortem index](docs/postmortems/README.md) reorganizes every historical postmortem into general guidance, while the [experiment verdict catalog](docs/postmortems/experiment-catalog.md) separates fundamentally flawed formulations from work that could be retried with a better scope, harness, or owner.
 
 the prior C++ implementation and exact historical records remain on [`uvsr-delta-recovery`](https://github.com/brockliddicoat/uvsr/tree/uvsr-delta-recovery). that branch is evidence and recovery material. it is not duplicated into the new product source tree.
 
