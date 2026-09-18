@@ -37,6 +37,57 @@ namespace
         fprintf(stderr, "import upload fixture: %s, object %u, index %zu\n", ImportErrorText(result.error), unsigned(result.object), result.index); exit(1);
     }
     uint32_t Axis(uint32_t axis, uint32_t mip) { const auto value = axis >> mip; return value ? value : 1; }
+    bool FloatWithinUlp(uint32_t expected, uint32_t actual, uint32_t& distance)
+    {
+        distance = expected > actual ? expected - actual : actual - expected;
+        return !((expected ^ actual) & 0x80000000u) &&
+            (expected & 0x7f800000u) != 0x7f800000u &&
+            (actual & 0x7f800000u) != 0x7f800000u && distance <= 4;
+    }
+    bool GeneratedMipMatches(const uint8_t* actual, const uint8_t* expected, size_t bytes,
+        const nvrhi::FormatInfo& format, uint32_t& maximumDifference)
+    {
+        const bool normalized8 = format.format == nvrhi::Format::R8_UNORM ||
+            format.format == nvrhi::Format::RG8_UNORM || format.format == nvrhi::Format::RGBA8_UNORM ||
+            format.format == nvrhi::Format::SRGBA8_UNORM;
+        if (normalized8)
+        {
+            for (size_t byte = 0; byte < bytes; ++byte)
+            {
+                const uint32_t difference = actual[byte] > expected[byte]
+                    ? actual[byte] - expected[byte] : expected[byte] - actual[byte];
+                if (difference > 1)
+                {
+                    fprintf(stderr, "generated normalized mip byte %zu: captured %u, imported %u, difference %u\n",
+                        byte, unsigned(expected[byte]), unsigned(actual[byte]), difference);
+                    return false;
+                }
+                if (difference > maximumDifference) maximumDifference = difference;
+            }
+            return true;
+        }
+        const bool float32 = format.format == nvrhi::Format::R32_FLOAT ||
+            format.format == nvrhi::Format::RG32_FLOAT || format.format == nvrhi::Format::RGB32_FLOAT ||
+            format.format == nvrhi::Format::RGBA32_FLOAT;
+        if (float32 && !(bytes % 4))
+        {
+            for (size_t word = 0; word < bytes; word += 4)
+            {
+                uint32_t captured = 0, imported = 0, difference = 0;
+                memcpy(&captured, expected + word, 4); memcpy(&imported, actual + word, 4);
+                if (captured == imported) continue;
+                if (!FloatWithinUlp(captured, imported, difference))
+                {
+                    fprintf(stderr, "generated float mip word %zu: captured %08x, imported %08x, difference %u ULP\n",
+                        word / 4, captured, imported, difference);
+                    return false;
+                }
+                if (difference > maximumDifference) maximumDifference = difference;
+            }
+            return true;
+        }
+        return false;
+    }
     struct FailedHealth
     {
         RendererUploadHealth real;
@@ -151,7 +202,8 @@ namespace
         }
         return readback;
     }
-    void CompareReadbacks(nvrhi::IDevice* device, nvrhi::IStagingTexture* candidate, RendererGpuReference& reference)
+    void CompareReadbacks(nvrhi::IDevice* device, nvrhi::IStagingTexture* candidate,
+        RendererGpuReference& reference, bool generatedMips)
     {
         const auto& a = candidate->getDesc();
         const uint32_t fields[]{a.width, a.height, a.depth, a.arraySize, uint32_t(a.dimension), a.mipLevels, uint32_t(a.format)};
@@ -171,9 +223,19 @@ namespace
             Require(referenceBytes <= sizeof(expected), "bounded captured texture bytes");
             reference.Read(expected, referenceBytes);
             bool same = true;
+            uint32_t maximumDifference = 0;
             for (uint32_t z = 0; z < Axis(a.depth, mip); ++z) for (size_t row = 0; row < rows; ++row)
-                same &= memcmp(actual + (z * rows + row) * candidatePitch, expected + (z * rows + row) * rowBytes, rowBytes) == 0;
+            {
+                const auto* imported = actual + (z * rows + row) * candidatePitch;
+                const auto* captured = expected + (z * rows + row) * rowBytes;
+                if (memcmp(imported, captured, rowBytes) &&
+                    !(generatedMips && mip && GeneratedMipMatches(imported, captured, rowBytes, format, maximumDifference)))
+                    same = false;
+            }
             device->unmapStagingTexture(candidate);
+            if (same && maximumDifference)
+                fprintf(stderr, "captured mip accepted bounded cross-adapter difference: format %u, %ux%u, slice %u, mip %u, maximum %u\n",
+                    unsigned(a.format), a.width, a.height, slice, mip, maximumDifference);
             if (!same) fprintf(stderr, "captured mip mismatch: format %u, %ux%u, slice %u, mip %u\n", unsigned(a.format), a.width, a.height, slice, mip);
             Require(same, "captured uploaded and generated mip bytes"); ++referenceSubresources;
         }
@@ -221,8 +283,9 @@ namespace
         Good(owner.PollCompletion(health), "texture completion query");
         Require(owner.Progress().phase == RendererUploadPhase::Complete && owner.Progress().gpuComplete, "actual texture completion");
         CompareDecoded(device, candidate, image);
+        const bool compareGeneratedMips = mips && image.Info().allowGeneratedMips;
         image.Reset(); memset(encoded.data, 0xee, encoded.size);
-        if (capturedControl) CompareReadbacks(device, candidate, reference);
+        if (capturedControl) CompareReadbacks(device, candidate, reference, compareGeneratedMips);
         const auto submissions = owner.Progress().submissions;
         Good(owner.Step(1, &passes, health), "completed upload idempotence");
         Require(owner.Progress().submissions == submissions && !owner.Progress().cpuBorrows, "completion does not resubmit");

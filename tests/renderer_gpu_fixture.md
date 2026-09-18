@@ -28,6 +28,12 @@ stable one- or two-ULP difference from the captured adapter. the retained
 second-UV control range aliases transformed position storage, so it uses the
 same bound. larger differences and all non-float differences still fail.
 
+authored image subresources and base levels remain byte-exact. generated mip
+levels allow at most one code value per channel for 8-bit normalized formats or
+four IEEE 754 ULP per word for 32-bit float formats. this covers bounded
+cross-adapter filtering and conversion rounding without weakening source-image,
+native-mip, compressed-texture, layout, or ownership checks.
+
 each of the 12 UI cases records its size, scale, scaling mode, format, atlas
 dimensions, exact atlas, draw hash and exact rendered pixels. the native draw
 hash is captured before rendering: Donut scales clip rectangles in place.
