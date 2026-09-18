@@ -10,6 +10,8 @@
 #include <imgui_internal.h>
 #include <GLFW/glfw3.h>
 #include <directx/d3d12.h>
+#include <directxpackedvector.h>
+#include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <Windows.h>
 #include <cmath>
@@ -128,6 +130,159 @@ namespace
             exact &= strcmp(digest.text, captured[index]) == 0;
         }
         return exact;
+    }
+
+    bool CapturedAdapter(ID3D12Device* device)
+    {
+        Microsoft::WRL::ComPtr<IDXGIFactory4> factory;
+        Require(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))), "DXGI factory for UI adapter identity");
+        Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+        Require(SUCCEEDED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter))),
+            "DXGI adapter for UI reference");
+        DXGI_ADAPTER_DESC1 description{};
+        Require(SUCCEEDED(adapter->GetDesc1(&description)), "DXGI UI adapter description");
+        constexpr unsigned capturedVendor = 0x8086;
+        constexpr unsigned capturedDevice = 0x7d55;
+        constexpr unsigned capturedSubsystem = 0x0c901028;
+        constexpr unsigned capturedRevision = 0x08;
+        const bool captured = description.VendorId == capturedVendor && description.DeviceId == capturedDevice &&
+            description.SubSysId == capturedSubsystem && description.Revision == capturedRevision;
+        char name[512]{};
+        Require(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, description.Description, -1,
+            name, int(sizeof(name)), nullptr, nullptr) > 0, "UTF-8 UI adapter description");
+        printf("UI adapter: %s, PCI %04x:%04x subsystem %08x revision %02x%s\n",
+            name, description.VendorId, description.DeviceId, description.SubSysId,
+            description.Revision, captured ? " (captured adapter)" : " (different adapter)");
+        return captured;
+    }
+
+    void ValidateCrossAdapterPixels(const Bytes& control, const Bytes& candidate,
+        uint32_t width, uint32_t height, uint32_t bytesPerPixel, unsigned caseIndex)
+    {
+        Require(control.size == candidate.size && width > 2 && height > 2 &&
+            (bytesPerPixel == 4 || bytesPerPixel == 8), "cross-adapter UI control shape");
+        const auto pixel = [width, bytesPerPixel](const Bytes& image, uint32_t x, uint32_t y)
+            { return image.data + (size_t(y) * width + x) * bytesPerPixel; };
+        const unsigned char* background = pixel(control, 0, 0);
+        Require(memcmp(background, pixel(candidate, 0, 0), bytesPerPixel) == 0,
+            "cross-adapter UI clear color");
+        size_t controlForegroundPixels = 0;
+        size_t candidateForegroundPixels = 0;
+        size_t coverageDifferences = 0;
+        unsigned fullMaximumDifference = 0;
+        float fullMaximumAbsoluteDifference = 0.f;
+        bool fullFrameFinite = true;
+        uint32_t firstCoverageX = 0, firstCoverageY = 0;
+        for (uint32_t y = 0; y < height; ++y)
+        {
+            for (uint32_t x = 0; x < width; ++x)
+            {
+                const bool referenceForeground = memcmp(pixel(control, x, y), background, bytesPerPixel) != 0;
+                const bool currentForeground = memcmp(pixel(candidate, x, y), background, bytesPerPixel) != 0;
+                controlForegroundPixels += referenceForeground;
+                candidateForegroundPixels += currentForeground;
+                for (unsigned channel = 0; channel < 4; ++channel)
+                {
+                    unsigned referenceValue = 0, currentValue = 0;
+                    if (bytesPerPixel == 4)
+                    {
+                        referenceValue = pixel(control, x, y)[channel];
+                        currentValue = pixel(candidate, x, y)[channel];
+                    }
+                    else
+                    {
+                        memcpy(&referenceValue, pixel(control, x, y) + channel * 2, 2);
+                        memcpy(&currentValue, pixel(candidate, x, y) + channel * 2, 2);
+                    }
+                    const unsigned difference = referenceValue > currentValue ?
+                        referenceValue - currentValue : currentValue - referenceValue;
+                    if (difference > fullMaximumDifference) fullMaximumDifference = difference;
+                    if (bytesPerPixel == 8)
+                    {
+                        const float referenceFloat = DirectX::PackedVector::XMConvertHalfToFloat(
+                            DirectX::PackedVector::HALF(referenceValue));
+                        const float currentFloat = DirectX::PackedVector::XMConvertHalfToFloat(
+                            DirectX::PackedVector::HALF(currentValue));
+                        fullFrameFinite &= std::isfinite(referenceFloat) && std::isfinite(currentFloat);
+                        const float absoluteDifference = fabsf(referenceFloat - currentFloat);
+                        if (absoluteDifference > fullMaximumAbsoluteDifference)
+                            fullMaximumAbsoluteDifference = absoluteDifference;
+                    }
+                }
+                if (referenceForeground != currentForeground)
+                {
+                    if (!coverageDifferences) { firstCoverageX = x; firstCoverageY = y; }
+                    ++coverageDifferences;
+                }
+            }
+        }
+        if (coverageDifferences)
+            fprintf(stderr, "UI case %u coverage differs at %u,%u; captured %zu, current %zu, mismatched %zu\n",
+                caseIndex, firstCoverageX, firstCoverageY, controlForegroundPixels,
+                candidateForegroundPixels, coverageDifferences);
+        Require(!coverageDifferences, "owned UI coverage differs from the cross-adapter control");
+        Require(fullFrameFinite, "cross-adapter UI pixels are not finite");
+        Require(bytesPerPixel == 4 ? fullMaximumDifference <= 1 :
+            fullMaximumAbsoluteDifference <= 1.f / 256.f,
+            "owned UI edge colors differ materially from the cross-adapter control");
+        size_t stablePixels = 0;
+        size_t stableForegroundPixels = 0;
+        unsigned maximumDifference = 0;
+        uint32_t failedX = 0, failedY = 0, failedChannel = 0;
+        bool valid = true;
+        for (uint32_t y = 1; y + 1 < height; ++y)
+        {
+            for (uint32_t x = 1; x + 1 < width; ++x)
+            {
+                const unsigned char* reference = pixel(control, x, y);
+                bool stable = true;
+                for (int offsetY = -1; stable && offsetY <= 1; ++offsetY)
+                    for (int offsetX = -1; stable && offsetX <= 1; ++offsetX)
+                        stable = memcmp(reference, pixel(control,
+                            uint32_t(int(x) + offsetX), uint32_t(int(y) + offsetY)), bytesPerPixel) == 0;
+                if (!stable) continue;
+                ++stablePixels;
+                stableForegroundPixels += memcmp(reference, background, bytesPerPixel) != 0;
+                const unsigned char* current = pixel(candidate, x, y);
+                constexpr unsigned channels = 4;
+                const unsigned bound = bytesPerPixel == 4 ? 1u : 8u;
+                for (unsigned channel = 0; channel < channels; ++channel)
+                {
+                    unsigned referenceValue = 0, currentValue = 0;
+                    if (bytesPerPixel == 4)
+                    {
+                        referenceValue = reference[channel];
+                        currentValue = current[channel];
+                    }
+                    else
+                    {
+                        memcpy(&referenceValue, reference + channel * 2, 2);
+                        memcpy(&currentValue, current + channel * 2, 2);
+                    }
+                    const unsigned difference = referenceValue > currentValue ?
+                        referenceValue - currentValue : currentValue - referenceValue;
+                    if (difference > maximumDifference) maximumDifference = difference;
+                    if (difference > bound && valid)
+                    {
+                        valid = false;
+                        failedX = x; failedY = y; failedChannel = channel;
+                    }
+                }
+            }
+        }
+        Require(stablePixels > size_t(width) * height / 2 && stableForegroundPixels > 1000,
+            "cross-adapter UI reference lacks structural samples");
+        if (!valid)
+            fprintf(stderr, "UI case %u differs inside a stable captured region at %u,%u channel %u; maximum %u\n",
+                caseIndex, failedX, failedY, failedChannel, maximumDifference);
+        Require(valid, "owned UI pixels differ materially from the cross-adapter control");
+        printf("UI case %u cross-adapter control: %zu covered, %zu stable pixels, %zu stable foreground, maximum %u stable and %u full-frame %s\n",
+            caseIndex, controlForegroundPixels, stablePixels, stableForegroundPixels,
+            maximumDifference, fullMaximumDifference,
+            bytesPerPixel == 4 ? "code values" : "binary16 ULP");
+        if (bytesPerPixel == 8)
+            printf("UI case %u cross-adapter full-frame absolute difference: %.9g\n",
+                caseIndex, double(fullMaximumAbsoluteDifference));
     }
 
     void Atlas(Bytes& output, int& width, int& height)
@@ -260,6 +415,7 @@ void TestRendererUi(nvrhi::IDevice* device, ID3D12Device* nativeDevice,
     using Access = RendererUiTestAccess;
     RendererGpuReference reference("renderer_ui_gpu_fixture.bin");
     RendererShaderFactory shaders(device, shaderDirectory.c_str());
+    const bool capturedAdapter = CapturedAdapter(nativeDevice);
     std::error_code error;
     wchar_t previewName[96]{};
     swprintf_s(previewName, L"ui-renderer-reference/run-%lu", GetCurrentProcessId());
@@ -338,6 +494,8 @@ void TestRendererUi(nvrhi::IDevice* device, ID3D12Device* nativeDevice,
             fprintf(stderr, "UI draw hash differs before exact pixel comparison: captured %016llx, current %016llx\n",
                 static_cast<unsigned long long>(referenceDrawHash),
                 static_cast<unsigned long long>(candidateDrawHash));
+        if (capturedFontFiles && capturedAdapter)
+            Require(referenceDrawHash == candidateDrawHash, "owned UI draw data differs from captured input");
         Bytes control; control.Allocate(candidate.size); reference.Read(control.data, control.size);
         if (target.bytesPerPixel == 4)
         {
@@ -356,14 +514,19 @@ void TestRendererUi(nvrhi::IDevice* device, ID3D12Device* nativeDevice,
         Bytes repeated; target.Read(device, repeated);
         Require(repeated.size == candidate.size && memcmp(repeated.data, candidate.data, candidate.size) == 0,
             "owned UI pixels are not repeatable");
-        if (capturedFontFiles)
+        if (capturedFontFiles && capturedAdapter)
             Require(control.size == candidate.size && memcmp(control.data, candidate.data, control.size) == 0,
                 "owned UI pixels differ from captured GPU rendering");
+        else if (capturedFontFiles)
+            ValidateCrossAdapterPixels(control, candidate, width, height, target.bytesPerPixel, caseIndex);
+        const char* comparison = capturedFontFiles && capturedAdapter ? "exact captured reference" :
+            capturedFontFiles ? "bounded captured control and exact repeat" :
+            "deterministic smoke with different Windows font revision";
         printf("UI case %u: %dx%d scale %.2f explicit %d format %u, atlas %dx%d, draw %016llx, pixels %016llx %s\n",
             caseIndex, test.width, test.height, test.scale, int(test.explicitScaling), unsigned(test.format),
             candidateAtlasWidth, candidateAtlasHeight, static_cast<unsigned long long>(candidateDrawHash),
             static_cast<unsigned long long>(Hash(14695981039346656037ull, candidate.data, candidate.size)),
-            capturedFontFiles ? "exact captured reference" : "exact repeat with different Windows font revision");
+            comparison);
         if (caseIndex == 0)
         {
             Require(context.BeginFrame(test.width, test.height, 1,1,1.f/60.f,true), "unfocused frame");

@@ -39,15 +39,27 @@ native-mip, compressed-texture, layout, or ownership checks.
 
 each of the 12 UI cases records its size, scale, scaling mode, format, atlas
 dimensions, exact atlas, draw hash and exact rendered pixels. the exact UI
-control applies when Segoe UI Semibold is
+pixel control applies when D3D12 reports the captured Intel Arc Graphics
+adapter (`8086:7d55`, subsystem `0c901028`, revision `08`) and Segoe UI Semibold
+is
 `2d9b22d71f72de2823fee5d9c8bc1b0fc32b2577c4c27b9ec6abdbb8df0e1731`
 and Segoe UI Bold is
 `aeb9e4a6ec5cc59f4d72df8189032d7dbb28f45161cf1552174818b5465dac4e`.
-the test logs both installed font identities. a different Windows font revision
-still renders every case twice and requires byte-exact repetition, but does not
-claim equivalence to the inapplicable captured font control. the native draw
-hash is captured before rendering and reported as a diagnostic before the
-exact rendered-pixel decision: Donut scales clip rectangles in place.
+the test logs the adapter and both installed font identities. with the captured
+fonts on another adapter, every 8-bit channel in the complete fixed image must
+stay within one code value. binary16 output must stay within `1/256` throughout
+and within eight ULP in each fixed control's locally uniform 3 by 3 regions.
+the complete foreground coverage mask must remain exact, including thin glyph
+strokes and rasterized edges. together, these checks reject shifted, missing,
+extra, wrongly blended, or wrongly converted draws while allowing the measured
+cross-adapter edge-color rounding. all 12 cases must also render twice
+byte-exactly on the current adapter. a different Windows
+font revision runs that repeatability check as a deterministic smoke test and
+does not claim visual equivalence to the inapplicable font control. the exact
+atlas remains required whenever the captured font files are installed. the
+native draw hash is captured before rendering. it is exact on the captured
+adapter and diagnostic on another host because the generated circle uses the
+host math runtime before any GPU work. Donut scales clip rectangles in place.
 the [capture correction](C:/Users/brock/OneDrive/Documents/uvsr/work/donut-factor-out-v4/runs/20260909-01/09-gpu-controls-v1/reference-02/correction.json)
 changes only that hash in the two framebuffer-scaling cases. all captured pixels
 remain unchanged. current rendering also repeats the frame against the fixed
