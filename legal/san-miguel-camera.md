@@ -18,8 +18,8 @@ this relationship. the reused material is the small camera-data selection only.
 
 ## evidence
 
-- [recorded camera provenance and mapping](../../assets/scenes/san_miguel_retextured/source-provenance.json)
-- [San Miguel scene descriptor](../../assets/scenes/san_miguel_retextured/san_miguel_retextured.scene.json)
+- [recorded camera provenance and mapping](../assets/scenes/san_miguel_retextured/source-provenance.json)
+- [San Miguel scene descriptor](../assets/scenes/san_miguel_retextured/san_miguel_retextured.scene.json)
 
 ## commercial clearance
 

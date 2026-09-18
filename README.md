@@ -9,7 +9,7 @@ this repository is the working home for a lightweight Rust graphics framework wi
 
 [AGFX](https://github.com/AmelieHeinrich/agfx) and [ShaderToHuman](https://github.com/electronicarts/ShaderToHuman) are design and testing inspirations. their explicit APIs, shader examples, golden-image tests, structured results, and report presentation inform the project, but they are not direct implementation sources or compatibility specifications. this project defines and tests its own Rust contracts.
 
-the first end-to-end proof will run a Rust-authored shader through the real [NoGraphicsAPI](https://github.com/sebbbi/NoGraphicsAPI) host, exercising physical GPU pointers and native descriptor heaps. reusable compiler and shader-library work will be designed for contribution to [Rust-GPU](https://github.com/Rust-GPU/rust-gpu).
+the first end-to-end proof will run a Rust-authored shader through the real [NoGraphicsAPI](https://github.com/sebbbi/NoGraphicsAPI) host, exercising physical GPU pointers and native descriptor heaps. reusable compiler and shader-library work will be designed for contribution to [RustGPU](https://github.com/Rust-GPU/rust-gpu).
 
 ## Target Matrix
 
@@ -28,7 +28,7 @@ compiled bytes, shader stage, entry point, source language, and required backend
 - provide a small explicit API with project-owned behavior and native escape hatches.
 - use explicit Rust ownership with small reviewed `unsafe` boundaries around native graphics APIs.
 - retain backend-specific capabilities and failure modes where flattening them would hide real behavior.
-- keep generic Rust-GPU changes separate from framework integration and narrow NoGraphicsAPI work.
+- keep generic RustGPU changes separate from framework integration and narrow NoGraphicsAPI work.
 - use one result model for human reports and concise machine-readable failure analysis.
 - prove one vertical slice before expanding API coverage, settings, or backend variants.
 
@@ -47,7 +47,7 @@ the prior C++ implementation and exact historical records remain on [`uvsr-delta
 3. prove device creation, one shader, one resource, one submission, readback, and retirement on each native backend.
 4. prove the risky Rust shader, physical-pointer, descriptor-heap, and translation paths with bounded probes.
 5. expand only the API and shader-language cells supported by executed evidence.
-6. contribute reusable Rust-GPU changes as focused upstream patches.
+6. contribute reusable RustGPU changes as focused upstream patches.
 
 the complete sequence and exit criteria are in the [roadmap](docs/roadmap.md).
 

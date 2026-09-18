@@ -19,10 +19,10 @@ asset derivative.
 
 ## evidence
 
-- [scene overview](../../assets/scenes/san_miguel_retextured/README.md)
-- [source provenance](../../assets/scenes/san_miguel_retextured/source-provenance.json)
-- [original notice](../../assets/scenes/san_miguel_retextured/LICENSE.txt)
-- [import report](../../assets/scenes/san_miguel_retextured/blender-import-report.json)
+- [scene overview](../assets/scenes/san_miguel_retextured/README.md)
+- [source provenance](../assets/scenes/san_miguel_retextured/source-provenance.json)
+- [original notice](../assets/scenes/san_miguel_retextured/LICENSE.txt)
+- [import report](../assets/scenes/san_miguel_retextured/blender-import-report.json)
 - packaging commit `f7c0c87d8cba6880428fbc34400eb2882fb5182e`
 
 ## commercial clearance

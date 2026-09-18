@@ -24,7 +24,7 @@ the supplied GLB is a separate Blender export. it is not a member of the hashed
 `Bistro_v5_2.zip`. the supporting package therefore does not by itself prove
 that the CC BY 4.0 grant covers this exact GLB. preserve the attribution and
 modification disclosures, and confirm the GLB's chain of title before commercial
-distribution. the [legal record](../../../legal/documentation/amazon-lumberyard-bistro.md)
+distribution. the [legal record](../../../legal/bistro.md)
 owns that clearance boundary.
 
 ## Conversion

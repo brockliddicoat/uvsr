@@ -8,7 +8,7 @@ build a lightweight cross-platform Rust graphics framework with native DirectX 1
 
 support Rust, Slang, and HLSL shader sources across every applicable DirectX 12, Vulkan 1.4, and Metal 4 cell. keep compiled bytes, stage, entry point, source language, and required metadata explicit and separate. a Rust host running only HLSL is not Rust shader support.
 
-the NoGraphicsAPI prototype must exercise physical GPU pointers and native descriptor heaps with Rust shaders in the actual host. keep reusable Rust-GPU compiler and shader-library work generic. keep framework integration and narrow NoGraphicsAPI work outside Rust-GPU patches.
+the NoGraphicsAPI prototype must exercise physical GPU pointers and native descriptor heaps with Rust shaders in the actual host. keep reusable RustGPU compiler and shader-library work generic. keep framework integration and narrow NoGraphicsAPI work outside RustGPU patches.
 
 do not add a render graph, ECS, a second abstraction layer, mandatory shared ownership, or a C++ wrapper presented as the finished product. add complexity only when a requirement or measured result needs it.
 
