@@ -12,7 +12,7 @@ UVSR is a focused C++17 and HLSL renderer for real time visibility, lighting,
 and antialiasing research. it is DirectX 12 only and uses ImGui. developer and
 production builds use the same renderer features.
 
-## product
+## Product
 
 UVSR provides deferred physically based lighting, one conventional path tracer,
 ray traced directional, sky, and flashlight
@@ -22,9 +22,13 @@ blue, and spatiotemporal blue noise set. material editing, pixel zoom, timing,
 buffer inspection, settings snapshots, and diagnostics remain available through
 the ImGui interface.
 
+the [Bistro source asset](assets/scenes/bistro_interior_retextured/README.md)
+omits 32 placemats and four floating wine glasses. supported and rack-hung
+glasses remain.
+
 the [user guide](docs/user-guide.md) explains controls and visible outcomes.
 
-## install and update
+## Install and Update
 
 the only shipped executable names are `uvsr-launcher.exe` and
 `uvsr-engine.exe`. the launcher installs and updates a signed and hash bound
@@ -41,7 +45,7 @@ SDKs, debug layers, symbols, or benchmark tools. see the
 download is linked here until an exact published artifact has passed the release
 gate.
 
-## build
+## Build
 
 use 64 bit Windows 11, Visual Studio 2022 with C++, a Windows SDK, CMake 3.24 or
 newer, and a DirectX 12 adapter with Shader Model 6.5. ray queries require DXR
@@ -60,7 +64,7 @@ ctest --test-dir $buildRoot -C Release --output-on-failure
 use a stable `<worktree-id>`. use `BUILD_TESTING=OFF` only for a production
 package. keep builds, caches, downloads, binaries, and staging outside Git.
 
-## documentation
+## Documentation
 
 - [documentation map](docs/README.md)
 - [settings and snapshots](docs/settings.md)
@@ -72,7 +76,7 @@ package. keep builds, caches, downloads, binaries, and staging outside Git.
 - [legal and provenance guide](legal/README.md)
 - [contribution guide](CONTRIBUTING.md)
 
-## license
+## License
 
 first party material is available under the
 [Polyform Noncommercial License](LICENSE.md). commercial use or sublicensing

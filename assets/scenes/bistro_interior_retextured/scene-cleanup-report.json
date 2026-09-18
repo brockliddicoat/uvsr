@@ -1,0 +1,264 @@
+{
+  "schemaVersion": 1,
+  "operation": "remove 32 placemats and four unsupported wine glasses with their liquid children; remap node and mesh indices only",
+  "source": {
+    "path": "components/bistro_interior.gltf",
+    "bytes": 3650166,
+    "sha256": "b6b8fe05764a2f47e037e7ca78ad5a04fbbfff4eb900c4e0ad4ee6f0e9314d68"
+  },
+  "output": {
+    "path": "components/bistro_interior.gltf",
+    "bytes": 3626572,
+    "sha256": "cf82b0266dfaecc44a3a91868905b9258268f9d8c2fab5aa39f73bae1c92681c"
+  },
+  "counts": {
+    "before": {
+      "nodes": 1469,
+      "meshes": 1415,
+      "meshInstances": 1415,
+      "primitives": 2247,
+      "triangles": 1316791,
+      "wineGlasses": 138,
+      "placemats": 32
+    },
+    "after": {
+      "nodes": 1429,
+      "meshes": 1375,
+      "meshInstances": 1375,
+      "primitives": 2207,
+      "triangles": 1285679,
+      "wineGlasses": 134,
+      "placemats": 0
+    }
+  },
+  "removedNodes": [
+    {
+      "sourceIndex": 342,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1270",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 371,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1246",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 372,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1248",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 373,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1250",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 374,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1252",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 375,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1254",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 376,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1256",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 377,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1258",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 378,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1260",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 379,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1262",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 380,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1264",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 381,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1266",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 382,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1268",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 383,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1272",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 384,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1274",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 385,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1276",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 386,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1278",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 387,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1280",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 388,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1282",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 389,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1284",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 390,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1286",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 391,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1288",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 392,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1290",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 393,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1292",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 394,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1294",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 395,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1296",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 396,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1298",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 397,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1300",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 398,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1302",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 399,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1304",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 400,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1306",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 401,
+      "name": "Bistro_Research_Interior_Cotton_Placemat_1308",
+      "reason": "requested placemat removal"
+    },
+    {
+      "sourceIndex": 1319,
+      "name": "Wine",
+      "reason": "liquid belonging to removed wine glass"
+    },
+    {
+      "sourceIndex": 1320,
+      "name": "WineGlass",
+      "reason": "unsupported wine glass"
+    },
+    {
+      "sourceIndex": 1351,
+      "name": "Wine.036",
+      "reason": "liquid belonging to removed wine glass"
+    },
+    {
+      "sourceIndex": 1352,
+      "name": "WineGlass2.008",
+      "reason": "unsupported wine glass"
+    },
+    {
+      "sourceIndex": 1353,
+      "name": "Wine.033",
+      "reason": "liquid belonging to removed wine glass"
+    },
+    {
+      "sourceIndex": 1354,
+      "name": "WineGlass3.008",
+      "reason": "unsupported wine glass"
+    },
+    {
+      "sourceIndex": 1355,
+      "name": "Wine.035",
+      "reason": "liquid belonging to removed wine glass"
+    },
+    {
+      "sourceIndex": 1356,
+      "name": "WineGlass4.008",
+      "reason": "unsupported wine glass"
+    }
+  ],
+  "preserved": "rack-hung, shelf-supported, cart-supported and table-supported glasses; plates, tables, cameras, materials, textures, accessors, buffer views and all five binary buffers",
+  "buffers": [
+    {
+      "path": "components/buffers/bistro_interior-01.bin",
+      "bytes": 87815365,
+      "sha256": "aaedaeb09e8284172b7a0d6b4e72e25d73f17c982e6a1e9f53c7b987b91f62b4"
+    },
+    {
+      "path": "components/buffers/bistro_interior-02.bin",
+      "bytes": 87901321,
+      "sha256": "360ace249926f03b151558ea974baba18105a6c6d759d1757cf852e1a0a723b5"
+    },
+    {
+      "path": "components/buffers/bistro_interior-03.bin",
+      "bytes": 86750949,
+      "sha256": "c82e2a41ace134d717057a1e9437ca58cb9dae165d3ff0c1ffda97a762f79f89"
+    },
+    {
+      "path": "components/buffers/bistro_interior-04.bin",
+      "bytes": 84441805,
+      "sha256": "57760d1fe6904aecb8a2cf651cf344a5ad3f3ffadfe4162e394e09fa80179c0b"
+    },
+    {
+      "path": "components/buffers/bistro_interior-05.bin",
+      "bytes": 72442000,
+      "sha256": "2366fb0ff918c73b825b55e1526a2aa1343724047146cf0fb7e4a0655384b784"
+    }
+  ]
+}

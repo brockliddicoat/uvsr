@@ -47,5 +47,11 @@
     "direction": [0.992681, -0.037313, -0.114857],
     "up": [0.037065, 0.999304, -0.004289],
     "verticalFovDegrees": 33.9666
-  }
+  },
+  "modifications": [
+    {
+      "operation": "remove 32 placemats and four unsupported wine glasses with their liquid children; remap node and mesh indices only",
+      "report": "scene-cleanup-report.json"
+    }
+  ]
 }

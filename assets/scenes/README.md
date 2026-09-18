@@ -1,4 +1,4 @@
-# bundled scenes
+# Bundled Scenes
 
 UVSR packages exactly two scenes:
 
@@ -18,6 +18,9 @@ allowlist is
 [`cmake/runtime-asset-map.def`](../../cmake/runtime-asset-map.def).
 provenance and legal files are not inferred from directory contents.
 
-the scene assets are protected byte for byte. a replacement or repaired asset
-must update its adjacent provenance, generated reports, package inventory, and
-legal record in the same change.
+the scene assets are protected. a replacement or repaired asset must update its
+adjacent provenance, add a report identifying the original and current bytes,
+and update the affected package inventory and legal record in the same change.
+retain original conversion reports as historical evidence. Bistro's
+[cleanup report](bistro_interior_retextured/scene-cleanup-report.json) records
+its subsequent object removals without changing the original binary buffers.

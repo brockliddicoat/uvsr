@@ -17,12 +17,19 @@ fallbacks. The GLB is associated with the McGuire archive entry but is not a
 member of the cited `Bistro_v5_2.zip`; the supporting ZIP cannot by itself prove
 the immediate GLB's license lineage.
 
+the subsequent scene cleanup removes 32 placemats, four unsupported wine glasses,
+and their four liquid children. rack-hung and surface-supported glasses remain.
+the cleanup changes scene nodes and meshes only, preserving all binary buffers,
+materials, textures, and retained transforms. the original attribution and
+license notices are unchanged.
+
 ## Evidence
 
 - [Scene Overview](../../assets/scenes/bistro_interior_retextured/README.md)
 - [Source Provenance](../../assets/scenes/bistro_interior_retextured/source-provenance.json)
 - [Bundled License](../../assets/scenes/bistro_interior_retextured/LICENSE.txt)
 - [Buffer Repack Report](../../assets/scenes/bistro_interior_retextured/components/buffer-repack-report.json)
+- [Scene Cleanup Report](../../assets/scenes/bistro_interior_retextured/scene-cleanup-report.json)
 - Packaging commit `f7c0c87d8cba6880428fbc34400eb2882fb5182e`
 
 ## Commercial Clearance

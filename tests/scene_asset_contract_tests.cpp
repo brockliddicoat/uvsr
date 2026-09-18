@@ -136,7 +136,7 @@ namespace
         { "bistro_interior_retextured", "Bistro Interior", "bistro_interior.gltf",
             { { 4.444546f, 2.258351f, -2.746721f }, { .992681f, -.037313f, -.114857f },
                 { .037065f, .999304f, -.004289f }, 33.9666f },
-            "5acbcd2585a9c3be6d04715ccfb9b5ed7018c3a9b73bf3d9c0662990117511bf",
+            "dd8e4c8c4ae163ef274c3877097ae98c2b04305660997938a7e23c0e1b6d7685",
             "613b86564d7f785a43b83f9ba59b008a758d3f8e0dac93a2e7e9b0d154f31a76", 74, 201, true },
         { "san_miguel_retextured", "San Miguel", "san_miguel.gltf",
             { { 27.6255f, 1.49616f, 2.42353f }, { -.9673232088f, -.0081301951f, -.2534160802f },
@@ -224,10 +224,36 @@ namespace
             const auto path = Relative(uvsr::json::Borrow(Member(output, "path", Kind::String).Text()));
             const auto bytes = Integer(output, "bytes");
             Require(reported.insert(path).second, "repack lists an output twice");
-            Require(fs::file_size(root / "components" / path) == bytes &&
-                HashFile(root / "components" / path) ==
-                    Lower(uvsr::json::Borrow(Member(output, "sha256", Kind::String).Text())),
-                "repacked output differs from its audited bytes: " + path);
+            if (scene.bistro && path == scene.model)
+            {
+                // The original repack is immutable provenance. The reviewed node/mesh
+                // cleanup has its own exact identity and must start from that repack.
+                const auto cleanup = Audit(root / "scene-cleanup-report.json",
+                    "c911a4ad1997b9f8c2a359fb05673ecedced19995439eb14daccb76812f07b66");
+                const auto source = Member(cleanup, "source", Kind::Object);
+                const auto current = Member(cleanup, "output", Kind::Object);
+                const auto modifications = Member(provenance, "modifications", Kind::Array);
+                Require(modifications.Count() == 1 &&
+                    uvsr::json::Borrow(Member(modifications.At(0), "report", Kind::String).Text()) ==
+                        "scene-cleanup-report.json", "Bistro provenance lost its cleanup record");
+                Require(uvsr::json::Borrow(Member(source, "path", Kind::String).Text()) == "components/" + path &&
+                    uvsr::json::Borrow(Member(current, "path", Kind::String).Text()) == "components/" + path &&
+                    Integer(source, "bytes") == bytes &&
+                    Lower(uvsr::json::Borrow(Member(source, "sha256", Kind::String).Text())) ==
+                        Lower(uvsr::json::Borrow(Member(output, "sha256", Kind::String).Text())),
+                    "Bistro cleanup is not based on the original repack");
+                Require(fs::file_size(root / "components" / path) == Integer(current, "bytes") &&
+                    HashFile(root / "components" / path) ==
+                        Lower(uvsr::json::Borrow(Member(current, "sha256", Kind::String).Text())),
+                    "Bistro glTF differs from its audited cleanup");
+            }
+            else
+            {
+                Require(fs::file_size(root / "components" / path) == bytes &&
+                    HashFile(root / "components" / path) ==
+                        Lower(uvsr::json::Borrow(Member(output, "sha256", Kind::String).Text())),
+                    "repacked output differs from its audited bytes: " + path);
+            }
             if (fs::path(path).extension() == ".bin")
             {
                 Require(bytes <= 90000000u, "repacked buffer exceeds its 90 MB limit");
@@ -386,6 +412,8 @@ namespace
             }
         }
         Require(triangles > 0 && std::isfinite(diagonal) && diagonal > 0, "scene has no finite geometry");
+        if (scene.bistro)
+            Require(triangles == 1285679, "Bistro cleanup changed unexpected triangle instances");
         for (const auto distance : hits)
             Require(std::isfinite(distance) && distance > radius && distance <= diagonal * 1.01f,
                 "initial camera lost floor, four-sided enclosure or forward geometry");
@@ -442,6 +470,27 @@ namespace
                 "scene retains a material domain the renderer cannot draw");
         Require(cgltf_load_buffers(&options, data.get(), path.c_str()) == cgltf_result_success &&
             cgltf_validate(data.get()) == cgltf_result_success, "CGltf rejected retained buffer/accessor data");
+        if (scene.bistro)
+        {
+            Require(data->nodes_count == 1429 && data->meshes_count == 1375,
+                "Bistro cleanup changed unexpected nodes or meshes");
+            size_t glasses = 0, storedGlasses = 0;
+            for (const auto* node : SceneNodes(*data))
+            {
+                const std::string_view name = node->name ? node->name : "";
+                Require(name.find("Cotton_Placemat") == std::string_view::npos &&
+                    name != "WineGlass" && name != "WineGlass2.008" &&
+                    name != "WineGlass3.008" && name != "WineGlass4.008",
+                    "Bistro retained a removed placemat or floating wine glass");
+                if (!node->mesh)
+                    continue;
+                const bool stored = name.substr(0, 10) == "Wine_Glass";
+                storedGlasses += stored;
+                glasses += stored || name.substr(0, 9) == "WineGlass";
+            }
+            Require(glasses == 134 && storedGlasses == 73,
+                "Bistro cleanup lost a supported or rack-hung glass");
+        }
         CheckGeometry(*data, scene);
     }
 
