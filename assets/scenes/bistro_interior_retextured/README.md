@@ -1,11 +1,11 @@
-# Bistro interior
+# Bistro Interior
 
-UVSR packages a converted, user supplied Blender GLB of the Wine variant
+this scene is a converted, user supplied Blender GLB of the Wine variant
 associated with Amazon Lumberyard Bistro. the exact source and conversion facts
 are in [`source-provenance.json`](source-provenance.json). the source notes,
 license, provenance JSON, and generated reports are preserved records.
 
-## source identity and terms
+## Source Identity and Terms
 
 | item | bytes | SHA-256 |
 | --- | ---: | --- |
@@ -27,22 +27,37 @@ modification disclosures, and confirm the GLB's chain of title before commercial
 distribution. the [legal record](../../../legal/documentation/amazon-lumberyard-bistro.md)
 owns that clearance boundary.
 
-## conversion
+## Conversion
 
 the GLB was repacked as standard glTF with five external buffers. buffer views
 were copied without decoding or reencoding; only alignment padding was added.
 the generated
 [`components/buffer-repack-report.json`](components/buffer-repack-report.json)
-records all six output files, 423,001,606 output bytes, and every SHA-256. its
+records the original six output files, 423,001,606 output bytes, and every SHA-256. its
 own SHA-256 is
 `0E65F90AF33D12DF98DE3AAD1868507768A829391B51FBEAD372B995343E65F0`.
 
-UVSR has no blended draw pass. the conversion changes `Water`, `Ice`, `Beer`,
+the original UVSR conversion targeted a renderer without a blended draw pass.
+it changed `Water`, `Ice`, `Beer`,
 `Red_Wine`, and `White_Wine` from BLEND to OPAQUE while preserving their other
 recorded values. this keeps 227 primitives and 109,600 triangles visible, but
 does not preserve liquid transparency. no analytic lights are present.
 
-## initial camera
+## Scene Cleanup
+
+the scene omits all 32 cotton placemats and four floating wine glasses,
+`WineGlass`, `WineGlass2.008`, `WineGlass3.008`, and `WineGlass4.008`, including
+their liquid children. the 32 glasses hanging in modeled racks remain, as do
+all glasses supported by tables, shelves, and the cart.
+
+[`scene-cleanup-report.json`](scene-cleanup-report.json) records the original
+and current glTF identities, the exact removed nodes, and geometry counts.
+only node and mesh arrays and their references changed. all remaining geometry,
+transforms, materials, textures, cameras, and five binary buffers are unchanged.
+the original repack report remains historical evidence, so its glTF hash refers
+to the pre-cleanup file. the cleanup report identifies the current glTF.
+
+## Initial Camera
 
 the descriptor retains the source direction, up vector, and 33.9666 degree
 vertical field of view. its position is the embedded camera translated 1 metre

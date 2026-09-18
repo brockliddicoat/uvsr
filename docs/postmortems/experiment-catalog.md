@@ -1,10 +1,10 @@
-# experiment verdict catalog
+# Experiment Verdict Catalog
 
-this catalog separates the mechanisms hidden inside the older UVSR delta postmortems. one historical document often contained several experiments with different outcomes, so the document itself does not receive one blanket verdict.
+this catalog separates the mechanisms hidden inside the older UVSR Delta postmortems. one historical document often contained several experiments with different outcomes, so the document itself does not receive one blanket verdict.
 
 the old AO ledger contains 414 inventory rows. many were papers, source candidates, forecasts, controls, or unbuilt ideas rather than executed experiments. calling all 414 successful or failed experiments would be false. this catalog groups those rows by the distinct hypothesis they tested. the immutable ledger remains the item-level source.
 
-## verdict language
+## Verdict Language
 
 | verdict | meaning |
 | --- | --- |
@@ -16,7 +16,7 @@ the old AO ledger contains 414 inventory rows. many were papers, source candidat
 
 “flawed as framed” applies to the exact contract below, not to every technique sharing its name. “retryable” is not a recommendation to restore old code. it means a clean experiment could answer a useful question.
 
-## quick separation
+## Quick Separation
 
 | verdict | experiments |
 | --- | ---: |
@@ -29,7 +29,7 @@ the old AO ledger contains 414 inventory rows. many were papers, source candidat
 
 the first group should not be retried under the same contract. the second needs a different scope or ownership model before code. the third can justify a clean prototype once its fixture and oracle exist. the fourth should not be mislabeled as failed, and the fifth needs new evidence before anyone argues for or against it.
 
-## lighting, visibility, and sampling
+## Lighting, Visibility, and Sampling
 
 | id | experiment | verdict | general finding and honest retry boundary | evidence |
 | --- | --- | --- | --- | --- |
@@ -75,7 +75,7 @@ the first group should not be retried under the same contract. the second needs 
 | L40 | continuing screen-space optimization without a fresh comparison to hardware ray tracing | redesign before retry | ray tracing became fast enough to change the original tradeoff while UVSR kept tuning individual screen-space stages. compare complete setup, trace, hierarchy, filter, reconstruction, history, and composition costs on current target hardware before choosing either path. | [diffuse removal][diffuse] |
 
 
-## temporal reconstruction, denoising, and authored motion
+## Temporal Reconstruction, Denoising, and Authored Motion
 
 | id | experiment | verdict | general finding and honest retry boundary | evidence |
 | --- | --- | --- | --- | --- |
@@ -96,7 +96,7 @@ the first group should not be retried under the same contract. the second needs 
 | T15 | collision-only flashlight mount | sound or strategically retired | a swept emitter sphere had one physical job and a testable safety contract. separating collision from cosmetic aim removed the unstable scene-depth controller. | [flashlight postmortem][flashlight] |
 | T16 | footprint, persistent-object, or projected-centroid flashlight targeting | retryable with a harness | a new attempt needs a stable target definition and a projected trajectory metric before response curves. steering, mount motion, and collision should be compared separately. | [flashlight postmortem][flashlight] |
 
-## presentation, controls, and runtime
+## Presentation, Controls, and Runtime
 
 | id | experiment | verdict | general finding and honest retry boundary | evidence |
 | --- | --- | --- | --- | --- |
@@ -122,7 +122,7 @@ the first group should not be retried under the same contract. the second needs 
 | P20 | an HDR-range CMAA2 shader axis | insufficient evidence | compiling an HDR macro while feeding display-linear color added no behavior. a retry would need an intentional scene-linear or HDR-output placement and matched image tests. | [engine cleanup][engine-cleanup] |
 
 
-## architecture, delivery, tests, and agent operation
+## Architecture, Delivery, Tests, and Agent Operation
 
 | id | experiment | verdict | general finding and honest retry boundary | evidence |
 | --- | --- | --- | --- | --- |
@@ -144,7 +144,7 @@ the first group should not be retried under the same contract. the second needs 
 | A16 | real registry and shortcut mutation inside a broad launcher contract test | redesign before retry | the integration goal was valid, but the harness crossed many destructive system boundaries before its first assertion and lacked enough phase isolation for safe diagnosis. offline evidence must precede any narrower rerun. | [CRASH-HOLD](crash-hold.md) |
 | A17 | CRASH-HOLD as a response to repeated machine failure | sound or strategically retired | the hold preserved evidence, prevented deliberate reproduction, and allowed audited source, build, static, and pure tests to continue. it correctly left affected release gates pending. | [CRASH-HOLD](crash-hold.md) |
 
-## what a stronger model can and cannot change
+## What a Stronger Model Can and Cannot Change
 
 a stronger model may implement a sound algorithm more faithfully, trace ownership faster, or design a better test. it cannot change an information limit or make contradictory evidence valid. a better prompt is useful only when it narrows the hypothesis, names the owner, supplies the missing fixture and oracle, and gives the agent a stop condition.
 

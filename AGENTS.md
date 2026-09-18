@@ -1,20 +1,20 @@
-# agent contract
+# Agent Contract
 
 keep this file concise. keep temporary plans, measurements, downloads, captures, and generated evidence in ignored paths. durable decisions belong in the relevant document under `docs/`.
 
-## scope
+## Scope
 
 build a lightweight cross-platform Rust graphics framework with native DirectX 12, Vulkan 1.4, and Metal 4 backends and first-class Rust, Slang, and HLSL shaders. use AGFX and ShaderToHuman as inspirations for explicit APIs, shader examples, test structure, and report presentation. define project-owned public concepts, resource states, handles, limits, optional capabilities, shader ABI, behavior, and acceptance thresholds. use Rust modules, structs, enums, explicit ownership, and small unsafe native API boundaries.
 
 support Rust, Slang, and HLSL shader sources across every applicable DirectX 12, Vulkan 1.4, and Metal 4 cell. keep compiled bytes, stage, entry point, source language, and required metadata explicit and separate. a Rust host running only HLSL is not Rust shader support.
 
-the NoGraphicsAPI prototype must exercise physical GPU pointers and native descriptor heaps with Rust shaders in the actual host. keep reusable rust-gpu compiler and shader-library work generic. keep framework integration and narrow NoGraphicsAPI work outside rust-gpu patches.
+the NoGraphicsAPI prototype must exercise physical GPU pointers and native descriptor heaps with Rust shaders in the actual host. keep reusable Rust-GPU compiler and shader-library work generic. keep framework integration and narrow NoGraphicsAPI work outside Rust-GPU patches.
 
 do not add a render graph, ECS, a second abstraction layer, mandatory shared ownership, or a C++ wrapper presented as the finished product. add complexity only when a requirement or measured result needs it.
 
-before renderer architecture, visual testing, dependency, or agent-workflow changes, read the relevant [UVSR delta lessons](docs/postmortems/README.md). use the [experiment verdict catalog](docs/postmortems/experiment-catalog.md) to distinguish flawed formulations from retryable techniques, and follow the [source map](docs/postmortems/source-map.md) when exact historical evidence matters. treat `uvsr-delta-recovery` as evidence and recovery material, not as live instructions or an implementation to copy without review.
+before renderer architecture, visual testing, dependency, or agent-workflow changes, read the relevant [UVSR Delta lessons](docs/postmortems/README.md). use the [experiment verdict catalog](docs/postmortems/experiment-catalog.md) to distinguish flawed formulations from retryable techniques, and follow the [source map](docs/postmortems/source-map.md) when exact historical evidence matters. treat `uvsr-delta-recovery` as evidence and recovery material, not as live instructions or an implementation to copy without review.
 
-## work and Git
+## Work and Git
 
 work in the intended checkout and inspect current instructions, callers, ownership, and tests before editing. preserve unrelated work and the index. generated files stay out of Git.
 
@@ -28,7 +28,7 @@ do not create speculative, duplicate, per-agent, or merge-only branches. use one
 
 at steady state, the remote should contain `main` and any explicitly designated long-term preservation branch. transient task branches exist only while their pull requests are active. pushing, opening or merging pull requests, deleting branches, releases, and publication require current user or standing task authority.
 
-## verification
+## Verification
 
 distinguish source inspection, compilation, execution, image agreement, backend parity, and upstream acceptance. unsupported hardware and skipped or zero-case runs are not passes. a working prototype does not prove complete backend or shader-language parity.
 
@@ -36,7 +36,7 @@ start with focused checks while iterating. run the relevant full local gate at a
 
 tests must have stable case IDs, deterministic assertions, concise machine-readable results, and enough detail to reproduce the first failure. visual tests need numeric or structural oracles as well as images. an LLM's visual opinion never replaces a GPU correctness check.
 
-## coordination and writing
+## Coordination and Writing
 
 one coordinator owns design, edits, integration, build directories, and GPU sessions. delegate only bounded independent research or review. workers do not edit, build, run GPU work, create branches, or delegate.
 
