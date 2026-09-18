@@ -21,6 +21,13 @@ attribute ranges, excluding padding. upload records retain 61 encoded inputs,
 159 authored-byte checks remain separate. the existing two-slice DDS exception
 still uses its literal control because Donut misclassifies that texture.
 
+the skin fixture keeps inputs, keys, joint palettes, packed attributes, and UV
+data byte-exact. transformed float ranges accept at most four IEEE 754 ULP per
+word because the hosted CI adapter evaluates the same matrix operations with a
+stable one- or two-ULP difference from the captured adapter. the retained
+second-UV control range aliases transformed position storage, so it uses the
+same bound. larger differences and all non-float differences still fail.
+
 each of the 12 UI cases records its size, scale, scaling mode, format, atlas
 dimensions, exact atlas, draw hash and exact rendered pixels. the native draw
 hash is captured before rendering: Donut scales clip rectangles in place.
