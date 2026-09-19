@@ -120,5 +120,63 @@ class HeapRecords(unittest.TestCase):
             check_heap_records(self.rows, self.metadata)
 
 
+class DivergentHeapRecords(unittest.TestCase):
+    def setUp(self):
+        self.metadata = {opt: {"identity": {"source_sha256": "source"}, "payload_sha256": f"module{opt}"} for opt in [0, 3]}
+        self.rows = [{"case_id": "theta.m2.ngapi.native_heap_divergent.controls", "status": "pass", "checks": 122,
+                      "shader_cases_executed": 0}]
+        colors = [[0x40000000, 0, 0, 0x40000000], [0, 0x40000000, 0, 0x40000000],
+                  [0, 0, 0x40000000, 0x40000000], [0x40000000] * 4]
+        tail = [0xa5c37e19] * 4 + [0xff0000ff, 0xff00ff00, 0xff000000, 0xff00ffff, 0xffff0000, 0xffffffff, 0xff000000, 0xffff00ff]
+        for opt in [0, 3]:
+            for phase in range(4):
+                self.rows.append({
+                    "case_id": f"theta.m2.ngapi.native_heap_divergent.opt{opt}.phase{phase}", "status": "pass",
+                    "source_sha256": "source", "payload_sha256": f"module{opt}", "output_address": "0x1000",
+                    "nonzero_high_address_bits": False, "phase": phase, "resource_xor": phase >> 1,
+                    "sampler_xor": phase & 1, "invocations": 4, "image_descriptor_bytes": 32, "sampler_descriptor_bytes": 16,
+                    "heap_slots": 4, "root_bytes": 16, "first_mismatch_word": -1, "shader_cases_executed": 1,
+                    "actual": [word for lane in range(4) for word in colors[lane ^ phase]] + tail,
+                })
+
+    def test_complete_matrix(self):
+        check_heap_records(self.rows, self.metadata, divergent=True)
+
+    def test_empty_missing_duplicate_cases(self):
+        for rows in [[], self.rows[:-1], self.rows + [self.rows[-1]], self.rows[:-1] + [self.rows[0]]]:
+            with self.subTest(count=len(rows)), self.assertRaises(ValueError):
+                check_heap_records(rows, self.metadata, divergent=True)
+
+    def test_every_lane_guard_and_texture_word(self):
+        for index in range(28):
+            rows = copy.deepcopy(self.rows)
+            rows[1]["actual"][index] ^= 1
+            with self.subTest(word=index), self.assertRaises(ValueError):
+                check_heap_records(rows, self.metadata, divergent=True)
+
+    def test_uniform_broadcast_and_lane_swap(self):
+        for words in [self.rows[1]["actual"][:4] * 4 + self.rows[1]["actual"][16:], self.rows[2]["actual"]]:
+            rows = copy.deepcopy(self.rows)
+            rows[1]["actual"] = words
+            with self.subTest(words=words), self.assertRaises(ValueError):
+                check_heap_records(rows, self.metadata, divergent=True)
+
+    def test_identity_masks_ranges_and_denominators(self):
+        for field, value in [("source_sha256", "stale"), ("payload_sha256", "stale"), ("phase", 1), ("resource_xor", 1),
+                             ("sampler_xor", 1), ("invocations", 1), ("shader_cases_executed", 0), ("status", "blocked"),
+                             ("first_mismatch_word", 0), ("image_descriptor_bytes", 64), ("sampler_descriptor_bytes", 0),
+                             ("heap_slots", 3), ("root_bytes", 8), ("output_address", "0x0"), ("output_address", "0x1004"),
+                             ("output_address", "0xffffffffffffffc0"), ("nonzero_high_address_bits", True)]:
+            rows = copy.deepcopy(self.rows)
+            rows[1][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                check_heap_records(rows, self.metadata, divergent=True)
+
+    def test_incomplete_cpu_controls(self):
+        self.rows[0]["checks"] = 74
+        with self.assertRaises(ValueError):
+            check_heap_records(self.rows, self.metadata, divergent=True)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,20 @@
+diff --git a/src/NoGraphicsAPI.cpp b/src/NoGraphicsAPI.cpp
+index 01f6cd2..ffa25fa 100644
+--- a/src/NoGraphicsAPI.cpp
++++ b/src/NoGraphicsAPI.cpp
+@@ -1666,6 +1666,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface,
+         features.vulkan12.scalarBlockLayout == VK_TRUE &&
+         features.vulkan12.bufferDeviceAddress == VK_TRUE &&
+         features.vulkan12.vulkanMemoryModel == VK_TRUE &&
++        features.vulkan12.shaderSampledImageArrayNonUniformIndexing == VK_TRUE &&
+         features.vulkan12.timelineSemaphore == VK_TRUE &&
+         features.vulkan13.synchronization2 == VK_TRUE &&
+         features.vulkan13.dynamicRendering == VK_TRUE &&
+@@ -1942,6 +1943,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
+     enabled_features.vulkan12.timelineSemaphore = VK_TRUE;
+     enabled_features.vulkan12.bufferDeviceAddress = VK_TRUE;
+     enabled_features.vulkan12.vulkanMemoryModel = VK_TRUE;
++    enabled_features.vulkan12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
+     enabled_features.vulkan13.synchronization2 = VK_TRUE;
+     enabled_features.vulkan13.dynamicRendering = VK_TRUE;
+     enabled_features.vulkan13.maintenance4 = VK_TRUE;

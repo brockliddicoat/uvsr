@@ -35,7 +35,7 @@ def run(command, directory, prefix):
     return result.stdout.decode("utf-8").replace("\r\n", "\n")
 
 
-def check_heap_profile(assembly):
+def check_heap_profile(assembly, divergent=False):
     required = {
         r"BuiltIn ResourceHeapEXT": 1, r"BuiltIn SamplerHeapEXT": 1,
         r" = OpUntypedVariableKHR ": 2, r" = OpConstantSizeOfEXT ": 2,
@@ -45,6 +45,12 @@ def check_heap_profile(assembly):
     }
     if any(len(re.findall(pattern, assembly)) != count for pattern, count in required.items()):
         raise RuntimeError("module no longer matches the reviewed native heap sample profile")
+    if divergent and ("BuiltIn LocalInvocationId" not in assembly
+                      or len(re.findall(r" = OpBitwiseXor ", assembly)) != 2
+                      or len(re.findall(r" = OpBitwiseAnd ", assembly)) != 2
+                      or len(re.findall(r" = OpUConvert ", assembly)) != 1
+                      or " = OpShiftRightLogical " not in assembly):
+        raise RuntimeError("module no longer has the reviewed lane-dependent heap indices and output offset")
     root = re.search(r"(%\S+) = OpTypeStruct (%\S+) (%\S+) \3", assembly)
     if (not root or not re.search(re.escape(root[2]) + r" = OpTypeInt 64 0", assembly)
             or not re.search(re.escape(root[3]) + r" = OpTypeInt 32 0", assembly)
@@ -58,9 +64,12 @@ def main():
     parser.add_argument("--rustgpu-source", type=Path, required=True)
     parser.add_argument("--codegen-backend", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--fixture", choices=["physical_readback", "native_heap_sample"], default="physical_readback")
+    parser.add_argument("--fixture", choices=["physical_readback", "native_heap_sample", "native_heap_divergent"], default="physical_readback")
     args = parser.parse_args()
     fixture = args.fixture
+    heap = fixture != "physical_readback"
+    divergent = fixture == "native_heap_divergent"
+    lanes = 4 if divergent else 1
     upstream = args.rustgpu_source.resolve()
     backend = args.codegen_backend.resolve(strict=True)
     output = args.output_dir.resolve()
@@ -104,8 +113,11 @@ def main():
         "-Zinline-mir=off", "-Zmir-enable-passes=-GVN", "-Zshare-generics=off",
         "-Cembed-bitcode=no", "-Cdebuginfo=0", "-Clto=off",
     ]
-    if fixture == "native_heap_sample":
-        common += ["-Ctarget-feature=+UntypedPointersKHR,+DescriptorHeapEXT,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap"]
+    if heap:
+        features = "+UntypedPointersKHR,+DescriptorHeapEXT,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap"
+        if divergent:
+            features += ",+ShaderNonUniform,+SampledImageArrayNonUniformIndexing"
+        common += [f"-Ctarget-feature={features}"]
     for path in search_paths:
         common += ["-L", f"dependency={path}"]
     for name, path in libraries.items():
@@ -127,18 +139,20 @@ def main():
         extensions = [line.split("OpExtension ", 1)[1].strip().strip('"') for line in assembly.splitlines() if "OpExtension " in line]
         required_capabilities = {"Shader", "Int64", "VulkanMemoryModel", "PhysicalStorageBufferAddresses"}
         required_extensions = set()
-        if fixture == "native_heap_sample":
+        if heap:
             required_capabilities |= {"UntypedPointersKHR", "DescriptorHeapEXT"}
             required_extensions |= {"SPV_KHR_untyped_pointers", "SPV_EXT_descriptor_heap"}
+        if divergent:
+            required_capabilities |= {"ShaderNonUniform", "SampledImageArrayNonUniformIndexing"}
         if set(capabilities) != required_capabilities or set(extensions) != required_extensions:
             raise RuntimeError("module feature requirements changed. Review the NGAPI feature patch before dispatch")
         if ("OpMemoryModel PhysicalStorageBuffer64 Vulkan" not in assembly
                 or not re.search(r'OpEntryPoint GLCompute %\S+ "computeMain"', assembly)
-                or not re.search(r"OpExecutionMode %\S+ LocalSize 1 1 1", assembly)
+                or not re.search(rf"OpExecutionMode %\S+ LocalSize {lanes} 1 1", assembly)
                 or re.search(r"\b(DescriptorSet|Binding|Uniform|StorageBuffer)\b", assembly)):
             raise RuntimeError("module no longer matches the reviewed compute entry and physical addressing")
-        if fixture == "native_heap_sample":
-            check_heap_profile(assembly)
+        if heap:
+            check_heap_profile(assembly, divergent)
         else:
             if (len(re.findall(r"OpLoad .* Aligned 4", assembly)) != 1
                     or len(re.findall(r"OpStore .* Aligned 4", assembly)) != 3):
@@ -151,7 +165,7 @@ def main():
         record = {
             "schema_version": 1, "case_id": f"theta.m2.ngapi.{fixture}.compile.opt{level}",
             "status": "pass", "language": "Rust", "stage": "compute", "entry_point": "computeMain",
-            "workgroup_size": [1, 1, 1], "target": "spirv-unknown-vulkan1.3-physical64",
+            "workgroup_size": [lanes, 1, 1], "target": "spirv-unknown-vulkan1.3-physical64",
             "profile": "ngapi-" + fixture.replace("_", "-"), "payload_type": "SPIR-V", "payload_sha256": sha256(module),
             "capabilities": capabilities, "extensions": extensions, "root_bytes": 16,
             "rustc_command": command, "identity": identity,

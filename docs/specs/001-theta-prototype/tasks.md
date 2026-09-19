@@ -34,6 +34,8 @@ T010-T015 do not depend on a complete AGFX slice. T014 can proceed before T013. 
 
 [E-025](../../execution.md#e-025-2026-09-19-tested-native-heap-library-constructors) adds partial T014/T015 library evidence: unsafe Image/Sampler native heap constructors, eight source cases for divergent indices/repeated mixed image types/fragment interfaces/feature and safety rejection, and the actual uniform NGAPI consumer using the library. all 34 required source pairs and eight GPU cases per host configuration pass. storage images, additional-stage execution, divergent runtime and full gates remain open.
 
+[E-026](../../execution.md#e-026-2026-09-19-tested-divergent-native-heap-access) adds partial T015/T016/T019 and H03/H04/H08 evidence: four lanes select both resource and sampler indices independently, with four permutation phases and opt0/opt3 shaders. each Debug/Release host passes eight GPU cases, 122 CPU controls and zero validation diagnostics. a separate two-line NGAPI prerequisite queries/enables the required sampled-image non-uniform feature. unchanged scalar and uniform gates pass after source recompilation and native rebuilding. additional stages/resources, the cube and the direct Rust Vulkan slice remain open.
+
 [E-023](../../execution.md#e-023-2026-09-19-compiled-native-heap-rust-shaders) is partial T014/T015 evidence: Rust assembly declares actual native resource/sampler heaps, samples an image, performs Rust vector arithmetic and writes a physical Vec4. default, optimized and qptr source variants pass. missing-feature controls reject. the broader adjacent gate retains a pre-existing subpass failure. reusable heap utilities, divergent indices, additional resources/stages and heap runtime remain open.
 
 ## M2. actual NGAPI on Windows Vulkan

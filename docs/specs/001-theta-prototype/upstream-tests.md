@@ -18,6 +18,8 @@ three different authorities are recorded: the draft author's checklist, a mainta
 
 [E-025](../../execution.md#e-025-2026-09-19-tested-native-heap-library-constructors) adds reusable unsafe Image/Sampler constructors without new compiler intrinsics. H03 has divergent compute source coverage, and H05/H06 have repeated float/integer sampled-image fragment compilation under both ABIs. eight new cases bring the source gate to 34 required pairs. the actual uniform NGAPI consumer passes eight cases in each Debug/Release host using this library. divergent, storage-image and additional-stage execution remain pending. no full H row or task is closed.
 
+[E-026](../../execution.md#e-026-2026-09-19-tested-divergent-native-heap-access) adds partial T015/T016/T019 and H03/H04/H08 evidence: four lanes select both resource and sampler indices independently, with four permutation phases and opt0/opt3 shaders. each Debug/Release host passes eight GPU cases, 122 CPU controls and zero validation diagnostics. a separate two-line NGAPI prerequisite queries/enables the required sampled-image non-uniform feature. unchanged scalar and uniform gates pass after source recompilation and native rebuilding. additional stages/resources, the cube and the direct Rust Vulkan slice remain open.
+
 ## PR #237 checklist
 
 the [draft, refreshed on 2026-09-19](https://github.com/Rust-GPU/rust-gpu/pull/237) was open at `e14a70d9260c7df7fab1542810f2ca0276233331`. its checked boxes refer to that draft, not proof in current main or the new implementation. all checklist items are mapped below.
