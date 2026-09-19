@@ -1,6 +1,6 @@
 # RustGPU tests and upstream crosswalk
 
-this page is the primary contribution crosswalk for [US6 and FR-015](spec.md). [tasks T010-T016 and T033-T035](tasks.md) own the work. every row needs an implementation/test pointer, observed result, source/configuration identity, and remaining limitation in the contribution evidence. no implementation row is currently complete.
+this page is the primary contribution crosswalk for [US6 and FR-015](spec.md). [tasks T010-T016 and T033-T035](tasks.md) own the work. every row needs an implementation/test pointer, observed result, source/configuration identity, and remaining limitation in the contribution evidence. H07's assembly-input tool gate passes at E-015. shader implementation and runtime rows remain incomplete.
 
 three different authorities are recorded: the draft author's checklist, a maintainer's concrete review concerns, and repository CI. none alone establishes eventual acceptance.
 
@@ -54,7 +54,7 @@ these are engineering requirements for this consumer, not a checklist quoted fro
 | H04 | pointer and heap use in one module | full optimized/unoptimized pipeline plus GPU output |
 | H05 | mixed resource types and supported access modes | sampled images, storage images, reads/writes as exposed; deliberate unsupported cases diagnose |
 | H06 | stage and interface preservation | compute, vertex/fragment, then task/mesh compiletests and supported-device execution |
-| H07 | tool/dependency compatibility | parser/linker/optimizer/serializer/validator probes in installed-tools and compiled-tools paths |
+| H07 | tool/dependency compatibility | [E-015](../../execution.md#e-015-2026-09-19-completed-the-two-configuration-pipeline-gate): all 16 required assembly-input probes pass in each configuration at the pinned patched revisions. this does not establish Rust source code generation or execution |
 | H08 | feature gating | enabled and missing-capability configurations; explicit test skips with reasons, no success-shaped empty result |
 | A01 | root and aggregate ABI | eight-byte addresses, high-bit preservation, nested address-containing structures, offsets, strides, scalar vectors, row-major matrix interpretation, 256-byte root boundary |
 | A02 | arithmetic, bounds, alignment, aliasing | correct defined operations and diagnostics/contracts for unsupported ones; never test undefined GPU dereferences by expecting a graceful error |

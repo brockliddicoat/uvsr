@@ -2,7 +2,7 @@
 
 these are tested changes from separately owned upstream checkouts. [sources.json](sources.json) pins each base, local verified commit, patch hash and controlling license. they are not published upstream contributions or proof of complete RustGPU support.
 
-latest checkpoint: all 16 required pipeline probes pass with installed tools after the [heap metadata patches](#heap-metadata-and-dependency-retention). compiled-tools integration remains pending. earlier results below preserve the evidence at each incremental patch.
+latest checkpoint: all 16 required pipeline probes pass with both installed and compiled tools after the [heap metadata patches](#heap-metadata-and-dependency-retention). [the two-configuration gate](#two-configuration-compiler-gate) records the integration. earlier results below preserve the evidence at each incremental patch.
 
 ## rspirv untyped globals
 
@@ -90,3 +90,20 @@ the RustGPU suite now reports 29 passed, three failed and four existing macOS-on
 apply each after its untyped-pointer patch at the exact manifest base, with `--unidiff-zero --index`. both retain their existing MIT OR Apache-2.0 terms. rerun the SPIR-T and installed-tools commands above. the verified Windows result is three grammar plus eight structural SPIR-T tests passing, and RustGPU **35 passed, zero failed, four existing macOS-only ignores**. all 16 required diagnostic cases pass, with no skips, including default/qptr linking and performance optimization for logical stores, physical stores, untyped stores and native resource/sampler heaps.
 
 RustGPU full formatting passes. SPIR-T formatting remains limited to changed ranges, with the prior unrelated full-format/Clippy failures still open. compiled-tools integration and Rust source code generation remain separate pending gates. no fixture was dispatched. [execution E-014](../../docs/execution.md#e-014-2026-09-19-preserved-native-heap-metadata-through-the-linker) records exact commits, failed attempts and the boundary of this result.
+
+## two-configuration compiler gate
+
+the exact E-014 compiler/SPIR-T candidate also passes with the E-011 compiled tools. add the two wrapper paths to the existing ignored Cargo patch configuration:
+
+```toml
+spirv-tools = { path = '<spirv-tools-rs checkout>/spirv-tools' }
+spirv-tools-sys = { path = '<spirv-tools-rs checkout>/spirv-tools-sys' }
+```
+
+resolve and inspect the local lockfile before running with `--locked`. the verified lock retained all package versions and dependency edges, changing only the two wrapper source/checksum entries relative to the installed-tools candidate. an automatic targeted update proposed unrelated dependency-edge changes, which were discarded. retain the exact resolved lock and configuration with run evidence.
+
+```powershell
+cargo test --config '<absolute configuration>' -p rustc_codegen_spirv --release --locked --no-default-features --features use-compiled-tools -j 1 -- --test-threads=1 -Z unstable-options --format=json
+```
+
+the local run additionally used `--offline` after dependencies were cached. it passed **35 tests, zero failures, four existing macOS-only ignores**. all 16 required probes passed with no skips. T005/H07's tool gate is complete, while Rust source compiletests, native execution and full upstream CI remain separate work. the installed and compiled tools have the distinct source identities recorded above. [E-015](../../docs/execution.md#e-015-2026-09-19-completed-the-two-configuration-pipeline-gate) owns the combined conclusion. a directory-local attribute keeps exported patch bytes and manifest hashes unchanged across Windows and Unix checkouts.
