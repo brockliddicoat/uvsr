@@ -1,0 +1,135 @@
+diff --git a/source/opt/aggressive_dead_code_elim_pass.cpp b/source/opt/aggressive_dead_code_elim_pass.cpp
+index 8ca2518..e43be75 100644
+--- a/source/opt/aggressive_dead_code_elim_pass.cpp
++++ b/source/opt/aggressive_dead_code_elim_pass.cpp
+@@ -651,0 +652,6 @@ void AggressiveDCEPass::InitializeWorkList(
++      // Volatile accesses remain observable even for Function storage and
++      // even when no load result or destination value escapes the function.
++      if (ii->HasVolatileMemoryAccess()) {
++        AddToWorklist(&*ii);
++        continue;
++      }
+diff --git a/source/opt/instruction.cpp b/source/opt/instruction.cpp
+index d697f0c..112f9b3 100644
+--- a/source/opt/instruction.cpp
++++ b/source/opt/instruction.cpp
+@@ -225,0 +226,11 @@ void Instruction::ReplaceOperands(const OperandList& new_operands) {
++bool Instruction::HasVolatileMemoryAccess() const {
++  for (uint32_t i = 0; i < NumInOperands(); ++i) {
++    const Operand& operand = GetInOperand(i);
++    if (operand.type == SPV_OPERAND_TYPE_MEMORY_ACCESS &&
++        (operand.words[0] & uint32_t(spv::MemoryAccessMask::Volatile)) != 0) {
++      return true;
++    }
++  }
++  return false;
++}
++
+diff --git a/source/opt/instruction.h b/source/opt/instruction.h
+index 9ab9f0e..4c9eb6f 100644
+--- a/source/opt/instruction.h
++++ b/source/opt/instruction.h
+@@ -441,0 +442,3 @@ class Instruction : public utils::IntrusiveNodeBase<Instruction> {
++  // Returns whether an explicit memory access operand carries Volatile.
++  bool HasVolatileMemoryAccess() const;
++
+diff --git a/source/opt/local_single_store_elim_pass.cpp b/source/opt/local_single_store_elim_pass.cpp
+index a3b2949..fd23481 100644
+--- a/source/opt/local_single_store_elim_pass.cpp
++++ b/source/opt/local_single_store_elim_pass.cpp
+@@ -219,0 +220,3 @@ Instruction* LocalSingleStoreElimPass::FindSingleStoreAndCheckUses(
++    // Propagating a single store through a volatile load would remove the
++    // access. A volatile store must also remain, even without a live load.
++    if (user->HasVolatileMemoryAccess()) return nullptr;
+diff --git a/source/opt/mem_pass.cpp b/source/opt/mem_pass.cpp
+index 4d061ff..c9985f0 100644
+--- a/source/opt/mem_pass.cpp
++++ b/source/opt/mem_pass.cpp
+@@ -301,0 +302,31 @@ bool MemPass::IsTargetVar(uint32_t varId) {
++  // Loads/stores of a volatile local must not be promoted, even through
++  // derived pointers. Cache only after inspecting every reachable use.
++  std::vector<uint32_t> pending{varId};
++  std::unordered_set<uint32_t> visited{varId};
++  while (!pending.empty()) {
++    const uint32_t pointer = pending.back();
++    pending.pop_back();
++    const bool non_volatile = get_def_use_mgr()->WhileEachUser(
++        pointer, [&](Instruction* user) {
++          if (user->HasVolatileMemoryAccess()) return false;
++          switch (user->opcode()) {
++            case spv::Op::OpAccessChain:
++            case spv::Op::OpInBoundsAccessChain:
++            case spv::Op::OpPtrAccessChain:
++            case spv::Op::OpInBoundsPtrAccessChain:
++            case spv::Op::OpCopyObject:
++            case spv::Op::OpPhi:
++            case spv::Op::OpSelect:
++              if (visited.insert(user->result_id()).second)
++                pending.push_back(user->result_id());
++              break;
++            default:
++              break;
++          }
++          return true;
++        });
++    if (!non_volatile) {
++      seen_non_target_vars_.insert(varId);
++      return false;
++    }
++  }
+diff --git a/test/opt/local_single_store_elim_test.cpp b/test/opt/local_single_store_elim_test.cpp
+index 8fd5c9d..e62fa38 100644
+--- a/test/opt/local_single_store_elim_test.cpp
++++ b/test/opt/local_single_store_elim_test.cpp
+@@ -1854,0 +1855,51 @@ TEST_F(LocalSingleStoreElimTest, VkMemoryModelTest) {
++TEST_F(LocalSingleStoreElimTest, PreserveVolatileFunctionMemoryAcrossLocalPasses) {
++  SetTargetEnv(SPV_ENV_VULKAN_1_3);
++  const std::string derived = R"(; CHECK: OpStore {{%\w+}} {{%\w+}} Volatile|Nontemporal
++; CHECK: OpLoad {{%\w+}} {{%\w+}} Volatile|Nontemporal
++; CHECK: OpLoad {{%\w+}} {{%\w+}} Volatile|Nontemporal
++OpCapability Shader
++OpCapability VulkanMemoryModel
++OpMemoryModel Logical Vulkan
++OpEntryPoint GLCompute %main "main" %output
++OpExecutionMode %main LocalSize 1 1 1
++%void = OpTypeVoid
++%u32 = OpTypeInt 32 0
++%two = OpConstant %u32 2
++%one = OpConstant %u32 1
++%value = OpConstant %u32 42
++%array = OpTypeArray %u32 %two
++%local_array = OpTypePointer Function %array
++%local_u32 = OpTypePointer Function %u32
++%shared_u32 = OpTypePointer Workgroup %u32
++%function = OpTypeFunction %void
++%output = OpVariable %shared_u32 Workgroup
++%main = OpFunction %void None %function
++%entry = OpLabel
++%local = OpVariable %local_array Function
++%ordinary = OpVariable %local_u32 Function
++OpStore %ordinary %value
++%input = OpLoad %u32 %ordinary
++%element = OpAccessChain %local_u32 %local %one
++OpStore %element %input Volatile|Nontemporal
++%used = OpLoad %u32 %element Volatile|Nontemporal
++%unused = OpLoad %u32 %element Volatile|Nontemporal
++OpStore %output %used
++OpReturn
++OpFunctionEnd
++)";
++  std::string scalar = derived;
++  const std::string variable = "%local = OpVariable %local_array Function";
++  scalar.replace(scalar.find(variable), variable.size(),
++                 "%local = OpVariable %local_u32 Function");
++  const std::string chain = "%element = OpAccessChain %local_u32 %local %one";
++  scalar.replace(scalar.find(chain), chain.size(),
++                 "%element = OpCopyObject %local_u32 %local");
++  for (const auto& text : {derived, scalar}) {
++    SinglePassRunAndMatch<AggressiveDCEPass>(text, true);
++    SinglePassRunAndMatch<LocalSingleBlockLoadStoreElimPass>(text, true);
++    SinglePassRunAndMatch<LocalSingleStoreElimPass>(text, true);
++    SinglePassRunAndMatch<SSARewritePass>(text, true);
++    SinglePassRunAndMatch<LocalAccessChainConvertPass>(text, true);
++  }
++}
++

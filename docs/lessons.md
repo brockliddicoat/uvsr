@@ -32,7 +32,7 @@ application: build a small reusable Vulkan testbed slice and keep broader parity
 
 **proposed, measurement rule.** compare the port and source over an explicit shared behavior manifest using the same counting tool and exclusions. report omitted/deferred behavior, generated code, dependencies, tests, and documentation separately. see [size and complexity](specs/001-theta-prototype/plan.md#size-and-complexity).
 
-application: evaluate whether ordinary Rust ownership and equivalent mappings actually reduce implementation size. limit: the port does not exist, so no reduction is measured or promised. a smaller subset cannot establish a smaller equivalent implementation.
+application: evaluate whether ordinary Rust ownership and equivalent mappings actually reduce implementation size. limit: the bounded Rust buffer/compute slice does not establish full equivalent-port size. a smaller subset cannot establish a smaller equivalent implementation, and no reduction is measured or promised.
 
 ## L-005. make unsafe contracts visible at both review levels
 
@@ -69,6 +69,8 @@ application: test signed and unsigned sources, widening and truncation, and insp
 **observed, pinned compiler/tool regression.** at [E-019](execution.md#e-019-2026-09-19-preserved-qptr-memory-effects), qptr and linking retained both volatile loads, but SPIRV-Tools aggressive dead-code elimination removed the one with an unused result. the optimized module still validated. preserving operands during serialization did not establish their later effects.
 
 application: assert required effect counts, flags and scope identities after optimization. include an ordinary removable access as a control so disabling optimization cannot satisfy the test. limit: this result covers explicit Volatile OpLoad and the tested memory forms. it does not prove all native optimizer semantics, Rust volatile intrinsic support or GPU behavior.
+
+[E-030](execution.md#e-030-2026-09-19-tested-aggregate-aliases-and-function-effects) extends the finding to Function storage. RustGPU promotion and several native local-memory passes independently removed explicit volatile operations. scalar/derived-pointer and unused-store regressions now retain those effects through individual passes and the performance pipeline. the actual NGAPI fixture executes with the preserved final instructions under default/qptr and opt0/opt3. numeric output alone cannot establish that an unused volatile access survived, so both structural and runtime checks remain necessary.
 
 ## L-011. follow aggregate accesses through copy lowering
 
