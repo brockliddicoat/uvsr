@@ -39,9 +39,9 @@ the [UVSR Delta postmortems](docs/postmortems/README.md) contain prior lessons. 
 
 ## current status
 
-implementation is active. the [execution record](docs/execution.md) includes scalar Rust shader readback through actual NGAPI on Windows Vulkan, alongside the compiler patches and remaining gates. native resource/sampler shader lookups, the full Rust testbed and an upstream PR remain open.
+implementation is active. the [execution record](docs/execution.md) includes actual NGAPI scalar, uniform/divergent native heap and textured-cube Rust shader results on Windows Vulkan. the [direct Rust slice](tools/theta/README.md) also passes the frozen AGFX buffer-copy case. its compute shader compiles, while direct Rust dispatch, full testbed parity and the upstream PR remain open.
 
-`.github/workflows` validates the baseline and conditionally runs Rust formatting and workspace tests once a manifest exists. it does not replace RustGPU's upstream CI or actual NGAPI execution.
+`.github/workflows` validates the baseline and runs Rust formatting and CPU workspace tests. it does not replace RustGPU's upstream CI or actual NGAPI execution.
 
 ## contributing
 

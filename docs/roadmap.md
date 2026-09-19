@@ -1,6 +1,6 @@
 # roadmap and current state
 
-status: specification prepared. no Rust implementation, build, device probe, GPU execution, or upstream PR exists.
+status: implementation active. the [execution record](execution.md) owns current compiler, actual NGAPI and direct Rust Vulkan evidence. remaining milestone gates and the upstream PR are open.
 
 the [audit index](specs/001-theta-prototype/README.md) is the plan and prompt entry. [research](specs/001-theta-prototype/research.md) owns the exact main and source pins. the latest scope makes the RustGPU contribution primary and native Windows Vulkan the first local test path.
 

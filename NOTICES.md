@@ -2,7 +2,7 @@
 
 ## Inspirations, Translation Sources, and Research References
 
-the first [AGFX slice](tests/parity/primary-slice.md) imports two unchanged binary golden fixtures under `tests/parity/fixtures/agfx`, copyright 2026 Amélie Heinrich, with the complete [MIT notice](legal/licenses/AGFX-MIT.txt). its source manifest records file hashes and planned Rust mappings. no third-party runtime implementation has been copied into the Rust project yet. AGFX and ShaderToHuman are inspirations and intended translation sources with the [source-parity contract](docs/specs/001-theta-prototype/contracts/source-parity.md). future imports and translations must retain exact licenses, copyright notices, provenance, and file-level dispositions.
+the first [AGFX slice](tests/parity/primary-slice.md) imports two unchanged binary golden fixtures under `tests/parity/fixtures/agfx`, copyright 2026 Amélie Heinrich, with the complete [MIT notice](legal/licenses/AGFX-MIT.txt). its source manifest records file hashes and Rust mappings. `shaders/rust/compute_multi_dispatch.rs` translates the source HLSL recurrence, and `crates/agfx/src/bin/buffer_copy.rs` translates the source copy fixture behavior under that same MIT notice. the native Rust owners implement the mapped Vulkan behavior directly. AGFX and ShaderToHuman are inspirations and intended translation sources with the [source-parity contract](docs/specs/001-theta-prototype/contracts/source-parity.md). future imports and translations must retain exact licenses, copyright notices, provenance, and file-level dispositions.
 
 AGFX's [MIT license](https://github.com/AmelieHeinrich/agfx/blob/f91b108a111d2ca3ca4b6586b6cb5dd750064fd7/LICENSE) requires retaining its copyright and permission notice in copies or substantial portions. ShaderToHuman's [BSD-3-Clause text](https://github.com/electronicarts/ShaderToHuman/blob/d6f98b7d67da802053cd9c702082fa741dec42e7/LICENSE.txt) requires source and binary notice preservation and prohibits implied endorsement without permission. preserve additional dependency and asset notices where applicable. this document does not relabel translated material as independently authored first-party code.
 
@@ -15,6 +15,10 @@ AGFX's [MIT license](https://github.com/AmelieHeinrich/agfx/blob/f91b108a111d2ca
 | [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross) | `a9193e76134de63810ee1a57b5343f236d6ff102` | shader translation feasibility reference |
 
 the repository's [Polyfrom Noncommercial license](LICENSE.md) covers first-party material only. it does not replace upstream licenses or grant rights the project does not control.
+
+## Rust host dependencies
+
+[Cargo.lock](Cargo.lock) records exact registry versions and checksums. ash 0.38.0+1.3.281 provides Vulkan bindings under MIT OR Apache-2.0. libloading 0.8.9 provides dynamic loading under ISC. serde_json 1.0.151 and sha2 0.10.9 provide records and hashes under MIT OR Apache-2.0. their source/license files remain in their published packages, not vendored here. any binary distribution must preserve the applicable direct and transitive dependency notices. no runtime binary is published by this source checkpoint.
 
 ## Compiler Patches
 
