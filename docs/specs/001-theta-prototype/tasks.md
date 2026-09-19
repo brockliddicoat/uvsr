@@ -57,6 +57,8 @@ T018 is supporting work below. M2 does not depend on adding a second full native
 
 [E-031](../../execution.md#e-031-2026-09-19-recorded-raw-pointer-method-limits) extends the partial T012/T013 raw-method inventory with one positive and four negative safe source families. all 43 required pointer/heap pairs pass. reference/allocation-dependent methods, additional resource/stage coverage and generic upstream difftests remain open, so no complete compiler task closes here.
 
+[E-032](../../execution.md#e-032-2026-09-19-executed-native-storage-image-operations) adds partial T014-T016/T019 storage-image evidence. existing constructors support rgba32ui native ImageRead/ImageWrite and a physical output through default/qptr at opt0/opt3. all 47 required source pairs and 16 actual cases per Debug/Release host pass, with exact readback and zero validation diagnostics. NGAPI queries/enables the declared storage-indexing feature through a separate two-line prerequisite. additional stages, broader operations and generic upstream difftests remain open.
+
 ## M3. RustGPU contribution draft
 
 - [ ] T033 [US6] reconcile all P, R, H, A, and C rows in [upstream tests](upstream-tests.md) against the proposed diff, tests, results, and limitations. depends on the promised T013/T015 features and T019 for actual-consumer claims. refresh relevant upstream comments and CI once before final draft preparation.
