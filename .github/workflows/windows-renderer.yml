@@ -184,7 +184,7 @@ jobs:
         shell: pwsh
         run: |
           $key = [Security.Cryptography.ECDsa]::Create(
-            [Security.Cryptography.ECCurve]::NamedCurves.nistP256)
+            [Security.Cryptography.ECCurve+NamedCurves]::nistP256)
           try {
             $keyPath = Join-Path $env:RUNNER_TEMP "uvsr-feed-test-key.pem"
             [IO.File]::WriteAllText($keyPath, $key.ExportECPrivateKeyPem(),
