@@ -12,7 +12,7 @@ use RustGPU `e6394e08eb3356083b12f732a01906f8e49f7c4a`, its `nightly-2026-07-03`
 $theta = '<absolute Theta checkout>'
 $rustgpu = '<absolute separate RustGPU checkout>'
 $probeTests = Join-Path $rustgpu 'crates/rustc_codegen_spirv/src/linker/test'
-git -C $rustgpu apply --check (Join-Path $theta 'tools/theta/rustgpu-probe-registration.patch')
+git -C $rustgpu apply --unidiff-zero --check (Join-Path $theta 'tools/theta/rustgpu-probe-registration.patch')
 if ($LASTEXITCODE -ne 0) { throw 'probe registration does not apply cleanly' }
 $probeFiles = @('instruction_compatibility.rs', 'logical_store.spvasm', 'physical_store.spvasm', 'untyped_store.spvasm', 'descriptor_heaps.spvasm')
 foreach ($probeFile in $probeFiles) {
@@ -23,7 +23,7 @@ Copy-Item -LiteralPath (Join-Path $theta 'tools/theta/rustgpu-instruction-probes
 foreach ($fixture in @('logical_store', 'physical_store', 'untyped_store', 'descriptor_heaps')) {
     Copy-Item -LiteralPath (Join-Path $theta "tests/compiler-probes/$fixture.spvasm") -Destination (Join-Path $probeTests "$fixture.spvasm")
 }
-git -C $rustgpu apply (Join-Path $theta 'tools/theta/rustgpu-probe-registration.patch')
+git -C $rustgpu apply --unidiff-zero (Join-Path $theta 'tools/theta/rustgpu-probe-registration.patch')
 if ($LASTEXITCODE -ne 0) { throw 'probe registration failed' }
 Set-Location -LiteralPath $rustgpu
 cargo test -p rustc_codegen_spirv --release --locked --no-default-features --features use-installed-tools -j 1 instruction_compatibility -- --test-threads=1 -Z unstable-options --format=json

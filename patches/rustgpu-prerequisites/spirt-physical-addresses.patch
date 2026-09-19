@@ -1,0 +1,116 @@
+diff --git a/src/qptr/lift.rs b/src/qptr/lift.rs
+index 8297e2f..e64fdfe 100644
+--- a/src/qptr/lift.rs
++++ b/src/qptr/lift.rs
+@@ -167 +167,2 @@ impl<'a> LiftToSpvPtrs<'a> {
+-    /// Returns `Some` iff `ty` is a SPIR-V `OpTypePointer`.
++    /// Returns a typed logical pointer that participated in qptr legalization.
++    /// PhysicalStorageBuffer types and call arguments remain unchanged.
+@@ -178,0 +180,3 @@ impl<'a> LiftToSpvPtrs<'a> {
++                if sc == self.wk.PhysicalStorageBuffer {
++                    return None;
++                }
+diff --git a/src/qptr/lower.rs b/src/qptr/lower.rs
+index 342f968..1fc2b7a 100644
+--- a/src/qptr/lower.rs
++++ b/src/qptr/lower.rs
+@@ -156 +156,2 @@ impl<'a> LowerFromSpvPtrs<'a> {
+-    /// Returns `Some` iff `ty` is a SPIR-V `OpTypePointer`.
++    /// Returns a typed logical pointer that needs qptr legalization.
++    /// PhysicalStorageBuffer pointers are concrete addresses and stay explicit.
+@@ -171,0 +173,3 @@ impl<'a> LowerFromSpvPtrs<'a> {
++                if sc == self.wk.PhysicalStorageBuffer {
++                    return None;
++                }
+@@ -533,0 +538,5 @@ impl LowerFromSpvPtrInstsInFunc<'_> {
++            // Physical pointers already have concrete types and addressing.
++            // Keep their access chains with the unchanged memory instructions.
++            if self.lowerer.as_spv_ptr_type(func.at(base_ptr).type_of(cx)).is_none() {
++                return Ok(Transformed::Unchanged);
++            }
+diff --git a/src/spv/spec.rs b/src/spv/spec.rs
+index 6f14cb9..8ecbf42 100644
+--- a/src/spv/spec.rs
++++ b/src/spv/spec.rs
+@@ -196,0 +197 @@ def_well_known! {
++        PhysicalStorageBuffer,
+diff --git a/tests/physical_pointers.rs b/tests/physical_pointers.rs
+new file mode 100644
+index 0000000..bb11530
+--- /dev/null
++++ b/tests/physical_pointers.rs
+@@ -0,0 +1,74 @@
++//! Structural physical-address regression, with consumer validation in RustGPU.
++#![forbid(unsafe_code)]
++
++use spirt::{Context, Module, spv};
++use std::rc::Rc;
++
++fn emit(words: &mut Vec<u32>, name: &str, operands: &[u32]) {
++    let opcode = spv::spec::Spec::get().instructions.lookup(name).unwrap();
++    words.push((((operands.len() + 1) as u32) << 16) | u32::from(opcode.as_u16()));
++    words.extend_from_slice(operands);
++}
++
++fn bytes(words: &[u32]) -> Vec<u8> {
++    words.iter().flat_map(|word| word.to_le_bytes()).collect()
++}
++
++#[test]
++fn qptr_preserves_physical_address_parameters_and_conversions() {
++    let mut words = vec![0x07230203, 0x00010600, 0, 32, 0];
++    for capability in [1, 11, 5347] {
++        emit(&mut words, "OpCapability", &[capability]);
++    }
++    emit(&mut words, "OpMemoryModel", &[5348, 1]); // PhysicalStorageBuffer64 GLSL450.
++    emit(&mut words, "OpEntryPoint", &[5, 10, 0x6e69616d, 0, 9]); // GLCompute, main, output.
++    emit(&mut words, "OpExecutionMode", &[10, 17, 1, 1, 1]);
++    emit(&mut words, "OpDecorate", &[15, 20]); // Aliased physical parameter.
++    emit(&mut words, "OpTypeVoid", &[1]);
++    emit(&mut words, "OpTypeInt", &[2, 32, 0]);
++    emit(&mut words, "OpTypeInt", &[3, 64, 0]);
++    emit(&mut words, "OpTypePointer", &[4, 5349, 2]); // PhysicalStorageBuffer u32.
++    emit(&mut words, "OpTypePointer", &[5, 6, 3]); // Private u64.
++    emit(&mut words, "OpTypeFunction", &[6, 1]);
++    emit(&mut words, "OpTypeFunction", &[7, 3, 4]);
++    emit(&mut words, "OpConstant", &[3, 8, 4096, 0]);
++    emit(&mut words, "OpVariable", &[5, 9, 6]);
++    emit(&mut words, "OpFunction", &[1, 10, 0, 6]);
++    emit(&mut words, "OpLabel", &[11]);
++    emit(&mut words, "OpConvertUToPtr", &[4, 12, 8]);
++    emit(&mut words, "OpFunctionCall", &[3, 13, 14, 12]);
++    emit(&mut words, "OpStore", &[9, 13]);
++    emit(&mut words, "OpReturn", &[]);
++    emit(&mut words, "OpFunctionEnd", &[]);
++    emit(&mut words, "OpFunction", &[3, 14, 2, 7]);
++    emit(&mut words, "OpFunctionParameter", &[4, 15]);
++    emit(&mut words, "OpLabel", &[16]);
++    emit(&mut words, "OpConvertPtrToU", &[3, 17, 15]);
++    emit(&mut words, "OpReturnValue", &[17]);
++    emit(&mut words, "OpFunctionEnd", &[]);
++
++    let mut module = Module::lower_from_spv_bytes(Rc::new(Context::new()), bytes(&words)).unwrap();
++    let layout = &spirt::qptr::LayoutConfig {
++        abstract_bool_size_align: (1, 1),
++        logical_ptr_size_align: (4, 4),
++        ..spirt::qptr::LayoutConfig::VULKAN_SCALAR_LAYOUT
++    };
++    spirt::passes::qptr::lower_from_spv_ptrs(&mut module, layout);
++    spirt::passes::qptr::analyze_uses(&mut module, layout);
++    spirt::passes::qptr::lift_to_spv_ptrs(&mut module, layout);
++    let output = module.lift_to_spv_module_emitter().unwrap().words;
++    let instructions: Vec<_> = spv::read::ModuleParser::read_from_spv_bytes(bytes(&output))
++        .unwrap()
++        .collect::<std::io::Result<_>>()
++        .unwrap();
++    for name in ["OpFunctionParameter", "OpFunctionCall", "OpConvertPtrToU", "OpConvertUToPtr"] {
++        assert_eq!(instructions.iter().filter(|i| i.without_ids.opcode.name() == name).count(), 1);
++    }
++    let parameter =
++        instructions.iter().find(|i| i.without_ids.opcode.name() == "OpFunctionParameter").unwrap();
++    let ty = instructions.iter().find(|i| i.result_id == parameter.result_type_id).unwrap();
++    assert_eq!(ty.without_ids.opcode.name(), "OpTypePointer");
++    assert!(matches!(ty.without_ids.imms[..], [spv::Imm::Short(_, 5349)]));
++    let again = Module::lower_from_spv_bytes(Rc::new(Context::new()), bytes(&output)).unwrap();
++    assert_eq!(again.lift_to_spv_module_emitter().unwrap().words, output);
++}

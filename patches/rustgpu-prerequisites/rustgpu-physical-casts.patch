@@ -1,0 +1,946 @@
+diff --git a/crates/rustc_codegen_spirv/src/builder/builder_methods.rs b/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
+index b2b5069..77927f3 100644
+--- a/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
++++ b/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
+@@ -604 +604,5 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+-        self.zombie(def, "cannot convert pointers to integers");
++        // Only the explicit physical64 target has this Rust ABI. Its pointer
++        // storage class is checked later, after inference across calls.
++        if self.tcx.data_layout.pointer_size().bits() != 64 {
++            self.zombie(def, "cannot convert pointers to integers");
++        }
+@@ -609 +613,3 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+-        self.zombie(def, "cannot convert integers to pointers");
++        if self.tcx.data_layout.pointer_size().bits() != 64 {
++            self.zombie(def, "cannot convert integers to pointers");
++        }
+@@ -2185,0 +2192,8 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
++            // Vulkan requires a 64-bit conversion result. Narrowing a Rust
++            // address cast is a separate integer conversion, not a different
++            // pointer width or a change to ordinary integer arithmetic.
++            let address_ty = if self.tcx.data_layout.pointer_size().bits() == 64 {
++                self.type_usize()
++            } else {
++                dest_ty
++            };
+@@ -2188 +2202 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-                .convert_ptr_to_u(dest_ty, None, val.def(self))
++                .convert_ptr_to_u(address_ty, None, val.def(self))
+@@ -2190 +2204 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-                .with_type(dest_ty);
++                .with_type(address_ty);
+@@ -2192 +2206 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-            result
++            self.intcast(result, dest_ty, false)
+@@ -2353 +2367,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-                        Some(self.constant_int(dest_ty, const_val))
++                        let src_size = Size::from_bits(src_width);
++                        let extended = if is_signed {
++                            src_size.sign_extend(const_val) as u128
++                        } else {
++                            src_size.truncate(const_val)
++                        };
++                        Some(self.constant_int(dest_ty, extended))
+@@ -2385,4 +2405,4 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-            (SpirvType::Integer(_, _), SpirvType::Integer(_, dest_signedness)) => {
+-                // spir-v spec doesn't seem to say that signedness needs to match the operands, only that the signedness
+-                // of the destination type must match the instruction's signedness.
+-                if dest_signedness {
++            (SpirvType::Integer(_, _), SpirvType::Integer(dest_width, dest_signedness)) => {
++                // rustc supplies the source interpretation. For example, i32
++                // to u64 must sign-extend even though its destination is unsigned.
++                if is_signed {
+@@ -2389,0 +2410,2 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
++                        .unwrap()
++                        .with_type(dest_ty)
+@@ -2391 +2413,12 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-                    self.emit().u_convert(dest_ty, None, val.def(self))
++                    // UConvert requires an unsigned result, including when a Rust
++                    // cast zero-extends to a signed type. Preserve its bits with a
++                    // separate same-width bitcast in that case.
++                    let unsigned_ty = if dest_signedness {
++                        SpirvType::Integer(dest_width, false).def(self.span(), self)
++                    } else {
++                        dest_ty
++                    };
++                    let converted = self.emit().u_convert(unsigned_ty, None, val.def(self))
++                        .unwrap()
++                        .with_type(unsigned_ty);
++                    self.bitcast(converted, dest_ty)
+@@ -2393,2 +2425,0 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-                .unwrap()
+-                .with_type(dest_ty)
+diff --git a/crates/rustc_codegen_spirv/src/builder_spirv.rs b/crates/rustc_codegen_spirv/src/builder_spirv.rs
+index c6ee311..0923a28 100644
+--- a/crates/rustc_codegen_spirv/src/builder_spirv.rs
++++ b/crates/rustc_codegen_spirv/src/builder_spirv.rs
+@@ -480 +480,10 @@ impl<'tcx> BuilderSpirv<'tcx> {
+-        builder.memory_model(AddressingModel::Logical, memory_model);
++        let addressing_model = target.addressing_model();
++        if addressing_model == AddressingModel::PhysicalStorageBuffer64 {
++            builder.capability(Capability::PhysicalStorageBufferAddresses);
++            // usize and raw pointer conversions use 64-bit integers in this ABI.
++            builder.capability(Capability::Int64);
++            if version < SpirvVersion::V1_5 {
++                builder.extension("SPV_KHR_physical_storage_buffer");
++            }
++        }
++        builder.memory_model(addressing_model, memory_model);
+diff --git a/crates/rustc_codegen_spirv/src/linker/inline.rs b/crates/rustc_codegen_spirv/src/linker/inline.rs
+index 3fa0bde..97e82a8 100644
+--- a/crates/rustc_codegen_spirv/src/linker/inline.rs
++++ b/crates/rustc_codegen_spirv/src/linker/inline.rs
+@@ -329,3 +329,3 @@ fn deny_recursion_in_module(sess: &Session, module: &Module) -> super::Result<()
+-/// - (if a type) refer to any pointer types
+-///   - this rules out both pointers in composites, and pointers to pointers
+-///     (the latter itself *also* rules out variables containing pointers)
++/// - (if a type) refer to logical pointer types
++///   - physical pointers are concrete values and may appear in composites or
++///     be stored in variables
+@@ -363 +363,5 @@ impl LegalGlobal {
+-                    Some(Self::TypeNonPointer | Self::Const)
++                    Some(
++                        Self::TypeNonPointer
++                            | Self::Const
++                            | Self::TypePointer(StorageClass::PhysicalStorageBuffer)
++                    )
+@@ -384,0 +389 @@ impl LegalGlobal {
++                    | StorageClass::PhysicalStorageBuffer
+@@ -395,0 +401 @@ impl LegalGlobal {
++            Self::TypePointer(StorageClass::PhysicalStorageBuffer) => true,
+@@ -463 +469,3 @@ fn should_inline(
+-        if let LegalGlobal::TypePointer(_) = param_ty {
++        if let LegalGlobal::TypePointer(storage_class) = param_ty
++            && *storage_class != StorageClass::PhysicalStorageBuffer
++        {
+diff --git a/crates/rustc_codegen_spirv/src/linker/mod.rs b/crates/rustc_codegen_spirv/src/linker/mod.rs
+index 98e076b..76d3c71 100644
+--- a/crates/rustc_codegen_spirv/src/linker/mod.rs
++++ b/crates/rustc_codegen_spirv/src/linker/mod.rs
+@@ -339,0 +340 @@ pub fn link(
++            sess,
+@@ -667,0 +669,4 @@ pub fn link(
++        // The legalization inliner may replace parameters with non-memory
++        // values. Decorate the final memory object declarations, not those
++        // removed parameters whose IDs would be rewritten onto other values.
++        simple_passes::decorate_physical_pointer_aliases(&mut output);
+diff --git a/crates/rustc_codegen_spirv/src/linker/simple_passes.rs b/crates/rustc_codegen_spirv/src/linker/simple_passes.rs
+index ebd37a9..f251bc5 100644
+--- a/crates/rustc_codegen_spirv/src/linker/simple_passes.rs
++++ b/crates/rustc_codegen_spirv/src/linker/simple_passes.rs
+@@ -2,2 +2,2 @@ use super::{get_name, get_names};
+-use rspirv::dr::{Block, Function, Module};
+-use rspirv::spirv::{Decoration, ExecutionModel, Op, Word};
++use rspirv::dr::{Block, Function, Instruction, Module, Operand};
++use rspirv::spirv::{AddressingModel, Decoration, ExecutionModel, Op, StorageClass, Word};
+@@ -9,0 +10,83 @@ use std::mem::take;
++#[cfg(test)]
++mod physical_pointer_tests;
++
++/// Satisfy the physical-pointer alias decoration rules after storage-class
++/// inference. Raw pointers may alias, so do not invent a Restrict promise.
++/// Existing explicit alias/restriction decorations retain their meaning.
++pub fn decorate_physical_pointer_aliases(module: &mut Module) {
++    if !module.memory_model.as_ref().is_some_and(|inst| {
++        inst.operands[0].unwrap_addressing_model() == AddressingModel::PhysicalStorageBuffer64
++    }) {
++        return;
++    }
++
++    let types: FxHashMap<_, _> = module
++        .types_global_values
++        .iter()
++        .filter_map(|inst| inst.result_id.map(|id| (id, inst)))
++        .collect();
++    let existing: FxHashSet<_> = module
++        .annotations
++        .iter()
++        .filter_map(|inst| {
++            (inst.class.opcode == Op::Decorate).then(|| {
++                (
++                    inst.operands[0].unwrap_id_ref(),
++                    inst.operands[1].unwrap_decoration(),
++                )
++            })
++        })
++        .collect();
++    let is_physical_pointer_or_array = |mut ty| {
++        while let Some(inst) = types.get(&ty) {
++            match inst.class.opcode {
++                Op::TypeArray | Op::TypeRuntimeArray => ty = inst.operands[0].unwrap_id_ref(),
++                Op::TypePointer | Op::TypeUntypedPointerKHR => {
++                    return inst.operands[0].unwrap_storage_class()
++                        == StorageClass::PhysicalStorageBuffer;
++                }
++                _ => return false,
++            }
++        }
++        false
++    };
++    let mut annotations = Vec::new();
++    let candidates = module
++        .types_global_values
++        .iter()
++        .filter(|inst| inst.class.opcode == Op::Variable)
++        .chain(module.functions.iter().flat_map(|f| {
++            f.parameters.iter().chain(f.blocks.iter().flat_map(|b| {
++                b.instructions
++                    .iter()
++                    .filter(|i| i.class.opcode == Op::Variable)
++            }))
++        }));
++    for inst in candidates {
++        let ty = inst.result_type.unwrap();
++        let decorations =
++            if inst.class.opcode == Op::FunctionParameter && is_physical_pointer_or_array(ty) {
++                Some((Decoration::Aliased, Decoration::Restrict))
++            } else if types.get(&ty).is_some_and(|t| {
++                t.class.opcode == Op::TypePointer
++                    && is_physical_pointer_or_array(t.operands[1].unwrap_id_ref())
++            }) {
++                Some((Decoration::AliasedPointer, Decoration::RestrictPointer))
++            } else {
++                None
++            };
++        if let Some((aliased, restricted)) = decorations {
++            let id = inst.result_id.unwrap();
++            if !existing.contains(&(id, aliased)) && !existing.contains(&(id, restricted)) {
++                annotations.push(Instruction::new(
++                    Op::Decorate,
++                    None,
++                    None,
++                    vec![Operand::IdRef(id), Operand::Decoration(aliased)],
++                ));
++            }
++        }
++    }
++    module.annotations.extend(annotations);
++}
++
+diff --git a/crates/rustc_codegen_spirv/src/linker/simple_passes/physical_pointer_tests.rs b/crates/rustc_codegen_spirv/src/linker/simple_passes/physical_pointer_tests.rs
+new file mode 100644
+index 0000000..b18b910
+--- /dev/null
++++ b/crates/rustc_codegen_spirv/src/linker/simple_passes/physical_pointer_tests.rs
+@@ -0,0 +1,95 @@
++#![forbid(unsafe_code)]
++
++use super::*;
++use rspirv::binary::Assemble;
++use spirv_tools::assembler::{self, Assembler};
++use spirv_tools::val::{self, Validator};
++use std::collections::BTreeSet;
++
++#[test]
++fn physical_alias_decorations_validate_and_preserve_explicit_restrictions() {
++    let source = r#"
++OpCapability Shader
++OpCapability PhysicalStorageBufferAddresses
++OpMemoryModel PhysicalStorageBuffer64 GLSL450
++OpEntryPoint GLCompute %main "main"
++OpExecutionMode %main LocalSize 1 1 1
++OpName %a "a"
++OpName %b "b"
++OpName %c "c"
++OpName %logical "logical"
++OpName %slot "slot"
++OpName %slots "slots"
++OpDecorate %b Restrict
++%void = OpTypeVoid
++%u32 = OpTypeInt 32 0
++%two = OpConstant %u32 2
++%physical = OpTypePointer PhysicalStorageBuffer %u32
++%physical_array = OpTypeArray %physical %two
++%slot_type = OpTypePointer Function %physical
++%slots_type = OpTypePointer Function %physical_array
++%logical_type = OpTypePointer Function %u32
++%main_type = OpTypeFunction %void
++%helper_type = OpTypeFunction %void %physical %physical %slot_type %logical_type
++%main = OpFunction %void None %main_type
++%main_label = OpLabel
++%slot = OpVariable %slot_type Function
++%slots = OpVariable %slots_type Function
++OpReturn
++OpFunctionEnd
++%helper = OpFunction %void None %helper_type
++%a = OpFunctionParameter %physical
++%b = OpFunctionParameter %physical
++%c = OpFunctionParameter %slot_type
++%logical = OpFunctionParameter %logical_type
++%helper_label = OpLabel
++OpReturn
++OpFunctionEnd
++"#;
++    let words = assembler::create(None)
++        .assemble(source, assembler::AssemblerOptions::default())
++        .unwrap();
++    let bytes: &[u8] = words.as_ref();
++    let mut module =
++        crate::link::with_rspirv_loader(|loader| rspirv::binary::parse_bytes(bytes, loader))
++            .unwrap();
++    let validator = val::create(None);
++    // The pinned validator does not require missing alias decorations. Check
++    // their exact presence below as well as validating their legal placement.
++
++    decorate_physical_pointer_aliases(&mut module);
++    validator.validate(&module.assemble(), None).unwrap();
++    let names: FxHashMap<_, _> = module
++        .debug_names
++        .iter()
++        .map(|inst| {
++            (
++                inst.operands[0].unwrap_id_ref(),
++                inst.operands[1].unwrap_literal_string(),
++            )
++        })
++        .collect();
++    let found: BTreeSet<_> = module
++        .annotations
++        .iter()
++        .map(|inst| {
++            (
++                names[&inst.operands[0].unwrap_id_ref()],
++                inst.operands[1].unwrap_decoration(),
++            )
++        })
++        .collect();
++    assert_eq!(
++        found,
++        BTreeSet::from([
++            ("a", Decoration::Aliased),
++            ("b", Decoration::Restrict),
++            ("c", Decoration::AliasedPointer),
++            ("slot", Decoration::AliasedPointer),
++            ("slots", Decoration::AliasedPointer),
++        ])
++    );
++    let first = module.assemble();
++    decorate_physical_pointer_aliases(&mut module);
++    assert_eq!(module.assemble(), first, "must not duplicate decorations");
++}
+diff --git a/crates/rustc_codegen_spirv/src/linker/specializer.rs b/crates/rustc_codegen_spirv/src/linker/specializer.rs
+index 7e20c2c..f3ff5aa 100644
+--- a/crates/rustc_codegen_spirv/src/linker/specializer.rs
++++ b/crates/rustc_codegen_spirv/src/linker/specializer.rs
+@@ -56 +56 @@ use rspirv::dr::{Builder, Function, Instruction, Module, Operand};
+-use rspirv::spirv::{Op, StorageClass, Word};
++use rspirv::spirv::{AddressingModel, Op, StorageClass, Word};
+@@ -57,0 +58 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
++use rustc_session::Session;
+@@ -62 +63 @@ use std::{fmt, io, iter, mem, slice};
+-use tracing::{debug, error};
++use tracing::debug;
+@@ -108,0 +110 @@ pub fn specialize(
++    sess: &Session,
+@@ -130,0 +133 @@ pub fn specialize(
++        session: sess,
+@@ -131,0 +135,3 @@ pub fn specialize(
++        physical_storage_buffer: module.memory_model.as_ref().is_some_and(|inst| {
++            inst.operands[0].unwrap_addressing_model() == AddressingModel::PhysicalStorageBuffer64
++        }),
+@@ -525 +531,2 @@ struct Generic {
+-struct Specializer<S: Specialization> {
++struct Specializer<'sess, S: Specialization> {
++    session: &'sess Session,
+@@ -526,0 +534 @@ struct Specializer<S: Specialization> {
++    physical_storage_buffer: bool,
+@@ -539 +547 @@ struct Specializer<S: Specialization> {
+-impl<S: Specialization> Specializer<S> {
++impl<S: Specialization> Specializer<'_, S> {
+@@ -706 +714 @@ struct InferCx<'a, S: Specialization> {
+-    specializer: &'a Specializer<S>,
++    specializer: &'a Specializer<'a, S>,
+@@ -732 +740 @@ impl<'a, S: Specialization> InferCx<'a, S> {
+-    fn new(specializer: &'a Specializer<S>) -> Self {
++    fn new(specializer: &'a Specializer<'a, S>) -> Self {
+@@ -1029,0 +1038,3 @@ struct Match<'a> {
++    /// Storage classes constrained to PhysicalStorageBuffer in the hybrid model.
++    physical_storage_classes: SmallVec<[InferOperand; 1]>,
++
+@@ -1049,0 +1061 @@ impl<'a> Match<'a> {
++            physical_storage_classes,
+@@ -1055,0 +1068 @@ impl<'a> Match<'a> {
++        physical_storage_classes.extend(other.physical_storage_classes);
+@@ -1080,0 +1094 @@ impl<'a> Match<'a> {
++            physical_storage_classes,
+@@ -1086,0 +1101 @@ impl<'a> Match<'a> {
++        physical_storage_classes.retain(|x| other.physical_storage_classes.contains(x));
+@@ -1138,0 +1154 @@ impl<'a> Match<'a> {
++                physical_storage_classes,
+@@ -1147,0 +1164,9 @@ impl<'a> Match<'a> {
++            list.entries(physical_storage_classes.iter().map(|operand| {
++                FmtBy(move |f| {
++                    write!(
++                        f,
++                        "{} = PhysicalStorageBuffer",
++                        operand.display_with_infer_cx(cx)
++                    )
++                })
++            }));
+@@ -1213,0 +1239,7 @@ impl<'a, S: Specialization> InferCx<'a, S> {
++            StorageClassPat::Physical => {
++                let mut m = Match::default();
++                if self.specializer.physical_storage_buffer {
++                    m.physical_storage_classes.push(storage_class);
++                }
++                m
++            }
+@@ -1510,24 +1542,12 @@ impl InferError {
+-    fn report(self, inst: &Instruction) {
+-        // FIXME(eddyb) better error reporting than this.
+-        match self {
+-            Self::Conflict(a, b) => {
+-                error!("inference conflict: {a:?} vs {b:?}");
+-            }
+-        }
+-        error!("    in ");
+-        // FIXME(eddyb) deduplicate this with other instruction printing logic.
+-        if let Some(result_id) = inst.result_id {
+-            error!("%{result_id} = ");
+-        }
+-        error!("Op{:?}", inst.class.opcode);
+-        for operand in inst
+-            .result_type
+-            .map(Operand::IdRef)
+-            .iter()
+-            .chain(inst.operands.iter())
+-        {
+-            error!(" {operand}");
+-        }
+-        error!("");
+-
+-        std::process::exit(1);
++    fn report(self, sess: &Session, inst: &Instruction) -> ! {
++        let conflict = match self {
++            Self::Conflict(
++                InferOperand::Concrete(CopyOperand::StorageClass(a)),
++                InferOperand::Concrete(CopyOperand::StorageClass(b)),
++            ) => format!("incompatible pointer storage classes {a:?} and {b:?}"),
++            Self::Conflict(a, b) => format!("inference conflict: {a:?} vs {b:?}"),
++        };
++        sess.dcx().fatal(format!(
++            "{conflict} while inferring Op{:?}",
++            inst.class.opcode
++        ))
+@@ -1752,0 +1773 @@ impl<'a, S: Specialization> InferCx<'a, S> {
++            physical_storage_classes,
+@@ -1757,0 +1779,9 @@ impl<'a, S: Specialization> InferCx<'a, S> {
++        for found in physical_storage_classes {
++            self.equate_infer_operands(
++                found,
++                InferOperand::Concrete(CopyOperand::StorageClass(
++                    StorageClass::PhysicalStorageBuffer,
++                )),
++            )?;
++        }
++
+@@ -2004 +2034 @@ impl<'a, S: Specialization> InferCx<'a, S> {
+-                e.report(inst);
++                e.report(self.specializer.session, inst);
+@@ -2110 +2140 @@ impl<'a, S: Specialization> InferCx<'a, S> {
+-                            e.report(inst);
++                            e.report(self.specializer.session, inst);
+@@ -2204 +2234 @@ struct Expander<'a, S: Specialization> {
+-    specializer: &'a Specializer<S>,
++    specializer: &'a Specializer<'a, S>,
+@@ -2222 +2252 @@ impl<'a, S: Specialization> Expander<'a, S> {
+-    fn new(specializer: &'a Specializer<S>, module: Module) -> Self {
++    fn new(specializer: &'a Specializer<'a, S>, module: Module) -> Self {
+diff --git a/crates/rustc_codegen_spirv/src/linker/test.rs b/crates/rustc_codegen_spirv/src/linker/test.rs
+index d156040..a0a5924 100644
+--- a/crates/rustc_codegen_spirv/src/linker/test.rs
++++ b/crates/rustc_codegen_spirv/src/linker/test.rs
+@@ -0,0 +1,2 @@
++mod physical_address;
++
+@@ -165,0 +168,7 @@ fn link_with_linker_opts(
++            // Assembly-only tests have no source file, but diagnostics may use
++            // DUMMY_SP. Give rustc a valid source-map entry for that location.
++            sess.source_map().new_source_file(
++                FileName::Custom("<linker-test>".into()).into(),
++                String::new(),
++            );
++
+@@ -171,2 +180,2 @@ fn link_with_linker_opts(
+-                    "".into(),
+-                    "".into(),
++                    std::env::temp_dir(),
++                    format!("rustgpu-linker-test-{:?}", std::thread::current().id()),
+diff --git a/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs b/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
+new file mode 100644
+index 0000000..1774aa5
+--- /dev/null
++++ b/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
+@@ -0,0 +1,92 @@
++//! Non-executed address conversions through the real linker and specializer.
++#![forbid(unsafe_code)]
++
++use super::{assemble_spirv, link_with_linker_opts, validate};
++use rspirv::binary::{Assemble, Disassemble};
++
++fn check_casts(untyped: bool, qptr: bool) {
++    let mut source = r#"
++OpCapability Shader
++OpCapability Int64
++OpCapability PhysicalStorageBufferAddresses
++OpMemoryModel PhysicalStorageBuffer64 GLSL450
++OpEntryPoint GLCompute %main "main" %output
++OpExecutionMode %main LocalSize 1 1 1
++%void = OpTypeVoid
++%u32 = OpTypeInt 32 0
++%u64 = OpTypeInt 64 0
++%address = OpConstant %u64 4096
++%physical = OpTypePointer PhysicalStorageBuffer %u32
++%private = OpTypePointer Private %u64
++%main_type = OpTypeFunction %void
++%helper_type = OpTypeFunction %u64 %physical
++%output = OpVariable %private Private
++%main = OpFunction %void None %main_type
++%entry = OpLabel
++%pointer = OpConvertUToPtr %physical %address
++%bits = OpFunctionCall %u64 %helper %pointer
++OpStore %output %bits
++OpReturn
++OpFunctionEnd
++%helper = OpFunction %u64 DontInline %helper_type
++%parameter = OpFunctionParameter %physical
++%helper_entry = OpLabel
++%result = OpConvertPtrToU %u64 %parameter
++OpReturnValue %result
++OpFunctionEnd
++"#
++    .to_owned();
++    if untyped {
++        source = source
++            .replace(
++                "OpMemoryModel",
++                "OpCapability UntypedPointersKHR\nOpExtension \"SPV_KHR_untyped_pointers\"\nOpMemoryModel",
++            )
++            .replace(
++                "OpTypePointer PhysicalStorageBuffer %u32",
++                "OpTypeUntypedPointerKHR PhysicalStorageBuffer",
++            );
++    }
++    let binary = assemble_spirv(&source);
++    let module = link_with_linker_opts(
++        &[&binary],
++        &crate::linker::Options {
++            infer_storage_classes: true,
++            structurize: true,
++            spirt_passes: if qptr { vec!["qptr".into()] } else { vec![] },
++            ..Default::default()
++        },
++    )
++    .expect("physical address conversions must survive specialization");
++    validate(&module.assemble());
++    let text = module.disassemble();
++    for instruction in [
++        "OpConvertUToPtr",
++        "OpConvertPtrToU",
++        "OpFunctionCall",
++        "Aliased",
++    ] {
++        assert!(text.contains(instruction), "missing {instruction}:\n{text}");
++    }
++    assert_eq!(module.functions.len(), 2, "keep the physical parameter");
++}
++
++#[test]
++fn typed_casts() {
++    check_casts(false, false);
++}
++
++#[test]
++fn untyped_casts() {
++    check_casts(true, false);
++}
++
++#[test]
++fn typed_casts_qptr() {
++    check_casts(false, true);
++}
++
++#[test]
++fn untyped_casts_qptr() {
++    check_casts(true, true);
++}
+diff --git a/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs b/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
+index 32d6f39..a11fae3 100644
+--- a/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
++++ b/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
+@@ -4,4 +4,3 @@
+-//! Only type/storage-class equality is currently handled here, no concrete
+-//! type/storage-class constraints, nor anything involving non-type/storage-class
+-//! operands. While more constraints could be supported, encoding all the possible
+-//! rules for them may be challenging.
++//! Type/storage-class equality and the physical-pointer storage-class rule are
++//! handled here. Other concrete constraints, and constraints on non-type or
++//! non-storage-class operands, are not represented.
+@@ -36,0 +36,5 @@ pub enum StorageClassPat {
++    /// A physical pointer's storage class. In the PhysicalStorageBuffer64
++    /// addressing model, this must be PhysicalStorageBuffer. Physical32/64
++    /// addressing does not constrain the storage class in this way.
++    Physical,
++
+@@ -190,0 +195 @@ pub fn instruction_signatures(op: Op) -> Option<&'static [InstSig<'static>]> {
++        pub const PHYSICAL: super::StorageClassPat = super::StorageClassPat::Physical;
+@@ -442 +447,3 @@ pub fn instruction_signatures(op: Op) -> Option<&'static [InstSig<'static>]> {
+-        Op::ConvertPtrToU | Op::SatConvertSToU | Op::SatConvertUToS | Op::ConvertUToPtr => {}
++        Op::ConvertPtrToU => sig! { (Either(Pointer(PHYSICAL, _), UntypedPointer(PHYSICAL))) -> _ },
++        Op::ConvertUToPtr => sig! { (_) -> Either(Pointer(PHYSICAL, _), UntypedPointer(PHYSICAL)) },
++        Op::SatConvertSToU | Op::SatConvertUToS => {}
+diff --git a/crates/rustc_codegen_spirv/src/target.rs b/crates/rustc_codegen_spirv/src/target.rs
+index e2858f5..1973015 100644
+--- a/crates/rustc_codegen_spirv/src/target.rs
++++ b/crates/rustc_codegen_spirv/src/target.rs
+@@ -1 +1 @@
+-use rspirv::spirv::MemoryModel;
++use rspirv::spirv::{AddressingModel, MemoryModel};
+@@ -556,0 +557,7 @@ impl SpirvTarget {
++
++    pub const fn addressing_model(&self) -> AddressingModel {
++        match self {
++            Self::VulkanPhysical64(_) => AddressingModel::PhysicalStorageBuffer64,
++            _ => AddressingModel::Logical,
++        }
++    }
+@@ -563 +570,8 @@ impl SpirvTargetVariant for SpirvTarget {
+-            SpirvTarget::Vulkan(t) | SpirvTarget::VulkanPhysical64(t) => t.validate(),
++            SpirvTarget::Vulkan(t) => t.validate(),
++            SpirvTarget::VulkanPhysical64(t) => {
++                t.validate()?;
++                if t.spirv_version() < SpirvVersion::V1_3 {
++                    return Err(TargetError::InvalidTargetVersion(*self));
++                }
++                Ok(())
++            }
+@@ -591 +605,3 @@ impl SpirvTarget {
+-            return VulkanTarget::from_str(base).map(Self::VulkanPhysical64);
++            let target = Self::VulkanPhysical64(VulkanTarget::from_str(base)?);
++            target.validate()?;
++            return Ok(target);
+@@ -645,0 +662 @@ impl SpirvTarget {
++                    .filter(|t| t.spirv_version() >= SpirvVersion::V1_3)
+@@ -738,0 +756,5 @@ mod tests {
++            if base.spirv_version() < SpirvVersion::V1_3 {
++                assert!(physical.validate().is_err());
++                assert!(SpirvTarget::parse_target(&physical.target()).is_err());
++                continue;
++            }
+@@ -744,0 +767,5 @@ mod tests {
++            assert_eq!(logical.addressing_model(), AddressingModel::Logical);
++            assert_eq!(
++                physical.addressing_model(),
++                AddressingModel::PhysicalStorageBuffer64
++            );
+diff --git a/docs/src/platform-support.md b/docs/src/platform-support.md
+index b90f1f1..7e66301 100644
+--- a/docs/src/platform-support.md
++++ b/docs/src/platform-support.md
+@@ -62,5 +62,19 @@ host's pointer width, but does not establish that an address is valid to access.
+-This initial target support only establishes Rust layout and integer behavior.
+-Integer-pointer casts remain rejected, and selecting this target does not yet
+-enable physical memory operations or change logical storage classes. Physical
+-addressing, alignment and alias rules require separate lowering and validation.
+-The layout compiletests do not execute shaders or dereference synthetic values.
++The target requires SPIR-V 1.3 or later and emits PhysicalStorageBuffer64 with
++PhysicalStorageBufferAddresses and Int64. The physical-storage extension is
++declared when targeting SPIR-V before 1.5. Only PhysicalStorageBuffer pointers
++represent integer addresses. Ordinary logical storage classes keep their
++meaning, and converting a logical pointer to an integer is diagnosed.
++
++Integer/raw-pointer casts support 64-bit address transport across function
++boundaries. Narrow integer casts convert the address to 64 bits before normal
++truncation. Integer-to-pointer casts extend according to the source integer's
++signedness, following Rust's cast rules. Existing targets still reject raw
++address conversions. Function parameters and pointer slots receive conservative
++Aliased/AliasedPointer decorations when required, preserving an existing
++explicit restriction rather than inventing a no-alias guarantee.
++
++This experimental support does not yet provide a physical-memory access API.
++Aligned loads/stores, pointer arithmetic and comparisons, aggregate pointer
++storage, atomics and reference validity need separate lowering and evidence.
++Do not infer those guarantees from a valid conversion. The source compiletests
++transport synthetic values without dereferencing them and do not execute shaders.
+diff --git a/tests/compiletests/ui/physical_storage/cast_baseline.rs b/tests/compiletests/ui/physical_storage/cast_baseline.rs
+index 6b5cdf7..5b5f624 100644
+--- a/tests/compiletests/ui/physical_storage/cast_baseline.rs
++++ b/tests/compiletests/ui/physical_storage/cast_baseline.rs
+@@ -1,0 +2 @@
++// only-vulkan1.3
+@@ -3 +3,0 @@
+-
+diff --git a/tests/compiletests/ui/physical_storage/cast_logical_rejected.rs b/tests/compiletests/ui/physical_storage/cast_logical_rejected.rs
+new file mode 100644
+index 0000000..7f034cf
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/cast_logical_rejected.rs
+@@ -0,0 +1,21 @@
++// build-fail
++// only-vulkan1.3_physical64
++// normalize-stderr-test "(\n)\n+$" -> "$1"
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[inline(never)]
++fn address_of(pointer: *const u32) -> u64 {
++    pointer as u64
++}
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] input: &u32,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut u64,
++) {
++    // PushConstant stays logical even in the physical-address target.
++    *output = address_of(input as *const u32);
++}
+diff --git a/tests/compiletests/ui/physical_storage/cast_logical_rejected.stderr b/tests/compiletests/ui/physical_storage/cast_logical_rejected.stderr
+new file mode 100644
+index 0000000..b380e92
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/cast_logical_rejected.stderr
+@@ -0,0 +1,3 @@
++error: incompatible pointer storage classes PushConstant and PhysicalStorageBuffer while inferring OpFunctionCall
++
++error: aborting due to 1 previous error
+diff --git a/tests/compiletests/ui/physical_storage/cast_physical64.rs b/tests/compiletests/ui/physical_storage/cast_physical64.rs
+new file mode 100644
+index 0000000..f0b427a
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/cast_physical64.rs
+@@ -0,0 +1,34 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[inline(never)]
++fn to_pointer(address: u64) -> *mut u32 {
++    address as *mut u32
++}
++
++#[inline(never)]
++fn to_address(pointer: *mut u32) -> u64 {
++    pointer as u64
++}
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] address: &u64,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u64; 4],
++) {
++    // No address is dereferenced. The pointer storage class is inferred across
++    // function arguments and returns rather than annotated at each use.
++    let pointer = to_pointer(*address);
++    output[0] = to_address(pointer);
++    output[1] = (pointer as u32) as u64;
++    output[2] = to_address((*address as u32) as *mut u32);
++    output[3] = to_address((*address as i32) as *mut u32);
++}
+diff --git a/tests/compiletests/ui/physical_storage/cast_physical64.stderr b/tests/compiletests/ui/physical_storage/cast_physical64.stderr
+new file mode 100644
+index 0000000..f1bfe58
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/cast_physical64.stderr
+@@ -0,0 +1,88 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %address %output
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %address "address"
++               OpName %output "output"
++               OpName %cast_physical64__to_pointer "cast_physical64::to_pointer"
++               OpName %cast_physical64__to_address "cast_physical64::to_address"
++               OpDecorate %_struct_7 Block
++               OpMemberDecorate %_struct_7 0 Offset 0
++               OpDecorate %8 ArrayStride 8
++               OpDecorate %_struct_9 Block
++               OpMemberDecorate %_struct_9 0 Offset 0
++               OpDecorate %output Binding 0
++               OpDecorate %output DescriptorSet 0
++               OpDecorate %10 Aliased
++        %u64 = OpTypeInt 64 0
++  %_struct_7 = OpTypeStruct %u64
++%_ptr_PushConstant__struct_7 = OpTypePointer PushConstant %_struct_7
++        %u32 = OpTypeInt 32 0
++      %u32_4 = OpConstant %u32 4
++          %8 = OpTypeArray %u64 %u32_4
++  %_struct_9 = OpTypeStruct %8
++%_ptr_StorageBuffer__struct_9 = OpTypePointer StorageBuffer %_struct_9
++       %void = OpTypeVoid
++         %17 = OpTypeFunction %void
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++    %address = OpVariable %_ptr_PushConstant__struct_7 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_StorageBuffer_8 = OpTypePointer StorageBuffer %8
++     %output = OpVariable %_ptr_StorageBuffer__struct_9 StorageBuffer
++%_ptr_PhysicalStorageBuffer_u32 = OpTypePointer PhysicalStorageBuffer %u32
++         %22 = OpTypeFunction %_ptr_PhysicalStorageBuffer_u32 %u64
++         %23 = OpTypeFunction %u64 %_ptr_PhysicalStorageBuffer_u32
++%_ptr_StorageBuffer_u64 = OpTypePointer StorageBuffer %u64
++      %u32_1 = OpConstant %u32 1
++      %u32_2 = OpConstant %u32 2
++        %i32 = OpTypeInt 32 1
++      %u32_3 = OpConstant %u32 3
++          %1 = OpFunction %void None %17
++         %29 = OpLabel
++         %30 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %address %u32_0
++         %31 = OpInBoundsAccessChain %_ptr_StorageBuffer_8 %output %u32_0
++         %32 = OpLoad %u64 %30
++         %33 = OpFunctionCall %_ptr_PhysicalStorageBuffer_u32 %cast_physical64__to_pointer %32
++         %34 = OpFunctionCall %u64 %cast_physical64__to_address %33
++         %35 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %31 %u32_0
++               OpStore %35 %34
++         %36 = OpConvertPtrToU %u64 %33
++         %37 = OpUConvert %u32 %36
++         %38 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %31 %u32_1
++         %39 = OpUConvert %u64 %37
++               OpStore %38 %39
++         %40 = OpLoad %u64 %30
++         %41 = OpUConvert %u32 %40
++         %42 = OpUConvert %u64 %41
++         %43 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %42
++         %44 = OpFunctionCall %u64 %cast_physical64__to_address %43
++         %45 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %31 %u32_2
++               OpStore %45 %44
++         %46 = OpLoad %u64 %30
++         %47 = OpUConvert %u32 %46
++         %48 = OpBitcast %i32 %47
++         %49 = OpSConvert %u64 %48
++         %50 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %49
++         %51 = OpFunctionCall %u64 %cast_physical64__to_address %50
++         %52 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %31 %u32_3
++               OpStore %52 %51
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
++%cast_physical64__to_pointer = OpFunction %_ptr_PhysicalStorageBuffer_u32 DontInline %22
++         %53 = OpFunctionParameter %u64
++         %54 = OpLabel
++         %55 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %53
++               OpNoLine
++               OpReturnValue %55
++               OpFunctionEnd
++%cast_physical64__to_address = OpFunction %u64 DontInline %23
++         %10 = OpFunctionParameter %_ptr_PhysicalStorageBuffer_u32
++         %56 = OpLabel
++         %57 = OpConvertPtrToU %u64 %10
++               OpNoLine
++               OpReturnValue %57
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/physical_storage/integer_cast_signedness.rs b/tests/compiletests/ui/physical_storage/integer_cast_signedness.rs
+new file mode 100644
+index 0000000..0a9f37c
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/integer_cast_signedness.rs
+@@ -0,0 +1,23 @@
++// build-pass
++// only-vulkan1.3
++// compile-flags: -C target-feature=+Int64
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] input: &u32,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u64; 4],
++) {
++    // The source signedness controls extension independently of the result type.
++    output[0] = (*input as i32) as u64;
++    output[1] = (*input as i64) as u64;
++    output[2] = (-1_i32) as u64;
++    output[3] = u32::MAX as i64 as u64;
++}
+diff --git a/tests/compiletests/ui/physical_storage/integer_cast_signedness.stderr b/tests/compiletests/ui/physical_storage/integer_cast_signedness.stderr
+new file mode 100644
+index 0000000..05d4aae
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/integer_cast_signedness.stderr
+@@ -0,0 +1,61 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpMemoryModel Logical Vulkan
++               OpEntryPoint GLCompute %1 "main" %input %output
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %input "input"
++               OpName %output "output"
++               OpDecorate %_struct_5 Block
++               OpMemberDecorate %_struct_5 0 Offset 0
++               OpDecorate %6 ArrayStride 8
++               OpDecorate %_struct_7 Block
++               OpMemberDecorate %_struct_7 0 Offset 0
++               OpDecorate %output Binding 0
++               OpDecorate %output DescriptorSet 0
++        %u32 = OpTypeInt 32 0
++  %_struct_5 = OpTypeStruct %u32
++%_ptr_PushConstant__struct_5 = OpTypePointer PushConstant %_struct_5
++        %u64 = OpTypeInt 64 0
++      %u32_4 = OpConstant %u32 4
++          %6 = OpTypeArray %u64 %u32_4
++  %_struct_7 = OpTypeStruct %6
++%_ptr_StorageBuffer__struct_7 = OpTypePointer StorageBuffer %_struct_7
++       %void = OpTypeVoid
++         %14 = OpTypeFunction %void
++%_ptr_PushConstant_u32 = OpTypePointer PushConstant %u32
++      %input = OpVariable %_ptr_PushConstant__struct_5 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_StorageBuffer_6 = OpTypePointer StorageBuffer %6
++     %output = OpVariable %_ptr_StorageBuffer__struct_7 StorageBuffer
++        %i32 = OpTypeInt 32 1
++%_ptr_StorageBuffer_u64 = OpTypePointer StorageBuffer %u64
++        %i64 = OpTypeInt 64 1
++      %u32_1 = OpConstant %u32 1
++      %u32_2 = OpConstant %u32 2
++%u64_18446744073709551615 = OpConstant %u64 18446744073709551615
++      %u32_3 = OpConstant %u32 3
++%i64_4294967295 = OpConstant %i64 4294967295
++          %1 = OpFunction %void None %14
++         %26 = OpLabel
++         %27 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %input %u32_0
++         %28 = OpInBoundsAccessChain %_ptr_StorageBuffer_6 %output %u32_0
++         %29 = OpLoad %u32 %27
++         %30 = OpBitcast %i32 %29
++         %31 = OpSConvert %u64 %30
++         %32 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %28 %u32_0
++               OpStore %32 %31
++         %33 = OpLoad %u32 %27
++         %34 = OpUConvert %u64 %33
++         %35 = OpBitcast %i64 %34
++         %36 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %28 %u32_1
++         %37 = OpBitcast %u64 %35
++               OpStore %36 %37
++         %38 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %28 %u32_2
++               OpStore %38 %u64_18446744073709551615
++         %39 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %28 %u32_3
++         %40 = OpBitcast %u64 %i64_4294967295
++               OpStore %39 %40
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/physical_storage/layout_physical64.stderr b/tests/compiletests/ui/physical_storage/layout_physical64.stderr
+index d16a5dc..8dc9933 100644
+--- a/tests/compiletests/ui/physical_storage/layout_physical64.stderr
++++ b/tests/compiletests/ui/physical_storage/layout_physical64.stderr
+@@ -4 +4,2 @@
+-               OpMemoryModel Logical Vulkan
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
