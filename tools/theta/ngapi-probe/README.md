@@ -147,3 +147,42 @@ python -m unittest discover -s tools/theta/ngapi-probe -p test_records.py -v
 ```
 
 [E-026](../../../docs/execution.md#e-026-2026-09-19-tested-divergent-native-heap-access) passes eight GPU cases and 122 CPU controls in each Debug/Release host, with zero validation diagnostics. all 20 Python record tests pass, including broadcast and lane-permutation rejection. this is divergent float sampled-image compute evidence. vertex/fragment execution, storage images, the cube, high-address and unequal-stride execution remain open.
+
+
+## textured cube with vertex and fragment stages
+
+[native_heap_cube.rs](native_heap_cube.rs) fetches an indexed 24-byte vertex through PhysicalPtr, applies a row-major transform and samples native image/sampler heaps in the fragment stage. [the caller](native_heap_cube.cpp) draws 36 indices into 128 x 128 RGBA8 UNORM and D32 float attachments. four cases cover two fixed affine views, two generated 2 x 2 images and nearest repeat/clamp samplers at nonzero slots. both Rust optimization levels use explicit vertexMain/fragmentMain metadata in one shared SPIR-V payload. [U-008](../../../UNSAFE.md#u-008-actual-ngapi-textured-cube) owns the reviewed caller contract.
+
+the vertex layout, cube geometry and entry names follow [NGAPI's cube](https://github.com/sebbbi/NoGraphicsAPI/tree/d60b10bdfe15c0f350d6d291d8e06afef3fe7d38/examples/cube), copyright 2026 Sebastian Aaltonen, with the complete [MIT notice](../../../legal/licenses/NoGraphicsAPI-MIT.txt). the original root prefix retains vertex address at 0 and transform at 8. this diagnostic appends resource/sampler indices at 72/76, making an 80-byte root. it intentionally uses generated textures, fixed views, unlit sampling, no culling, a positive-height viewport and offscreen readback. it does not claim original spinning/lit sample parity or presentation. no original texture asset is copied.
+
+[cube_oracle.py](cube_oracle.py) independently intersects pixel-center rays with a unit box. it does not consume the triangle list or a previous GPU image. RGBA including alpha must match exactly, depth must differ by at most 3e-6, and every pixel must have finite depth in [0,1] and a valid palette color. geometric ties within 1e-6 and texel boundaries within 2e-5 are masked from exact comparison, with a strict 256-pixel maximum. current cases mask 127 to 168 of 16,384 pixels. native checks preserve all vertex/index/texture bytes plus input and readback guards. PNGs and raw depth are retained for diagnosis. CPU tests reject blank, flipped, wrong-view/resource/sampler, corrupt depth/alpha, incomplete and stale results.
+
+use the E-025 compiler/library and E-026 NGAPI prerequisites above, then:
+
+```powershell
+python tools/theta/ngapi-probe/compile_readback.py --fixture native_heap_cube `
+  --rustgpu-source work/theta/upstream/rust-gpu `
+  --codegen-backend work/theta/build/rust-gpu/release/rustc_codegen_spirv.dll `
+  --output-dir work/theta/build/ngapi-cube-shaders
+if ($LASTEXITCODE -ne 0) { throw 'cube shader compilation failed' }
+cmake -S tools/theta/ngapi-probe -B work/theta/build/ngapi-owned `
+  -G "Visual Studio 17 2022" -A x64 `
+  "-DNGAPI_SOURCE_DIR=$thetaRoot/work/theta/upstream/NoGraphicsAPI" `
+  "-DTHETA_CUBE_SHADER_DIR=$thetaRoot/work/theta/build/ngapi-cube-shaders" `
+  "-DVulkan_INCLUDE_DIR=$sdk/Include" "-DVulkan_LIBRARY=$sdk/Lib/vulkan-1.lib"
+if ($LASTEXITCODE -ne 0) { throw 'native configure failed' }
+python -m unittest discover -s tools/theta/ngapi-probe -p 'test_*.py' -v
+if ($LASTEXITCODE -ne 0) { throw 'image/record controls failed' }
+foreach ($configuration in @('Debug', 'Release')) {
+  cmake --build work/theta/build/ngapi-owned --config $configuration `
+    --target theta_ngapi_native_heap_cube --parallel 1
+  if ($LASTEXITCODE -ne 0) { throw 'native build failed' }
+  python tools/theta/ngapi-probe/run_readback.py --fixture native_heap_cube `
+    --executable "work/theta/build/ngapi-owned/$configuration/theta_ngapi_native_heap_cube.exe" `
+    --sdk $sdk --shader-dir work/theta/build/ngapi-cube-shaders `
+    --output-dir "work/theta/evidence/native-heap-cube-$configuration"
+  if ($LASTEXITCODE -ne 0) { throw 'cube consumer failed' }
+}
+```
+
+[E-027](../../../docs/execution.md#e-027-2026-09-19-verified-the-native-heap-textured-cube) records eight passing GPU cases in each Debug/Release host, zero validation diagnostics and all 31 Python image/record tests. existing scalar/uniform/divergent compute gates still pass. this adds vertex/fragment and a bounded aggregate-read runtime result. storage images, task/mesh, presentation, direct Rust Vulkan, Linux and complete upstream CI remain open.

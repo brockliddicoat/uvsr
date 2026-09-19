@@ -76,6 +76,8 @@ application: assert required effect counts, flags and scope identities after opt
 
 application: cover a whole aggregate and mixed physical/logical temporaries when changing memory access metadata. inspect the final accesses after legalization and optimization. a single SPIR-V copy mask applies to both endpoints, so the weaker known alignment is valid for both. limit: the regression proves the tested array compiler path with pure Aligned metadata. it does not establish effectful/scoped-copy semantics or aggregate GPU execution.
 
+[E-027](execution.md#e-027-2026-09-19-verified-the-native-heap-textured-cube) adds bounded aggregate-read execution: a 24-byte vertex containing two float arrays works as one aligned aggregate load at opt0 and six aligned scalar loads at opt3. both actual cube image/depth oracles pass in Debug/Release. this extends the evidence for that vertex layout, without proving the separate u32-array copy fixture or arbitrary aggregate operations.
+
 ## L-012. preserve declaration order across assembly placement
 
 **observed, pinned RustGPU native-heap source probe.** at [E-023](execution.md#e-023-2026-09-19-compiled-native-heap-rust-shaders), the assembly loader accepted heap instructions but source compilation failed on a forward ID. inline assembly registered types immediately while deferring constants to function bodies. later global placement therefore put a descriptor-size constant after the array whose ID decoration used it.

@@ -94,7 +94,7 @@ def main():
     parser.add_argument("--sdk", type=Path, required=True)
     parser.add_argument("--shader-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--fixture", choices=["physical_readback", "native_heap_sample", "native_heap_divergent"], default="physical_readback")
+    parser.add_argument("--fixture", choices=["physical_readback", "native_heap_sample", "native_heap_divergent", "native_heap_cube"], default="physical_readback")
     args = parser.parse_args()
     fixture = args.fixture
     executable = args.executable.resolve(strict=True)
@@ -123,8 +123,14 @@ def main():
     })
     start = time.monotonic()
     timed_out = False
+    if fixture == "native_heap_cube":
+        for opt in (0, 3):
+            for case in range(4):
+                for suffix in ("rgba", "depth"):
+                    (output / f"cube.opt{opt}.case{case}.{suffix}").unlink(missing_ok=True)
     try:
-        result = subprocess.run([str(executable)], env=environment, capture_output=True, timeout=45)
+        result = subprocess.run([str(executable)], cwd=output if fixture == "native_heap_cube" else None,
+                                env=environment, capture_output=True, timeout=45)
         stdout, stderr, exit_code = result.stdout, result.stderr, result.returncode
     except subprocess.TimeoutExpired as error:
         stdout, stderr, exit_code = error.stdout or b"", error.stderr or b"", None
@@ -139,13 +145,16 @@ def main():
     failure = None
     try:
         records = [json.loads(line) for line in out_text.splitlines() if line.strip()]
-        if fixture == "physical_readback":
+        if fixture == "native_heap_cube":
+            from cube_oracle import check_cube_records
+            check_cube_records(records, metadata, output)
+        elif fixture == "physical_readback":
             check_records(records, metadata)
         else:
             check_heap_records(records, metadata, divergent=fixture == "native_heap_divergent")
         if exit_code != 0 or timed_out or not inserted or diagnostics:
             raise ValueError("native exit, validation insertion or validation diagnostics failed")
-    except (ValueError, KeyError, TypeError) as error:
+    except (ValueError, KeyError, TypeError, OSError) as error:
         failure = str(error)
     adapter = re.search(r'Using "([^"]+)" with driver: "([^"]+)"', err_text)
     report = {
