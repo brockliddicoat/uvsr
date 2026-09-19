@@ -17,3 +17,18 @@ if ($LASTEXITCODE -ne 0) { throw 'NGAPI prerequisite failed' }
 run from this repository's root. no RustGPU patch depends on NGAPI or this file.
 
 [E-021](../../docs/execution.md#e-021-2026-09-19-executed-rust-physical-readback-through-ngapi) records the actual Windows Debug/Release tests, limitations and exact shader identity. the change has not been submitted to NGAPI upstream. it changes neither device-address allocation nor descriptor-heap/pipeline/root-data implementation.
+
+
+## divergent sampled-image access
+
+apply [ngapi-divergent-sampling.patch](ngapi-divergent-sampling.patch) after the physical-readback patch. [divergent-source.json](divergent-source.json) pins this separate increment, its prerequisite and reconstructed tree. the two added lines query/require and enable `shaderSampledImageArrayNonUniformIndexing` in the same fixed experimental profile. there is no public negotiation API or fallback.
+
+```powershell
+$ngapiPatch = (Resolve-Path patches/ngapi-physical-readback/ngapi-divergent-sampling.patch).Path
+git -C work/theta/upstream/NoGraphicsAPI apply --check $ngapiPatch
+if ($LASTEXITCODE -ne 0) { throw 'divergent NGAPI prerequisite does not apply' }
+git -C work/theta/upstream/NoGraphicsAPI apply $ngapiPatch
+if ($LASTEXITCODE -ne 0) { throw 'divergent NGAPI prerequisite failed' }
+```
+
+[E-026](../../docs/execution.md#e-026-2026-09-19-tested-divergent-native-heap-access) records the four-lane actual consumer and unchanged scalar/uniform regression gates. native heaps permit non-uniform indexing by default, while the [Vulkan SPIR-V environment](https://docs.vulkan.org/spec/latest/appendices/spirvenv.html) still requires the sampled-image capability and its device feature for this artifact. this patch is not part of the generic RustGPU contribution and has not been published to NGAPI upstream.

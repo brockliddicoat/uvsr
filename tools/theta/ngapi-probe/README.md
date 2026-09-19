@@ -113,3 +113,37 @@ foreach ($configuration in @('Debug', 'Release')) {
 ```
 
 the runner requires eight unique GPU cases, one CPU-control record, current source/payload hashes, exact bytes and native validation insertion without diagnostics. the native `--self-test` runs 74 CPU checks without creating a device. all 14 Python record tests run with the earlier unittest command. [U-005](../../../UNSAFE.md#u-005-actual-ngapi-native-heap-sample) records the reviewed boundary. this compute fixture leaves divergent indices, unequal descriptor sizes, nonzero high address bits, additional resources/stages, cube, direct Rust Vulkan and Linux coverage open.
+
+
+## divergent resource/sampler heap readback
+
+[native_heap_divergent.rs](native_heap_divergent.rs) runs four invocations in one workgroup. each lane selects a different combination of resource slots 1/3 and sampler slots 2/3. four root-mask phases permute the expected colors, testing both indices independently. the shared native caller checks four Vec4 outputs, a 16-byte guard and both original textures. [U-007](../../../UNSAFE.md#u-007-actual-ngapi-divergent-heap-sample) owns the complete reviewed caller contract.
+
+use the same E-025 compiler/library and both [NGAPI prerequisites](../../../patches/ngapi-physical-readback/README.md). the artifact declares ShaderNonUniform and SampledImageArrayNonUniformIndexing. the host queries and enables the matching sampled-image feature before device creation. after preparing the owned environment above:
+
+```powershell
+python tools/theta/ngapi-probe/compile_readback.py --fixture native_heap_divergent `
+  --rustgpu-source work/theta/upstream/rust-gpu `
+  --codegen-backend work/theta/build/rust-gpu/release/rustc_codegen_spirv.dll `
+  --output-dir work/theta/build/ngapi-divergent-shaders
+if ($LASTEXITCODE -ne 0) { throw 'divergent shader compilation failed' }
+cmake -S tools/theta/ngapi-probe -B work/theta/build/ngapi-owned `
+  -G "Visual Studio 17 2022" -A x64 `
+  "-DNGAPI_SOURCE_DIR=$thetaRoot/work/theta/upstream/NoGraphicsAPI" `
+  "-DTHETA_DIVERGENT_SHADER_DIR=$thetaRoot/work/theta/build/ngapi-divergent-shaders" `
+  "-DVulkan_INCLUDE_DIR=$sdk/Include" "-DVulkan_LIBRARY=$sdk/Lib/vulkan-1.lib"
+if ($LASTEXITCODE -ne 0) { throw 'native configure failed' }
+foreach ($configuration in @('Debug', 'Release')) {
+  cmake --build work/theta/build/ngapi-owned --config $configuration `
+    --target theta_ngapi_native_heap_divergent --parallel 1
+  if ($LASTEXITCODE -ne 0) { throw 'native build failed' }
+  python tools/theta/ngapi-probe/run_readback.py --fixture native_heap_divergent `
+    --executable "work/theta/build/ngapi-owned/$configuration/theta_ngapi_native_heap_divergent.exe" `
+    --sdk $sdk --shader-dir work/theta/build/ngapi-divergent-shaders `
+    --output-dir "work/theta/evidence/native-heap-divergent-$configuration"
+  if ($LASTEXITCODE -ne 0) { throw 'divergent NGAPI consumer failed' }
+}
+python -m unittest discover -s tools/theta/ngapi-probe -p test_records.py -v
+```
+
+[E-026](../../../docs/execution.md#e-026-2026-09-19-tested-divergent-native-heap-access) passes eight GPU cases and 122 CPU controls in each Debug/Release host, with zero validation diagnostics. all 20 Python record tests pass, including broadcast and lane-permutation rejection. this is divergent float sampled-image compute evidence. vertex/fragment execution, storage images, the cube, high-address and unequal-stride execution remain open.

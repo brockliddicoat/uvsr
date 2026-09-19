@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/sebbbi/NoGraphicsAPI",
+  "base_commit": "2d811720e824197ee9cb39092de113e9ac6bba07",
+  "prerequisite_manifest": "source.json",
+  "verified_local_commit": "a9b7e3fb00704385f186ba804483f5e7b0be5a9e",
+  "tree": "f745d7dc2912056c4cb1ee4c0d2b32617cbfb680",
+  "patch": "ngapi-divergent-sampling.patch",
+  "patch_sha256": "e6d9e440745f14c52f21f1250023ef350bd97bc394a7584fbb9ed5244aa770d7",
+  "scope": "experimental fixed NGAPI profile for divergent sampled-image heap access",
+  "additional_required_features": [
+    "shaderSampledImageArrayNonUniformIndexing"
+  ],
+  "license": "../../legal/licenses/NoGraphicsAPI-MIT.txt",
+  "upstream_publication": false
+}
