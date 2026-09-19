@@ -48,6 +48,8 @@ raw physical-address APIs state allocation validity, range, alignment, lifetime,
 
 [E-021](../../../execution.md#e-021-2026-09-19-executed-rust-physical-readback-through-ngapi) executes one physical u32 read and three writes through actual NGAPI's Windows Vulkan compute/root path. the two u64 root fields have offsets 0/8 and size 16. transfer/compute/host barriers and timeline retirement establish the bounded [U-002](../../../../UNSAFE.md#u-002-actual-ngapi-physical-u32-readback) caller contract. real addresses are below 4 GiB, explicitly leaving nonzero high-address coverage open. no resource/sampler lookup occurs, so this does not yet prove the native-heap shader interface.
 
+[E-022](../../../execution.md#e-022-2026-09-19-tested-the-physical-pointer-library) adds transparent PhysicalPtr<T> transport with u64 size/alignment and explicit u64/i64 wrapping counts. U-003 documents unsafe Copy-value access. the actual scalar consumer preserves its two-u64 host ABI and runtime oracle. a u32-array copy validates with Aligned 4 through source/default/qptr compilation, with aggregate runtime still pending. pointee layout remains a separate host/shader agreement.
+
 ## minimum cases
 
 use exact arithmetic/buffer readback, nonzero descriptor slots, distinct samplers/textures, uniform/divergent indices, root aggregates, matrix orientation, aligned access, mixed logical/physical operations, optimized/unoptimized modules, missing-feature diagnostics, and valid lifecycle sequences. add stage cases for every promised exposed stage.

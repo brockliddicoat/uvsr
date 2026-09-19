@@ -2,14 +2,14 @@
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use spirv_std::spirv;
+use spirv_std::{spirv, PhysicalPtr};
 
 /// Matches PhysicalReadbackRoot in physical_readback.hpp. Both fields transport
 /// device addresses, not host pointers or target-dependent usize values.
 #[repr(C)]
 pub struct PhysicalReadbackRoot {
-    pub source: u64,
-    pub destination: u64,
+    pub source: PhysicalPtr<u32>,
+    pub destination: PhysicalPtr<u32>,
 }
 
 const _: () = {
@@ -33,22 +33,26 @@ const _: () = {
 #[allow(unsafe_code, non_snake_case)]
 #[spirv(compute(threads(1)))]
 pub unsafe fn computeMain(#[spirv(push_constant)] root: &PhysicalReadbackRoot) {
-    let source = root.source as *const u32;
-    let destination = root.destination as *mut u32;
-    // SAFETY: U-002. The source identifies a live, aligned and initialized u32
+    let source = root.source;
+    let destination = root.destination;
+    // SAFETY: U-002/U-003. The source identifies a live, aligned and initialized u32
     // visible to this invocation. All u32 bit patterns are valid.
     let value = unsafe { source.read() };
-    // SAFETY: U-002. The first four bytes of the disjoint destination are live,
+    // SAFETY: U-002/U-003. The first four bytes of the disjoint destination are live,
     // aligned and exclusively writable until queue completion.
     unsafe { destination.write(value.wrapping_add(7)) };
-    // SAFETY: U-002. Byte offset four is aligned and inside the same exclusive
+    // SAFETY: U-002/U-003. Byte offset four is aligned and inside the same exclusive
     // 12-byte destination. The host validates its complete range before dispatch.
-    unsafe { destination.wrapping_add(1).write(root.source as u32) };
-    // SAFETY: U-002. Byte offset eight covers the final four bytes of that range.
+    unsafe {
+        destination
+            .wrapping_add(1)
+            .write(root.source.address() as u32)
+    };
+    // SAFETY: U-002/U-003. Byte offset eight covers the final four bytes of that range.
     // Address bits are transported as integers without creating Rust references.
     unsafe {
         destination
             .wrapping_add(2)
-            .write((root.source >> 32) as u32)
+            .write((root.source.address() >> 32) as u32)
     };
 }

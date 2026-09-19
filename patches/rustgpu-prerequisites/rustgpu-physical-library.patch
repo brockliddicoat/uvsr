@@ -1,0 +1,1020 @@
+diff --git a/crates/rustc_codegen_spirv/src/builder/builder_methods.rs b/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
+index 8bab990..acb4752 100644
+--- a/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
++++ b/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
+@@ -2923 +2923 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-        _dst_align: Align,
++        dst_align: Align,
+@@ -2925 +2925 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-        _src_align: Align,
++        src_align: Align,
+@@ -2984 +2984 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-                self.store(const_value, dst, Align::from_bytes(0).unwrap());
++                self.store(const_value, dst, dst_align);
+@@ -2986,0 +2987,4 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
++                // A single memory mask applies to both operands, including on
++                // SPIR-V 1.3. The weaker known alignment is valid for both ends.
++                let (memory_access, memory_operands) =
++                    self.load_store_alignment(dst_align.min(src_align));
+@@ -2988 +2992,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-                    .copy_memory(dst.def(self), src.def(self), None, None, empty())
++                    .copy_memory(
++                        dst.def(self),
++                        src.def(self),
++                        memory_access,
++                        None,
++                        memory_operands,
++                    )
+diff --git a/crates/rustc_codegen_spirv/src/builder/format_args_decompiler.rs b/crates/rustc_codegen_spirv/src/builder/format_args_decompiler.rs
+index cd024b4..5e168f7 100644
+--- a/crates/rustc_codegen_spirv/src/builder/format_args_decompiler.rs
++++ b/crates/rustc_codegen_spirv/src/builder/format_args_decompiler.rs
+@@ -510,5 +510,4 @@ impl<'tcx> DecodedFormatArgs<'tcx> {
+-                    (Op::Store, [_, _, Operand::MemoryAccess(mask), Operand::LiteralBit32(_)])
+-                        if *mask == MemoryAccess::ALIGNED =>
+-                    {
+-                        &inst.operands[..2]
+-                    }
++                    (
++                        Op::Store | Op::CopyMemory,
++                        [_, _, Operand::MemoryAccess(mask), Operand::LiteralBit32(_)],
++                    ) if *mask == MemoryAccess::ALIGNED => &inst.operands[..2],
+diff --git a/crates/rustc_codegen_spirv/src/linker/mem2reg.rs b/crates/rustc_codegen_spirv/src/linker/mem2reg.rs
+index c6fd8c0..c5de866 100644
+--- a/crates/rustc_codegen_spirv/src/linker/mem2reg.rs
++++ b/crates/rustc_codegen_spirv/src/linker/mem2reg.rs
+@@ -15 +15 @@ use rspirv::dr::{Block, Function, Instruction, ModuleHeader, Operand};
+-use rspirv::spirv::{Op, Word};
++use rspirv::spirv::{MemoryAccess, Op, Word};
+@@ -331,2 +331,10 @@ fn split_copy_memory(
+-                if inst.operands.len() > 2 {
+-                    // TODO: Copy the memory operands to the load/store
++                let memory_operands = &inst.operands[2..];
++                if !memory_operands.is_empty()
++                    && !matches!(
++                        memory_operands,
++                        [Operand::MemoryAccess(mask), Operand::LiteralBit32(_)]
++                            if *mask == MemoryAccess::ALIGNED
++                    )
++                {
++                    // Effectful or separately scoped masks need a separate
++                    // promotion analysis. Alignment alone has no memory effect.
+@@ -348,6 +356,6 @@ fn split_copy_memory(
+-                block.instructions[inst_index] = Instruction::new(
+-                    Op::Load,
+-                    Some(ty),
+-                    Some(temp_id),
+-                    vec![Operand::IdRef(source)],
+-                );
++                let mut load_operands = vec![Operand::IdRef(source)];
++                load_operands.extend_from_slice(memory_operands);
++                let mut store_operands = vec![Operand::IdRef(target), Operand::IdRef(temp_id)];
++                store_operands.extend_from_slice(memory_operands);
++                block.instructions[inst_index] =
++                    Instruction::new(Op::Load, Some(ty), Some(temp_id), load_operands);
+@@ -357,6 +365 @@ fn split_copy_memory(
+-                    Instruction::new(
+-                        Op::Store,
+-                        None,
+-                        None,
+-                        vec![Operand::IdRef(target), Operand::IdRef(temp_id)],
+-                    ),
++                    Instruction::new(Op::Store, None, None, store_operands),
+diff --git a/crates/rustc_codegen_spirv/src/linker/mod.rs b/crates/rustc_codegen_spirv/src/linker/mod.rs
+index 59fb851..e362693 100644
+--- a/crates/rustc_codegen_spirv/src/linker/mod.rs
++++ b/crates/rustc_codegen_spirv/src/linker/mod.rs
+@@ -497,0 +498,4 @@ pub fn link(
++    // Copy splitting can introduce new logical loads/stores with the copy's
++    // shared alignment. Keep only the alignment needed by physical accesses.
++    simple_passes::remove_logical_alignment(&mut output);
++
+diff --git a/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs b/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
+index 7240789..91cb3ae 100644
+--- a/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
++++ b/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
+@@ -233,0 +234,81 @@ fn volatile_memory_operands_qptr() {
++
++fn check_aligned_copies(qptr: bool) {
++    let source = r#"
++OpCapability Shader
++OpCapability Int64
++OpCapability PhysicalStorageBufferAddresses
++OpCapability VulkanMemoryModel
++OpMemoryModel PhysicalStorageBuffer64 Vulkan
++OpEntryPoint GLCompute %main "main"
++OpExecutionMode %main LocalSize 1 1 1
++OpDecorate %array ArrayStride 4
++%void = OpTypeVoid
++%u32 = OpTypeInt 32 0
++%u64 = OpTypeInt 64 0
++%three = OpConstant %u32 3
++%array = OpTypeArray %u32 %three
++%source_address = OpConstant %u64 4096
++%destination_address = OpConstant %u64 8192
++%physical = OpTypePointer PhysicalStorageBuffer %array
++%local = OpTypePointer Function %array
++%main_type = OpTypeFunction %void
++%main = OpFunction %void None %main_type
++%entry = OpLabel
++%temporary = OpVariable %local Function
++%source = OpConvertUToPtr %physical %source_address
++%destination = OpConvertUToPtr %physical %destination_address
++OpCopyMemory %temporary %source Aligned 4
++OpCopyMemory %destination %temporary Aligned 4
++OpReturn
++OpFunctionEnd
++"#;
++    let binary = assemble_spirv(source);
++    let module = link_with_linker_opts(
++        &[&binary],
++        &crate::linker::Options {
++            infer_storage_classes: true,
++            structurize: true,
++            spirt_passes: if qptr { vec!["qptr".into()] } else { vec![] },
++            ..Default::default()
++        },
++    )
++    .expect("aligned aggregate copies must survive linking");
++    validate(&module.assemble());
++    for (op, mask_index) in [(Op::Load, 1), (Op::Store, 2)] {
++        let instructions: Vec<_> = module
++            .all_inst_iter()
++            .filter(|inst| inst.class.opcode == op)
++            .collect();
++        assert_eq!(instructions.len(), 1, "{}", module.disassemble());
++        assert_eq!(
++            &instructions[0].operands[mask_index..],
++            &[
++                Operand::MemoryAccess(MemoryAccess::ALIGNED),
++                Operand::LiteralBit32(4)
++            ],
++            "{}",
++            module.disassemble()
++        );
++    }
++    assert!(
++        module
++            .all_inst_iter()
++            .all(|inst| inst.class.opcode != Op::CopyMemory)
++    );
++    let mut optimizer = spirv_tools::opt::create(None);
++    optimizer.register_performance_passes();
++    let optimized = optimizer
++        .optimize(module.assemble(), &mut |_| {}, None)
++        .unwrap();
++    validate(optimized.as_words());
++}
++
++#[test]
++fn aligned_aggregate_copies() {
++    check_aligned_copies(false);
++}
++
++#[test]
++fn aligned_aggregate_copies_qptr() {
++    check_aligned_copies(true);
++}
+diff --git a/crates/spirv-std/src/lib.rs b/crates/spirv-std/src/lib.rs
+index 288432b..dfc2fa0 100644
+--- a/crates/spirv-std/src/lib.rs
++++ b/crates/spirv-std/src/lib.rs
+@@ -101,0 +102 @@ pub mod memory;
++mod physical_ptr;
+@@ -113,0 +115 @@ pub use num_traits;
++pub use physical_ptr::PhysicalPtr;
+diff --git a/crates/spirv-std/src/physical_ptr.rs b/crates/spirv-std/src/physical_ptr.rs
+new file mode 100644
+index 0000000..344f5d9
+--- /dev/null
++++ b/crates/spirv-std/src/physical_ptr.rs
+@@ -0,0 +1,157 @@
++//! Explicit 64-bit device-address transport and physical-memory access.
++//!
++//! Address operations are safe and available on host and shader targets. Memory
++//! access is unsafe and requires a Vulkan `-physical64` shader target. No method
++//! establishes allocation validity, alias restrictions or synchronization.
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++use core::{marker::PhantomData, mem::size_of};
++
++/// A typed device address with the representation and alignment of `u64`.
++///
++/// This value does not own or borrow an allocation. Copying or casting it only
++/// transports its bits. Zero and invalid addresses may be represented safely,
++/// but must not be used for memory access. The pointee must be sized.
++///
++/// Host-shader layouts must agree on `T` separately. In particular, types
++/// containing native pointers or `usize` do not have a portable pointee layout.
++/// This type provides no `Deref`, reference constructor, restriction marker,
++/// atomic access, volatile access or allocation-dependent pointer method.
++#[repr(transparent)]
++pub struct PhysicalPtr<T> {
++    address: u64,
++    // The marker records the pointee without owning T or imposing its auto
++    // traits on address-only transport. No T value is constructed here.
++    pointee: PhantomData<fn() -> T>,
++}
++
++impl<T> Copy for PhysicalPtr<T> {}
++
++impl<T> Clone for PhysicalPtr<T> {
++    fn clone(&self) -> Self {
++        *self
++    }
++}
++
++impl<T> PartialEq for PhysicalPtr<T> {
++    fn eq(&self, other: &Self) -> bool {
++        self.address == other.address
++    }
++}
++
++impl<T> Eq for PhysicalPtr<T> {}
++
++impl<T> PhysicalPtr<T> {
++    /// Transport an address without validating or accessing an allocation.
++    #[inline]
++    pub const fn from_address(address: u64) -> Self {
++        Self {
++            address,
++            pointee: PhantomData,
++        }
++    }
++
++    /// Return the complete address bits, independently of the target's usize.
++    #[inline]
++    pub const fn address(self) -> u64 {
++        self.address
++    }
++
++    /// Test the zero address without converting it to a typed Rust pointer.
++    #[inline]
++    pub const fn is_null(self) -> bool {
++        self.address == 0
++    }
++
++    /// Change the pointee type without accessing memory or changing the address.
++    /// The caller of a later memory access must establish the new type's layout,
++    /// alignment and value-validity requirements.
++    #[inline]
++    pub const fn cast<U>(self) -> PhysicalPtr<U> {
++        PhysicalPtr::from_address(self.address)
++    }
++
++    /// Add an element count using arithmetic modulo 2^64.
++    /// This does not make the resulting address valid for memory access.
++    #[inline]
++    pub const fn wrapping_add(self, count: u64) -> Self {
++        Self::from_address(
++            self.address
++                .wrapping_add(count.wrapping_mul(size_of::<T>() as u64)),
++        )
++    }
++
++    /// Subtract an element count using arithmetic modulo 2^64.
++    /// This does not make the resulting address valid for memory access.
++    #[inline]
++    pub const fn wrapping_sub(self, count: u64) -> Self {
++        Self::from_address(
++            self.address
++                .wrapping_sub(count.wrapping_mul(size_of::<T>() as u64)),
++        )
++    }
++
++    /// Offset by a signed element count using arithmetic modulo 2^64.
++    /// Counts are explicit i64 values rather than a target-dependent isize.
++    #[inline]
++    pub const fn wrapping_offset(self, count: i64) -> Self {
++        self.wrapping_add(count as u64)
++    }
++}
++
++// On ordinary 32-bit SPIR-V targets the methods are absent, so a use gets a
++// source-level diagnostic instead of silently truncating an address. On host
++// targets gpu_only provides the standard panic stub, never a CPU dereference.
++#[cfg(any(not(target_arch = "spirv"), target_pointer_width = "64"))]
++impl<T: Copy> PhysicalPtr<T> {
++    /// Read a value from physical device memory.
++    ///
++    /// Requires a Vulkan `-physical64` shader target and its emitted capabilities.
++    /// On CPU platforms this method panics without accessing the address.
++    ///
++    /// # Safety
++    /// The address must be nonzero, including when T has zero size.
++    /// The complete `size_of::<T>()` range must belong to a live device allocation
++    /// with the shader's layout and `align_of::<T>()` alignment. It must contain
++    /// an initialized, valid T value whose initialization is visible to this
++    /// invocation. The allocation and any resources/lifetimes represented by T
++    /// must remain valid through their last use and queue completion. There must
++    /// be no conflicting concurrent write or incompatible Rust reference alias.
++    /// This operation creates no Rust reference and establishes no visibility.
++    #[allow(unsafe_code)]
++    #[spirv_std_macros::gpu_only]
++    #[inline]
++    pub unsafe fn read(self) -> T {
++        // SAFETY: U-003. The caller establishes the complete aligned, initialized,
++        // live range and non-conflicting access described above. T: Copy avoids
++        // duplicating ownership of a non-Copy value. No reference is fabricated.
++        unsafe { (self.address as *const T).read() }
++    }
++
++    /// Write a value to physical device memory without reading the old value.
++    ///
++    /// Requires a Vulkan `-physical64` shader target and its emitted capabilities.
++    /// On CPU platforms this method panics without accessing the address.
++    ///
++    /// # Safety
++    /// The address must be nonzero, including when T has zero size.
++    /// The complete `size_of::<T>()` range must belong to a live device allocation
++    /// with the shader's layout and `align_of::<T>()` alignment. This invocation
++    /// must have exclusive write access, with no concurrent reader/writer or
++    /// incompatible Rust reference alias. The allocation and any resources or
++    /// lifetimes represented by value must remain valid until their last use and
++    /// queue completion. Consumers need explicit synchronization and visibility
++    /// before reading, reusing or retiring the allocation. The old bytes need
++    /// not contain an initialized T. This operation creates no Rust reference.
++    #[allow(unsafe_code)]
++    #[spirv_std_macros::gpu_only]
++    #[inline]
++    pub unsafe fn write(self, value: T) {
++        // SAFETY: U-003. The caller supplies a complete aligned, exclusively writable
++        // live range with T's shader layout. The typed value is initialized and
++        // T: Copy has no destructor. Visibility and retirement remain external.
++        unsafe { (self.address as *mut T).write(value) };
++    }
++}
+diff --git a/crates/spirv-std/tests/physical_ptr.rs b/crates/spirv-std/tests/physical_ptr.rs
+new file mode 100644
+index 0000000..6111d4f
+--- /dev/null
++++ b/crates/spirv-std/tests/physical_ptr.rs
+@@ -0,0 +1,71 @@
++#![forbid(unsafe_code)]
++
++use core::mem::{align_of, offset_of, size_of};
++use spirv_std::PhysicalPtr;
++
++#[repr(C)]
++struct Root {
++    tag: u32,
++    pointers: [PhysicalPtr<u32>; 2],
++    count: u32,
++}
++
++#[test]
++fn physical_ptr_layout_and_non_owning_copy() {
++    struct NotCopy;
++    let pointer = PhysicalPtr::<NotCopy>::from_address(0xfedc_ba98_7654_3210);
++    let copied = pointer;
++    assert_eq!(pointer.address(), copied.address());
++    assert_eq!(size_of::<PhysicalPtr<NotCopy>>(), 8);
++    assert_eq!(align_of::<PhysicalPtr<NotCopy>>(), align_of::<u64>());
++    assert_eq!(offset_of!(Root, pointers), 8);
++    assert_eq!(offset_of!(Root, count), 24);
++    assert_eq!(size_of::<Root>(), 32);
++    assert_eq!(size_of::<[PhysicalPtr<u32>; 2]>(), 16);
++}
++
++#[test]
++fn physical_ptr_address_cast_and_null() {
++    for address in [0, 1, 4096, 1 << 63, u64::MAX] {
++        let pointer = PhysicalPtr::<u32>::from_address(address);
++        assert_eq!(pointer.is_null(), address == 0);
++        assert_eq!(pointer.cast::<u8>().address(), address);
++        assert!(pointer == PhysicalPtr::from_address(address));
++        assert!(pointer != PhysicalPtr::from_address(address.wrapping_add(1)));
++    }
++}
++
++#[test]
++fn physical_ptr_wrapping_matches_wide_integer_reference() {
++    for address in [0, 1, 4096, 1 << 63, u64::MAX - 3, u64::MAX] {
++        let pointer = PhysicalPtr::<u32>::from_address(address);
++        for count in [0, 1, 2, u64::MAX] {
++            let byte_count = u128::from(count) * 4;
++            assert_eq!(
++                pointer.wrapping_add(count).address(),
++                (u128::from(address) + byte_count) as u64
++            );
++            assert_eq!(
++                pointer.wrapping_sub(count).address(),
++                u128::from(address).wrapping_sub(byte_count) as u64
++            );
++        }
++        for count in [i64::MIN, -1024, -1, 0, 1, i64::MAX] {
++            let expected = (i128::from(address) + i128::from(count) * 4) as u64;
++            assert_eq!(pointer.wrapping_offset(count).address(), expected);
++        }
++    }
++}
++
++#[test]
++fn physical_ptr_stride_follows_pointee_layout() {
++    let pointer = PhysicalPtr::<[u32; 3]>::from_address(0x1000);
++    assert_eq!(pointer.wrapping_add(2).address(), 0x1018);
++    assert_eq!(pointer.cast::<u8>().wrapping_add(2).address(), 0x1002);
++    assert_eq!(
++        PhysicalPtr::<()>::from_address(0x1000)
++            .wrapping_add(u64::MAX)
++            .address(),
++        0x1000
++    );
++}
+diff --git a/docs/src/platform-support.md b/docs/src/platform-support.md
+index 163f875..ffd01ae 100644
+--- a/docs/src/platform-support.md
++++ b/docs/src/platform-support.md
+@@ -98 +98,2 @@ The current operation evidence is deliberately narrower than `*mut` parity:
+-| other pointer casts, aggregate accesses, volatile intrinsics, copies, atomics, references and allocation-dependent methods | require separate lowering, diagnostics and execution evidence |
++| whole typed aggregate copies with alignment only | the `[u32; 3]` fixture emits aligned physical load/store instructions, including through qptr and optimization |
++| other pointer casts, volatile intrinsics, effectful/scoped copies, atomics, references and allocation-dependent methods | require separate lowering, diagnostics and execution evidence |
+@@ -102,2 +103 @@ GPU behavior or the allocation, aliasing and lifetime obligations of in-bounds
+-methods. This experimental support does not yet provide a physical-memory
+-access API. Formatted u32 panic arguments are tested
++methods. Formatted u32 panic arguments are tested
+@@ -106,0 +107,32 @@ so 64-bit usize bounds diagnostics retain explicit unprintable placeholders.
++#### explicit device-address library
++
++`spirv_std::PhysicalPtr<T>` is a transparent `u64` address with a non-owning
++pointee marker. It neither owns nor borrows a device allocation. Construction,
++address extraction, equality, null tests, casts and wrapping element arithmetic
++are safe address transport. Counts use explicit `u64` or `i64`, independent of
++the shader's pointer width. Arithmetic wraps modulo 2^64 and does not establish
++allocation validity. The element stride follows the target's `T` layout.
++
++For example, `PhysicalPtr::<u32>::from_address(address).wrapping_add(2)`
++transports `address + 8` modulo 2^64. It performs no load or store. A root field
++has the size/alignment of `u64`, including when nested in structs and arrays.
++The host and shader must separately agree on pointee layout. Native pointers
++or `usize` inside `T` are not portable across target ABIs.
++
++`read` and `write` require `T: Copy` and are unsafe. They exist on Vulkan
++`-physical64` shaders and use the ordinary `gpu_only` panic stub on CPU targets.
++They are absent on ordinary 32-bit shader targets. Every access requires a
++nonzero address, even for zero-sized values, a live complete aligned range,
++valid initialized read values, compatible aliases and no conflicting access.
++The caller owns initialization visibility, synchronization, completion and
++retirement, including any resources or lifetimes represented by `T`.
++The method documentation states each obligation. No Rust reference is created.
++
++The library exposes no `Deref`, safe memory access, restriction marker, raw
++pointer escape, reference constructor, copy-range, volatile or atomic API.
++It does not imply all `Copy` types compile. Source fixtures cover u32 access,
++an aligned `[u32; 3]` copy and rejection on the ordinary shader target. Native
++tests cover transport, nested layout and wrapping against wide-integer
++references. Compiletests do not dispatch these fixtures or establish GPU
++soundness, aggregate runtime behavior or complete `*mut` parity.
++
+diff --git a/tests/compiletests/ui/physical_storage/library_access_physical64.rs b/tests/compiletests/ui/physical_storage/library_access_physical64.rs
+new file mode 100644
+index 0000000..4a794b1
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/library_access_physical64.rs
+@@ -0,0 +1,35 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++use spirv_std::{PhysicalPtr, spirv};
++
++/// Compile-only fixture. Never dispatch synthetic addresses.
++///
++/// # Safety
++/// The caller supplies a real nonzero address to one live, four-byte-aligned,
++/// initialized u32 with exclusive read/write access through queue completion.
++/// It is disjoint from both logical interfaces. Dispatch one invocation after
++/// initialization visibility. U-003 records the compile-only consumer boundary.
++#[allow(unsafe_code)]
++#[spirv(compute(threads(1)))]
++pub unsafe fn main(
++    #[spirv(push_constant)] address: &u64,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u32; 2],
++) {
++    let pointer = PhysicalPtr::<u32>::from_address(*address);
++    // SAFETY: U-003. The entry contract supplies one live, aligned, initialized
++    // and visible u32 with exclusive access, separate from the logical output.
++    output[0] = unsafe { pointer.read() };
++    // SAFETY: U-003. The same complete range is exclusively writable. The new
++    // u32 value is valid and the allocation remains live through completion.
++    unsafe { pointer.write(output[0].wrapping_add(7)) };
++    // SAFETY: U-003. This invocation just initialized the same live allocation.
++    output[1] = unsafe { pointer.read() };
++}
+diff --git a/tests/compiletests/ui/physical_storage/library_access_physical64.stderr b/tests/compiletests/ui/physical_storage/library_access_physical64.stderr
+new file mode 100644
+index 0000000..103f885
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/library_access_physical64.stderr
+@@ -0,0 +1,56 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %address %output
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %address "address"
++               OpName %output "output"
++               OpDecorate %_struct_8 Block
++               OpMemberDecorate %_struct_8 0 Offset 0
++               OpDecorate %9 ArrayStride 4
++               OpDecorate %_struct_10 Block
++               OpMemberDecorate %_struct_10 0 Offset 0
++               OpDecorate %output Binding 0
++               OpDecorate %output DescriptorSet 0
++        %u64 = OpTypeInt 64 0
++  %_struct_8 = OpTypeStruct %u64
++%_ptr_PushConstant__struct_8 = OpTypePointer PushConstant %_struct_8
++        %u32 = OpTypeInt 32 0
++      %u32_2 = OpConstant %u32 2
++          %9 = OpTypeArray %u32 %u32_2
++ %_struct_10 = OpTypeStruct %9
++%_ptr_StorageBuffer__struct_10 = OpTypePointer StorageBuffer %_struct_10
++       %void = OpTypeVoid
++         %17 = OpTypeFunction %void
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++    %address = OpVariable %_ptr_PushConstant__struct_8 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_StorageBuffer_9 = OpTypePointer StorageBuffer %9
++     %output = OpVariable %_ptr_StorageBuffer__struct_10 StorageBuffer
++%_ptr_PhysicalStorageBuffer_u32 = OpTypePointer PhysicalStorageBuffer %u32
++%_ptr_StorageBuffer_u32 = OpTypePointer StorageBuffer %u32
++      %u32_7 = OpConstant %u32 7
++      %u32_1 = OpConstant %u32 1
++          %1 = OpFunction %void None %17
++         %25 = OpLabel
++         %26 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %address %u32_0
++         %27 = OpInBoundsAccessChain %_ptr_StorageBuffer_9 %output %u32_0
++         %28 = OpLoad %u64 %26
++         %29 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %28
++         %30 = OpLoad %u32 %29 Aligned 4
++         %31 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %27 %u32_0
++               OpStore %31 %30
++         %32 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %27 %u32_0
++         %33 = OpLoad %u32 %32
++         %34 = OpIAdd %u32 %33 %u32_7
++         %35 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %28
++               OpStore %35 %34 Aligned 4
++         %36 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %28
++         %37 = OpLoad %u32 %36 Aligned 4
++         %38 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %27 %u32_1
++               OpStore %38 %37
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/physical_storage/library_aggregate_physical64.rs b/tests/compiletests/ui/physical_storage/library_aggregate_physical64.rs
+new file mode 100644
+index 0000000..296602c
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/library_aggregate_physical64.rs
+@@ -0,0 +1,36 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++use spirv_std::{PhysicalPtr, spirv};
++
++#[repr(C)]
++pub struct Root {
++    source: PhysicalPtr<[u32; 3]>,
++    destination: PhysicalPtr<[u32; 3]>,
++}
++
++/// Compile-only aggregate fixture. Never dispatch synthetic addresses.
++///
++/// # Safety
++/// Both nonzero addresses name disjoint live 12-byte allocations aligned to four.
++/// Source contains a visible initialized [u32; 3]. Destination is exclusively
++/// writable. No concurrent accesses or incompatible reference aliases exist.
++/// Dispatch one invocation and keep allocations live through completion. U-003
++/// owns this compile-only boundary. No runtime aggregate proof is claimed.
++#[allow(unsafe_code)]
++#[spirv(compute(threads(1)))]
++pub unsafe fn main(#[spirv(push_constant)] root: &Root) {
++    // SAFETY: U-003. The complete initialized source array is live, aligned and
++    // visible. Every u32 representation is valid and the array is Copy.
++    let value = unsafe { root.source.read() };
++    // SAFETY: U-003. The disjoint destination covers all 12 bytes and is live,
++    // aligned and exclusively writable through this invocation's completion.
++    unsafe { root.destination.write(value) };
++}
+diff --git a/tests/compiletests/ui/physical_storage/library_aggregate_physical64.stderr b/tests/compiletests/ui/physical_storage/library_aggregate_physical64.stderr
+new file mode 100644
+index 0000000..a606ac0
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/library_aggregate_physical64.stderr
+@@ -0,0 +1,46 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %root
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %Root "Root"
++               OpMemberName %Root 0 "source"
++               OpMemberName %Root 1 "destination"
++               OpName %root "root"
++               OpName %ops__try_trait__NeverShortCircuit__char__3__ "ops::try_trait::NeverShortCircuit<[char; 3]>"
++               OpMemberDecorate %Root 0 Offset 0
++               OpMemberDecorate %Root 1 Offset 8
++               OpDecorate %_struct_8 Block
++               OpMemberDecorate %_struct_8 0 Offset 0
++               OpDecorate %ops__try_trait__NeverShortCircuit__char__3__ ArrayStride 4
++        %u64 = OpTypeInt 64 0
++       %Root = OpTypeStruct %u64 %u64
++  %_struct_8 = OpTypeStruct %Root
++%_ptr_PushConstant__struct_8 = OpTypePointer PushConstant %_struct_8
++       %void = OpTypeVoid
++         %12 = OpTypeFunction %void
++%_ptr_PushConstant_Root = OpTypePointer PushConstant %Root
++       %root = OpVariable %_ptr_PushConstant__struct_8 PushConstant
++        %u32 = OpTypeInt 32 0
++      %u32_0 = OpConstant %u32 0
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++      %u32_3 = OpConstant %u32 3
++%ops__try_trait__NeverShortCircuit__char__3__ = OpTypeArray %u32 %u32_3
++%_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ = OpTypePointer PhysicalStorageBuffer %ops__try_trait__NeverShortCircuit__char__3__
++      %u32_1 = OpConstant %u32 1
++          %1 = OpFunction %void None %12
++         %20 = OpLabel
++         %21 = OpInBoundsAccessChain %_ptr_PushConstant_Root %root %u32_0
++         %22 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %21 %u32_0
++         %23 = OpLoad %u64 %22
++         %24 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %23
++         %25 = OpLoad %ops__try_trait__NeverShortCircuit__char__3__ %24 Aligned 4
++         %26 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %21 %u32_1
++         %27 = OpLoad %u64 %26
++         %28 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %27
++               OpStore %28 %25 Aligned 4
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/physical_storage/library_logical_access_rejected.rs b/tests/compiletests/ui/physical_storage/library_logical_access_rejected.rs
+new file mode 100644
+index 0000000..a778163
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/library_logical_access_rejected.rs
+@@ -0,0 +1,15 @@
++// build-fail
++// only-vulkan1.3
++// normalize-stderr-test "(\n)\n+$" -> "$1"
++
++#![forbid(unsafe_code)]
++
++use spirv_std::{PhysicalPtr, spirv};
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] address: &u64,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut u32,
++) {
++    *output = PhysicalPtr::<u32>::from_address(*address).read();
++}
+diff --git a/tests/compiletests/ui/physical_storage/library_logical_access_rejected.stderr b/tests/compiletests/ui/physical_storage/library_logical_access_rejected.stderr
+new file mode 100644
+index 0000000..c1ef992
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/library_logical_access_rejected.stderr
+@@ -0,0 +1,9 @@
++error[E0599]: no method named `read` found for struct `PhysicalPtr<T>` in the current scope
++  --> $DIR/library_logical_access_rejected.rs:14:58
++   |
++LL |     *output = PhysicalPtr::<u32>::from_address(*address).read();
++   |                                                          ^^^^ method not found in `PhysicalPtr<u32>`
++
++error: aborting due to 1 previous error
++
++For more information about this error, try `rustc --explain E0599`.
+diff --git a/tests/compiletests/ui/physical_storage/library_transport_logical.rs b/tests/compiletests/ui/physical_storage/library_transport_logical.rs
+new file mode 100644
+index 0000000..fa50dcb
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/library_transport_logical.rs
+@@ -0,0 +1,55 @@
++// build-pass
++// only-vulkan1.3
++// compile-flags: -C target-feature=+Int64
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![forbid(unsafe_code)]
++
++use core::mem::{align_of, offset_of, size_of};
++use spirv_std::{PhysicalPtr, spirv};
++
++#[repr(C)]
++pub struct Root {
++    pointer: PhysicalPtr<u32>,
++    count: u64,
++}
++
++#[repr(C)]
++struct Nested {
++    tag: u32,
++    pointers: [PhysicalPtr<u32>; 2],
++}
++
++const _: () = {
++    assert!(size_of::<PhysicalPtr<u32>>() == 8);
++    assert!(align_of::<PhysicalPtr<u32>>() == 8);
++    assert!(offset_of!(Root, count) == 8);
++    assert!(size_of::<Root>() == 16);
++    assert!(offset_of!(Nested, pointers) == 8);
++    assert!(size_of::<Nested>() == 24);
++    assert!(
++        PhysicalPtr::<u32>::from_address(u64::MAX - 3)
++            .wrapping_add(1)
++            .is_null()
++    );
++    assert!(
++        PhysicalPtr::<u32>::from_address(4)
++            .wrapping_offset(-1)
++            .is_null()
++    );
++};
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] root: &Root,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u64; 5],
++) {
++    output[0] = root.pointer.wrapping_add(root.count).address();
++    output[1] = root.pointer.wrapping_sub(root.count).address();
++    output[2] = root.pointer.wrapping_offset(root.count as i64).address();
++    output[3] = root.pointer.cast::<u8>().address();
++    output[4] = root.pointer.is_null() as u64;
++}
+diff --git a/tests/compiletests/ui/physical_storage/library_transport_logical.stderr b/tests/compiletests/ui/physical_storage/library_transport_logical.stderr
+new file mode 100644
+index 0000000..802e585
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/library_transport_logical.stderr
+@@ -0,0 +1,92 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpMemoryModel Logical Vulkan
++               OpEntryPoint GLCompute %1 "main" %root %output
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %Root "Root"
++               OpMemberName %Root 0 "pointer"
++               OpMemberName %Root 1 "count"
++               OpName %root "root"
++               OpName %output "output"
++               OpMemberDecorate %Root 0 Offset 0
++               OpMemberDecorate %Root 1 Offset 8
++               OpDecorate %_struct_8 Block
++               OpMemberDecorate %_struct_8 0 Offset 0
++               OpDecorate %9 ArrayStride 8
++               OpDecorate %_struct_10 Block
++               OpMemberDecorate %_struct_10 0 Offset 0
++               OpDecorate %output Binding 0
++               OpDecorate %output DescriptorSet 0
++        %u64 = OpTypeInt 64 0
++       %Root = OpTypeStruct %u64 %u64
++  %_struct_8 = OpTypeStruct %Root
++%_ptr_PushConstant__struct_8 = OpTypePointer PushConstant %_struct_8
++        %u32 = OpTypeInt 32 0
++      %u32_5 = OpConstant %u32 5
++          %9 = OpTypeArray %u64 %u32_5
++ %_struct_10 = OpTypeStruct %9
++%_ptr_StorageBuffer__struct_10 = OpTypePointer StorageBuffer %_struct_10
++       %void = OpTypeVoid
++         %17 = OpTypeFunction %void
++%_ptr_PushConstant_Root = OpTypePointer PushConstant %Root
++       %root = OpVariable %_ptr_PushConstant__struct_8 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_StorageBuffer_9 = OpTypePointer StorageBuffer %9
++     %output = OpVariable %_ptr_StorageBuffer__struct_10 StorageBuffer
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++      %u32_1 = OpConstant %u32 1
++      %u32_4 = OpConstant %u32 4
++%_ptr_StorageBuffer_u64 = OpTypePointer StorageBuffer %u64
++        %i64 = OpTypeInt 64 1
++      %u32_2 = OpConstant %u32 2
++      %u32_3 = OpConstant %u32 3
++       %bool = OpTypeBool
++      %u64_0 = OpConstant %u64 0
++      %u64_1 = OpConstant %u64 1
++          %1 = OpFunction %void None %17
++         %31 = OpLabel
++         %32 = OpInBoundsAccessChain %_ptr_PushConstant_Root %root %u32_0
++         %33 = OpInBoundsAccessChain %_ptr_StorageBuffer_9 %output %u32_0
++         %34 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %32 %u32_0
++         %35 = OpLoad %u64 %34
++         %36 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %32 %u32_1
++         %37 = OpLoad %u64 %36
++         %38 = OpUConvert %u64 %u32_4
++         %39 = OpIMul %u64 %37 %38
++         %40 = OpIAdd %u64 %35 %39
++         %41 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %33 %u32_0
++               OpStore %41 %40
++         %42 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %32 %u32_0
++         %43 = OpLoad %u64 %42
++         %44 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %32 %u32_1
++         %45 = OpLoad %u64 %44
++         %46 = OpUConvert %u64 %u32_4
++         %47 = OpIMul %u64 %45 %46
++         %48 = OpISub %u64 %43 %47
++         %49 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %33 %u32_1
++               OpStore %49 %48
++         %50 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %32 %u32_0
++         %51 = OpLoad %u64 %50
++         %52 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %32 %u32_1
++         %53 = OpLoad %u64 %52
++         %54 = OpBitcast %i64 %53
++         %55 = OpBitcast %u64 %54
++         %56 = OpUConvert %u64 %u32_4
++         %57 = OpIMul %u64 %55 %56
++         %58 = OpIAdd %u64 %51 %57
++         %59 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %33 %u32_2
++               OpStore %59 %58
++         %60 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %32 %u32_0
++         %61 = OpLoad %u64 %60
++         %62 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %33 %u32_3
++               OpStore %62 %61
++         %63 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %32 %u32_0
++         %64 = OpLoad %u64 %63
++         %65 = OpIEqual %bool %64 %u64_0
++         %66 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %33 %u32_4
++         %67 = OpSelect %u64 %65 %u64_1 %u64_0
++               OpStore %66 %67
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/physical_storage/library_transport_physical64.rs b/tests/compiletests/ui/physical_storage/library_transport_physical64.rs
+new file mode 100644
+index 0000000..ba9968d
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/library_transport_physical64.rs
+@@ -0,0 +1,55 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+Int64
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![forbid(unsafe_code)]
++
++use core::mem::{align_of, offset_of, size_of};
++use spirv_std::{PhysicalPtr, spirv};
++
++#[repr(C)]
++pub struct Root {
++    pointer: PhysicalPtr<u32>,
++    count: u64,
++}
++
++#[repr(C)]
++struct Nested {
++    tag: u32,
++    pointers: [PhysicalPtr<u32>; 2],
++}
++
++const _: () = {
++    assert!(size_of::<PhysicalPtr<u32>>() == 8);
++    assert!(align_of::<PhysicalPtr<u32>>() == 8);
++    assert!(offset_of!(Root, count) == 8);
++    assert!(size_of::<Root>() == 16);
++    assert!(offset_of!(Nested, pointers) == 8);
++    assert!(size_of::<Nested>() == 24);
++    assert!(
++        PhysicalPtr::<u32>::from_address(u64::MAX - 3)
++            .wrapping_add(1)
++            .is_null()
++    );
++    assert!(
++        PhysicalPtr::<u32>::from_address(4)
++            .wrapping_offset(-1)
++            .is_null()
++    );
++};
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] root: &Root,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u64; 5],
++) {
++    output[0] = root.pointer.wrapping_add(root.count).address();
++    output[1] = root.pointer.wrapping_sub(root.count).address();
++    output[2] = root.pointer.wrapping_offset(root.count as i64).address();
++    output[3] = root.pointer.cast::<u8>().address();
++    output[4] = root.pointer.is_null() as u64;
++}
+diff --git a/tests/compiletests/ui/physical_storage/library_transport_physical64.stderr b/tests/compiletests/ui/physical_storage/library_transport_physical64.stderr
+new file mode 100644
+index 0000000..2cb06ae
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/library_transport_physical64.stderr
+@@ -0,0 +1,91 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %root %output
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %Root "Root"
++               OpMemberName %Root 0 "pointer"
++               OpMemberName %Root 1 "count"
++               OpName %root "root"
++               OpName %output "output"
++               OpMemberDecorate %Root 0 Offset 0
++               OpMemberDecorate %Root 1 Offset 8
++               OpDecorate %_struct_8 Block
++               OpMemberDecorate %_struct_8 0 Offset 0
++               OpDecorate %9 ArrayStride 8
++               OpDecorate %_struct_10 Block
++               OpMemberDecorate %_struct_10 0 Offset 0
++               OpDecorate %output Binding 0
++               OpDecorate %output DescriptorSet 0
++        %u64 = OpTypeInt 64 0
++       %Root = OpTypeStruct %u64 %u64
++  %_struct_8 = OpTypeStruct %Root
++%_ptr_PushConstant__struct_8 = OpTypePointer PushConstant %_struct_8
++        %u32 = OpTypeInt 32 0
++      %u32_5 = OpConstant %u32 5
++          %9 = OpTypeArray %u64 %u32_5
++ %_struct_10 = OpTypeStruct %9
++%_ptr_StorageBuffer__struct_10 = OpTypePointer StorageBuffer %_struct_10
++       %void = OpTypeVoid
++         %17 = OpTypeFunction %void
++%_ptr_PushConstant_Root = OpTypePointer PushConstant %Root
++       %root = OpVariable %_ptr_PushConstant__struct_8 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_StorageBuffer_9 = OpTypePointer StorageBuffer %9
++     %output = OpVariable %_ptr_StorageBuffer__struct_10 StorageBuffer
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++      %u32_1 = OpConstant %u32 1
++      %u64_4 = OpConstant %u64 4
++%_ptr_StorageBuffer_u64 = OpTypePointer StorageBuffer %u64
++        %i64 = OpTypeInt 64 1
++      %u32_2 = OpConstant %u32 2
++      %u32_3 = OpConstant %u32 3
++       %bool = OpTypeBool
++      %u64_0 = OpConstant %u64 0
++      %u32_4 = OpConstant %u32 4
++      %u64_1 = OpConstant %u64 1
++          %1 = OpFunction %void None %17
++         %32 = OpLabel
++         %33 = OpInBoundsAccessChain %_ptr_PushConstant_Root %root %u32_0
++         %34 = OpInBoundsAccessChain %_ptr_StorageBuffer_9 %output %u32_0
++         %35 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_0
++         %36 = OpLoad %u64 %35
++         %37 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_1
++         %38 = OpLoad %u64 %37
++         %39 = OpIMul %u64 %38 %u64_4
++         %40 = OpIAdd %u64 %36 %39
++         %41 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %34 %u32_0
++               OpStore %41 %40
++         %42 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_0
++         %43 = OpLoad %u64 %42
++         %44 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_1
++         %45 = OpLoad %u64 %44
++         %46 = OpIMul %u64 %45 %u64_4
++         %47 = OpISub %u64 %43 %46
++         %48 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %34 %u32_1
++               OpStore %48 %47
++         %49 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_0
++         %50 = OpLoad %u64 %49
++         %51 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_1
++         %52 = OpLoad %u64 %51
++         %53 = OpBitcast %i64 %52
++         %54 = OpBitcast %u64 %53
++         %55 = OpIMul %u64 %54 %u64_4
++         %56 = OpIAdd %u64 %50 %55
++         %57 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %34 %u32_2
++               OpStore %57 %56
++         %58 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_0
++         %59 = OpLoad %u64 %58
++         %60 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %34 %u32_3
++               OpStore %60 %59
++         %61 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_0
++         %62 = OpLoad %u64 %61
++         %63 = OpIEqual %bool %62 %u64_0
++         %64 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %34 %u32_4
++         %65 = OpSelect %u64 %63 %u64_1 %u64_0
++               OpStore %64 %65
++               OpNoLine
++               OpReturn
++               OpFunctionEnd

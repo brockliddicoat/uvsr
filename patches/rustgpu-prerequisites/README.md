@@ -179,3 +179,21 @@ cargo run --release --locked -p compiletests --no-default-features --features us
 ```
 
 [E-020](../../docs/execution.md#e-020-2026-09-19-lowered-typed-pointer-operations) owns the exact counts, independent native Rust transport check and failed setup/probe results. physical aggregate memory, the shader-library access contract, allocation-dependent methods, full pointer parity and real Vulkan/NGAPI execution remain open.
+
+## physical pointer library and aggregate alignment
+
+[rustgpu-physical-library.patch](rustgpu-physical-library.patch) follows the typed-pointer patch at the manifest base with `--unidiff-zero --index`. it adds `spirv_std::PhysicalPtr<T>`, a transparent u64 with a non-owning marker. construction, casts, null tests, equality and wrapping arithmetic only transport bits. unsafe Copy-value reads/writes require the complete documented allocation, layout, initialization, aliasing, visibility and lifetime contract. ordinary 32-bit shaders lack those access methods, and native methods use the existing GPU-only panic stub. there is no reference, restriction marker or safe memory-access API. MIT OR Apache-2.0 terms remain unchanged.
+
+the array fixture exposed lost alignment in whole typed copies. the compiler now retains the weaker source/destination alignment in a shared OpCopyMemory operand, transfers it to split accesses, and removes alignment from resulting logical accesses. only absent or pure Aligned copy operands are supported. effectful/scoped copies remain outside this change. default/qptr linker regressions validate a physical array copy before and after performance optimization.
+
+run the full compiler/shared-type gate, two-target `physical_storage` matrix and adjacent source command above. library checks are:
+
+```powershell
+cargo test --release --locked -p spirv-std -j 1
+cargo clippy --release --locked -p spirv-std --all-targets -j 1 -- -D warnings
+$env:RUSTDOCFLAGS = '-D warnings'
+cargo doc --release --locked -p spirv-std --no-deps -j 1
+cargo fmt --all -- --check
+```
+
+also check UI source formatting directly because the workspace formatter excludes it. [E-022](../../docs/execution.md#e-022-2026-09-19-tested-the-physical-pointer-library) owns exact results and the separate actual NGAPI scalar consumer. [U-003](../../UNSAFE.md#u-003-physicalptr-shader-library-access) records the library/fixture audit, with self-contained contracts mirrored into the patch. aggregate runtime, general Copy-type support, complete pointer parity and full upstream CI remain open.
