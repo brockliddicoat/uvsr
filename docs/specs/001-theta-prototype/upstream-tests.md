@@ -20,6 +20,8 @@ three different authorities are recorded: the draft author's checklist, a mainta
 
 [E-026](../../execution.md#e-026-2026-09-19-tested-divergent-native-heap-access) adds partial T015/T016/T019 and H03/H04/H08 evidence: four lanes select both resource and sampler indices independently, with four permutation phases and opt0/opt3 shaders. each Debug/Release host passes eight GPU cases, 122 CPU controls and zero validation diagnostics. a separate two-line NGAPI prerequisite queries/enables the required sampled-image non-uniform feature. unchanged scalar and uniform gates pass after source recompilation and native rebuilding. additional stages/resources, the cube and the direct Rust Vulkan slice remain open.
 
+[E-027](../../execution.md#e-027-2026-09-19-verified-the-native-heap-textured-cube) adds partial T015/T017/T019 and H04/H06/A01-A04 evidence: the actual NGAPI textured cube passes eight opt/view/resource/sampler cases per Debug/Release host with exact color, bounded depth error, input/guard checks and zero native validation diagnostics. vertex PhysicalPtr aggregate reads and fragment native heap sampling now execute together. the generic compiler/library is unchanged. wider resources/stages, full upstream gates and the direct Rust Vulkan slice remain open.
+
 ## PR #237 checklist
 
 the [draft, refreshed on 2026-09-19](https://github.com/Rust-GPU/rust-gpu/pull/237) was open at `e14a70d9260c7df7fab1542810f2ca0276233331`. its checked boxes refer to that draft, not proof in current main or the new implementation. all checklist items are mapped below.

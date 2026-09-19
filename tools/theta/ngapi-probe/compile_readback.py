@@ -59,16 +59,35 @@ def check_heap_profile(assembly, divergent=False):
         raise RuntimeError("heap sample root no longer has the reviewed u64/u32/u32 layout")
 
 
+def check_cube_profile(assembly):
+    for pattern in [r'OpEntryPoint Vertex %\S+ "vertexMain"', r'OpEntryPoint Fragment %\S+ "fragmentMain"',
+                    r"BuiltIn VertexIndex", r"BuiltIn Position", r"OpImageSampleImplicitLod", r"OpLoad .* Aligned 4",
+                    r"BuiltIn ResourceHeapEXT", r"BuiltIn SamplerHeapEXT", r"OpUntypedAccessChainKHR"]:
+        if not re.search(pattern, assembly):
+            raise RuntimeError(f"cube profile lacks {pattern}")
+    root = re.search(r"(%\S+) = OpTypeStruct (%\S+) (%\S+) (%\S+) \4", assembly)
+    if (not root or not re.search(re.escape(root[2]) + r" = OpTypeInt 64 0", assembly)
+            or not re.search(re.escape(root[4]) + r" = OpTypeInt 32 0", assembly)
+            or any(f"OpMemberDecorate {root[1]} {index} Offset {offset}" not in assembly
+                   for index, offset in enumerate([0, 8, 72, 76]))):
+        raise RuntimeError("cube root no longer has the reviewed 80-byte layout")
+    if (len(re.findall(r" = OpConstantSizeOfEXT ", assembly)) != 2
+            or len(re.findall(r"OpDecorateId .* ArrayStrideIdEXT", assembly)) != 2
+            or len(re.findall(r" = OpUntypedVariableKHR ", assembly)) != 2):
+        raise RuntimeError("cube native descriptor declarations changed")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rustgpu-source", type=Path, required=True)
     parser.add_argument("--codegen-backend", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--fixture", choices=["physical_readback", "native_heap_sample", "native_heap_divergent"], default="physical_readback")
+    parser.add_argument("--fixture", choices=["physical_readback", "native_heap_sample", "native_heap_divergent", "native_heap_cube"], default="physical_readback")
     args = parser.parse_args()
     fixture = args.fixture
     heap = fixture != "physical_readback"
     divergent = fixture == "native_heap_divergent"
+    cube = fixture == "native_heap_cube"
     lanes = 4 if divergent else 1
     upstream = args.rustgpu_source.resolve()
     backend = args.codegen_backend.resolve(strict=True)
@@ -130,7 +149,7 @@ def main():
         command = common + [f"-Copt-level={level}", "-o", str(module) + ".json"]
         run(command, upstream, output / f"{stem}_rustc")
         result = json.loads(Path(str(module) + ".json").read_text())
-        if result["entry_points"] != ["computeMain"]:
+        if sorted(result["entry_points"]) != (["fragmentMain", "vertexMain"] if cube else ["computeMain"]):
             raise RuntimeError(f"unexpected entry points: {result['entry_points']}")
         run([validator, "--target-env", "vulkan1.3", str(module)], upstream, output / f"{stem}_validate")
         assembly = run([disassembler, str(module)], upstream, output / f"{stem}_disassemble")
@@ -147,11 +166,14 @@ def main():
         if set(capabilities) != required_capabilities or set(extensions) != required_extensions:
             raise RuntimeError("module feature requirements changed. Review the NGAPI feature patch before dispatch")
         if ("OpMemoryModel PhysicalStorageBuffer64 Vulkan" not in assembly
-                or not re.search(r'OpEntryPoint GLCompute %\S+ "computeMain"', assembly)
-                or not re.search(rf"OpExecutionMode %\S+ LocalSize {lanes} 1 1", assembly)
                 or re.search(r"\b(DescriptorSet|Binding|Uniform|StorageBuffer)\b", assembly)):
-            raise RuntimeError("module no longer matches the reviewed compute entry and physical addressing")
-        if heap:
+            raise RuntimeError("module no longer matches the reviewed physical addressing and descriptor profile")
+        if not cube and (not re.search(r'OpEntryPoint GLCompute %\S+ "computeMain"', assembly)
+                         or not re.search(rf"OpExecutionMode %\S+ LocalSize {lanes} 1 1", assembly)):
+            raise RuntimeError("module no longer matches the reviewed compute entry")
+        if cube:
+            check_cube_profile(assembly)
+        elif heap:
             check_heap_profile(assembly, divergent)
         else:
             if (len(re.findall(r"OpLoad .* Aligned 4", assembly)) != 1
@@ -170,6 +192,11 @@ def main():
             "capabilities": capabilities, "extensions": extensions, "root_bytes": 16,
             "rustc_command": command, "identity": identity,
         }
+        if cube:
+            for key in ["stage", "entry_point", "workgroup_size"]:
+                del record[key]
+            record.update(root_bytes=80, entry_points=[{"stage": "vertex", "entry_point": "vertexMain"},
+                                                     {"stage": "fragment", "entry_point": "fragmentMain"}])
         (output / f"{stem}.metadata.json").write_text(json.dumps(record, indent=2) + "\n")
         words = struct.unpack(f"<{module.stat().st_size // 4}I", module.read_bytes())
         header += [f'static const char {stem}_sha256[] = "{sha256(module)}";', f"static const gpu::uint32 {stem}[] = {{"]
