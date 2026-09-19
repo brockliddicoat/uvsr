@@ -138,6 +138,18 @@ run SPIR-T's `cargo test --locked -j 1`, then the full compiler/shared-type unit
 cargo run --release --locked -p compiletests --no-default-features --features use-compiled-tools -j 1 -- --target-env vulkan1.3 storage_class const-int-cast const-narrowing-cast const-from-cast u8-const-cast
 ```
 
-[E-017](../../docs/execution.md#e-017-2026-09-19-lowered-physical-address-conversions) owns the complete counts, failed approaches and verification limits. the six required Rust source pairs now include physical casts, mixed-storage rejection and signed/unsigned integer controls. source oracles were reviewed before acceptance. alias tests assert exact decorations because the pinned validator does not enforce their absence. conservative aliasing is not a `Restrict` promise.
+[E-017](../../docs/execution.md#e-017-2026-09-19-lowered-physical-address-conversions) owns the complete counts, failed approaches and verification limits. the six required Rust source pairs now include physical casts, mixed-storage rejection and signed/unsigned integer controls. source oracles were reviewed before acceptance. alias tests assert the compiler's conservative raw-pointer policy, separately from instruction validity. [SPIR-V 1.6 revision 8](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html#Aliasing) permits absent decorations, but requires alias markings for memory declarations that may alias. accepted absence is therefore not a validator defect. `Restrict` and `RestrictPointer` add no effect under the Vulkan memory model.
 
 this checkpoint does not establish aligned raw memory access, raw-pointer operation parity, aggregate pointer storage, atomics, reference validity or GPU execution. physical instructions remain explicit through qptr, so this does not close memory-operand lowering/lifting requirement P07. T010-T013 and actual NGAPI shader execution remain open. all added Rust tests forbid unsafe, and the source probes never dereference addresses.
+
+## aligned physical accesses
+
+[rustgpu-physical-access.patch](rustgpu-physical-access.patch) follows the cast patch at the exact manifest base. apply with `--unidiff-zero --index`. it preserves rustc's known load/store alignment on physical64, removes only Aligned from logical accesses after inference, and retains other memory flags and scope IDs. it also fixes the panic decompiler's alignment handling, scope IDs in memory signatures, and mixed-width index merging exposed by the new safe array regression.
+
+run the full compiler/shared-type unit command and the two-target `physical_storage` command above. include the existing panic cases in the adjacent regression command:
+
+```powershell
+cargo run --release --locked -p compiletests --no-default-features --features use-compiled-tools -j 1 -- --target-env vulkan1.3 storage_class const-int-cast const-narrowing-cast const-from-cast u8-const-cast panic
+```
+
+[E-018](../../docs/execution.md#e-018-2026-09-19-compiled-aligned-physical-accesses) owns exact counts and limits. the scalar raw-access source has an explicitly unsafe entry and a complete caller contract, registered as [U-001](../../UNSAFE.md#u-001-compile-only-physical-u32-access). compilation never dispatches a synthetic address. the panic fixture forbids unsafe and retains the upstream formatter's explicit unprintable 64-bit usize placeholders. no GPU execution, full operation parity or P07 qptr memory-operand lowering is claimed. MIT OR Apache-2.0 terms are unchanged.

@@ -1,0 +1,524 @@
+diff --git a/crates/rustc_codegen_spirv/src/builder/builder_methods.rs b/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
+index 77927f3..5ab67e3 100644
+--- a/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
++++ b/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
+@@ -15 +15 @@ use rspirv::dr::{InsertPoint, Instruction, Operand};
+-use rspirv::spirv::{MemoryModel, MemorySemantics, Op, Scope, StorageClass, Word};
++use rspirv::spirv::{MemoryAccess, MemoryModel, MemorySemantics, Op, Scope, StorageClass, Word};
+@@ -617,0 +618,14 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
++    fn load_store_alignment(&self, align: Align) -> (Option<MemoryAccess>, Option<Operand>) {
++        if self.tcx.data_layout.pointer_size().bits() != 64 {
++            return (None, None);
++        }
++        // Storage class is inferred later. Preserve rustc's known alignment
++        // now, then remove it from logical accesses before pointer legalization.
++        let bytes = u32::try_from(align.bytes())
++            .unwrap_or_else(|_| self.fatal("memory alignment does not fit a SPIR-V operand"));
++        (
++            Some(MemoryAccess::ALIGNED),
++            Some(Operand::LiteralBit32(bytes)),
++        )
++    }
++
+@@ -1010 +1024 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+-                .map(|inst| {
++                .and_then(|inst| {
+@@ -1016 +1030,6 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+-                    (base_ptr, indices)
++                    let last_index_id = *indices.last()?;
++                    let last_index_ty = module
++                        .all_inst_iter()
++                        .find(|inst| inst.result_id == Some(last_index_id))?
++                        .result_type?;
++                    Some((base_ptr, indices, last_index_ty))
+@@ -1019 +1038 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+-        if let Some((original_ptr, original_indices)) = maybe_original_access_chain {
++        if let Some((original_ptr, original_indices, last_index_ty)) = maybe_original_access_chain {
+@@ -1025 +1044,15 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+-            *last_index_id = self.add(last_index_id.with_type(index.ty), index).def(self);
++            // Access-chain indices are signed by SPIR-V semantics, regardless
++            // of OpTypeInt's signedness. Preserve both widths before merging a
++            // u32 structural index with a pointer-sized Rust offset.
++            let width = |ty| match self.lookup_type(ty) {
++                SpirvType::Integer(width, _) => width,
++                _ => self.fatal("access-chain index is not an integer"),
++            };
++            let merged_ty = if width(last_index_ty) > width(index.ty) {
++                last_index_ty
++            } else {
++                index.ty
++            };
++            let previous = self.intcast(last_index_id.with_type(last_index_ty), merged_ty, true);
++            let index = self.intcast(index, merged_ty, true);
++            *last_index_id = self.add(previous, index).def(self);
+@@ -1871 +1904 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-    fn load(&mut self, ty: Self::Type, ptr: Self::Value, _align: Align) -> Self::Value {
++    fn load(&mut self, ty: Self::Type, ptr: Self::Value, align: Align) -> Self::Value {
+@@ -1872,0 +1906 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
++        let (memory_access, memory_operands) = self.load_store_alignment(align);
+@@ -1875 +1909,7 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-                .load(access_ty, None, ptr.def(self), None, empty())
++                .load(
++                    access_ty,
++                    None,
++                    ptr.def(self),
++                    memory_access,
++                    memory_operands,
++                )
+@@ -2003 +2043 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-    fn store(&mut self, val: Self::Value, ptr: Self::Value, _align: Align) -> Self::Value {
++    fn store(&mut self, val: Self::Value, ptr: Self::Value, align: Align) -> Self::Value {
+@@ -2005,0 +2046 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
++        let (memory_access, memory_operands) = self.load_store_alignment(align);
+@@ -2008 +2049 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-            .store(ptr.def(self), val.def(self), None, empty())
++            .store(ptr.def(self), val.def(self), memory_access, memory_operands)
+diff --git a/crates/rustc_codegen_spirv/src/builder/format_args_decompiler.rs b/crates/rustc_codegen_spirv/src/builder/format_args_decompiler.rs
+index 16b2a0f..cd024b4 100644
+--- a/crates/rustc_codegen_spirv/src/builder/format_args_decompiler.rs
++++ b/crates/rustc_codegen_spirv/src/builder/format_args_decompiler.rs
+@@ -10 +10 @@ use rspirv::dr::{InsertPoint, Instruction, Operand};
+-use rspirv::spirv::{Op, StorageClass, Word};
++use rspirv::spirv::{MemoryAccess, Op, StorageClass, Word};
+@@ -500,0 +501,17 @@ impl<'tcx> DecodedFormatArgs<'tcx> {
++                // Alignment describes the address, so it does not add an effect
++                // to these temporary formatting loads/stores. Other memory flags
++                // (notably Volatile and scoped visibility) must remain unsupported.
++                let operands = match (inst.class.opcode, &inst.operands[..]) {
++                    (Op::Load, [_, Operand::MemoryAccess(mask), Operand::LiteralBit32(_)])
++                        if *mask == MemoryAccess::ALIGNED =>
++                    {
++                        &inst.operands[..1]
++                    }
++                    (Op::Store, [_, _, Operand::MemoryAccess(mask), Operand::LiteralBit32(_)])
++                        if *mask == MemoryAccess::ALIGNED =>
++                    {
++                        &inst.operands[..2]
++                    }
++                    _ => &inst.operands[..],
++                };
++
+@@ -504,2 +521 @@ impl<'tcx> DecodedFormatArgs<'tcx> {
+-                let id_operands = inst
+-                    .operands
++                let id_operands = operands
+diff --git a/crates/rustc_codegen_spirv/src/linker/mod.rs b/crates/rustc_codegen_spirv/src/linker/mod.rs
+index 76d3c71..59fb851 100644
+--- a/crates/rustc_codegen_spirv/src/linker/mod.rs
++++ b/crates/rustc_codegen_spirv/src/linker/mod.rs
+@@ -362,0 +363,2 @@ pub fn link(
++    simple_passes::remove_logical_alignment(&mut output);
++
+diff --git a/crates/rustc_codegen_spirv/src/linker/simple_passes.rs b/crates/rustc_codegen_spirv/src/linker/simple_passes.rs
+index f251bc5..76ec475 100644
+--- a/crates/rustc_codegen_spirv/src/linker/simple_passes.rs
++++ b/crates/rustc_codegen_spirv/src/linker/simple_passes.rs
+@@ -3 +3,3 @@ use rspirv::dr::{Block, Function, Instruction, Module, Operand};
+-use rspirv::spirv::{AddressingModel, Decoration, ExecutionModel, Op, StorageClass, Word};
++use rspirv::spirv::{
++    AddressingModel, Decoration, ExecutionModel, MemoryAccess, Op, StorageClass, Word,
++};
+@@ -12,0 +15,70 @@ mod physical_pointer_tests;
++/// Remove alignment from inferred logical accesses before pointer legalization,
++/// retaining all other memory flags and their operands in their original order.
++pub fn remove_logical_alignment(module: &mut Module) {
++    if !module.memory_model.as_ref().is_some_and(|inst| {
++        inst.operands[0].unwrap_addressing_model() == AddressingModel::PhysicalStorageBuffer64
++    }) {
++        return;
++    }
++    let pointer_types: FxHashMap<_, _> = module
++        .types_global_values
++        .iter()
++        .filter(|inst| {
++            matches!(
++                inst.class.opcode,
++                Op::TypePointer | Op::TypeUntypedPointerKHR
++            )
++        })
++        .map(|inst| {
++            (
++                inst.result_id.unwrap(),
++                inst.operands[0].unwrap_storage_class(),
++            )
++        })
++        .collect();
++    let pointer_values: FxHashMap<_, _> = module
++        .all_inst_iter()
++        .filter_map(|inst| Some((inst.result_id?, *pointer_types.get(&inst.result_type?)?)))
++        .collect();
++    for inst in module
++        .functions
++        .iter_mut()
++        .flat_map(|f| f.blocks.iter_mut().flat_map(|b| b.instructions.iter_mut()))
++    {
++        let mask_index = match inst.class.opcode {
++            Op::Load => 1,
++            Op::Store => 2,
++            _ => continue,
++        };
++        let Some(Operand::MemoryAccess(mask)) = inst.operands.get(mask_index) else {
++            continue;
++        };
++        let mask = *mask;
++        if !mask.contains(MemoryAccess::ALIGNED)
++            || !matches!(
++                inst.operands.get(mask_index + 1),
++                Some(Operand::LiteralBit32(_))
++            )
++            || !pointer_values
++                .get(&inst.operands[0].unwrap_id_ref())
++                .is_some_and(|sc| {
++                    !matches!(
++                        sc,
++                        StorageClass::PhysicalStorageBuffer | StorageClass::Generic
++                    )
++                })
++        {
++            continue;
++        }
++        // Aligned is the first bit carrying a payload, so its literal precedes
++        // any availability/visibility scope IDs or alias-scope IDs.
++        inst.operands.remove(mask_index + 1);
++        let remaining = mask & !MemoryAccess::ALIGNED;
++        if remaining.is_empty() {
++            inst.operands.remove(mask_index);
++        } else {
++            inst.operands[mask_index] = Operand::MemoryAccess(remaining);
++        }
++    }
++}
++
+diff --git a/crates/rustc_codegen_spirv/src/linker/simple_passes/physical_pointer_tests.rs b/crates/rustc_codegen_spirv/src/linker/simple_passes/physical_pointer_tests.rs
+index b18b910..856d7d6 100644
+--- a/crates/rustc_codegen_spirv/src/linker/simple_passes/physical_pointer_tests.rs
++++ b/crates/rustc_codegen_spirv/src/linker/simple_passes/physical_pointer_tests.rs
+@@ -57,2 +57,2 @@ OpFunctionEnd
+-    // The pinned validator does not require missing alias decorations. Check
+-    // their exact presence below as well as validating their legal placement.
++    // Absence is valid SPIR-V, but does not express Rust's raw-pointer alias
++    // policy. Check that policy separately from legal decoration placement.
+diff --git a/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs b/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
+index 1774aa5..40f28be 100644
+--- a/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
++++ b/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
+@@ -1 +1 @@
+-//! Non-executed address conversions through the real linker and specializer.
++//! Non-executed address conversions and memory operands through the real linker.
+@@ -5,0 +6,2 @@ use rspirv::binary::{Assemble, Disassemble};
++use rspirv::dr::Operand;
++use rspirv::spirv::{MemoryAccess, Op};
+@@ -12 +14,2 @@ OpCapability PhysicalStorageBufferAddresses
+-OpMemoryModel PhysicalStorageBuffer64 GLSL450
++OpCapability VulkanMemoryModel
++OpMemoryModel PhysicalStorageBuffer64 Vulkan
+@@ -18,0 +22,2 @@ OpExecutionMode %main LocalSize 1 1 1
++%value = OpConstant %u32 42
++%scope = OpConstant %u32 2
+@@ -20 +25 @@ OpExecutionMode %main LocalSize 1 1 1
+-%private = OpTypePointer Private %u64
++%workgroup = OpTypePointer Workgroup %u64
+@@ -23 +28 @@ OpExecutionMode %main LocalSize 1 1 1
+-%output = OpVariable %private Private
++%output = OpVariable %workgroup Workgroup
+@@ -28 +33,4 @@ OpExecutionMode %main LocalSize 1 1 1
+-OpStore %output %bits
++OpStore %output %bits Aligned|Nontemporal|MakePointerAvailable|NonPrivatePointer 8 %scope
++%loaded = OpLoad %u64 %output Aligned|Nontemporal|MakePointerVisible|NonPrivatePointer 8 %scope
++%other = OpConvertUToPtr %physical %loaded
++OpStore %other %value Aligned|Nontemporal 4
+@@ -67,0 +76 @@ OpFunctionEnd
++        "Aligned|Nontemporal 4",
+@@ -71,0 +81,26 @@ OpFunctionEnd
++    assert!(
++        !text.contains("Aligned|Nontemporal 8"),
++        "logical alignment must be removed"
++    );
++    let scope = module
++        .types_global_values
++        .iter()
++        .find_map(|inst| {
++            (inst.class.opcode == Op::Constant && inst.operands == [Operand::LiteralBit32(2)])
++                .then(|| inst.result_id.unwrap())
++        })
++        .expect("retain the Workgroup scope constant");
++    for (op, flag, mask_index) in [
++        (Op::Store, MemoryAccess::MAKE_POINTER_AVAILABLE, 2),
++        (Op::Load, MemoryAccess::MAKE_POINTER_VISIBLE, 1),
++    ] {
++        let mask = MemoryAccess::NONTEMPORAL | MemoryAccess::NON_PRIVATE_POINTER | flag;
++        assert!(
++            module.all_inst_iter().any(|inst| {
++                inst.class.opcode == op
++                    && inst.operands.get(mask_index..)
++                        == Some(&[Operand::MemoryAccess(mask), Operand::IdScope(scope)][..])
++            }),
++            "retain {op:?} flags and scope after removing alignment:\n{text}"
++        );
++    }
+diff --git a/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs b/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
+index a11fae3..c8f7d74 100644
+--- a/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
++++ b/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
+@@ -343,2 +343,4 @@ pub fn instruction_signatures(op: Op) -> Option<&'static [InstSig<'static>]> {
+-        Op::Load => sig! { (Either(Pointer(_, T), UntypedPointer(_))) -> T },
+-        Op::Store => sig! { (Either(Pointer(_, T), UntypedPointer(_)), T) },
++        // Optional memory operands can include scope/alias IDs. They do not
++        // constrain the pointer storage class or the accessed value type.
++        Op::Load => sig! { (Either(Pointer(_, T), UntypedPointer(_)), ..) -> T },
++        Op::Store => sig! { (Either(Pointer(_, T), UntypedPointer(_)), T, ..) },
+diff --git a/docs/src/platform-support.md b/docs/src/platform-support.md
+index 7e66301..cb4f504 100644
+--- a/docs/src/platform-support.md
++++ b/docs/src/platform-support.md
+@@ -75,0 +76,7 @@ explicit restriction rather than inventing a no-alias guarantee.
++Scalar raw reads/writes carry rustc's known alignment. Alignment is removed
++from logical accesses after storage-class inference, while other memory flags
++and their scope operands are retained. The compile-only scalar fixture has an
++unsafe entry contract covering real allocation, initialization, alignment,
++exclusive access, lifetime and host synchronization. It is never dispatched
++with a synthetic address. Compilation and validation do not prove runtime safety.
++
+@@ -77,4 +84,5 @@ This experimental support does not yet provide a physical-memory access API.
+-Aligned loads/stores, pointer arithmetic and comparisons, aggregate pointer
+-storage, atomics and reference validity need separate lowering and evidence.
+-Do not infer those guarantees from a valid conversion. The source compiletests
+-transport synthetic values without dereferencing them and do not execute shaders.
++Pointer arithmetic and comparisons, aggregate pointer storage, atomics and
++reference validity need separate lowering and evidence. Do not infer those
++guarantees from a valid conversion. Formatted u32 panic arguments are tested
++on both ABIs. The existing debug formatter does not print 64-bit integers,
++so 64-bit usize bounds diagnostics retain explicit unprintable placeholders.
+diff --git a/tests/compiletests/ui/physical_storage/access_physical64.rs b/tests/compiletests/ui/physical_storage/access_physical64.rs
+new file mode 100644
+index 0000000..59d2b36
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/access_physical64.rs
+@@ -0,0 +1,37 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++use spirv_std::spirv;
++
++/// Compile-only fixture. Do not dispatch synthetic addresses.
++///
++/// # Safety
++/// The caller must provide a live, initialized, four-byte-aligned device
++/// allocation covering one u32 at `address`. It must permit this invocation's
++/// exclusive read/write access, remain live through completion, and be disjoint
++/// from `output` and the push constants. Dispatch exactly one invocation after
++/// establishing device visibility. U-001 owns the boundary and runtime limits.
++#[allow(unsafe_code)]
++#[spirv(compute(threads(1)))]
++pub unsafe fn main(
++    #[spirv(push_constant)] address: &u64,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u32; 2],
++) {
++    let pointer = *address as *mut u32;
++    // SAFETY: U-001. The caller's contract supplies a live, aligned, initialized
++    // u32 with exclusive access and completion-bound lifetime. All u32 bits are valid.
++    let before = unsafe { pointer.read() };
++    output[0] = before;
++    // SAFETY: U-001. The same four-byte allocation is exclusively writable and
++    // does not alias either logical interface. Wrapping arithmetic yields a valid u32.
++    unsafe { pointer.write(before.wrapping_add(7)) };
++    // SAFETY: U-001. This invocation has just initialized the same live allocation.
++    output[1] = unsafe { pointer.read() };
++}
+diff --git a/tests/compiletests/ui/physical_storage/access_physical64.stderr b/tests/compiletests/ui/physical_storage/access_physical64.stderr
+new file mode 100644
+index 0000000..2eff030
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/access_physical64.stderr
+@@ -0,0 +1,52 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %address %output
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %address "address"
++               OpName %output "output"
++               OpDecorate %_struct_7 Block
++               OpMemberDecorate %_struct_7 0 Offset 0
++               OpDecorate %8 ArrayStride 4
++               OpDecorate %_struct_9 Block
++               OpMemberDecorate %_struct_9 0 Offset 0
++               OpDecorate %output Binding 0
++               OpDecorate %output DescriptorSet 0
++        %u64 = OpTypeInt 64 0
++  %_struct_7 = OpTypeStruct %u64
++%_ptr_PushConstant__struct_7 = OpTypePointer PushConstant %_struct_7
++        %u32 = OpTypeInt 32 0
++      %u32_2 = OpConstant %u32 2
++          %8 = OpTypeArray %u32 %u32_2
++  %_struct_9 = OpTypeStruct %8
++%_ptr_StorageBuffer__struct_9 = OpTypePointer StorageBuffer %_struct_9
++       %void = OpTypeVoid
++         %16 = OpTypeFunction %void
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++    %address = OpVariable %_ptr_PushConstant__struct_7 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_StorageBuffer_8 = OpTypePointer StorageBuffer %8
++     %output = OpVariable %_ptr_StorageBuffer__struct_9 StorageBuffer
++%_ptr_PhysicalStorageBuffer_u32 = OpTypePointer PhysicalStorageBuffer %u32
++%_ptr_StorageBuffer_u32 = OpTypePointer StorageBuffer %u32
++      %u32_7 = OpConstant %u32 7
++      %u32_1 = OpConstant %u32 1
++          %1 = OpFunction %void None %16
++         %24 = OpLabel
++         %25 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %address %u32_0
++         %26 = OpInBoundsAccessChain %_ptr_StorageBuffer_8 %output %u32_0
++         %27 = OpLoad %u64 %25
++         %28 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %27
++         %29 = OpLoad %u32 %28 Aligned 4
++         %30 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %26 %u32_0
++               OpStore %30 %29
++         %31 = OpIAdd %u32 %29 %u32_7
++               OpStore %28 %31 Aligned 4
++         %32 = OpLoad %u32 %28 Aligned 4
++         %33 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %26 %u32_1
++               OpStore %33 %32
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/physical_storage/panic_physical64.rs b/tests/compiletests/ui/physical_storage/panic_physical64.rs
+new file mode 100644
+index 0000000..f1cd2e0
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/panic_physical64.rs
+@@ -0,0 +1,23 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+ext:SPV_KHR_non_semantic_info
++// compile-flags: -C llvm-args=--abort-strategy=debug-printf
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "ui/physical_storage/" -> "$$DIR/"
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++// Aligned pre-link loads/stores must not hide formatting operands from the
++// panic decompiler. Keep both a dynamic argument and an ordinary bounds check.
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] index: &u32,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u32; 1],
++) {
++    assert!(*index < 4, "index {} exceeds four", *index);
++    output[0] = [7, 11, 13, 17][*index as usize];
++}
+diff --git a/tests/compiletests/ui/physical_storage/panic_physical64.stderr b/tests/compiletests/ui/physical_storage/panic_physical64.stderr
+new file mode 100644
+index 0000000..3ed2fb6
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/panic_physical64.stderr
+@@ -0,0 +1,97 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpExtension "SPV_KHR_non_semantic_info"
++          %1 = OpExtInstImport "NonSemantic.DebugPrintf"
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %2 "main" %index %output
++               OpExecutionMode %2 LocalSize 1 1 1
++          %5 = OpString "/n[Rust panicked at $DIR/panic_physical64.rs:21:5]/n index %u exceeds four/n      in main()/n"
++          %6 = OpString "/n[Rust panicked at $DIR/panic_physical64.rs:22:17]/n index out of bounds: the len is {/* unprintable usize */: } but the index is {/* unprintable usize */: }/n      in main()/n"
++          %7 = OpString "$DIR/panic_physical64.rs"
++               OpName %index "index"
++               OpName %output "output"
++               OpDecorate %_struct_8 Block
++               OpMemberDecorate %_struct_8 0 Offset 0
++               OpDecorate %9 ArrayStride 4
++               OpDecorate %_struct_10 Block
++               OpMemberDecorate %_struct_10 0 Offset 0
++               OpDecorate %output Binding 0
++               OpDecorate %output DescriptorSet 0
++        %u32 = OpTypeInt 32 0
++  %_struct_8 = OpTypeStruct %u32
++%_ptr_PushConstant__struct_8 = OpTypePointer PushConstant %_struct_8
++      %u32_1 = OpConstant %u32 1
++          %9 = OpTypeArray %u32 %u32_1
++ %_struct_10 = OpTypeStruct %9
++%_ptr_StorageBuffer__struct_10 = OpTypePointer StorageBuffer %_struct_10
++       %void = OpTypeVoid
++         %16 = OpTypeFunction %void
++      %u32_4 = OpConstant %u32 4
++         %18 = OpTypeArray %u32 %u32_4
++%_ptr_Function_18 = OpTypePointer Function %18
++%_ptr_PushConstant_u32 = OpTypePointer PushConstant %u32
++      %index = OpVariable %_ptr_PushConstant__struct_8 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_StorageBuffer_9 = OpTypePointer StorageBuffer %9
++     %output = OpVariable %_ptr_StorageBuffer__struct_10 StorageBuffer
++       %bool = OpTypeBool
++%_ptr_Function_u32 = OpTypePointer Function %u32
++      %u32_7 = OpConstant %u32 7
++     %u32_11 = OpConstant %u32 11
++      %u32_2 = OpConstant %u32 2
++     %u32_13 = OpConstant %u32 13
++      %u32_3 = OpConstant %u32 3
++     %u32_17 = OpConstant %u32 17
++        %u64 = OpTypeInt 64 0
++      %u64_4 = OpConstant %u64 4
++      %u64_0 = OpConstant %u64 0
++%_ptr_StorageBuffer_u32 = OpTypePointer StorageBuffer %u32
++          %2 = OpFunction %void None %16
++         %35 = OpLabel
++         %36 = OpVariable %_ptr_Function_18 Function
++         %37 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %index %u32_0
++         %38 = OpInBoundsAccessChain %_ptr_StorageBuffer_9 %output %u32_0
++         %39 = OpLoad %u32 %37
++         %40 = OpULessThan %bool %39 %u32_4
++               OpNoLine
++               OpSelectionMerge %41 None
++               OpBranchConditional %40 %42 %43
++         %42 = OpLabel
++               OpBranch %41
++         %43 = OpLabel
++         %44 = OpLoad %u32 %37
++         %45 = OpExtInst %void %1 1 %5 %44
++               OpNoLine
++               OpReturn
++         %41 = OpLabel
++         %46 = OpInBoundsAccessChain %_ptr_Function_u32 %36 %u32_0
++               OpStore %46 %u32_7
++         %47 = OpInBoundsAccessChain %_ptr_Function_u32 %36 %u32_1
++               OpStore %47 %u32_11
++         %48 = OpInBoundsAccessChain %_ptr_Function_u32 %36 %u32_2
++               OpStore %48 %u32_13
++         %49 = OpInBoundsAccessChain %_ptr_Function_u32 %36 %u32_3
++               OpStore %49 %u32_17
++         %50 = OpLoad %u32 %37
++         %51 = OpUConvert %u64 %50
++         %52 = OpULessThan %bool %51 %u64_4
++               OpNoLine
++               OpSelectionMerge %53 None
++               OpBranchConditional %52 %54 %55
++         %54 = OpLabel
++               OpBranch %53
++         %55 = OpLabel
++         %56 = OpExtInst %void %1 1 %6
++               OpNoLine
++               OpReturn
++         %53 = OpLabel
++         %57 = OpIAdd %u64 %u64_0 %51
++         %58 = OpInBoundsAccessChain %_ptr_Function_u32 %36 %57
++         %59 = OpLoad %u32 %58
++         %60 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %38 %u32_0
++               OpStore %60 %59
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
