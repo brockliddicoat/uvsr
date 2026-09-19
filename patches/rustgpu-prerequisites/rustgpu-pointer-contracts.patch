@@ -1,0 +1,487 @@
+diff --git a/docs/src/platform-support.md b/docs/src/platform-support.md
+index 63af796..36ec4b5 100644
+--- a/docs/src/platform-support.md
++++ b/docs/src/platform-support.md
+@@ -94,0 +95 @@ The current operation evidence is deliberately narrower than `*mut` parity:
++| `cast_const`, `cast_mut` with the same pointee type | compile without changing address bits or creating references |
+@@ -96,0 +98,3 @@ The current operation evidence is deliberately narrower than `*mut` parity:
++| `cast::<u8>`, `addr`, `with_addr`, `map_addr` on a u32 pointer | diagnosed at differing-pointee casts inside the standard-library helpers; use the explicit-u64 library for address transport |
++| `wrapping_byte_add`, `wrapping_byte_sub`, `wrapping_byte_offset` on a u32 pointer | diagnosed at the helpers' casts to byte/unit pointers; the element-offset results above do not establish byte-helper support |
++| `is_aligned`, `align_offset` on a u32 pointer | diagnosed at typed-pointer casts; unoptimized `align_offset` also reaches the existing unsupported checked-multiply operation |
+@@ -99 +103 @@ The current operation evidence is deliberately narrower than `*mut` parity:
+-| other pointer casts, volatile intrinsics, effectful/scoped copies, atomics, references and allocation-dependent methods | require separate lowering, diagnostics and execution evidence |
++| other pointer casts, volatile intrinsics, effectful/scoped copies, atomics, references and allocation-dependent methods | remain outside the supported initial API and need separate lowering, diagnostics and execution evidence |
+@@ -106,0 +111,7 @@ so 64-bit usize bounds diagnostics retain explicit unprintable placeholders.
++The negative method fixtures record the current pinned toolchain's diagnostics.
++They are not a promise that every optimization level diagnoses at the same
++helper, or that every unlisted raw-pointer operation is rejected. In particular,
++reference creation, in-bounds offsets and allocation-dependent operations are
++not part of the initial supported contract. Do not use a successful compile as
++proof that an unlisted operation has a sound host/shader ABI or runtime behavior.
++
+diff --git a/tests/compiletests/ui/physical_storage/pointer_address_methods_physical64.rs b/tests/compiletests/ui/physical_storage/pointer_address_methods_physical64.rs
+new file mode 100644
+index 0000000..19d1952
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_address_methods_physical64.rs
+@@ -0,0 +1,21 @@
++// build-fail
++// only-vulkan1.3_physical64
++// normalize-stderr-test "<\S*/library/core/src/" -> "<$$CORE_SRC/"
++// normalize-stderr-test "(\n)\n+$" -> "$1"
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] data: &[u64; 2],
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u64; 3],
++) {
++    // These safe methods only transport address bits. No resulting pointer is
++    // dereferenced, including when wrapping changes its allocation/provenance.
++    let pointer = data[0] as *mut u32;
++    output[0] = pointer.addr() as u64;
++    output[1] = pointer.with_addr(data[1] as usize) as u64;
++    output[2] = pointer.map_addr(|address| address.wrapping_add(data[1] as usize)) as u64;
++}
+diff --git a/tests/compiletests/ui/physical_storage/pointer_address_methods_physical64.stderr b/tests/compiletests/ui/physical_storage/pointer_address_methods_physical64.stderr
+new file mode 100644
+index 0000000..217d13c
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_address_methods_physical64.stderr
+@@ -0,0 +1,98 @@
++error: cannot cast between pointer types
++       from `*u32`
++         to `*struct () {  }`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:33:6
++   |
++LL |     }
++   |      ^
++   |
++note: used from within `<*mut u32>::cast::<()>`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:33:6
++   |
++LL |     }
++   |      ^
++note: called by `<*mut u32>::addr`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:150:38
++   |
++LL |         unsafe { mem::transmute(self.cast::<()>()) }
++   |                                      ^^^^^^^^^^^^
++note: called by `pointer_address_methods_physical64::main`
++  --> <$DIR/pointer_address_methods_physical64.rs>:18:25
++   |
++LL |     output[0] = pointer.addr() as u64;
++   |                         ^^^^^^
++note: called by `main`
++  --> <$DIR/pointer_address_methods_physical64.rs>:11:8
++   |
++LL | pub fn main(
++   |        ^^^^
++
++error: cannot cast between pointer types
++       from `*u32`
++         to `*u8`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:33:6
++   |
++LL |     }
++   |      ^
++   |
++note: used from within `<*mut u32>::cast::<u8>`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:33:6
++   |
++LL |     }
++   |      ^
++note: called by `<*mut u32>::wrapping_byte_offset`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:493:14
++   |
++LL |         self.cast::<u8>().wrapping_offset(count).with_metadata_of(self)
++   |              ^^^^^^^^^^^^
++note: called by `<*mut u32>::with_addr`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:203:14
++   |
++LL |         self.wrapping_byte_offset(offset)
++   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++note: called by `pointer_address_methods_physical64::main`
++  --> <$DIR/pointer_address_methods_physical64.rs>:19:25
++   |
++LL |     output[1] = pointer.with_addr(data[1] as usize) as u64;
++   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
++note: called by `main`
++  --> <$DIR/pointer_address_methods_physical64.rs>:11:8
++   |
++LL | pub fn main(
++   |        ^^^^
++
++error: cannot cast between pointer types
++       from `*u8`
++         to `*struct () {  }`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:117:9
++   |
++LL |         from_raw_parts_mut::<U>(self as *mut (), metadata(meta))
++   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++   |
++note: used from within `<*mut u8>::with_metadata_of::<u32>`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:117:9
++   |
++LL |         from_raw_parts_mut::<U>(self as *mut (), metadata(meta))
++   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++note: called by `<*mut u32>::wrapping_byte_offset`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:493:50
++   |
++LL |         self.cast::<u8>().wrapping_offset(count).with_metadata_of(self)
++   |                                                  ^^^^^^^^^^^^^^^^^^^^^^
++note: called by `<*mut u32>::with_addr`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:203:14
++   |
++LL |         self.wrapping_byte_offset(offset)
++   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++note: called by `pointer_address_methods_physical64::main`
++  --> <$DIR/pointer_address_methods_physical64.rs>:19:25
++   |
++LL |     output[1] = pointer.with_addr(data[1] as usize) as u64;
++   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
++note: called by `main`
++  --> <$DIR/pointer_address_methods_physical64.rs>:11:8
++   |
++LL | pub fn main(
++   |        ^^^^
++
++error: aborting due to 3 previous errors
+diff --git a/tests/compiletests/ui/physical_storage/pointer_alignment_methods_physical64.rs b/tests/compiletests/ui/physical_storage/pointer_alignment_methods_physical64.rs
+new file mode 100644
+index 0000000..5e11cda
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_alignment_methods_physical64.rs
+@@ -0,0 +1,20 @@
++// build-fail
++// only-vulkan1.3_physical64
++// normalize-stderr-test "<\S*/library/core/src/" -> "<$$CORE_SRC/"
++// normalize-stderr-test "(\n)\n+$" -> "$1"
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] address: &u64,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u64; 2],
++) {
++    // Alignment queries do not establish allocation validity. Sixteen is a
++    // nonzero power of two, so align_offset's alignment argument is valid.
++    let pointer = *address as *mut u32;
++    output[0] = pointer.is_aligned() as u64;
++    output[1] = pointer.align_offset(16) as u64;
++}
+diff --git a/tests/compiletests/ui/physical_storage/pointer_alignment_methods_physical64.stderr b/tests/compiletests/ui/physical_storage/pointer_alignment_methods_physical64.stderr
+new file mode 100644
+index 0000000..0836ecd
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_alignment_methods_physical64.stderr
+@@ -0,0 +1,72 @@
++error: cannot cast between pointer types
++       from `*u32`
++         to `*struct () {  }`
++  --> <$CORE_SRC/ptr/const_ptr.rs>:50:6
++   |
++LL |     }
++   |      ^
++   |
++note: used from within `<*const u32>::cast::<()>`
++  --> <$CORE_SRC/ptr/const_ptr.rs>:50:6
++   |
++LL |     }
++   |      ^
++note: called by `<*const u32>::addr`
++  --> <$CORE_SRC/ptr/const_ptr.rs>:159:38
++   |
++LL |         unsafe { mem::transmute(self.cast::<()>()) }
++   |                                      ^^^^^^^^^^^^
++note: called by `core::ptr::align_offset::<u32>`
++  --> <$CORE_SRC/ptr/mod.rs>:2319:25
++   |
++LL |     let addr: usize = p.addr();
++   |                         ^^^^^^
++note: called by `<*mut u32>::align_offset`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:1548:28
++   |
++LL |         let ret = unsafe { align_offset(self, align) };
++   |                            ^^^^^^^^^^^^^^^^^^^^^^^^^
++note: called by `pointer_alignment_methods_physical64::main`
++  --> <$DIR/pointer_alignment_methods_physical64.rs>:19:25
++   |
++LL |     output[1] = pointer.align_offset(16) as u64;
++   |                         ^^^^^^^^^^^^^^^^
++note: called by `main`
++  --> <$DIR/pointer_alignment_methods_physical64.rs>:11:8
++   |
++LL | pub fn main(
++   |        ^^^^
++
++error: checked mul is not supported yet
++  --> <$CORE_SRC/ptr/mod.rs>:2308:40
++   |
++LL |             let (new_gate, overflow) = mul_with_overflow(mod_gate, mod_gate);
++   |                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++   |
++note: used from within `core::ptr::align_offset::mod_inv`
++  --> <$CORE_SRC/ptr/mod.rs>:2308:28
++   |
++LL |             let (new_gate, overflow) = mul_with_overflow(mod_gate, mod_gate);
++   |                            ^^^^^^^^
++note: called by `core::ptr::align_offset::<u32>`
++  --> <$CORE_SRC/ptr/mod.rs>:2423:47
++   |
++LL |         return wrapping_mul(minusp2, unsafe { mod_inv(s2, a2) }) & a2minus1;
++   |                                               ^^^^^^^^^^^^^^^
++note: called by `<*mut u32>::align_offset`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:1548:28
++   |
++LL |         let ret = unsafe { align_offset(self, align) };
++   |                            ^^^^^^^^^^^^^^^^^^^^^^^^^
++note: called by `pointer_alignment_methods_physical64::main`
++  --> <$DIR/pointer_alignment_methods_physical64.rs>:19:25
++   |
++LL |     output[1] = pointer.align_offset(16) as u64;
++   |                         ^^^^^^^^^^^^^^^^
++note: called by `main`
++  --> <$DIR/pointer_alignment_methods_physical64.rs>:11:8
++   |
++LL | pub fn main(
++   |        ^^^^
++
++error: aborting due to 2 previous errors
+diff --git a/tests/compiletests/ui/physical_storage/pointer_byte_methods_physical64.rs b/tests/compiletests/ui/physical_storage/pointer_byte_methods_physical64.rs
+new file mode 100644
+index 0000000..b212fe4
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_byte_methods_physical64.rs
+@@ -0,0 +1,21 @@
++// build-fail
++// only-vulkan1.3_physical64
++// normalize-stderr-test "<\S*/library/core/src/" -> "<$$CORE_SRC/"
++// normalize-stderr-test "(\n)\n+$" -> "$1"
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] data: &[u64; 3],
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u64; 3],
++) {
++    // Byte offsets must not scale by the original u32 pointee stride. All
++    // results are converted to integers without accessing an allocation.
++    let pointer = data[0] as *mut u32;
++    output[0] = pointer.wrapping_byte_add(data[1] as usize) as u64;
++    output[1] = pointer.wrapping_byte_sub(data[1] as usize) as u64;
++    output[2] = pointer.wrapping_byte_offset(data[2] as isize) as u64;
++}
+diff --git a/tests/compiletests/ui/physical_storage/pointer_byte_methods_physical64.stderr b/tests/compiletests/ui/physical_storage/pointer_byte_methods_physical64.stderr
+new file mode 100644
+index 0000000..007ca16
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_byte_methods_physical64.stderr
+@@ -0,0 +1,59 @@
++error: cannot cast between pointer types
++       from `*u32`
++         to `*u8`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:33:6
++   |
++LL |     }
++   |      ^
++   |
++note: used from within `<*mut u32>::cast::<u8>`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:33:6
++   |
++LL |     }
++   |      ^
++note: called by `<*mut u32>::wrapping_byte_add`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:1151:14
++   |
++LL |         self.cast::<u8>().wrapping_add(count).with_metadata_of(self)
++   |              ^^^^^^^^^^^^
++note: called by `pointer_byte_methods_physical64::main`
++  --> <$DIR/pointer_byte_methods_physical64.rs>:18:25
++   |
++LL |     output[0] = pointer.wrapping_byte_add(data[1] as usize) as u64;
++   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++note: called by `main`
++  --> <$DIR/pointer_byte_methods_physical64.rs>:11:8
++   |
++LL | pub fn main(
++   |        ^^^^
++
++error: cannot cast between pointer types
++       from `*u8`
++         to `*struct () {  }`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:117:9
++   |
++LL |         from_raw_parts_mut::<U>(self as *mut (), metadata(meta))
++   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++   |
++note: used from within `<*mut u8>::with_metadata_of::<u32>`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:117:9
++   |
++LL |         from_raw_parts_mut::<U>(self as *mut (), metadata(meta))
++   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++note: called by `<*mut u32>::wrapping_byte_add`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:1151:47
++   |
++LL |         self.cast::<u8>().wrapping_add(count).with_metadata_of(self)
++   |                                               ^^^^^^^^^^^^^^^^^^^^^^
++note: called by `pointer_byte_methods_physical64::main`
++  --> <$DIR/pointer_byte_methods_physical64.rs>:18:25
++   |
++LL |     output[0] = pointer.wrapping_byte_add(data[1] as usize) as u64;
++   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++note: called by `main`
++  --> <$DIR/pointer_byte_methods_physical64.rs>:11:8
++   |
++LL | pub fn main(
++   |        ^^^^
++
++error: aborting due to 2 previous errors
+diff --git a/tests/compiletests/ui/physical_storage/pointer_cast_methods_physical64.rs b/tests/compiletests/ui/physical_storage/pointer_cast_methods_physical64.rs
+new file mode 100644
+index 0000000..a9f65fb
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_cast_methods_physical64.rs
+@@ -0,0 +1,19 @@
++// build-fail
++// only-vulkan1.3_physical64
++// normalize-stderr-test "<\S*/library/core/src/" -> "<$$CORE_SRC/"
++// normalize-stderr-test "(\n)\n+$" -> "$1"
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] address: &u64,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut u64,
++) {
++    // Casts transport arbitrary address bits without creating references or
++    // asserting that the address names an accessible allocation.
++    let pointer = *address as *mut u32;
++    *output = pointer.cast::<u8>() as u64;
++}
+diff --git a/tests/compiletests/ui/physical_storage/pointer_cast_methods_physical64.stderr b/tests/compiletests/ui/physical_storage/pointer_cast_methods_physical64.stderr
+new file mode 100644
+index 0000000..3135482
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_cast_methods_physical64.stderr
+@@ -0,0 +1,25 @@
++error: cannot cast between pointer types
++       from `*u32`
++         to `*u8`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:33:6
++   |
++LL |     }
++   |      ^
++   |
++note: used from within `<*mut u32>::cast::<u8>`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:33:6
++   |
++LL |     }
++   |      ^
++note: called by `pointer_cast_methods_physical64::main`
++  --> <$DIR/pointer_cast_methods_physical64.rs>:18:23
++   |
++LL |     *output = pointer.cast::<u8>() as u64;
++   |                       ^^^^^^^^^^^^
++note: called by `main`
++  --> <$DIR/pointer_cast_methods_physical64.rs>:11:8
++   |
++LL | pub fn main(
++   |        ^^^^
++
++error: aborting due to 1 previous error
+diff --git a/tests/compiletests/ui/physical_storage/pointer_const_methods_physical64.rs b/tests/compiletests/ui/physical_storage/pointer_const_methods_physical64.rs
+new file mode 100644
+index 0000000..e11cb70
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_const_methods_physical64.rs
+@@ -0,0 +1,22 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] address: &u64,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u64; 2],
++) {
++    // Constness changes do not alter the pointee type. These casts transport
++    // bits only, without creating a reference or accessing memory.
++    let pointer = *address as *mut u32;
++    output[0] = pointer.cast_const() as u64;
++    output[1] = pointer.cast_const().cast_mut() as u64;
++}
+diff --git a/tests/compiletests/ui/physical_storage/pointer_const_methods_physical64.stderr b/tests/compiletests/ui/physical_storage/pointer_const_methods_physical64.stderr
+new file mode 100644
+index 0000000..48e544a
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_const_methods_physical64.stderr
+@@ -0,0 +1,49 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %address %output
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %address "address"
++               OpName %output "output"
++               OpDecorate %_struct_5 Block
++               OpMemberDecorate %_struct_5 0 Offset 0
++               OpDecorate %6 ArrayStride 8
++               OpDecorate %_struct_7 Block
++               OpMemberDecorate %_struct_7 0 Offset 0
++               OpDecorate %output Binding 0
++               OpDecorate %output DescriptorSet 0
++        %u64 = OpTypeInt 64 0
++  %_struct_5 = OpTypeStruct %u64
++%_ptr_PushConstant__struct_5 = OpTypePointer PushConstant %_struct_5
++        %u32 = OpTypeInt 32 0
++      %u32_2 = OpConstant %u32 2
++          %6 = OpTypeArray %u64 %u32_2
++  %_struct_7 = OpTypeStruct %6
++%_ptr_StorageBuffer__struct_7 = OpTypePointer StorageBuffer %_struct_7
++       %void = OpTypeVoid
++         %14 = OpTypeFunction %void
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++    %address = OpVariable %_ptr_PushConstant__struct_5 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_StorageBuffer_6 = OpTypePointer StorageBuffer %6
++     %output = OpVariable %_ptr_StorageBuffer__struct_7 StorageBuffer
++%_ptr_PhysicalStorageBuffer_u32 = OpTypePointer PhysicalStorageBuffer %u32
++%_ptr_StorageBuffer_u64 = OpTypePointer StorageBuffer %u64
++      %u32_1 = OpConstant %u32 1
++          %1 = OpFunction %void None %14
++         %21 = OpLabel
++         %22 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %address %u32_0
++         %23 = OpInBoundsAccessChain %_ptr_StorageBuffer_6 %output %u32_0
++         %24 = OpLoad %u64 %22
++         %25 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %24
++         %26 = OpConvertPtrToU %u64 %25
++         %27 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %23 %u32_0
++               OpStore %27 %26
++         %28 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %23 %u32_1
++         %29 = OpConvertPtrToU %u64 %25
++               OpStore %28 %29
++               OpNoLine
++               OpReturn
++               OpFunctionEnd

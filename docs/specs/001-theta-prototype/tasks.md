@@ -55,6 +55,8 @@ T018 is supporting work below. M2 does not depend on adding a second full native
 
 [E-030](../../execution.md#e-030-2026-09-19-tested-aggregate-aliases-and-function-effects) advances T011-T013/T017/T019 with aggregate writes, loaded-alias access and default/qptr Function-memory effects in the actual host. the bounded new source and runtime gates pass. remaining operation/resource/stage coverage and broader upstream CI still prevent closing those complete tasks.
 
+[E-031](../../execution.md#e-031-2026-09-19-recorded-raw-pointer-method-limits) extends the partial T012/T013 raw-method inventory with one positive and four negative safe source families. all 43 required pointer/heap pairs pass. reference/allocation-dependent methods, additional resource/stage coverage and generic upstream difftests remain open, so no complete compiler task closes here.
+
 ## M3. RustGPU contribution draft
 
 - [ ] T033 [US6] reconcile all P, R, H, A, and C rows in [upstream tests](upstream-tests.md) against the proposed diff, tests, results, and limitations. depends on the promised T013/T015 features and T019 for actual-consumer claims. refresh relevant upstream comments and CI once before final draft preparation.

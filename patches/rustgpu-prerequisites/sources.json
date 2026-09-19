@@ -423,6 +423,22 @@
         "../../legal/licenses/RustGPU-MIT.txt",
         "../../legal/licenses/RustGPU-APACHE.txt"
       ]
+    },
+    {
+      "file": "rustgpu-pointer-contracts.patch",
+      "sha256": "62e1c75859d50a5050f9b9c0a5f52ee0fed4363e74a231c67e0f4ec31620a464",
+      "repository": "https://github.com/Rust-GPU/rust-gpu",
+      "base": "e59c924a5287c9b8cf7d8c49cc37aa8d6bb0bc08",
+      "local_verified_commit": "af95a5e708f8ea75f4f84182efcf223ac8480eef",
+      "license": "MIT OR Apache-2.0",
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ],
+      "license_files": [
+        "../../legal/licenses/RustGPU-MIT.txt",
+        "../../legal/licenses/RustGPU-APACHE.txt"
+      ]
     }
   ]
 }
