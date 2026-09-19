@@ -1,0 +1,988 @@
+diff --git a/crates/spirv-std/README.md b/crates/spirv-std/README.md
+index 9d2a8a1..ab3631a 100644
+--- a/crates/spirv-std/README.md
++++ b/crates/spirv-std/README.md
+@@ -38,0 +39,28 @@ pub fn main(
++## Native descriptor heaps
++
++`Image::from_resource_heap` and `Sampler::from_sampler_heap` load opaque values
++from the heaps bound by `VK_EXT_descriptor_heap`. They are unsafe because the
++caller must establish bounds, descriptor/resource validity, lifetime and
++synchronization. The returned values work with the existing image operations.
++
++Indices count native descriptors of the requested type, using
++`OpConstantSizeOfEXT` and `ArrayStrideIdEXT`. Rust's `size_of` for these opaque
++types is unrelated to the native descriptor stride. A mixed heap must place each
++descriptor at the exact byte offset represented by its typed index. These
++methods do not own or borrow resources and do not validate indices.
++
++Enable `DescriptorHeapEXT`, `UntypedPointersKHR`, `ext:SPV_EXT_descriptor_heap`
++and `ext:SPV_KHR_untyped_pointers`. Access need not be uniform, and the
++constructors never emit `Uniform` or `UniformId`. Divergent sampled-image access
++also declares `ShaderNonUniform` and `SampledImageArrayNonUniformIndexing`, with
++the applicable device feature enabled. `DescriptorHeapEXT` removes the need for
++`NonUniform` decoration, not the caller's resource and capability obligations.
++The existing sampling methods may retain that decoration when enabled.
++
++The constructors require no physical address or pointer-width policy. Combining
++them with `PhysicalPtr` memory access requires the separate physical64 target.
++CPU stubs panic without accessing a heap. The source tests cover sampled 2D
++float/integer images, repeated constructors, a fragment interface, divergent
++compute indices and optimized/qptr paths. This does not claim execution support
++for every image parameter, storage access, stage or device.
++
+diff --git a/crates/spirv-std/src/lib.rs b/crates/spirv-std/src/lib.rs
+index dfc2fa0..afe92b8 100644
+--- a/crates/spirv-std/src/lib.rs
++++ b/crates/spirv-std/src/lib.rs
+@@ -101,0 +102 @@ pub mod memory;
++mod native_heap;
+diff --git a/crates/spirv-std/src/native_heap.rs b/crates/spirv-std/src/native_heap.rs
+new file mode 100644
+index 0000000..c8eb265
+--- /dev/null
++++ b/crates/spirv-std/src/native_heap.rs
+@@ -0,0 +1,123 @@
++//! Native descriptor heap access through the existing opaque resource types.
++//!
++//! These constructors require `DescriptorHeapEXT`, `UntypedPointersKHR`,
++//! `SPV_EXT_descriptor_heap` and `SPV_KHR_untyped_pointers`. Indices count native
++//! descriptors of the requested type, not bytes or application-defined slots.
++//! Access may be divergent. No uniformity decoration or ownership is asserted.
++//! CPU versions panic without accessing memory.
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++use crate::Sampler;
++use crate::image::{Image, SampleType};
++#[cfg(target_arch = "spirv")]
++use core::{arch::asm, mem::MaybeUninit};
++
++impl<
++    SampledType: SampleType<FORMAT, COMPONENTS>,
++    const DIM: u32,
++    const DEPTH: u32,
++    const ARRAYED: u32,
++    const MULTISAMPLED: u32,
++    const SAMPLED: u32,
++    const FORMAT: u32,
++    const COMPONENTS: u32,
++> Image<SampledType, DIM, DEPTH, ARRAYED, MULTISAMPLED, SAMPLED, FORMAT, COMPONENTS>
++{
++    /// Load an image descriptor from the bound native resource heap.
++    ///
++    /// Requires `DescriptorHeapEXT`, `UntypedPointersKHR` and their SPIR-V
++    /// extensions. Divergent uses also require the resource's applicable
++    /// non-uniform indexing capability and enabled device feature. This method
++    /// emits no `Uniform` or `UniformId` promise.
++    ///
++    /// The byte offset is `index * OpConstantSizeOfEXT(Self)`. This is not Rust's
++    /// `size_of::<Self>()`. For mixed heaps the caller must supply an index whose
++    /// resulting byte offset identifies the requested descriptor exactly.
++    ///
++    /// # Safety
++    /// The complete descriptor range must be in the bound, live resource heap,
++    /// with the native descriptor alignment, initialized and visible to this
++    /// invocation. It must describe a valid image matching every parameter of
++    /// Self, with supported usage, format and layout for all subsequent accesses.
++    /// The heap, descriptor and image must remain valid through their last use
++    /// and queue completion, without conflicting writes or descriptor updates.
++    /// Subsequent sampling must use a compatible sampler. The caller establishes
++    /// synchronization, aliasing and device/extension requirements. No bounds,
++    /// descriptor type, resource lifetime or uniformity check is performed.
++    #[allow(unsafe_code)]
++    #[crate::macros::gpu_only]
++    #[inline]
++    pub unsafe fn from_resource_heap(index: u32) -> Self {
++        let mut result = MaybeUninit::<Self>::uninit();
++        // SAFETY: U-006. The caller provides a complete valid descriptor at the
++        // native-size offset and keeps the image valid for later use. Assembly
++        // writes one opaque Self to this aligned local slot before assume_init.
++        // Only a pointer to local storage is passed, not a Rust heap reference.
++        unsafe {
++            asm!(
++                "%u32 = OpTypeInt 32 0",
++                "%size = OpConstantSizeOfEXT %u32 typeof*{result}",
++                "%array = OpTypeRuntimeArray typeof*{result}",
++                "OpDecorateId %array ArrayStrideIdEXT %size",
++                "%pointer = OpTypeUntypedPointerKHR UniformConstant",
++                "%heap = OpUntypedVariableKHR %pointer UniformConstant",
++                "OpDecorate %heap BuiltIn ResourceHeapEXT",
++                "%slot = OpUntypedAccessChainKHR %pointer %array %heap {index}",
++                "%value = OpLoad typeof*{result} %slot",
++                "OpStore {result} %value",
++                index = in(reg) index,
++                result = in(reg) result.as_mut_ptr(),
++            );
++            result.assume_init()
++        }
++    }
++}
++
++impl Sampler {
++    /// Load a sampler descriptor from the bound native sampler heap.
++    ///
++    /// Requires `DescriptorHeapEXT`, `UntypedPointersKHR` and their SPIR-V
++    /// extensions. Divergent sampling also requires the applicable non-uniform
++    /// indexing capability and enabled device feature. No uniformity decoration
++    /// is emitted.
++    ///
++    /// The byte offset is `index * OpConstantSizeOfEXT(Sampler)`, not Rust's
++    /// sampler size. Indices may differ between invocations.
++    ///
++    /// # Safety
++    /// The complete descriptor range must be in the bound, live sampler heap at
++    /// the native aligned offset, initialized with a valid sampler and visible
++    /// to this invocation. Keep the heap and descriptor live and unchanged
++    /// through their last use and queue completion. Every subsequent image use
++    /// must be compatible with this sampler's settings. The caller establishes
++    /// synchronization and device/extension requirements. No bounds or lifetime
++    /// check is performed and no ownership or uniformity promise is inferred.
++    #[allow(unsafe_code)]
++    #[crate::macros::gpu_only]
++    #[inline]
++    pub unsafe fn from_sampler_heap(index: u32) -> Self {
++        let mut result = MaybeUninit::<Self>::uninit();
++        // SAFETY: U-006. The caller supplies the complete initialized native
++        // sampler descriptor and its lifetime. Assembly writes exactly one
++        // opaque Sampler into valid local storage before assume_init reads it.
++        unsafe {
++            asm!(
++                "%u32 = OpTypeInt 32 0",
++                "%size = OpConstantSizeOfEXT %u32 typeof*{result}",
++                "%array = OpTypeRuntimeArray typeof*{result}",
++                "OpDecorateId %array ArrayStrideIdEXT %size",
++                "%pointer = OpTypeUntypedPointerKHR UniformConstant",
++                "%heap = OpUntypedVariableKHR %pointer UniformConstant",
++                "OpDecorate %heap BuiltIn SamplerHeapEXT",
++                "%slot = OpUntypedAccessChainKHR %pointer %array %heap {index}",
++                "%value = OpLoad typeof*{result} %slot",
++                "OpStore {result} %value",
++                index = in(reg) index,
++                result = in(reg) result.as_mut_ptr(),
++            );
++            result.assume_init()
++        }
++    }
++}
+diff --git a/tests/compiletests/ui/descriptor_heap/auxiliary/library_body.rs b/tests/compiletests/ui/descriptor_heap/auxiliary/library_body.rs
+new file mode 100644
+index 0000000..0cead18
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/auxiliary/library_body.rs
+@@ -0,0 +1,34 @@
++use spirv_std::glam::{UVec3, Vec2, Vec4};
++use spirv_std::{PhysicalPtr, Sampler, image::Image2d, spirv};
++
++/// Compile-only divergent native heap access. Never dispatch synthetic addresses.
++///
++/// # Safety
++/// U-006: dispatch one workgroup of four invocations. The output must be a live,
++/// nonzero 16-byte-aligned device allocation of at least 64 bytes, exclusively
++/// writable, disjoint from the heaps and sampled resources. Resource slots 1/3
++/// and sampler slots 2/3 satisfy the constructors' complete descriptor, image,
++/// sampler, layout and visibility contracts. Each lane owns its 16-byte range.
++/// Keep all resources live without conflicting updates until completion and
++/// establish output visibility before reading or reusing it.
++#[allow(unsafe_code)]
++#[spirv(compute(threads(4)))]
++pub unsafe fn main(
++    #[spirv(push_constant)] output: &PhysicalPtr<Vec4>,
++    #[spirv(local_invocation_id)] local: UVec3,
++) {
++    let lane = local.x;
++    // SAFETY: U-006. The entry contract supplies the two valid sampled-image
++    // slots and compatible samplers for every lane, with complete lifetimes.
++    let (image, sampler) = unsafe {
++        (
++            Image2d::from_resource_heap(1 + 2 * ((lane >> 1) & 1)),
++            Sampler::from_sampler_heap(2 + (lane & 1)),
++        )
++    };
++    let color: Vec4 = image.sample_by_lod(sampler, Vec2::new(1.25, 0.25), 0.0);
++    // SAFETY: U-006/U-003. Four lanes address disjoint aligned 16-byte ranges
++    // within the caller's complete allocation, with visibility/retirement owned
++    // by the caller. No reference to physical storage is manufactured.
++    unsafe { output.wrapping_add(u64::from(lane)).write(color * 2.0) };
++}
+diff --git a/tests/compiletests/ui/descriptor_heap/auxiliary/library_mixed_body.rs b/tests/compiletests/ui/descriptor_heap/auxiliary/library_mixed_body.rs
+new file mode 100644
+index 0000000..35c1250
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/auxiliary/library_mixed_body.rs
+@@ -0,0 +1,38 @@
++use spirv_std::glam::{UVec4, Vec2, Vec4};
++use spirv_std::{
++    Sampler,
++    image::{Image2d, Image2dU},
++    spirv,
++};
++
++/// Compile-only repeated and mixed-type native heap constructors.
++///
++/// # Safety
++/// U-006. Resource slots index/index+2 must describe valid visible sampled f32
++/// 2D images, and index+1 a sampled u32 2D image. All index sums must fit u32.
++/// Sampler slots 2/3 must be valid and compatible with every corresponding image
++/// use, including nearest integer sampling. Each constructor's complete lifetime,
++/// bounds, descriptor-type, layout, visibility and aliasing contract applies.
++/// Never dispatch this fixture without establishing those host obligations.
++#[allow(unsafe_code)]
++#[spirv(fragment)]
++pub unsafe fn main(
++    #[spirv(push_constant)] index: &u32,
++    #[spirv(location = 0)] float_color: &mut Vec4,
++    #[spirv(location = 1)] integer_color: &mut UVec4,
++) {
++    // SAFETY: U-006. Each valid native descriptor has the precise image type
++    // and compatible sampler required above, with no conflicting updates.
++    let (first, integers, last, repeat, clamp) = unsafe {
++        (
++            Image2d::from_resource_heap(*index),
++            Image2dU::from_resource_heap(*index + 1),
++            Image2d::from_resource_heap(*index + 2),
++            Sampler::from_sampler_heap(2),
++            Sampler::from_sampler_heap(3),
++        )
++    };
++    let uv = Vec2::new(0.25, 0.25);
++    *float_color = first.sample_by_lod(repeat, uv, 0.0) + last.sample_by_lod(clamp, uv, 0.0);
++    *integer_color = integers.sample_by_lod(repeat, uv, 0.0);
++}
+diff --git a/tests/compiletests/ui/descriptor_heap/library_missing_capability_physical64.rs b/tests/compiletests/ui/descriptor_heap/library_missing_capability_physical64.rs
+new file mode 100644
+index 0000000..57a6ca7
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_missing_capability_physical64.rs
+@@ -0,0 +1,10 @@
++// build-fail
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+ShaderNonUniform,+SampledImageArrayNonUniformIndexing,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// normalize-stderr-test "[ \t]+(\n)" -> "$1"
++// normalize-stderr-test "(\n)\n+$" -> "$1"
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/library_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/library_missing_capability_physical64.stderr b/tests/compiletests/ui/descriptor_heap/library_missing_capability_physical64.stderr
+new file mode 100644
+index 0000000..62509bc
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_missing_capability_physical64.stderr
+@@ -0,0 +1,8 @@
++error: error:0:0 - Operand 2 of DecorateId requires one of these capabilities: DescriptorHeapEXT
++         OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ ArrayStrideIdEXT %20
++
++   |
++   = note: spirv-val failed
++   = note: module `$TEST_BUILD_DIR/descriptor_heap/library_missing_capability_physical64.vulkan1.3_physical64`
++
++error: aborting due to 1 previous error
+diff --git a/tests/compiletests/ui/descriptor_heap/library_missing_extension_physical64.rs b/tests/compiletests/ui/descriptor_heap/library_missing_extension_physical64.rs
+new file mode 100644
+index 0000000..0d5e42d
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_missing_extension_physical64.rs
+@@ -0,0 +1,10 @@
++// build-fail
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+ShaderNonUniform,+SampledImageArrayNonUniformIndexing,+DescriptorHeapEXT,+ext:SPV_KHR_untyped_pointers
++// normalize-stderr-test "[ \t]+(\n)" -> "$1"
++// normalize-stderr-test "(\n)\n+$" -> "$1"
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/library_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/library_missing_extension_physical64.stderr b/tests/compiletests/ui/descriptor_heap/library_missing_extension_physical64.stderr
+new file mode 100644
+index 0000000..c0ac401
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_missing_extension_physical64.stderr
+@@ -0,0 +1,8 @@
++error: error:0:0 - Capability DescriptorHeapEXT is not allowed by Vulkan 1.3 specification (or requires extension)
++         OpCapability DescriptorHeapEXT
++
++   |
++   = note: spirv-val failed
++   = note: module `$TEST_BUILD_DIR/descriptor_heap/library_missing_extension_physical64.vulkan1.3_physical64`
++
++error: aborting due to 1 previous error
+diff --git a/tests/compiletests/ui/descriptor_heap/library_mixed_logical.rs b/tests/compiletests/ui/descriptor_heap/library_mixed_logical.rs
+new file mode 100644
+index 0000000..022b623
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_mixed_logical.rs
+@@ -0,0 +1,12 @@
++// build-pass
++// only-vulkan1.3
++// compile-flags: -C target-feature=+UntypedPointersKHR,+DescriptorHeapEXT,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// compile-flags: -C debuginfo=0 -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/library_mixed_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/library_mixed_logical.stderr b/tests/compiletests/ui/descriptor_heap/library_mixed_logical.stderr
+new file mode 100644
+index 0000000..61a53ad
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_mixed_logical.stderr
+@@ -0,0 +1,109 @@
++               OpCapability Shader
++               OpCapability UntypedPointersKHR
++               OpCapability DescriptorHeapEXT
++               OpCapability VulkanMemoryModel
++               OpExtension "SPV_EXT_descriptor_heap"
++               OpExtension "SPV_KHR_untyped_pointers"
++               OpMemoryModel Logical Vulkan
++               OpEntryPoint Fragment %1 "main" %index %3 %4 %float_color %integer_color
++               OpExecutionMode %1 OriginUpperLeft
++               OpName %index "index"
++               OpName %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ "core::mem::MaybeDangling<spirv_std::image::Image<f32, 1, 2, 0, 0, 1, 0, 4>>"
++               OpName %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__ "core::mem::MaybeDangling<spirv_std::image::Image<u32, 1, 2, 0, 0, 1, 0, 4>>"
++               OpName %core__mem__MaybeDangling_spirv_std__Sampler_ "core::mem::MaybeDangling<spirv_std::Sampler>"
++               OpName %float_color "float_color"
++               OpName %integer_color "integer_color"
++               OpName %_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into "<glam::f32::scalar::vec4::Vec4 as spirv_std::vector::VectorTruncateInto<glam::f32::scalar::vec4::Vec4>>::truncate_into"
++               OpName %_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into "<glam::u32::uvec4::UVec4 as spirv_std::vector::VectorTruncateInto<glam::u32::uvec4::UVec4>>::truncate_into"
++               OpDecorate %_struct_17 Block
++               OpMemberDecorate %_struct_17 0 Offset 0
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ ArrayStrideIdEXT %19
++               OpDecorate %3 BuiltIn ResourceHeapEXT
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__ ArrayStrideIdEXT %21
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ ArrayStrideIdEXT %23
++               OpDecorate %4 BuiltIn SamplerHeapEXT
++               OpDecorate %float_color Location 0
++               OpDecorate %integer_color Location 1
++        %u32 = OpTypeInt 32 0
++ %_struct_17 = OpTypeStruct %u32
++%_ptr_PushConstant__struct_17 = OpTypePointer PushConstant %_struct_17
++        %f32 = OpTypeFloat 32
++      %v4f32 = OpTypeVector %f32 4
++%_ptr_Output_v4f32 = OpTypePointer Output %v4f32
++      %v4u32 = OpTypeVector %u32 4
++%_ptr_Output_v4u32 = OpTypePointer Output %v4u32
++       %void = OpTypeVoid
++         %32 = OpTypeFunction %void
++%_ptr_PushConstant_u32 = OpTypePointer PushConstant %u32
++      %index = OpVariable %_ptr_PushConstant__struct_17 PushConstant
++      %u32_0 = OpConstant %u32 0
++%core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ = OpTypeImage %f32 2D 2 0 0 1 Unknown
++         %19 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++%_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++         %35 = OpTypeUntypedPointerKHR UniformConstant
++          %3 = OpUntypedVariableKHR %35 UniformConstant
++      %u32_1 = OpConstant %u32 1
++%core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__ = OpTypeImage %u32 2D 2 0 0 1 Unknown
++         %21 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__
++%_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__
++      %u32_2 = OpConstant %u32 2
++%core__mem__MaybeDangling_spirv_std__Sampler_ = OpTypeSampler
++         %23 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__Sampler_
++%_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__Sampler_
++          %4 = OpUntypedVariableKHR %35 UniformConstant
++      %u32_3 = OpConstant %u32 3
++      %v2f32 = OpTypeVector %f32 2
++   %f32_0_25 = OpConstant %f32 0.25
++         %41 = OpTypeSampledImage %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++      %f32_0 = OpConstant %f32 0
++         %43 = OpTypeFunction %v4f32 %v4f32
++%float_color = OpVariable %_ptr_Output_v4f32 Output
++         %44 = OpTypeSampledImage %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__
++         %45 = OpTypeFunction %v4u32 %v4u32
++%integer_color = OpVariable %_ptr_Output_v4u32 Output
++          %1 = OpFunction %void None %32
++         %46 = OpLabel
++         %47 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %index %u32_0
++         %48 = OpLoad %u32 %47
++         %49 = OpUntypedAccessChainKHR %35 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %3 %48
++         %50 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %49
++         %51 = OpLoad %u32 %47
++         %52 = OpIAdd %u32 %51 %u32_1
++         %53 = OpUntypedAccessChainKHR %35 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__ %3 %52
++         %54 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__ %53
++         %55 = OpLoad %u32 %47
++         %56 = OpIAdd %u32 %55 %u32_2
++         %57 = OpUntypedAccessChainKHR %35 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %3 %56
++         %58 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %57
++         %59 = OpUntypedAccessChainKHR %35 %_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ %4 %u32_2
++         %60 = OpLoad %core__mem__MaybeDangling_spirv_std__Sampler_ %59
++         %61 = OpUntypedAccessChainKHR %35 %_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ %4 %u32_3
++         %62 = OpLoad %core__mem__MaybeDangling_spirv_std__Sampler_ %61
++         %63 = OpCompositeConstruct %v2f32 %f32_0_25 %f32_0_25
++         %64 = OpSampledImage %41 %50 %60
++         %65 = OpImageSampleExplicitLod %v4f32 %64 %63 Lod %f32_0
++         %66 = OpFunctionCall %v4f32 %_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into %65
++         %67 = OpCompositeConstruct %v2f32 %f32_0_25 %f32_0_25
++         %68 = OpSampledImage %41 %58 %62
++         %69 = OpImageSampleExplicitLod %v4f32 %68 %67 Lod %f32_0
++         %70 = OpFunctionCall %v4f32 %_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into %69
++         %71 = OpFAdd %v4f32 %66 %70
++               OpStore %float_color %71
++         %72 = OpCompositeConstruct %v2f32 %f32_0_25 %f32_0_25
++         %73 = OpSampledImage %44 %54 %60
++         %74 = OpImageSampleExplicitLod %v4u32 %73 %72 Lod %f32_0
++         %75 = OpFunctionCall %v4u32 %_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into %74
++               OpStore %integer_color %75
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
++%_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into = OpFunction %v4f32 None %43
++         %76 = OpFunctionParameter %v4f32
++         %77 = OpLabel
++               OpReturnValue %76
++               OpFunctionEnd
++%_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into = OpFunction %v4u32 None %45
++         %78 = OpFunctionParameter %v4u32
++         %79 = OpLabel
++               OpReturnValue %78
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/descriptor_heap/library_mixed_physical64.rs b/tests/compiletests/ui/descriptor_heap/library_mixed_physical64.rs
+new file mode 100644
+index 0000000..008112e
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_mixed_physical64.rs
+@@ -0,0 +1,12 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+DescriptorHeapEXT,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// compile-flags: -C debuginfo=0 -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/library_mixed_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/library_mixed_physical64.stderr b/tests/compiletests/ui/descriptor_heap/library_mixed_physical64.stderr
+new file mode 100644
+index 0000000..54a0f53
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_mixed_physical64.stderr
+@@ -0,0 +1,110 @@
++               OpCapability Shader
++               OpCapability UntypedPointersKHR
++               OpCapability DescriptorHeapEXT
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpExtension "SPV_EXT_descriptor_heap"
++               OpExtension "SPV_KHR_untyped_pointers"
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint Fragment %1 "main" %index %3 %4 %float_color %integer_color
++               OpExecutionMode %1 OriginUpperLeft
++               OpName %index "index"
++               OpName %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ "core::mem::MaybeDangling<spirv_std::image::Image<f32, 1, 2, 0, 0, 1, 0, 4>>"
++               OpName %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__ "core::mem::MaybeDangling<spirv_std::image::Image<u32, 1, 2, 0, 0, 1, 0, 4>>"
++               OpName %core__mem__MaybeDangling_spirv_std__Sampler_ "core::mem::MaybeDangling<spirv_std::Sampler>"
++               OpName %float_color "float_color"
++               OpName %integer_color "integer_color"
++               OpName %_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into "<glam::f32::scalar::vec4::Vec4 as spirv_std::vector::VectorTruncateInto<glam::f32::scalar::vec4::Vec4>>::truncate_into"
++               OpName %_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into "<glam::u32::uvec4::UVec4 as spirv_std::vector::VectorTruncateInto<glam::u32::uvec4::UVec4>>::truncate_into"
++               OpDecorate %_struct_17 Block
++               OpMemberDecorate %_struct_17 0 Offset 0
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ ArrayStrideIdEXT %19
++               OpDecorate %3 BuiltIn ResourceHeapEXT
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__ ArrayStrideIdEXT %21
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ ArrayStrideIdEXT %23
++               OpDecorate %4 BuiltIn SamplerHeapEXT
++               OpDecorate %float_color Location 0
++               OpDecorate %integer_color Location 1
++        %u32 = OpTypeInt 32 0
++ %_struct_17 = OpTypeStruct %u32
++%_ptr_PushConstant__struct_17 = OpTypePointer PushConstant %_struct_17
++        %f32 = OpTypeFloat 32
++      %v4f32 = OpTypeVector %f32 4
++%_ptr_Output_v4f32 = OpTypePointer Output %v4f32
++      %v4u32 = OpTypeVector %u32 4
++%_ptr_Output_v4u32 = OpTypePointer Output %v4u32
++       %void = OpTypeVoid
++         %32 = OpTypeFunction %void
++%_ptr_PushConstant_u32 = OpTypePointer PushConstant %u32
++      %index = OpVariable %_ptr_PushConstant__struct_17 PushConstant
++      %u32_0 = OpConstant %u32 0
++%core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ = OpTypeImage %f32 2D 2 0 0 1 Unknown
++         %19 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++%_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++         %35 = OpTypeUntypedPointerKHR UniformConstant
++          %3 = OpUntypedVariableKHR %35 UniformConstant
++      %u32_1 = OpConstant %u32 1
++%core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__ = OpTypeImage %u32 2D 2 0 0 1 Unknown
++         %21 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__
++%_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__
++      %u32_2 = OpConstant %u32 2
++%core__mem__MaybeDangling_spirv_std__Sampler_ = OpTypeSampler
++         %23 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__Sampler_
++%_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__Sampler_
++          %4 = OpUntypedVariableKHR %35 UniformConstant
++      %u32_3 = OpConstant %u32 3
++      %v2f32 = OpTypeVector %f32 2
++   %f32_0_25 = OpConstant %f32 0.25
++         %41 = OpTypeSampledImage %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++      %f32_0 = OpConstant %f32 0
++         %43 = OpTypeFunction %v4f32 %v4f32
++%float_color = OpVariable %_ptr_Output_v4f32 Output
++         %44 = OpTypeSampledImage %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__
++         %45 = OpTypeFunction %v4u32 %v4u32
++%integer_color = OpVariable %_ptr_Output_v4u32 Output
++          %1 = OpFunction %void None %32
++         %46 = OpLabel
++         %47 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %index %u32_0
++         %48 = OpLoad %u32 %47
++         %49 = OpUntypedAccessChainKHR %35 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %3 %48
++         %50 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %49
++         %51 = OpLoad %u32 %47
++         %52 = OpIAdd %u32 %51 %u32_1
++         %53 = OpUntypedAccessChainKHR %35 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__ %3 %52
++         %54 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__1__0__4__ %53
++         %55 = OpLoad %u32 %47
++         %56 = OpIAdd %u32 %55 %u32_2
++         %57 = OpUntypedAccessChainKHR %35 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %3 %56
++         %58 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %57
++         %59 = OpUntypedAccessChainKHR %35 %_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ %4 %u32_2
++         %60 = OpLoad %core__mem__MaybeDangling_spirv_std__Sampler_ %59
++         %61 = OpUntypedAccessChainKHR %35 %_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ %4 %u32_3
++         %62 = OpLoad %core__mem__MaybeDangling_spirv_std__Sampler_ %61
++         %63 = OpCompositeConstruct %v2f32 %f32_0_25 %f32_0_25
++         %64 = OpSampledImage %41 %50 %60
++         %65 = OpImageSampleExplicitLod %v4f32 %64 %63 Lod %f32_0
++         %66 = OpFunctionCall %v4f32 %_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into %65
++         %67 = OpCompositeConstruct %v2f32 %f32_0_25 %f32_0_25
++         %68 = OpSampledImage %41 %58 %62
++         %69 = OpImageSampleExplicitLod %v4f32 %68 %67 Lod %f32_0
++         %70 = OpFunctionCall %v4f32 %_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into %69
++         %71 = OpFAdd %v4f32 %66 %70
++               OpStore %float_color %71
++         %72 = OpCompositeConstruct %v2f32 %f32_0_25 %f32_0_25
++         %73 = OpSampledImage %44 %54 %60
++         %74 = OpImageSampleExplicitLod %v4u32 %73 %72 Lod %f32_0
++         %75 = OpFunctionCall %v4u32 %_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into %74
++               OpStore %integer_color %75
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
++%_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into = OpFunction %v4f32 None %43
++         %76 = OpFunctionParameter %v4f32
++         %77 = OpLabel
++               OpReturnValue %76
++               OpFunctionEnd
++%_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into = OpFunction %v4u32 None %45
++         %78 = OpFunctionParameter %v4u32
++         %79 = OpLabel
++               OpReturnValue %78
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/descriptor_heap/library_optimized_physical64.rs b/tests/compiletests/ui/descriptor_heap/library_optimized_physical64.rs
+new file mode 100644
+index 0000000..2ce66db
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_optimized_physical64.rs
+@@ -0,0 +1,13 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+ShaderNonUniform,+SampledImageArrayNonUniformIndexing,+DescriptorHeapEXT,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// compile-flags: -C opt-level=3 -C lto=off
++// compile-flags: -C debuginfo=0 -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/library_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/library_optimized_physical64.stderr b/tests/compiletests/ui/descriptor_heap/library_optimized_physical64.stderr
+new file mode 100644
+index 0000000..7a93e78
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_optimized_physical64.stderr
+@@ -0,0 +1,97 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability UntypedPointersKHR
++               OpCapability DescriptorHeapEXT
++               OpCapability ShaderNonUniform
++               OpCapability SampledImageArrayNonUniformIndexing
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpExtension "SPV_EXT_descriptor_heap"
++               OpExtension "SPV_KHR_untyped_pointers"
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %output %local %4 %5
++               OpExecutionMode %1 LocalSize 4 1 1
++               OpName %output "output"
++               OpName %local "local"
++               OpName %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ "core::mem::MaybeDangling<spirv_std::image::Image<f32, 1, 2, 0, 0, 1, 0, 4>>"
++               OpName %core__mem__MaybeDangling_spirv_std__Sampler_ "core::mem::MaybeDangling<spirv_std::Sampler>"
++               OpName %_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into "<glam::f32::scalar::vec4::Vec4 as spirv_std::vector::VectorTruncateInto<glam::f32::scalar::vec4::Vec4>>::truncate_into"
++               OpDecorate %_struct_18 Block
++               OpMemberDecorate %_struct_18 0 Offset 0
++               OpDecorate %local BuiltIn LocalInvocationId
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ ArrayStrideIdEXT %20
++               OpDecorate %4 BuiltIn ResourceHeapEXT
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ ArrayStrideIdEXT %22
++               OpDecorate %5 BuiltIn SamplerHeapEXT
++               OpDecorate %23 NonUniform
++               OpDecorate %24 NonUniform
++        %u64 = OpTypeInt 64 0
++ %_struct_18 = OpTypeStruct %u64
++%_ptr_PushConstant__struct_18 = OpTypePointer PushConstant %_struct_18
++        %u32 = OpTypeInt 32 0
++      %v3u32 = OpTypeVector %u32 3
++%_ptr_Input_v3u32 = OpTypePointer Input %v3u32
++       %void = OpTypeVoid
++         %31 = OpTypeFunction %void
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++     %output = OpVariable %_ptr_PushConstant__struct_18 PushConstant
++      %u32_0 = OpConstant %u32 0
++      %local = OpVariable %_ptr_Input_v3u32 Input
++        %i32 = OpTypeInt 32 1
++      %i32_1 = OpConstant %i32 1
++      %u32_1 = OpConstant %u32 1
++      %u32_2 = OpConstant %u32 2
++        %f32 = OpTypeFloat 32
++%core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ = OpTypeImage %f32 2D 2 0 0 1 Unknown
++         %20 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++%_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++         %39 = OpTypeUntypedPointerKHR UniformConstant
++          %4 = OpUntypedVariableKHR %39 UniformConstant
++%core__mem__MaybeDangling_spirv_std__Sampler_ = OpTypeSampler
++         %22 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__Sampler_
++%_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__Sampler_
++          %5 = OpUntypedVariableKHR %39 UniformConstant
++      %v2f32 = OpTypeVector %f32 2
++   %f32_1_25 = OpConstant %f32 1.25
++   %f32_0_25 = OpConstant %f32 0.25
++         %43 = OpTypeSampledImage %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++      %v4f32 = OpTypeVector %f32 4
++      %f32_0 = OpConstant %f32 0
++         %46 = OpTypeFunction %v4f32 %v4f32
++     %u64_16 = OpConstant %u64 16
++      %f32_2 = OpConstant %f32 2
++%_ptr_PhysicalStorageBuffer_v4f32 = OpTypePointer PhysicalStorageBuffer %v4f32
++          %1 = OpFunction %void None %31
++         %50 = OpLabel
++         %51 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %output %u32_0
++         %52 = OpLoad %v3u32 %local
++         %53 = OpCompositeExtract %u32 %52 0
++         %54 = OpShiftRightLogical %u32 %53 %i32_1
++         %55 = OpBitwiseAnd %u32 %54 %u32_1
++         %56 = OpIMul %u32 %u32_2 %55
++         %57 = OpIAdd %u32 %u32_1 %56
++         %58 = OpUntypedAccessChainKHR %39 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %4 %57
++         %59 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %58
++         %60 = OpBitwiseAnd %u32 %53 %u32_1
++         %61 = OpIAdd %u32 %u32_2 %60
++         %62 = OpUntypedAccessChainKHR %39 %_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ %5 %61
++         %63 = OpLoad %core__mem__MaybeDangling_spirv_std__Sampler_ %62
++         %64 = OpCompositeConstruct %v2f32 %f32_1_25 %f32_0_25
++         %23 = OpSampledImage %43 %59 %63
++         %24 = OpImageSampleExplicitLod %v4f32 %23 %64 Lod %f32_0
++         %65 = OpFunctionCall %v4f32 %_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into %24
++         %66 = OpLoad %u64 %51
++         %67 = OpUConvert %u64 %53
++         %68 = OpIMul %u64 %67 %u64_16
++         %69 = OpIAdd %u64 %66 %68
++         %70 = OpVectorTimesScalar %v4f32 %65 %f32_2
++         %71 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_v4f32 %69
++               OpStore %71 %70 Aligned 16
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
++%_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into = OpFunction %v4f32 None %46
++         %72 = OpFunctionParameter %v4f32
++         %73 = OpLabel
++               OpReturnValue %72
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/descriptor_heap/library_physical64.rs b/tests/compiletests/ui/descriptor_heap/library_physical64.rs
+new file mode 100644
+index 0000000..3ad4bde
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_physical64.rs
+@@ -0,0 +1,12 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+ShaderNonUniform,+SampledImageArrayNonUniformIndexing,+DescriptorHeapEXT,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// compile-flags: -C debuginfo=0 -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/library_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/library_physical64.stderr b/tests/compiletests/ui/descriptor_heap/library_physical64.stderr
+new file mode 100644
+index 0000000..7a93e78
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_physical64.stderr
+@@ -0,0 +1,97 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability UntypedPointersKHR
++               OpCapability DescriptorHeapEXT
++               OpCapability ShaderNonUniform
++               OpCapability SampledImageArrayNonUniformIndexing
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpExtension "SPV_EXT_descriptor_heap"
++               OpExtension "SPV_KHR_untyped_pointers"
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %output %local %4 %5
++               OpExecutionMode %1 LocalSize 4 1 1
++               OpName %output "output"
++               OpName %local "local"
++               OpName %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ "core::mem::MaybeDangling<spirv_std::image::Image<f32, 1, 2, 0, 0, 1, 0, 4>>"
++               OpName %core__mem__MaybeDangling_spirv_std__Sampler_ "core::mem::MaybeDangling<spirv_std::Sampler>"
++               OpName %_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into "<glam::f32::scalar::vec4::Vec4 as spirv_std::vector::VectorTruncateInto<glam::f32::scalar::vec4::Vec4>>::truncate_into"
++               OpDecorate %_struct_18 Block
++               OpMemberDecorate %_struct_18 0 Offset 0
++               OpDecorate %local BuiltIn LocalInvocationId
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ ArrayStrideIdEXT %20
++               OpDecorate %4 BuiltIn ResourceHeapEXT
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ ArrayStrideIdEXT %22
++               OpDecorate %5 BuiltIn SamplerHeapEXT
++               OpDecorate %23 NonUniform
++               OpDecorate %24 NonUniform
++        %u64 = OpTypeInt 64 0
++ %_struct_18 = OpTypeStruct %u64
++%_ptr_PushConstant__struct_18 = OpTypePointer PushConstant %_struct_18
++        %u32 = OpTypeInt 32 0
++      %v3u32 = OpTypeVector %u32 3
++%_ptr_Input_v3u32 = OpTypePointer Input %v3u32
++       %void = OpTypeVoid
++         %31 = OpTypeFunction %void
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++     %output = OpVariable %_ptr_PushConstant__struct_18 PushConstant
++      %u32_0 = OpConstant %u32 0
++      %local = OpVariable %_ptr_Input_v3u32 Input
++        %i32 = OpTypeInt 32 1
++      %i32_1 = OpConstant %i32 1
++      %u32_1 = OpConstant %u32 1
++      %u32_2 = OpConstant %u32 2
++        %f32 = OpTypeFloat 32
++%core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ = OpTypeImage %f32 2D 2 0 0 1 Unknown
++         %20 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++%_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++         %39 = OpTypeUntypedPointerKHR UniformConstant
++          %4 = OpUntypedVariableKHR %39 UniformConstant
++%core__mem__MaybeDangling_spirv_std__Sampler_ = OpTypeSampler
++         %22 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__Sampler_
++%_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__Sampler_
++          %5 = OpUntypedVariableKHR %39 UniformConstant
++      %v2f32 = OpTypeVector %f32 2
++   %f32_1_25 = OpConstant %f32 1.25
++   %f32_0_25 = OpConstant %f32 0.25
++         %43 = OpTypeSampledImage %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++      %v4f32 = OpTypeVector %f32 4
++      %f32_0 = OpConstant %f32 0
++         %46 = OpTypeFunction %v4f32 %v4f32
++     %u64_16 = OpConstant %u64 16
++      %f32_2 = OpConstant %f32 2
++%_ptr_PhysicalStorageBuffer_v4f32 = OpTypePointer PhysicalStorageBuffer %v4f32
++          %1 = OpFunction %void None %31
++         %50 = OpLabel
++         %51 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %output %u32_0
++         %52 = OpLoad %v3u32 %local
++         %53 = OpCompositeExtract %u32 %52 0
++         %54 = OpShiftRightLogical %u32 %53 %i32_1
++         %55 = OpBitwiseAnd %u32 %54 %u32_1
++         %56 = OpIMul %u32 %u32_2 %55
++         %57 = OpIAdd %u32 %u32_1 %56
++         %58 = OpUntypedAccessChainKHR %39 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %4 %57
++         %59 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %58
++         %60 = OpBitwiseAnd %u32 %53 %u32_1
++         %61 = OpIAdd %u32 %u32_2 %60
++         %62 = OpUntypedAccessChainKHR %39 %_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ %5 %61
++         %63 = OpLoad %core__mem__MaybeDangling_spirv_std__Sampler_ %62
++         %64 = OpCompositeConstruct %v2f32 %f32_1_25 %f32_0_25
++         %23 = OpSampledImage %43 %59 %63
++         %24 = OpImageSampleExplicitLod %v4f32 %23 %64 Lod %f32_0
++         %65 = OpFunctionCall %v4f32 %_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into %24
++         %66 = OpLoad %u64 %51
++         %67 = OpUConvert %u64 %53
++         %68 = OpIMul %u64 %67 %u64_16
++         %69 = OpIAdd %u64 %66 %68
++         %70 = OpVectorTimesScalar %v4f32 %65 %f32_2
++         %71 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_v4f32 %69
++               OpStore %71 %70 Aligned 16
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
++%_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into = OpFunction %v4f32 None %46
++         %72 = OpFunctionParameter %v4f32
++         %73 = OpLabel
++               OpReturnValue %72
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/descriptor_heap/library_qptr_physical64.rs b/tests/compiletests/ui/descriptor_heap/library_qptr_physical64.rs
+new file mode 100644
+index 0000000..4051f10
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_qptr_physical64.rs
+@@ -0,0 +1,13 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+ShaderNonUniform,+SampledImageArrayNonUniformIndexing,+DescriptorHeapEXT,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// compile-flags: -C llvm-args=--spirt-passes=qptr
++// compile-flags: -C debuginfo=0 -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/library_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/library_qptr_physical64.stderr b/tests/compiletests/ui/descriptor_heap/library_qptr_physical64.stderr
+new file mode 100644
+index 0000000..8567877
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_qptr_physical64.stderr
+@@ -0,0 +1,97 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability UntypedPointersKHR
++               OpCapability DescriptorHeapEXT
++               OpCapability ShaderNonUniform
++               OpCapability SampledImageArrayNonUniformIndexing
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpExtension "SPV_EXT_descriptor_heap"
++               OpExtension "SPV_KHR_untyped_pointers"
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %local %3 %4 %output
++               OpExecutionMode %1 LocalSize 4 1 1
++               OpName %local "local"
++               OpName %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ "core::mem::MaybeDangling<spirv_std::image::Image<f32, 1, 2, 0, 0, 1, 0, 4>>"
++               OpName %core__mem__MaybeDangling_spirv_std__Sampler_ "core::mem::MaybeDangling<spirv_std::Sampler>"
++               OpName %output "output"
++               OpName %_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into "<glam::f32::scalar::vec4::Vec4 as spirv_std::vector::VectorTruncateInto<glam::f32::scalar::vec4::Vec4>>::truncate_into"
++               OpDecorate %_struct_18 Block
++               OpMemberDecorate %_struct_18 0 Offset 0
++               OpDecorate %local BuiltIn LocalInvocationId
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ ArrayStrideIdEXT %20
++               OpDecorate %3 BuiltIn ResourceHeapEXT
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ ArrayStrideIdEXT %22
++               OpDecorate %4 BuiltIn SamplerHeapEXT
++               OpDecorate %23 NonUniform
++               OpDecorate %24 NonUniform
++        %u64 = OpTypeInt 64 0
++ %_struct_18 = OpTypeStruct %u64
++%_ptr_PushConstant__struct_18 = OpTypePointer PushConstant %_struct_18
++        %u32 = OpTypeInt 32 0
++      %v3u32 = OpTypeVector %u32 3
++%_ptr_Input_v3u32 = OpTypePointer Input %v3u32
++       %void = OpTypeVoid
++         %31 = OpTypeFunction %void
++      %local = OpVariable %_ptr_Input_v3u32 Input
++        %i32 = OpTypeInt 32 1
++      %i32_1 = OpConstant %i32 1
++      %u32_1 = OpConstant %u32 1
++      %u32_2 = OpConstant %u32 2
++        %f32 = OpTypeFloat 32
++%core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ = OpTypeImage %f32 2D 2 0 0 1 Unknown
++         %20 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++%_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++         %37 = OpTypeUntypedPointerKHR UniformConstant
++          %3 = OpUntypedVariableKHR %37 UniformConstant
++%core__mem__MaybeDangling_spirv_std__Sampler_ = OpTypeSampler
++         %22 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__Sampler_
++%_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__Sampler_
++          %4 = OpUntypedVariableKHR %37 UniformConstant
++      %v2f32 = OpTypeVector %f32 2
++   %f32_1_25 = OpConstant %f32 1.25
++   %f32_0_25 = OpConstant %f32 0.25
++         %41 = OpTypeSampledImage %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__
++      %v4f32 = OpTypeVector %f32 4
++      %f32_0 = OpConstant %f32 0
++         %44 = OpTypeFunction %v4f32 %v4f32
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++     %output = OpVariable %_ptr_PushConstant__struct_18 PushConstant
++      %u32_0 = OpConstant %u32 0
++     %u64_16 = OpConstant %u64 16
++      %f32_2 = OpConstant %f32 2
++%_ptr_PhysicalStorageBuffer_v4f32 = OpTypePointer PhysicalStorageBuffer %v4f32
++          %1 = OpFunction %void None %31
++         %50 = OpLabel
++         %51 = OpLoad %v3u32 %local
++         %52 = OpCompositeExtract %u32 %51 0
++         %53 = OpShiftRightLogical %u32 %52 %i32_1
++         %54 = OpBitwiseAnd %u32 %53 %u32_1
++         %55 = OpIMul %u32 %u32_2 %54
++         %56 = OpIAdd %u32 %u32_1 %55
++         %57 = OpUntypedAccessChainKHR %37 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %3 %56
++         %58 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_f32__1__2__0__0__1__0__4__ %57
++         %59 = OpBitwiseAnd %u32 %52 %u32_1
++         %60 = OpIAdd %u32 %u32_2 %59
++         %61 = OpUntypedAccessChainKHR %37 %_runtimearr_core__mem__MaybeDangling_spirv_std__Sampler_ %4 %60
++         %62 = OpLoad %core__mem__MaybeDangling_spirv_std__Sampler_ %61
++         %63 = OpCompositeConstruct %v2f32 %f32_1_25 %f32_0_25
++         %23 = OpSampledImage %41 %58 %62
++         %24 = OpImageSampleExplicitLod %v4f32 %23 %63 Lod %f32_0
++         %64 = OpFunctionCall %v4f32 %_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into %24
++         %65 = OpAccessChain %_ptr_PushConstant_u64 %output %u32_0
++         %66 = OpLoad %u64 %65
++         %67 = OpUConvert %u64 %52
++         %68 = OpIMul %u64 %67 %u64_16
++         %69 = OpIAdd %u64 %66 %68
++         %70 = OpVectorTimesScalar %v4f32 %64 %f32_2
++         %71 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_v4f32 %69
++               OpStore %71 %70 Aligned 16
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
++%_glam__f32__scalar__vec4__Vec4_as_spirv_std__vector__VectorTruncateInto_glam__f32__scalar__vec4__Vec4____truncate_into = OpFunction %v4f32 None %44
++         %72 = OpFunctionParameter %v4f32
++         %73 = OpLabel
++               OpReturnValue %72
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/descriptor_heap/library_requires_unsafe.rs b/tests/compiletests/ui/descriptor_heap/library_requires_unsafe.rs
+new file mode 100644
+index 0000000..f76b7d6
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_requires_unsafe.rs
+@@ -0,0 +1,13 @@
++// build-fail
++// only-vulkan1.3
++
++#![forbid(unsafe_code)]
++
++use spirv_std::{Sampler, image::Image2d};
++
++pub fn main() {
++    let _image = Image2d::from_resource_heap(1);
++    //~^ ERROR call to unsafe function
++    let _sampler = Sampler::from_sampler_heap(2);
++    //~^ ERROR call to unsafe function
++}
+diff --git a/tests/compiletests/ui/descriptor_heap/library_requires_unsafe.stderr b/tests/compiletests/ui/descriptor_heap/library_requires_unsafe.stderr
+new file mode 100644
+index 0000000..d6890c2
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/library_requires_unsafe.stderr
+@@ -0,0 +1,19 @@
++error[E0133]: call to unsafe function `spirv_std::native_heap::<impl Image<SampledType, DIM, DEPTH, ARRAYED, MULTISAMPLED, SAMPLED, FORMAT, COMPONENTS>>::from_resource_heap` is unsafe and requires unsafe function or block
++  --> $DIR/library_requires_unsafe.rs:9:18
++   |
++LL |     let _image = Image2d::from_resource_heap(1);
++   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
++   |
++   = note: consult the function's documentation for information on how to avoid undefined behavior
++
++error[E0133]: call to unsafe function `spirv_std::native_heap::<impl Sampler>::from_sampler_heap` is unsafe and requires unsafe function or block
++  --> $DIR/library_requires_unsafe.rs:11:20
++   |
++LL |     let _sampler = Sampler::from_sampler_heap(2);
++   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ call to unsafe function
++   |
++   = note: consult the function's documentation for information on how to avoid undefined behavior
++
++error: aborting due to 2 previous errors
++
++For more information about this error, try `rustc --explain E0133`.

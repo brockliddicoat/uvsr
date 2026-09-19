@@ -32,6 +32,8 @@ select primary M0-M3 work first. supporting work may proceed when it directly he
 
 T010-T015 do not depend on a complete AGFX slice. T014 can proceed before T013. M1 closes only when the promised compiler evidence and small direct Windows Vulkan slice are both recorded.
 
+[E-025](../../execution.md#e-025-2026-09-19-tested-native-heap-library-constructors) adds partial T014/T015 library evidence: unsafe Image/Sampler native heap constructors, eight source cases for divergent indices/repeated mixed image types/fragment interfaces/feature and safety rejection, and the actual uniform NGAPI consumer using the library. all 34 required source pairs and eight GPU cases per host configuration pass. storage images, additional-stage execution, divergent runtime and full gates remain open.
+
 [E-023](../../execution.md#e-023-2026-09-19-compiled-native-heap-rust-shaders) is partial T014/T015 evidence: Rust assembly declares actual native resource/sampler heaps, samples an image, performs Rust vector arithmetic and writes a physical Vec4. default, optimized and qptr source variants pass. missing-feature controls reject. the broader adjacent gate retains a pre-existing subpass failure. reusable heap utilities, divergent indices, additional resources/stages and heap runtime remain open.
 
 ## M2. actual NGAPI on Windows Vulkan

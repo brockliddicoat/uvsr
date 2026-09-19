@@ -54,6 +54,8 @@ raw physical-address APIs state allocation validity, range, alignment, lifetime,
 
 ## minimum cases
 
+[E-025](../../../execution.md#e-025-2026-09-19-tested-native-heap-library-constructors) preserves that actual-host ABI through reusable Image/Sampler constructors. constructor indices count native descriptors of the requested type, not Rust opaque-value sizes or an application-wide mixed slot stride. the unsafe caller must establish the exact native byte offset, descriptor validity and lifetime. divergent source fixtures declare the applicable sampled-image non-uniform capabilities explicitly. no uniformity decoration is inferred by these constructors.
+
 use exact arithmetic/buffer readback, nonzero descriptor slots, distinct samplers/textures, uniform/divergent indices, root aggregates, matrix orientation, aligned access, mixed logical/physical operations, optimized/unoptimized modules, missing-feature diagnostics, and valid lifecycle sequences. add stage cases for every promised exposed stage.
 
 record the first failing phase and emitted capabilities alongside output. [research](../research.md) owns references and tool constraints. neither Vulkan profile proves another API, and compiler-only validation does not prove device execution.
