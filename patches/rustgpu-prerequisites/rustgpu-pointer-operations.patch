@@ -1,0 +1,523 @@
+diff --git a/crates/rustc_codegen_spirv/src/builder/builder_methods.rs b/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
+index 5ab67e3..8bab990 100644
+--- a/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
++++ b/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
+@@ -945 +945 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+-            Some(idx_u64 * stride)
++            Some(Size::from_bytes(idx_u64.checked_mul(stride.bytes())?))
+@@ -1062,0 +1063,15 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
++        if self.tcx.data_layout.pointer_size().bits() == 64 {
++            if let Some(stride) = self.lookup_type(stride_elem_ty).sizeof(self) {
++                // Only physical pointers can convert to addresses after storage
++                // inference. Keep the existing logical legalization above, and
++                // use modular address arithmetic for this remaining raw case.
++                let address_ty = self.type_usize();
++                let address = self.ptrtoint(ptr, address_ty);
++                let index = self.intcast(index, address_ty, true);
++                let stride = self.const_usize(stride.bytes());
++                let offset = self.mul(index, stride);
++                let address = self.add(address, offset);
++                return self.inttoptr(address, ptr.ty);
++            }
++        }
++
+@@ -2682 +2697,6 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-                    if self.emit().version().unwrap() > (1, 3) {
++                    // SPIR-V pointer equality excludes PhysicalStorageBuffer.
++                    // Compare its 64-bit addresses and let inference reject
++                    // conversions from logical pointers on this target.
++                    if self.emit().version().unwrap() > (1, 3)
++                        && self.tcx.data_layout.pointer_size().bits() != 64
++                    {
+@@ -2704 +2724,3 @@ impl<'a, 'tcx> BuilderMethods<'a, 'tcx> for Builder<'a, 'tcx> {
+-                    if self.emit().version().unwrap() > (1, 3) {
++                    if self.emit().version().unwrap() > (1, 3)
++                        && self.tcx.data_layout.pointer_size().bits() != 64
++                    {
+diff --git a/docs/src/platform-support.md b/docs/src/platform-support.md
+index cb4f504..163f875 100644
+--- a/docs/src/platform-support.md
++++ b/docs/src/platform-support.md
+@@ -83,4 +83,21 @@ with a synthetic address. Compilation and validation do not prove runtime safety
+-This experimental support does not yet provide a physical-memory access API.
+-Pointer arithmetic and comparisons, aggregate pointer storage, atomics and
+-reference validity need separate lowering and evidence. Do not infer those
+-guarantees from a valid conversion. Formatted u32 panic arguments are tested
++Physical pointer equality and inequality compare 64-bit addresses because
++SPIR-V's pointer comparison instructions exclude PhysicalStorageBuffer.
++Existing logical pointer legalization runs first for offsets. The remaining
++sized raw-pointer case uses pointer-width byte arithmetic with the pointee's
++stride, preserving wrapping behavior. Storage inference still rejects integer
++address conversions from logical storage classes.
++
++The current operation evidence is deliberately narrower than `*mut` parity:
++
++| Operation | Observed compiler boundary |
++| --- | --- |
++| `==`, `!=`, `<` on typed physical u32 pointers | 64-bit address comparisons compile and validate |
++| `wrapping_add`, `wrapping_sub`, `wrapping_offset` | u32-pointer fixtures retain full-width stride arithmetic, including a negative offset with rustc optimization enabled |
++| `core::ptr::null_mut`, u32-pointer `is_null` | diagnosed as unsupported typed-pointer casts inside these standard-library helpers |
++| logical pointer address comparison on physical64 | rejected after storage-class inference |
++| other pointer casts, aggregate accesses, volatile intrinsics, copies, atomics, references and allocation-dependent methods | require separate lowering, diagnostics and execution evidence |
++
++These tests transport addresses without dereferencing them. They do not prove
++GPU behavior or the allocation, aliasing and lifetime obligations of in-bounds
++methods. This experimental support does not yet provide a physical-memory
++access API. Formatted u32 panic arguments are tested
+diff --git a/tests/compiletests/ui/physical_storage/pointer_compare_physical64.rs b/tests/compiletests/ui/physical_storage/pointer_compare_physical64.rs
+new file mode 100644
+index 0000000..f60faf6
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_compare_physical64.rs
+@@ -0,0 +1,23 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] addresses: &[u64; 2],
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u32; 3],
++) {
++    // Comparisons transport address information only. No pointer is dereferenced.
++    let left = addresses[0] as *mut u32;
++    let right = addresses[1] as *mut u32;
++    output[0] = (left == right) as u32;
++    output[1] = (left != right) as u32;
++    output[2] = (left < right) as u32;
++}
+diff --git a/tests/compiletests/ui/physical_storage/pointer_compare_physical64.stderr b/tests/compiletests/ui/physical_storage/pointer_compare_physical64.stderr
+new file mode 100644
+index 0000000..f14bc34
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_compare_physical64.stderr
+@@ -0,0 +1,71 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %addresses %output
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %ops__try_trait__NeverShortCircuit__char__3__ "ops::try_trait::NeverShortCircuit<[char; 3]>"
++               OpName %addresses "addresses"
++               OpName %output "output"
++               OpDecorate %6 ArrayStride 8
++               OpDecorate %_struct_7 Block
++               OpMemberDecorate %_struct_7 0 Offset 0
++               OpDecorate %ops__try_trait__NeverShortCircuit__char__3__ ArrayStride 4
++               OpDecorate %_struct_8 Block
++               OpMemberDecorate %_struct_8 0 Offset 0
++               OpDecorate %output Binding 0
++               OpDecorate %output DescriptorSet 0
++        %u64 = OpTypeInt 64 0
++        %u32 = OpTypeInt 32 0
++      %u32_2 = OpConstant %u32 2
++          %6 = OpTypeArray %u64 %u32_2
++  %_struct_7 = OpTypeStruct %6
++%_ptr_PushConstant__struct_7 = OpTypePointer PushConstant %_struct_7
++      %u32_3 = OpConstant %u32 3
++%ops__try_trait__NeverShortCircuit__char__3__ = OpTypeArray %u32 %u32_3
++  %_struct_8 = OpTypeStruct %ops__try_trait__NeverShortCircuit__char__3__
++%_ptr_StorageBuffer__struct_8 = OpTypePointer StorageBuffer %_struct_8
++       %void = OpTypeVoid
++         %16 = OpTypeFunction %void
++%_ptr_PushConstant_6 = OpTypePointer PushConstant %6
++  %addresses = OpVariable %_ptr_PushConstant__struct_7 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_StorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ = OpTypePointer StorageBuffer %ops__try_trait__NeverShortCircuit__char__3__
++     %output = OpVariable %_ptr_StorageBuffer__struct_8 StorageBuffer
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++%_ptr_PhysicalStorageBuffer_u32 = OpTypePointer PhysicalStorageBuffer %u32
++      %u32_1 = OpConstant %u32 1
++       %bool = OpTypeBool
++%_ptr_StorageBuffer_u32 = OpTypePointer StorageBuffer %u32
++          %1 = OpFunction %void None %16
++         %25 = OpLabel
++         %26 = OpInBoundsAccessChain %_ptr_PushConstant_6 %addresses %u32_0
++         %27 = OpInBoundsAccessChain %_ptr_StorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %output %u32_0
++         %28 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %26 %u32_0
++         %29 = OpLoad %u64 %28
++         %30 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %29
++         %31 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %26 %u32_1
++         %32 = OpLoad %u64 %31
++         %33 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %32
++         %34 = OpConvertPtrToU %u64 %30
++         %35 = OpConvertPtrToU %u64 %33
++         %36 = OpIEqual %bool %34 %35
++         %37 = OpSelect %u32 %36 %u32_1 %u32_0
++         %38 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %27 %u32_0
++               OpStore %38 %37
++         %39 = OpConvertPtrToU %u64 %30
++         %40 = OpConvertPtrToU %u64 %33
++         %41 = OpINotEqual %bool %39 %40
++         %42 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %27 %u32_1
++         %43 = OpSelect %u32 %41 %u32_1 %u32_0
++               OpStore %42 %43
++         %44 = OpConvertPtrToU %u64 %30
++         %45 = OpConvertPtrToU %u64 %33
++         %46 = OpULessThan %bool %44 %45
++         %47 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %27 %u32_2
++         %48 = OpSelect %u32 %46 %u32_1 %u32_0
++               OpStore %47 %48
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/physical_storage/pointer_is_null_physical64.rs b/tests/compiletests/ui/physical_storage/pointer_is_null_physical64.rs
+new file mode 100644
+index 0000000..3e5f0c2
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_is_null_physical64.rs
+@@ -0,0 +1,18 @@
++// build-fail
++// only-vulkan1.3_physical64
++// normalize-stderr-test "<\S*/library/core/src/" -> "<$$CORE_SRC/"
++// normalize-stderr-test "(\n)\n+$" -> "$1"
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] address: &u64,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut u32,
++) {
++    // The standard helper casts to *const u8 before transporting its address.
++    // This separate typed-pointer cast remains unsupported, with a diagnostic.
++    *output = (*address as *mut u32).is_null() as u32;
++}
+diff --git a/tests/compiletests/ui/physical_storage/pointer_is_null_physical64.stderr b/tests/compiletests/ui/physical_storage/pointer_is_null_physical64.stderr
+new file mode 100644
+index 0000000..b3a89d1
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_is_null_physical64.stderr
+@@ -0,0 +1,35 @@
++error: cannot cast between pointer types
++       from `*u32`
++         to `*u8`
++  --> <$CORE_SRC/ptr/const_ptr.rs>:26:9
++   |
++LL | /         const_eval_select!(
++LL | |             @capture { ptr: *const u8 } -> bool:
++LL | |             // This use of `const_raw_ptr_comparison` has been explicitly blessed by t-lang.
++LL | |             if const #[rustc_allow_const_fn_unstable(const_raw_ptr_comparison)] {
++...  |
++LL | |         )
++   | |_________^
++   |
++note: used from within `<*const u32>::is_null`
++  --> <$CORE_SRC/ptr/const_ptr.rs>:25:19
++   |
++LL |         let ptr = self as *const u8;
++   |                   ^^^^^^^^^^^^^^^^^
++note: called by `<*mut u32>::is_null`
++  --> <$CORE_SRC/ptr/mut_ptr.rs>:23:27
++   |
++LL |         self.cast_const().is_null()
++   |                           ^^^^^^^^^
++note: called by `pointer_is_null_physical64::main`
++  --> <$DIR/pointer_is_null_physical64.rs>:17:38
++   |
++LL |     *output = (*address as *mut u32).is_null() as u32;
++   |                                      ^^^^^^^^^
++note: called by `main`
++  --> <$DIR/pointer_is_null_physical64.rs>:11:8
++   |
++LL | pub fn main(
++   |        ^^^^
++
++error: aborting due to 1 previous error
+diff --git a/tests/compiletests/ui/physical_storage/pointer_logical_compare_rejected.rs b/tests/compiletests/ui/physical_storage/pointer_logical_compare_rejected.rs
+new file mode 100644
+index 0000000..99d7557
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_logical_compare_rejected.rs
+@@ -0,0 +1,18 @@
++// build-fail
++// only-vulkan1.3_physical64
++// normalize-stderr-test "(\n)\n+$" -> "$1"
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] left: &u32,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] right: &u32,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 1)] output: &mut u32,
++) {
++    // Logical pointers cannot acquire physical address semantics merely
++    // because this target has a 64-bit Rust pointer ABI.
++    *output = (left as *const u32 == right as *const u32) as u32;
++}
+diff --git a/tests/compiletests/ui/physical_storage/pointer_logical_compare_rejected.stderr b/tests/compiletests/ui/physical_storage/pointer_logical_compare_rejected.stderr
+new file mode 100644
+index 0000000..b380e92
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_logical_compare_rejected.stderr
+@@ -0,0 +1,3 @@
++error: incompatible pointer storage classes PushConstant and PhysicalStorageBuffer while inferring OpFunctionCall
++
++error: aborting due to 1 previous error
+diff --git a/tests/compiletests/ui/physical_storage/pointer_negative_offset_physical64.rs b/tests/compiletests/ui/physical_storage/pointer_negative_offset_physical64.rs
+new file mode 100644
+index 0000000..8144831
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_negative_offset_physical64.rs
+@@ -0,0 +1,19 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C opt-level=3 -C lto=off -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] address: &u64,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut u64,
++) {
++    // A negative offset is address arithmetic, never a synthetic memory access.
++    *output = (*address as *mut u32).wrapping_offset(-1) as u64;
++}
+diff --git a/tests/compiletests/ui/physical_storage/pointer_negative_offset_physical64.stderr b/tests/compiletests/ui/physical_storage/pointer_negative_offset_physical64.stderr
+new file mode 100644
+index 0000000..77408b3
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_negative_offset_physical64.stderr
+@@ -0,0 +1,45 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %address %output
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %address "address"
++               OpName %output "output"
++               OpDecorate %_struct_6 Block
++               OpMemberDecorate %_struct_6 0 Offset 0
++               OpDecorate %output Binding 0
++               OpDecorate %output DescriptorSet 0
++        %u64 = OpTypeInt 64 0
++  %_struct_6 = OpTypeStruct %u64
++%_ptr_PushConstant__struct_6 = OpTypePointer PushConstant %_struct_6
++%_ptr_StorageBuffer__struct_6 = OpTypePointer StorageBuffer %_struct_6
++       %void = OpTypeVoid
++         %11 = OpTypeFunction %void
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++    %address = OpVariable %_ptr_PushConstant__struct_6 PushConstant
++        %u32 = OpTypeInt 32 0
++      %u32_0 = OpConstant %u32 0
++%_ptr_StorageBuffer_u64 = OpTypePointer StorageBuffer %u64
++     %output = OpVariable %_ptr_StorageBuffer__struct_6 StorageBuffer
++%_ptr_PhysicalStorageBuffer_u32 = OpTypePointer PhysicalStorageBuffer %u32
++        %i64 = OpTypeInt 64 1
++     %i64_n1 = OpConstant %i64 -1
++      %u64_4 = OpConstant %u64 4
++          %1 = OpFunction %void None %11
++         %20 = OpLabel
++         %21 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %address %u32_0
++         %22 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %output %u32_0
++         %23 = OpLoad %u64 %21
++         %24 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %23
++         %25 = OpConvertPtrToU %u64 %24
++         %26 = OpBitcast %u64 %i64_n1
++         %27 = OpIMul %u64 %26 %u64_4
++         %28 = OpIAdd %u64 %25 %27
++         %29 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %28
++         %30 = OpConvertPtrToU %u64 %29
++               OpStore %22 %30
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/physical_storage/pointer_null_physical64.rs b/tests/compiletests/ui/physical_storage/pointer_null_physical64.rs
+new file mode 100644
+index 0000000..ae5ef7d
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_null_physical64.rs
+@@ -0,0 +1,20 @@
++// build-fail
++// only-vulkan1.3_physical64
++// normalize-stderr-test "<\S*/library/core/src/" -> "<$$CORE_SRC/"
++// normalize-stderr-test "(\n)\n+$" -> "$1"
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] address: &u64,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u64; 2],
++) {
++    // The current core null constructor needs an unsupported void/unit pointer
++    // cast. Keep a clean rejection until that separate operation is supported.
++    let pointer = *address as *mut u32;
++    output[0] = (pointer == core::ptr::null_mut()) as u64;
++    output[1] = core::ptr::null_mut::<u32>() as u64;
++}
+diff --git a/tests/compiletests/ui/physical_storage/pointer_null_physical64.stderr b/tests/compiletests/ui/physical_storage/pointer_null_physical64.stderr
+new file mode 100644
+index 0000000..ba70c04
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_null_physical64.stderr
+@@ -0,0 +1,30 @@
++error: cannot cast between pointer types
++       from `*void`
++         to `*struct () {  }`
++  --> <$CORE_SRC/ptr/mod.rs>:948:2
++   |
++LL | }
++   |  ^
++   |
++note: used from within `core::ptr::without_provenance_mut::<()>`
++  --> <$CORE_SRC/ptr/mod.rs>:948:2
++   |
++LL | }
++   |  ^
++note: called by `core::ptr::null_mut::<u32>`
++  --> <$CORE_SRC/ptr/mod.rs>:880:24
++   |
++LL |     from_raw_parts_mut(without_provenance_mut::<()>(0), ())
++   |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++note: called by `pointer_null_physical64::main`
++  --> <$DIR/pointer_null_physical64.rs>:18:29
++   |
++LL |     output[0] = (pointer == core::ptr::null_mut()) as u64;
++   |                             ^^^^^^^^^^^^^^^^^^^^^
++note: called by `main`
++  --> <$DIR/pointer_null_physical64.rs>:11:8
++   |
++LL | pub fn main(
++   |        ^^^^
++
++error: aborting due to 1 previous error
+diff --git a/tests/compiletests/ui/physical_storage/pointer_offset_physical64.rs b/tests/compiletests/ui/physical_storage/pointer_offset_physical64.rs
+new file mode 100644
+index 0000000..bcc60cf
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_offset_physical64.rs
+@@ -0,0 +1,23 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] data: &[u64; 3],
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u64; 3],
++) {
++    // Wrapping arithmetic does not assert allocation validity. These pointers
++    // are converted back to addresses without any memory access.
++    let pointer = data[0] as *mut u32;
++    output[0] = pointer.wrapping_add(data[1] as usize) as u64;
++    output[1] = pointer.wrapping_sub(data[1] as usize) as u64;
++    output[2] = pointer.wrapping_offset(data[2] as isize) as u64;
++}
+diff --git a/tests/compiletests/ui/physical_storage/pointer_offset_physical64.stderr b/tests/compiletests/ui/physical_storage/pointer_offset_physical64.stderr
+new file mode 100644
+index 0000000..8fb5fc8
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/pointer_offset_physical64.stderr
+@@ -0,0 +1,80 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %data %output
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %data "data"
++               OpName %output "output"
++               OpDecorate %7 ArrayStride 8
++               OpDecorate %_struct_8 Block
++               OpMemberDecorate %_struct_8 0 Offset 0
++               OpDecorate %output Binding 0
++               OpDecorate %output DescriptorSet 0
++        %u64 = OpTypeInt 64 0
++        %u32 = OpTypeInt 32 0
++      %u32_3 = OpConstant %u32 3
++          %7 = OpTypeArray %u64 %u32_3
++  %_struct_8 = OpTypeStruct %7
++%_ptr_PushConstant__struct_8 = OpTypePointer PushConstant %_struct_8
++%_ptr_StorageBuffer__struct_8 = OpTypePointer StorageBuffer %_struct_8
++       %void = OpTypeVoid
++         %15 = OpTypeFunction %void
++%_ptr_PushConstant_7 = OpTypePointer PushConstant %7
++       %data = OpVariable %_ptr_PushConstant__struct_8 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_StorageBuffer_7 = OpTypePointer StorageBuffer %7
++     %output = OpVariable %_ptr_StorageBuffer__struct_8 StorageBuffer
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++%_ptr_PhysicalStorageBuffer_u32 = OpTypePointer PhysicalStorageBuffer %u32
++      %u32_1 = OpConstant %u32 1
++        %i64 = OpTypeInt 64 1
++      %u64_4 = OpConstant %u64 4
++%_ptr_StorageBuffer_u64 = OpTypePointer StorageBuffer %u64
++      %i64_0 = OpConstant %i64 0
++      %u32_2 = OpConstant %u32 2
++          %1 = OpFunction %void None %15
++         %27 = OpLabel
++         %28 = OpInBoundsAccessChain %_ptr_PushConstant_7 %data %u32_0
++         %29 = OpInBoundsAccessChain %_ptr_StorageBuffer_7 %output %u32_0
++         %30 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %28 %u32_0
++         %31 = OpLoad %u64 %30
++         %32 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %31
++         %33 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %28 %u32_1
++         %34 = OpLoad %u64 %33
++         %35 = OpBitcast %i64 %34
++         %36 = OpConvertPtrToU %u64 %32
++         %37 = OpBitcast %u64 %35
++         %38 = OpIMul %u64 %37 %u64_4
++         %39 = OpIAdd %u64 %36 %38
++         %40 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %39
++         %41 = OpConvertPtrToU %u64 %40
++         %42 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %29 %u32_0
++               OpStore %42 %41
++         %43 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %28 %u32_1
++         %44 = OpLoad %u64 %43
++         %45 = OpBitcast %i64 %44
++         %46 = OpISub %i64 %i64_0 %45
++         %47 = OpConvertPtrToU %u64 %32
++         %48 = OpBitcast %u64 %46
++         %49 = OpIMul %u64 %48 %u64_4
++         %50 = OpIAdd %u64 %47 %49
++         %51 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %50
++         %52 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %29 %u32_1
++         %53 = OpConvertPtrToU %u64 %51
++               OpStore %52 %53
++         %54 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %28 %u32_2
++         %55 = OpLoad %u64 %54
++         %56 = OpBitcast %i64 %55
++         %57 = OpConvertPtrToU %u64 %32
++         %58 = OpBitcast %u64 %56
++         %59 = OpIMul %u64 %58 %u64_4
++         %60 = OpIAdd %u64 %57 %59
++         %61 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %60
++         %62 = OpInBoundsAccessChain %_ptr_StorageBuffer_u64 %29 %u32_2
++         %63 = OpConvertPtrToU %u64 %61
++               OpStore %62 %63
++               OpNoLine
++               OpReturn
++               OpFunctionEnd

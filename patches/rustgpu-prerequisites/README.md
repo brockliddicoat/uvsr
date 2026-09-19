@@ -2,7 +2,7 @@
 
 these are tested changes from separately owned upstream checkouts. [sources.json](sources.json) pins each base, local verified commit, patch hash and controlling license. they are not published upstream contributions or proof of complete RustGPU support.
 
-latest checkpoint: [qptr memory operands and volatile loads](#qptr-memory-operands-and-volatile-loads) adds actual load/store lowering and a separately tested native optimizer prerequisite. the original 16 probes passed both tool configurations at the [two-configuration gate](#two-configuration-compiler-gate). the new volatile regression requires patched compiled tools. earlier results below preserve the evidence at each incremental patch.
+latest checkpoint: [typed pointer operations](#typed-pointer-operations) adds address comparisons, wrapping offsets and explicit rejection controls. it retains the [native optimizer prerequisite](#qptr-memory-operands-and-volatile-loads) for volatile effects. the original 16 probes passed both tool configurations at the [two-configuration gate](#two-configuration-compiler-gate). the new volatile regression requires patched compiled tools. earlier results below preserve the evidence at each incremental patch.
 
 ## rspirv untyped globals
 
@@ -165,3 +165,17 @@ apply the SPIR-T and RustGPU patches at their exact manifest bases with `--unidi
 run standalone SPIR-T tests, then the compiled-tools compiler/shared-type gate and two-target `physical_storage` source command above. the existing storage/cast/panic command checks adjacent behavior after the native dependency change. [E-019](../../docs/execution.md#e-019-2026-09-19-preserved-qptr-memory-effects) owns results, failed controls and source identities. RustGPU formatting passes, while SPIR-T retains its previously recorded whole-repository format/Clippy limitations.
 
 the installed SDK's unpatched optimizer still fails the volatile reproducer. a patched CLI build and the full native C++/upstream CI suites remain pending. do not skip the new regression to make that configuration pass. these are non-executed assembly/compiler tests, not Rust volatile-intrinsic support, general pointer-operation parity or P07's GPU execution evidence.
+
+## typed pointer operations
+
+[rustgpu-pointer-operations.patch](rustgpu-pointer-operations.patch) follows the qptr regression patch at the manifest base, with `--unidiff-zero --index` and the existing MIT OR Apache-2.0 terms. physical64 equality/inequality compare full-width addresses because SPIR-V pointer comparisons exclude physical storage. after existing logical offset legalization, the remaining sized raw-pointer case uses byte-stride multiplication and addition. constant-offset probing uses checked multiplication. no memory access or unsafe site is added by these transformations.
+
+six new source cases cover typed u32 comparisons, dynamic wrapping add/sub/offset, a negative offset with rustc optimization enabled, logical-address rejection, and the current `null_mut`/`is_null` typed-cast limitations. the upstream-facing document carries this operation inventory without claiming `*mut` parity. the optimized source fixture sets `-C opt-level=3 -C lto=off` because the backend's rustc ThinLTO method is unimplemented. these settings do not establish GPU execution or substitute for SPIR-V optimization checks.
+
+rerun the compiled-tools compiler/shared-type gate and the two-target `physical_storage` command above. the adjacent source command for this change is:
+
+```powershell
+cargo run --release --locked -p compiletests --no-default-features --features use-compiled-tools -j 1 -- --target-env vulkan1.3 storage_class const-int-cast const-narrowing-cast const-from-cast u8-const-cast panic ptr_read ptr_write ptr_copy allocate_null offsets_vec3_vec3a
+```
+
+[E-020](../../docs/execution.md#e-020-2026-09-19-lowered-typed-pointer-operations) owns the exact counts, independent native Rust transport check and failed setup/probe results. physical aggregate memory, the shader-library access contract, allocation-dependent methods, full pointer parity and real Vulkan/NGAPI execution remain open.

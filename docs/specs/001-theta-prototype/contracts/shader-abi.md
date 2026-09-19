@@ -44,6 +44,8 @@ validate eight-byte address representation, nested address-containing structures
 
 raw physical-address APIs state allocation validity, range, alignment, lifetime, aliasing, and synchronization obligations under the central unsafe policy. host ownership and queue completion establish when referenced resources and descriptors may be reused. synthetic addresses are never dereferenced. enable memory-model/int64 features only where the artifact and API require them, not simply because addresses contain 64 bits.
 
+[E-020](../../../execution.md#e-020-2026-09-19-lowered-typed-pointer-operations) verifies typed u32 pointer comparisons and wrapping add/sub/offset as 64-bit address operations, with logical storage still rejected. standard `null_mut` and u32-pointer `is_null` retain explicit unsupported typed-cast diagnostics. these transport-only cases do not establish allocation-dependent pointer methods, complete raw-pointer parity or GPU behavior.
+
 ## minimum cases
 
 use exact arithmetic/buffer readback, nonzero descriptor slots, distinct samplers/textures, uniform/divergent indices, root aggregates, matrix orientation, aligned access, mixed logical/physical operations, optimized/unoptimized modules, missing-feature diagnostics, and valid lifecycle sequences. add stage cases for every promised exposed stage.
