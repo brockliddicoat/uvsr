@@ -15,6 +15,8 @@ the copied [copy golden](fixtures/agfx/copy_buffer_to_buffer.bin) and [compute g
 
 ## owner and caller mapping
 
+sampler behavior is outside this first buffer slice. newly inspected comparison and anisotropy conventions are recorded as future Rust candidates [A-009/A-010](../../docs/agfx-port-notes.md), without expanding this slice or changing its goldens.
+
 | source owner / symbols | required slice behavior | proposed Rust mapping / boundary |
 | --- | --- | --- |
 | `agfx.h`, `agfx_vulkan.cpp`: `agfxDeviceCreate`, command queue creation, `agfxDeviceWaitIdle` | explicit Vulkan selection, queried capabilities, headless device, graphics/compute-capable queue, cleanup after partial creation | one `Device` owner. native Windows loader is the first route. Linux remains separately unverified |

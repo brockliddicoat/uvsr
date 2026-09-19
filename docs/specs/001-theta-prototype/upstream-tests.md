@@ -16,6 +16,8 @@ this page is the primary contribution crosswalk for [US6 and FR-015](spec.md). [
 
 three different authorities are recorded: the draft author's checklist, a maintainer's concrete review concerns, and repository CI. none alone establishes eventual acceptance.
 
+[E-025](../../execution.md#e-025-2026-09-19-tested-native-heap-library-constructors) adds reusable unsafe Image/Sampler constructors without new compiler intrinsics. H03 has divergent compute source coverage, and H05/H06 have repeated float/integer sampled-image fragment compilation under both ABIs. eight new cases bring the source gate to 34 required pairs. the actual uniform NGAPI consumer passes eight cases in each Debug/Release host using this library. divergent, storage-image and additional-stage execution remain pending. no full H row or task is closed.
+
 ## PR #237 checklist
 
 the [draft, refreshed on 2026-09-19](https://github.com/Rust-GPU/rust-gpu/pull/237) was open at `e14a70d9260c7df7fab1542810f2ca0276233331`. its checked boxes refer to that draft, not proof in current main or the new implementation. all checklist items are mapped below.

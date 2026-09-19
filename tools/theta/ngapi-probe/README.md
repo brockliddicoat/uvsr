@@ -84,9 +84,9 @@ this proves scalar physical reads/writes and a two-u64 root through NGAPI. the m
 
 ## native resource/sampler heap readback
 
-[native_heap_sample.rs](native_heap_sample.rs) uses actual native heaps and dynamic uniform indices from a 16-byte root. [the native caller](native_heap_sample.cpp) initializes all four slots per heap, then tests resource slots 1/3 with sampler slots 2/3. two 2 x 2 RGBA8 images and nearest repeat/clamp addressing at UV (1.25, 0.25) produce four distinct exact colors. the Rust shader doubles the sampled Vec4 and writes it through PhysicalPtr. the host checks all output bits, a 16-byte destination guard and unchanged source textures after barriers and timeline completion.
+[native_heap_sample.rs](native_heap_sample.rs) uses Image2d::from_resource_heap and Sampler::from_sampler_heap with dynamic uniform indices from a 16-byte root. [the native caller](native_heap_sample.cpp) initializes all four slots per heap, then tests resource slots 1/3 with sampler slots 2/3. two 2 x 2 RGBA8 images and nearest repeat/clamp addressing at UV (1.25, 0.25) produce four distinct exact colors. existing sample_by_lod performs sampling, then the Rust shader doubles the Vec4 and writes it through PhysicalPtr. the host checks all output bits, a 16-byte destination guard and unchanged source textures after barriers and timeline completion.
 
-apply the compiler prerequisites through the ID-constant/debug-stripping patches. verified source pins and observed results belong to [E-024](../../../docs/execution.md#e-024-2026-09-19-executed-native-heap-rust-shaders). NGAPI retains the same separate physical-readback feature patch. after preparing the physical64 sysroot above, use the owned nightly and SDK environment:
+apply the compiler prerequisites through the native heap library patch. verified source pins and current results belong to [E-025](../../../docs/execution.md#e-025-2026-09-19-tested-native-heap-library-constructors). NGAPI retains the same separate physical-readback feature patch. [U-006](../../../UNSAFE.md#u-006-native-heap-image-and-sampler-constructors) owns the unsafe library boundary. after preparing the physical64 sysroot above, use the owned nightly and SDK environment:
 
 ```powershell
 python tools/theta/ngapi-probe/compile_readback.py --fixture native_heap_sample `

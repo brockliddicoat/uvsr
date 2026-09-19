@@ -362,6 +362,22 @@
         "--unidiff-zero",
         "--index"
       ]
+    },
+    {
+      "file": "rustgpu-native-heap-library.patch",
+      "sha256": "f7bb0e848a66b5ef9bd13707875509cee4bf736eeecaa206f7c0708e61117958",
+      "repository": "https://github.com/Rust-GPU/rust-gpu",
+      "base": "e2858253836b9236263c20c6e372e3b7913e822f",
+      "local_verified_commit": "101153ea8fd0275468c271f03038302bbe7ded6f",
+      "license": "MIT OR Apache-2.0",
+      "license_files": [
+        "../../legal/licenses/RustGPU-MIT.txt",
+        "../../legal/licenses/RustGPU-APACHE.txt"
+      ],
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ]
     }
   ]
 }
