@@ -197,3 +197,18 @@ cargo fmt --all -- --check
 ```
 
 also check UI source formatting directly because the workspace formatter excludes it. [E-022](../../docs/execution.md#e-022-2026-09-19-tested-the-physical-pointer-library) owns exact results and the separate actual NGAPI scalar consumer. [U-003](../../UNSAFE.md#u-003-physicalptr-shader-library-access) records the library/fixture audit, with self-contained contracts mirrored into the patch. aggregate runtime, general Copy-type support, complete pointer parity and full upstream CI remain open.
+
+## native heap Rust assembly
+
+[rustgpu-native-heap-asm.patch](rustgpu-native-heap-asm.patch) follows the physical-library patch at the manifest base with `--unidiff-zero --index`, retaining MIT OR Apache-2.0 terms. it registers explicit untyped pointer types, places untyped variables by storage class, and emits assembly constants in declaration order in the global type/value section. this lets descriptor-size constants precede the runtime arrays whose ID strides reference them. compiler changes remain safe Rust and introduce no consumer dependency or public heap utility.
+
+five source wrappers share one compile-only unsafe body. it loads resource slot 1 and sampler slot 2 from native heaps, samples explicit LOD zero, multiplies the color by two in ordinary Rust and writes a physical Vec4. default, opt3 with LTO disabled, and qptr variants validate. missing DescriptorHeapEXT capability or extension produces a required diagnostic. complete expected streams retain both heap interfaces, size constants, ID strides, accesses, arithmetic and Aligned 16 output. [U-004](../../UNSAFE.md#u-004-compile-only-native-heap-source-probe) owns the local boundary review. no fixture is dispatched.
+
+rerun the full compiler/shared-type gate, workspace/direct fixture formatting, and:
+
+```powershell
+$env:RUST_TEST_THREADS = '1'
+cargo run --release --locked -p compiletests --no-default-features --features use-compiled-tools -j 1 -- --target-env vulkan1.3,vulkan1.3-physical64 physical_storage descriptor_heap
+```
+
+[E-023](../../docs/execution.md#e-023-2026-09-19-compiled-native-heap-rust-shaders) records 24 required source pairs and the broader adjacent gate's unresolved subpass-coordinate failure, reproduced with the previous compiler sources. keep that existing test enabled. native heap runtime, reusable interfaces, divergent indices, additional stages/resources and full upstream CI remain pending. malformed assembly also retains a pre-existing parser recovery limitation.

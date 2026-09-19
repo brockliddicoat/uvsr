@@ -75,3 +75,9 @@ application: assert required effect counts, flags and scope identities after opt
 **observed, pinned RustGPU regression.** at [E-022](execution.md#e-022-2026-09-19-tested-the-physical-pointer-library), scalar accesses carried valid alignment but an array read/write failed validation. rustc routed the aggregate through memcpy, whose lowering discarded both alignments. preserving alignment also required transferring it when the linker split a copy into a load/store, then cleaning newly introduced logical accesses.
 
 application: cover a whole aggregate and mixed physical/logical temporaries when changing memory access metadata. inspect the final accesses after legalization and optimization. a single SPIR-V copy mask applies to both endpoints, so the weaker known alignment is valid for both. limit: the regression proves the tested array compiler path with pure Aligned metadata. it does not establish effectful/scoped-copy semantics or aggregate GPU execution.
+
+## L-012. preserve declaration order across assembly placement
+
+**observed, pinned RustGPU native-heap source probe.** at [E-023](execution.md#e-023-2026-09-19-compiled-native-heap-rust-shaders), the assembly loader accepted heap instructions but source compilation failed on a forward ID. inline assembly registered types immediately while deferring constants to function bodies. later global placement therefore put a descriptor-size constant after the array whose ID decoration used it.
+
+application: inspect the complete source-to-module order when adding instructions with type/annotation dependencies. place constants in the global section at declaration time and test the full source path, alongside assembly-input probes. limit: the tested default, optimized and qptr shaders establish these declarations and accesses, not arbitrary malformed assembly handling or GPU behavior.

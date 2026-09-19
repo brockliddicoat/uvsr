@@ -1,0 +1,522 @@
+diff --git a/crates/rustc_codegen_spirv/src/builder/builder_methods.rs b/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
+index acb4752..e7871e1 100644
+--- a/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
++++ b/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
+@@ -461 +461,3 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+-            SpirvType::Pointer { .. } => self.fatal("memset on pointers not implemented yet"),
++            SpirvType::Pointer { .. } | SpirvType::UntypedPointer { .. } => {
++                self.fatal("memset on pointers not implemented yet")
++            }
+@@ -532 +534,3 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+-            SpirvType::Pointer { .. } => self.fatal("memset on pointers not implemented yet"),
++            SpirvType::Pointer { .. } | SpirvType::UntypedPointer { .. } => {
++                self.fatal("memset on pointers not implemented yet")
++            }
+diff --git a/crates/rustc_codegen_spirv/src/builder/spirv_asm.rs b/crates/rustc_codegen_spirv/src/builder/spirv_asm.rs
+index e83ca9f..afb46cb 100644
+--- a/crates/rustc_codegen_spirv/src/builder/spirv_asm.rs
++++ b/crates/rustc_codegen_spirv/src/builder/spirv_asm.rs
+@@ -422,0 +423,4 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
++            Op::TypeUntypedPointerKHR => SpirvType::UntypedPointer {
++                storage_class: inst.operands[0].unwrap_storage_class(),
++            }
++            .def(self.span(), self),
+@@ -442,3 +446,4 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
+-            Op::Variable => {
+-                // OpVariable with Function storage class should be emitted inside the function,
+-                // however, all other OpVariables should appear in the global scope instead.
++            Op::Variable | Op::UntypedVariableKHR => {
++                // Typed and untyped variables use the same storage-class operand.
++                // Function locals belong at the start of the entry block; other
++                // variables are module declarations.
+@@ -457,0 +463,9 @@ impl<'cx, 'tcx> Builder<'cx, 'tcx> {
++            op if op.is_constant() => {
++                // Constants used by ID decorations must precede their target
++                // types. Deferring these to a function and reloading the module
++                // moves them after types emitted above and creates forward IDs.
++                self.emit_global()
++                    .insert_types_global_values(dr::InsertPoint::End, inst);
++                return;
++            }
++
+diff --git a/crates/rustc_codegen_spirv/src/codegen_cx/constant.rs b/crates/rustc_codegen_spirv/src/codegen_cx/constant.rs
+index d4f0cbb..f2b8e0d 100644
+--- a/crates/rustc_codegen_spirv/src/codegen_cx/constant.rs
++++ b/crates/rustc_codegen_spirv/src/codegen_cx/constant.rs
+@@ -631,0 +632 @@ impl<'tcx> CodegenCx<'tcx> {
++            | SpirvType::UntypedPointer { .. }
+diff --git a/crates/rustc_codegen_spirv/src/codegen_cx/type_.rs b/crates/rustc_codegen_spirv/src/codegen_cx/type_.rs
+index c2ef34e..01d7bff 100644
+--- a/crates/rustc_codegen_spirv/src/codegen_cx/type_.rs
++++ b/crates/rustc_codegen_spirv/src/codegen_cx/type_.rs
+@@ -203 +203 @@ impl BaseTypeCodegenMethods for CodegenCx<'_> {
+-            SpirvType::Pointer { .. } => TypeKind::Pointer,
++            SpirvType::Pointer { .. } | SpirvType::UntypedPointer { .. } => TypeKind::Pointer,
+diff --git a/crates/rustc_codegen_spirv/src/spirv_type.rs b/crates/rustc_codegen_spirv/src/spirv_type.rs
+index 262538f..2c009b4 100644
+--- a/crates/rustc_codegen_spirv/src/spirv_type.rs
++++ b/crates/rustc_codegen_spirv/src/spirv_type.rs
+@@ -66,0 +67,5 @@ pub enum SpirvType<'tcx> {
++    /// An explicit SPIR-V pointer without a pointee type. Its storage class is
++    /// supplied by assembly rather than inferred from a Rust reference.
++    UntypedPointer {
++        storage_class: StorageClass,
++    },
+@@ -183,0 +189,3 @@ impl SpirvType<'_> {
++            Self::UntypedPointer { storage_class } => cx
++                .emit_global()
++                .type_untyped_pointer_khr_id(id, storage_class),
+@@ -364 +372 @@ impl SpirvType<'_> {
+-            Self::Pointer { .. } => cx.tcx.data_layout.pointer_size(),
++            Self::Pointer { .. } | Self::UntypedPointer { .. } => cx.tcx.data_layout.pointer_size(),
+@@ -387 +395,3 @@ impl SpirvType<'_> {
+-            Self::Pointer { .. } => cx.tcx.data_layout.pointer_align().abi,
++            Self::Pointer { .. } | Self::UntypedPointer { .. } => {
++                cx.tcx.data_layout.pointer_align().abi
++            }
+@@ -403 +413 @@ impl SpirvType<'_> {
+-            Self::Pointer { .. } => None,
++            Self::Pointer { .. } | Self::UntypedPointer { .. } => None,
+@@ -466,0 +477,3 @@ impl SpirvType<'_> {
++            SpirvType::UntypedPointer { storage_class } => {
++                SpirvType::UntypedPointer { storage_class }
++            }
+@@ -644,0 +658,5 @@ impl fmt::Debug for SpirvTypePrinter<'_, '_> {
++            SpirvType::UntypedPointer { storage_class } => f
++                .debug_struct("UntypedPointer")
++                .field("id", &self.id)
++                .field("storage_class", &storage_class)
++                .finish(),
+@@ -810,0 +829,3 @@ impl SpirvTypePrinter<'_, '_> {
++            SpirvType::UntypedPointer { storage_class } => {
++                write!(f, "untyped pointer ({storage_class:?})")
++            }
+diff --git a/docs/src/inline-asm.md b/docs/src/inline-asm.md
+index 7b5f6c5..193528f 100644
+--- a/docs/src/inline-asm.md
++++ b/docs/src/inline-asm.md
+@@ -71,0 +72,32 @@ pub unsafe fn vector_extract_dynamic<T: Scalar, V: Vector<T>>(vector: V, index:
++
++### Native descriptor-heap declarations
++
++Assembly can declare `OpTypeUntypedPointerKHR` with an explicit storage class.
++Unlike `OpTypePointer`, it has no pointee from which to infer a Rust type.
++Typed and untyped variables follow the same placement rule: Function variables
++go at the beginning of the entry block, and other variables are module globals.
++Constant instructions are emitted at their declaration point in the global
++type/value section. In particular, a constant used by `OpDecorateId` must appear
++before the array or struct it decorates. Write its declaration before that type.
++
++Native resource and sampler heaps use untyped UniformConstant variables with
++the ResourceHeapEXT and SamplerHeapEXT built-ins. Descriptor arrays can use
++`OpConstantSizeOfEXT` and `ArrayStrideIdEXT` rather than assuming a descriptor's
++byte size. Enable `DescriptorHeapEXT`, `UntypedPointersKHR`,
++`ext:SPV_EXT_descriptor_heap` and `ext:SPV_KHR_untyped_pointers` in target features.
++The capability and extension are both required. Inline assembly enum arguments
++use their Rust spellings, for example `Dim2D` for an image dimension.
++
++The `descriptor_heap` source fixtures test a uniform image/sampler lookup,
++explicit-LOD sampling, ordinary Rust vector arithmetic and a physical output,
++including optimized and qptr variants. Missing heap capability or extension is
++diagnosed by validation. These are compile-only fixtures with explicit unsafe
++entry contracts. They are never dispatched with invented resource handles.
++
++No safe heap-access API, bounds checking, resource lifetime or synchronization
++is implied by instruction support. A runtime caller must provide compatible,
++initialized native descriptors and live visible resources, the correct native
++strides, valid output ranges and completion before reuse or retirement. Multiple
++declarations, non-uniform indices, additional stages/resource types and actual
++execution require separate coverage. Malformed assembly syntax can still reach
++existing parser error-recovery limitations.
+diff --git a/tests/compiletests/ui/descriptor_heap/auxiliary/sample_body.rs b/tests/compiletests/ui/descriptor_heap/auxiliary/sample_body.rs
+new file mode 100644
+index 0000000..71da82e
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/auxiliary/sample_body.rs
+@@ -0,0 +1,63 @@
++use core::arch::asm;
++use spirv_std::glam::{Vec2, Vec4};
++use spirv_std::{PhysicalPtr, spirv};
++
++/// Compile-only native-heap sample followed by ordinary Rust vector arithmetic.
++///
++/// # Safety
++/// U-004: never dispatch this fixture without establishing all these conditions.
++/// Bind live native resource/sampler heaps. Resource slot 1 contains a valid,
++/// initialized, visible sampled 2D f32 image descriptor, sampler slot 2 contains
++/// a compatible valid sampler. Slot offsets use the native sizes for those
++/// descriptor types. The image is in a sampleable layout with visible contents.
++/// Keep heaps, descriptors, image and sampler live through completion with no
++/// conflicting updates. Output is a nonzero 16-byte-aligned device allocation,
++/// at least 16 bytes, disjoint from all other resources and exclusively writable.
++/// Dispatch one invocation. Establish output visibility and completion before
++/// reading, reusing or retiring it. No synthetic address may be dereferenced.
++#[allow(unsafe_code)]
++#[spirv(compute(threads(1)))]
++pub unsafe fn main(#[spirv(push_constant)] output: &PhysicalPtr<Vec4>) {
++    let coordinates = Vec2::splat(0.5);
++    let mut color = Vec4::ZERO;
++    // SAFETY: U-004. This compile-only entry's contract supplies valid uniform
++    // heap slots and live visible resources. The local output is initialized,
++    // aligned, writable and live throughout the assembly, which falls through
++    // after writing one Vec4. It creates no Rust reference to a descriptor.
++    unsafe {
++        asm!(
++            "%u32 = OpTypeInt 32 0",
++            "%f32 = OpTypeFloat 32",
++            "%one = OpConstant %u32 1",
++            "%two = OpConstant %u32 2",
++            "%lod = OpConstant %f32 0",
++            "%image = OpTypeImage %f32 Dim2D 0 0 0 1 Unknown",
++            "%sampler = OpTypeSampler",
++            "%sampled_image = OpTypeSampledImage %image",
++            "%image_size = OpConstantSizeOfEXT %u32 %image",
++            "%sampler_size = OpConstantSizeOfEXT %u32 %sampler",
++            "%image_array = OpTypeRuntimeArray %image",
++            "%sampler_array = OpTypeRuntimeArray %sampler",
++            "OpDecorateId %image_array ArrayStrideIdEXT %image_size",
++            "OpDecorateId %sampler_array ArrayStrideIdEXT %sampler_size",
++            "%heap_pointer = OpTypeUntypedPointerKHR UniformConstant",
++            "%resources = OpUntypedVariableKHR %heap_pointer UniformConstant",
++            "%samplers = OpUntypedVariableKHR %heap_pointer UniformConstant",
++            "OpDecorate %resources BuiltIn ResourceHeapEXT",
++            "OpDecorate %samplers BuiltIn SamplerHeapEXT",
++            "%image_slot = OpUntypedAccessChainKHR %heap_pointer %image_array %resources %one",
++            "%sampler_slot = OpUntypedAccessChainKHR %heap_pointer %sampler_array %samplers %two",
++            "%texture = OpLoad %image %image_slot",
++            "%filter = OpLoad %sampler %sampler_slot",
++            "%sampled = OpSampledImage %sampled_image %texture %filter",
++            "%coords = OpLoad _ {coordinates}",
++            "%color = OpImageSampleExplicitLod typeof*{color} %sampled %coords Lod %lod",
++            "OpStore {color} %color",
++            coordinates = in(reg) &coordinates,
++            color = in(reg) &mut color,
++        );
++    }
++    // SAFETY: U-004/U-003. The entry contract establishes the complete aligned,
++    // live, exclusive output range and its completion/visibility obligations.
++    unsafe { output.write(color * 2.0) };
++}
+diff --git a/tests/compiletests/ui/descriptor_heap/sample_missing_capability_physical64.rs b/tests/compiletests/ui/descriptor_heap/sample_missing_capability_physical64.rs
+new file mode 100644
+index 0000000..f88758d
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/sample_missing_capability_physical64.rs
+@@ -0,0 +1,10 @@
++// build-fail
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// normalize-stderr-test "[ \t]+(\n)" -> "$1"
++// normalize-stderr-test "(\n)\n+$" -> "$1"
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/sample_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/sample_missing_capability_physical64.stderr b/tests/compiletests/ui/descriptor_heap/sample_missing_capability_physical64.stderr
+new file mode 100644
+index 0000000..86b0e8b
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/sample_missing_capability_physical64.stderr
+@@ -0,0 +1,8 @@
++error: error:0:0 - Operand 2 of DecorateId requires one of these capabilities: DescriptorHeapEXT
++         OpDecorateId %_runtimearr_25 ArrayStrideIdEXT %12
++
++   |
++   = note: spirv-val failed
++   = note: module `$TEST_BUILD_DIR/descriptor_heap/sample_missing_capability_physical64.vulkan1.3_physical64`
++
++error: aborting due to 1 previous error
+diff --git a/tests/compiletests/ui/descriptor_heap/sample_missing_extension_physical64.rs b/tests/compiletests/ui/descriptor_heap/sample_missing_extension_physical64.rs
+new file mode 100644
+index 0000000..c406dde
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/sample_missing_extension_physical64.rs
+@@ -0,0 +1,10 @@
++// build-fail
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+DescriptorHeapEXT,+ext:SPV_KHR_untyped_pointers
++// normalize-stderr-test "[ \t]+(\n)" -> "$1"
++// normalize-stderr-test "(\n)\n+$" -> "$1"
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/sample_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/sample_missing_extension_physical64.stderr b/tests/compiletests/ui/descriptor_heap/sample_missing_extension_physical64.stderr
+new file mode 100644
+index 0000000..d0061ef
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/sample_missing_extension_physical64.stderr
+@@ -0,0 +1,8 @@
++error: error:0:0 - Capability DescriptorHeapEXT is not allowed by Vulkan 1.3 specification (or requires extension)
++         OpCapability DescriptorHeapEXT
++
++   |
++   = note: spirv-val failed
++   = note: module `$TEST_BUILD_DIR/descriptor_heap/sample_missing_extension_physical64.vulkan1.3_physical64`
++
++error: aborting due to 1 previous error
+diff --git a/tests/compiletests/ui/descriptor_heap/sample_optimized_physical64.rs b/tests/compiletests/ui/descriptor_heap/sample_optimized_physical64.rs
+new file mode 100644
+index 0000000..dfe8dcf
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/sample_optimized_physical64.rs
+@@ -0,0 +1,13 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+DescriptorHeapEXT,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// compile-flags: -C opt-level=3 -C lto=off
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/sample_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/sample_optimized_physical64.stderr b/tests/compiletests/ui/descriptor_heap/sample_optimized_physical64.stderr
+new file mode 100644
+index 0000000..a5c3844
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/sample_optimized_physical64.stderr
+@@ -0,0 +1,63 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability UntypedPointersKHR
++               OpCapability DescriptorHeapEXT
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpExtension "SPV_EXT_descriptor_heap"
++               OpExtension "SPV_KHR_untyped_pointers"
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %output %3 %4
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %output "output"
++               OpDecorate %_struct_10 Block
++               OpMemberDecorate %_struct_10 0 Offset 0
++               OpDecorateId %_runtimearr_25 ArrayStrideIdEXT %12
++               OpDecorate %3 BuiltIn ResourceHeapEXT
++               OpDecorateId %_runtimearr_28 ArrayStrideIdEXT %14
++               OpDecorate %4 BuiltIn SamplerHeapEXT
++        %u64 = OpTypeInt 64 0
++ %_struct_10 = OpTypeStruct %u64
++%_ptr_PushConstant__struct_10 = OpTypePointer PushConstant %_struct_10
++       %void = OpTypeVoid
++         %18 = OpTypeFunction %void
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++     %output = OpVariable %_ptr_PushConstant__struct_10 PushConstant
++        %u32 = OpTypeInt 32 0
++      %u32_0 = OpConstant %u32 0
++        %f32 = OpTypeFloat 32
++      %v2f32 = OpTypeVector %f32 2
++    %f32_0_5 = OpConstant %f32 0.5
++         %25 = OpTypeImage %f32 2D 0 0 0 1 Unknown
++         %12 = OpConstantSizeOfEXT %u32 %25
++%_runtimearr_25 = OpTypeRuntimeArray %25
++         %26 = OpTypeUntypedPointerKHR UniformConstant
++          %3 = OpUntypedVariableKHR %26 UniformConstant
++      %u32_1 = OpConstant %u32 1
++         %28 = OpTypeSampler
++         %14 = OpConstantSizeOfEXT %u32 %28
++%_runtimearr_28 = OpTypeRuntimeArray %28
++          %4 = OpUntypedVariableKHR %26 UniformConstant
++      %u32_2 = OpConstant %u32 2
++         %30 = OpTypeSampledImage %25
++      %v4f32 = OpTypeVector %f32 4
++      %f32_0 = OpConstant %f32 0
++      %f32_2 = OpConstant %f32 2
++%_ptr_PhysicalStorageBuffer_v4f32 = OpTypePointer PhysicalStorageBuffer %v4f32
++          %1 = OpFunction %void None %18
++         %35 = OpLabel
++         %36 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %output %u32_0
++         %37 = OpCompositeConstruct %v2f32 %f32_0_5 %f32_0_5
++         %38 = OpUntypedAccessChainKHR %26 %_runtimearr_25 %3 %u32_1
++         %39 = OpUntypedAccessChainKHR %26 %_runtimearr_28 %4 %u32_2
++         %40 = OpLoad %25 %38
++         %41 = OpLoad %28 %39
++         %42 = OpSampledImage %30 %40 %41
++         %43 = OpImageSampleExplicitLod %v4f32 %42 %37 Lod %f32_0
++         %44 = OpLoad %u64 %36
++         %45 = OpVectorTimesScalar %v4f32 %43 %f32_2
++         %46 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_v4f32 %44
++               OpStore %46 %45 Aligned 16
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/descriptor_heap/sample_physical64.rs b/tests/compiletests/ui/descriptor_heap/sample_physical64.rs
+new file mode 100644
+index 0000000..6169192
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/sample_physical64.rs
+@@ -0,0 +1,12 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+DescriptorHeapEXT,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/sample_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/sample_physical64.stderr b/tests/compiletests/ui/descriptor_heap/sample_physical64.stderr
+new file mode 100644
+index 0000000..a5c3844
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/sample_physical64.stderr
+@@ -0,0 +1,63 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability UntypedPointersKHR
++               OpCapability DescriptorHeapEXT
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpExtension "SPV_EXT_descriptor_heap"
++               OpExtension "SPV_KHR_untyped_pointers"
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %output %3 %4
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %output "output"
++               OpDecorate %_struct_10 Block
++               OpMemberDecorate %_struct_10 0 Offset 0
++               OpDecorateId %_runtimearr_25 ArrayStrideIdEXT %12
++               OpDecorate %3 BuiltIn ResourceHeapEXT
++               OpDecorateId %_runtimearr_28 ArrayStrideIdEXT %14
++               OpDecorate %4 BuiltIn SamplerHeapEXT
++        %u64 = OpTypeInt 64 0
++ %_struct_10 = OpTypeStruct %u64
++%_ptr_PushConstant__struct_10 = OpTypePointer PushConstant %_struct_10
++       %void = OpTypeVoid
++         %18 = OpTypeFunction %void
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++     %output = OpVariable %_ptr_PushConstant__struct_10 PushConstant
++        %u32 = OpTypeInt 32 0
++      %u32_0 = OpConstant %u32 0
++        %f32 = OpTypeFloat 32
++      %v2f32 = OpTypeVector %f32 2
++    %f32_0_5 = OpConstant %f32 0.5
++         %25 = OpTypeImage %f32 2D 0 0 0 1 Unknown
++         %12 = OpConstantSizeOfEXT %u32 %25
++%_runtimearr_25 = OpTypeRuntimeArray %25
++         %26 = OpTypeUntypedPointerKHR UniformConstant
++          %3 = OpUntypedVariableKHR %26 UniformConstant
++      %u32_1 = OpConstant %u32 1
++         %28 = OpTypeSampler
++         %14 = OpConstantSizeOfEXT %u32 %28
++%_runtimearr_28 = OpTypeRuntimeArray %28
++          %4 = OpUntypedVariableKHR %26 UniformConstant
++      %u32_2 = OpConstant %u32 2
++         %30 = OpTypeSampledImage %25
++      %v4f32 = OpTypeVector %f32 4
++      %f32_0 = OpConstant %f32 0
++      %f32_2 = OpConstant %f32 2
++%_ptr_PhysicalStorageBuffer_v4f32 = OpTypePointer PhysicalStorageBuffer %v4f32
++          %1 = OpFunction %void None %18
++         %35 = OpLabel
++         %36 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %output %u32_0
++         %37 = OpCompositeConstruct %v2f32 %f32_0_5 %f32_0_5
++         %38 = OpUntypedAccessChainKHR %26 %_runtimearr_25 %3 %u32_1
++         %39 = OpUntypedAccessChainKHR %26 %_runtimearr_28 %4 %u32_2
++         %40 = OpLoad %25 %38
++         %41 = OpLoad %28 %39
++         %42 = OpSampledImage %30 %40 %41
++         %43 = OpImageSampleExplicitLod %v4f32 %42 %37 Lod %f32_0
++         %44 = OpLoad %u64 %36
++         %45 = OpVectorTimesScalar %v4f32 %43 %f32_2
++         %46 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_v4f32 %44
++               OpStore %46 %45 Aligned 16
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/descriptor_heap/sample_qptr_physical64.rs b/tests/compiletests/ui/descriptor_heap/sample_qptr_physical64.rs
+new file mode 100644
+index 0000000..3229634
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/sample_qptr_physical64.rs
+@@ -0,0 +1,13 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+DescriptorHeapEXT,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// compile-flags: -C llvm-args=--spirt-passes=qptr
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/sample_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/sample_qptr_physical64.stderr b/tests/compiletests/ui/descriptor_heap/sample_qptr_physical64.stderr
+new file mode 100644
+index 0000000..4b21a82
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/sample_qptr_physical64.stderr
+@@ -0,0 +1,63 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability UntypedPointersKHR
++               OpCapability DescriptorHeapEXT
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpExtension "SPV_EXT_descriptor_heap"
++               OpExtension "SPV_KHR_untyped_pointers"
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "main" %2 %3 %output
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %output "output"
++               OpDecorate %_struct_10 Block
++               OpMemberDecorate %_struct_10 0 Offset 0
++               OpDecorateId %_runtimearr_23 ArrayStrideIdEXT %12
++               OpDecorate %2 BuiltIn ResourceHeapEXT
++               OpDecorateId %_runtimearr_26 ArrayStrideIdEXT %14
++               OpDecorate %3 BuiltIn SamplerHeapEXT
++        %u64 = OpTypeInt 64 0
++ %_struct_10 = OpTypeStruct %u64
++%_ptr_PushConstant__struct_10 = OpTypePointer PushConstant %_struct_10
++       %void = OpTypeVoid
++         %18 = OpTypeFunction %void
++        %f32 = OpTypeFloat 32
++      %v2f32 = OpTypeVector %f32 2
++    %f32_0_5 = OpConstant %f32 0.5
++        %u32 = OpTypeInt 32 0
++         %23 = OpTypeImage %f32 2D 0 0 0 1 Unknown
++         %12 = OpConstantSizeOfEXT %u32 %23
++%_runtimearr_23 = OpTypeRuntimeArray %23
++         %24 = OpTypeUntypedPointerKHR UniformConstant
++          %2 = OpUntypedVariableKHR %24 UniformConstant
++      %u32_1 = OpConstant %u32 1
++         %26 = OpTypeSampler
++         %14 = OpConstantSizeOfEXT %u32 %26
++%_runtimearr_26 = OpTypeRuntimeArray %26
++          %3 = OpUntypedVariableKHR %24 UniformConstant
++      %u32_2 = OpConstant %u32 2
++         %28 = OpTypeSampledImage %23
++      %v4f32 = OpTypeVector %f32 4
++      %f32_0 = OpConstant %f32 0
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++     %output = OpVariable %_ptr_PushConstant__struct_10 PushConstant
++      %u32_0 = OpConstant %u32 0
++      %f32_2 = OpConstant %f32 2
++%_ptr_PhysicalStorageBuffer_v4f32 = OpTypePointer PhysicalStorageBuffer %v4f32
++          %1 = OpFunction %void None %18
++         %35 = OpLabel
++         %36 = OpCompositeConstruct %v2f32 %f32_0_5 %f32_0_5
++         %37 = OpUntypedAccessChainKHR %24 %_runtimearr_23 %2 %u32_1
++         %38 = OpUntypedAccessChainKHR %24 %_runtimearr_26 %3 %u32_2
++         %39 = OpLoad %23 %37
++         %40 = OpLoad %26 %38
++         %41 = OpSampledImage %28 %39 %40
++         %42 = OpImageSampleExplicitLod %v4f32 %41 %36 Lod %f32_0
++         %43 = OpAccessChain %_ptr_PushConstant_u64 %output %u32_0
++         %44 = OpLoad %u64 %43
++         %45 = OpVectorTimesScalar %v4f32 %42 %f32_2
++         %46 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_v4f32 %44
++               OpStore %46 %45 Aligned 16
++               OpNoLine
++               OpReturn
++               OpFunctionEnd

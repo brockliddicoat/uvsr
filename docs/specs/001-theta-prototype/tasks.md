@@ -32,6 +32,8 @@ select primary M0-M3 work first. supporting work may proceed when it directly he
 
 T010-T015 do not depend on a complete AGFX slice. T014 can proceed before T013. M1 closes only when the promised compiler evidence and small direct Windows Vulkan slice are both recorded.
 
+[E-023](../../execution.md#e-023-2026-09-19-compiled-native-heap-rust-shaders) is partial T014/T015 evidence: Rust assembly declares actual native resource/sampler heaps, samples an image, performs Rust vector arithmetic and writes a physical Vec4. default, optimized and qptr source variants pass. missing-feature controls reject. the broader adjacent gate retains a pre-existing subpass failure. reusable heap utilities, divergent indices, additional resources/stages and heap runtime remain open.
+
 ## M2. actual NGAPI on Windows Vulkan
 
 - [ ] T017 [US1, US6] load Rust-authored pointer/readback and textured-cube shaders into actual NGAPI on native Windows Vulkan. depends on T013, T015, and T016. preserve entry points, root ABI, native heap behavior, and real resource lifetimes. keep any narrow NGAPI host patch separate, with exact source/shader hashes and commands.
