@@ -1,0 +1,29 @@
+; theta.tools.physical_store. Tool fixture, not Rust-authored or GPU executed.
+OpCapability Shader
+OpCapability Int64
+OpCapability PhysicalStorageBufferAddresses
+OpExtension "SPV_KHR_physical_storage_buffer"
+OpMemoryModel PhysicalStorageBuffer64 GLSL450
+OpEntryPoint GLCompute %main "computeMain" %root
+OpExecutionMode %main LocalSize 1 1 1
+OpDecorate %Root Block
+OpMemberDecorate %Root 0 Offset 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%u32 = OpTypeInt 32 0
+%u64 = OpTypeInt 64 0
+%zero = OpConstant %u32 0
+%value = OpConstant %u32 42
+%Root = OpTypeStruct %u64
+%push_root = OpTypePointer PushConstant %Root
+%push_address = OpTypePointer PushConstant %u64
+%physical_u32 = OpTypePointer PhysicalStorageBuffer %u32
+%root = OpVariable %push_root PushConstant
+%main = OpFunction %void None %fn
+%entry = OpLabel
+%address_slot = OpAccessChain %push_address %root %zero
+%address = OpLoad %u64 %address_slot
+%pointer = OpConvertUToPtr %physical_u32 %address
+OpStore %pointer %value Aligned 4
+OpReturn
+OpFunctionEnd

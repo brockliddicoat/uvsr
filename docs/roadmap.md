@@ -1,43 +1,30 @@
-# Roadmap and Current State
+# roadmap and current state
 
-status: prepared research baseline. implementation, builds, GPU execution, and upstream pull requests have not started.
+status: specification prepared. no Rust implementation, build, device probe, GPU execution, or upstream PR exists.
 
-## Inspected Baselines
+the [audit index](specs/001-theta-prototype/README.md) is the plan and prompt entry. [research](specs/001-theta-prototype/research.md) owns the exact main and source pins. the latest scope makes the RustGPU contribution primary and native Windows Vulkan the first local test path.
 
-the inspected revisions are listed in [notices](../NOTICES.md). refresh them once when implementation starts, record relevant changes, then pin the revisions used for each experiment. AGFX and ShaderToHuman remain inspirations. this project owns its API, test inventory, expected results, and thresholds.
+## primary delivery
 
-## Stages
-
-| id | outcome | completion evidence |
+| milestone | exit evidence | tasks |
 | --- | --- | --- |
-| S0 | device and tool inventory, inspiration study, project contracts, and nine shader-language and backend probes | actual probe runs, explicit capability limits, and first scoped failures |
-| S1 | one useful Rust graphics vertical slice with ordinary shaders and structured report output | device, shader, resource, submission, readback, retirement, and image evidence from native Rust backend logic |
-| S2 | correct RustGPU physical-pointer representation and operations | upstream compiletests and difftests, full-width ABI and overflow regressions |
-| S3 | reusable native descriptor-heap helpers and compiler support | real heap instructions, optimizer and validator survival, deterministic resource access |
-| S4 | Rust cube and readback through the framework and Rust shaders in NoGraphicsAPI | exact shader identity, combined pointer and heap behavior, project-owned expected-result agreement |
-| S5 | complete required project API and backend behavior | per-feature contract mapping and executed backend reports |
-| S6 | focused RustGPU contribution packet | complete promised checklist, reviewable commits, documentation, and full relevant CI |
-| S7 | Rust, Slang, and HLSL support across applicable backends | resource, layout, stage, execution, and result proof by cell |
-| S8 | selected shader regression coverage and human and agent test access | real results, trustworthy oracles, queryable reports, and seeded usability evaluation |
+| M0, activate Vulkan baseline | pinned sources, Windows tool/device facts, minimal ABI and instruction probes, explicit blockers | [baseline tasks](specs/001-theta-prototype/tasks.md#m0-vulkan-baseline) |
+| M1, compiler and small testbed slice | tested generic RustGPU lowering and a minimal native Windows Vulkan Rust AGFX slice | [compiler and slice tasks](specs/001-theta-prototype/tasks.md#m1-compiler-and-small-vulkan-slice) |
+| M2, actual consumer | combined Rust pointer/heap readback and cube in actual NGAPI on Windows Vulkan, with exact provenance | [consumer tasks](specs/001-theta-prototype/tasks.md#m2-actual-ngapi-on-windows-vulkan) |
+| M3, local RustGPU PR draft | focused diff, upstream tests, safety and ABI docs, reproducible consumer, local PR text and honest CI status | [contribution tasks](specs/001-theta-prototype/tasks.md#m3-rustgpu-contribution-draft) |
 
-S2 and S3 can proceed independently of the complete framework. S7 and S8 begin when the first useful S1 slice exists. a working S4 prototype does not complete S5, S7, or S8.
+direct Vulkan and NGAPI receive most design and test effort. Linux Vulkan portability remains explicit, but does not substitute for Windows proof. unavailable native-heap hardware blocks that runtime claim, not useful compiler diagnostics.
 
-## First Checkpoint
+M3 is the main local deliverable. complete framework parity, report polish, Metal, DirectX, and additional shader languages are not prerequisites. drafting, publishing, successful public CI, and maintainer acceptance are separate states.
 
-1. choose isolated implementation, dependency, build, and result directories.
-2. inventory available DirectX 12, Vulkan 1.4, and Metal tools and test devices.
-3. study the pinned inspirations and write the first project-owned device, shader, lifetime, and result contracts.
-4. run the nine minimal shader-language and backend feasibility probes.
-5. implement one native vertical slice and emit a stable machine-readable result.
-6. select the next API slice only after those results identify viable compiler and backend paths.
+## supporting testbed work
 
-## Current Uncertainties
+[the supporting track](specs/001-theta-prototype/tasks.md#supporting-testbed-parity) expands the close AGFX Rust port and ShaderToHuman source parity after, or where directly useful to, the primary path. preserve the complete source inventory and label deferred variants. do not claim full upstream parity while they remain unproved.
 
-- available devices and required Vulkan 1.4 extensions.
-- complete physical-pointer semantics and target layout in RustGPU.
-- native descriptor-heap support through compilation and optimization.
-- Rust shader translation and ABI compatibility on DirectX 12 and Metal.
-- Slang binding adaptation across the selected project layouts.
-- portable shader-regression fixtures and consistent color handling.
+Metal is the second backend priority. DirectX comes last and may accept greater documented compromises. these are future implementation directions, not gates for this RustGPU plan. adaptable shader/artifact boundaries preserve future choices without adding unused adapters.
 
-report source inspection, compile success, GPU execution, image agreement, backend parity, and upstream status separately. no weighted completion percentage is defined.
+## execution and learning
+
+use the [start/resume prompt](specs/001-theta-prototype/quickstart.md). keep current position and detailed experiments in ignored `work/theta/STATE.md` and `NOTES.md`. append durable milestone and blocker summaries to [execution](execution.md). promote reusable, evidence-qualified findings to [lessons](lessons.md). maintain [the unsafe audit](../UNSAFE.md) with every boundary change.
+
+[tasks](specs/001-theta-prototype/tasks.md) owns implementation completion. [requirements](specs/001-theta-prototype/checklists/requirements.md) owns traceability. these documents do not keep competing completion percentages.

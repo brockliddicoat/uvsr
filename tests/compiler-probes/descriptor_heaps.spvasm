@@ -1,0 +1,62 @@
+; theta.tools.descriptor_heaps. Real heap instructions plus a physical output.
+; Slots 1 and 2, texture and sampler respectively. Never dispatched by this probe.
+; Extension contracts: SPV_EXT_descriptor_heap and SPV_KHR_untyped_pointers.
+OpCapability Shader
+OpCapability Int64
+OpCapability PhysicalStorageBufferAddresses
+OpCapability UntypedPointersKHR
+OpCapability DescriptorHeapEXT
+OpExtension "SPV_KHR_physical_storage_buffer"
+OpExtension "SPV_KHR_untyped_pointers"
+OpExtension "SPV_EXT_descriptor_heap"
+OpMemoryModel PhysicalStorageBuffer64 GLSL450
+OpEntryPoint GLCompute %main "computeMain" %root %resources %samplers
+OpExecutionMode %main LocalSize 1 1 1
+OpDecorate %Root Block
+OpMemberDecorate %Root 0 Offset 0
+OpDecorate %resources BuiltIn ResourceHeapEXT
+OpDecorate %samplers BuiltIn SamplerHeapEXT
+OpDecorateId %image_array ArrayStrideIdEXT %image_size
+OpDecorateId %sampler_array ArrayStrideIdEXT %sampler_size
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%u32 = OpTypeInt 32 0
+%u64 = OpTypeInt 64 0
+%f32 = OpTypeFloat 32
+%v2 = OpTypeVector %f32 2
+%v4 = OpTypeVector %f32 4
+%zero = OpConstant %u32 0
+%one = OpConstant %u32 1
+%two = OpConstant %u32 2
+%lod = OpConstant %f32 0
+%half = OpConstant %f32 0.5
+%coords = OpConstantComposite %v2 %half %half
+%image = OpTypeImage %f32 2D 0 0 0 1 Unknown
+%sampler = OpTypeSampler
+%sampled_image = OpTypeSampledImage %image
+%image_size = OpConstantSizeOfEXT %u32 %image
+%sampler_size = OpConstantSizeOfEXT %u32 %sampler
+%image_array = OpTypeRuntimeArray %image
+%sampler_array = OpTypeRuntimeArray %sampler
+%uniform_untyped = OpTypeUntypedPointerKHR UniformConstant
+%resources = OpUntypedVariableKHR %uniform_untyped UniformConstant
+%samplers = OpUntypedVariableKHR %uniform_untyped UniformConstant
+%Root = OpTypeStruct %u64
+%push_root = OpTypePointer PushConstant %Root
+%push_address = OpTypePointer PushConstant %u64
+%physical_v4 = OpTypePointer PhysicalStorageBuffer %v4
+%root = OpVariable %push_root PushConstant
+%main = OpFunction %void None %fn
+%entry = OpLabel
+%image_slot = OpUntypedAccessChainKHR %uniform_untyped %image_array %resources %one
+%sampler_slot = OpUntypedAccessChainKHR %uniform_untyped %sampler_array %samplers %two
+%texture = OpLoad %image %image_slot
+%filter = OpLoad %sampler %sampler_slot
+%sampled = OpSampledImage %sampled_image %texture %filter
+%color = OpImageSampleExplicitLod %v4 %sampled %coords Lod %lod
+%address_slot = OpAccessChain %push_address %root %zero
+%address = OpLoad %u64 %address_slot
+%pointer = OpConvertUToPtr %physical_v4 %address
+OpStore %pointer %color Aligned 16
+OpReturn
+OpFunctionEnd

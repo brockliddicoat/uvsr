@@ -35,11 +35,11 @@ no single metric establishes graphics correctness. select the smallest set that 
 
 include alpha, color space, exposure, and image encoding in the contract. a comparison between differently exposed or differently sampled images is not a valid regression result merely because a tool can compute a number.
 
-## learn from AGFX without copying its contract
+## preserve AGFX parity and cover its oracle gaps
 
 at inspected revision [`f91b108a`](https://github.com/AmelieHeinrich/agfx/tree/f91b108a111d2ca3ca4b6586b6cb5dd750064fd7), AGFX provides a useful inspiration for concise GPU evidence. its [image comparison](https://github.com/AmelieHeinrich/agfx/blob/f91b108a111d2ca3ca4b6586b6cb5dd750064fd7/src/agfx/agfx_tests/test_compare.cpp) computes NVIDIA FLIP mean and maximum error, writes a magma error image, and fails when the mean exceeds the case threshold. its [runner](https://github.com/AmelieHeinrich/agfx/blob/f91b108a111d2ca3ca4b6586b6cb5dd750064fd7/src/agfx/agfx_tests/main.cpp) writes JSON with case status, duration, thresholds, numeric results, and artifact paths. its [report viewer](https://github.com/AmelieHeinrich/agfx/blob/f91b108a111d2ca3ca4b6586b6cb5dd750064fd7/tools/test_report/index.html) reads that same JSON.
 
-this project should adopt the principle, not AGFX's test inventory or acceptance threshold. FLIP is useful because it turns an image difference into queryable values and a localized error map. it cannot prove correct geometry, resource lifetime, temporal stability, physical energy, intended artistic output, or equal performance. each project case needs a reviewed reference, a reasoned threshold, and at least one structural or semantic assertion for the failure it is meant to catch.
+the current [Theta specification](../specs/001-theta-prototype/contracts/source-parity.md) requires the AGFX test inventory and source oracle behavior to be mapped and preserved. add explicit checks for blind spots rather than silently relaxing a source threshold. FLIP turns an image difference into queryable values and a localized error map, but it cannot prove correct geometry, resource lifetime, temporal stability, physical energy, intended artistic output, or equal performance. each case needs a reviewed reference and a structural or semantic assertion for its named failure mode where the original oracle is insufficient.
 
 updating a golden is an explicit review action. a runner must never make its own output correct by silently replacing the reference.
 

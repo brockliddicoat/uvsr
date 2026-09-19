@@ -38,7 +38,7 @@ use a concrete type when there is one real owner and one real consumer. introduc
 5. the smallest experiment that can disprove the idea,
 6. what will be implemented independently, translated with attribution, or left out.
 
-AGFX and ShaderToHuman are inspirations for this repository. they do not define its implementation, compatibility promise, or test requirements. the project should learn from their explicit APIs, shader examples, goldens, structured results, and report presentation while owning a smaller contract appropriate to Rust and the selected native backends.
+AGFX and ShaderToHuman are inspirations and, under the current [Theta specification](../specs/001-theta-prototype/contracts/source-parity.md), source-parity references. a close Rust port must make the source contract understandable and traceable before translating it. preserve meaningful source behavior, tests, and attribution while expressing ownership with ordinary Rust types. this choice does not justify a second abstraction layer or an unexplained compatibility shim.
 
 ## isolate dependencies at transaction boundaries
 
@@ -60,9 +60,9 @@ leaving both paths active is not a neutral intermediate state. it doubles states
 
 **observed.** a generic graphics layer can look portable while depending on one backend's descriptor model, synchronization, shader layout, or feature set. source similarity then hides unsupported cells.
 
-**recommended.** keep common concepts only where behavior is truly common. preserve backend-specific capability queries, limits, synchronization, error details, and native handles where they matter. each language and backend cell remains incomplete until its actual compiler path, ABI, validation, execution, and result are proven.
+**recommended.** keep common concepts only where behavior is truly common. preserve backend-specific capability queries, limits, synchronization, error details, and native handles where they matter. each claimed language and backend combination remains unproved until its actual compiler path, ABI, validation, execution, and result are tested. this evidence rule does not require implementing every future combination.
 
-start risky compiler and API work as bounded probes. a failed Rust-to-Metal route, descriptor-heap instruction, or pointer-layout experiment should change the plan early. it should not be hidden behind an interface that suggests support already exists.
+start risky compiler and API work as bounded probes. a failed required descriptor-heap instruction or pointer-layout experiment should change the active plan early. future API translation remains separate research under the current Vulkan-first scope. it should not be hidden behind an interface that suggests support already exists.
 
 ## make lifetime and failure first-class
 
