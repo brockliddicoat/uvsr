@@ -43,3 +43,5 @@ the [prerequisite patch record](../patches/rustgpu-prerequisites/README.md) iden
 the same record retains full MIT and Apache-2.0 texts for SPIR-T and RustGPU source patches, separately from the project's own license.
 
 the SPIRV-Tools wrapper source patch retains its full [MIT](licenses/SPIRV-Tools-rs-MIT.txt) and [Apache-2.0](licenses/SPIRV-Tools-rs-APACHE.txt) texts. the separate native optimizer patch retains [SPIRV-Tools' Apache-2.0 license](licenses/SPIRV-Tools-APACHE.txt). the patch manifest records its exact base and modification independently of the wrapper and header pins. generated tables remain outside this repository.
+
+the separate [NGAPI host prerequisite](../patches/ngapi-physical-readback/README.md) retains NoGraphicsAPI's complete [MIT notice](licenses/NoGraphicsAPI-MIT.txt), original source pin and local modification. NGAPI remains an external native consumer, outside the generic RustGPU contribution.

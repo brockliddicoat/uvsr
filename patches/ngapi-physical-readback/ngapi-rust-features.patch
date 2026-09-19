@@ -1,0 +1,36 @@
+diff --git a/src/NoGraphicsAPI.cpp b/src/NoGraphicsAPI.cpp
+index edaa6cb244071bd6d3c551019a454eaec2e408fe..01f6cd2f5cb3a0317e8186dc15a476bc03698519 100644
+--- a/src/NoGraphicsAPI.cpp
++++ b/src/NoGraphicsAPI.cpp
+@@ -1649,6 +1649,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface,
+     vkGetPhysicalDeviceFeatures2(physical_device, &features.core);
+     const bool required_features =
+         features.core.features.shaderInt16 == VK_TRUE &&
++        features.core.features.shaderInt64 == VK_TRUE &&
+         features.core.features.samplerAnisotropy == VK_TRUE &&
+         features.core.features.depthBiasClamp == VK_TRUE &&
+         features.core.features.independentBlend == VK_TRUE &&
+@@ -1664,6 +1665,7 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface,
+         features.vulkan12.shaderFloat16 == VK_TRUE &&
+         features.vulkan12.scalarBlockLayout == VK_TRUE &&
+         features.vulkan12.bufferDeviceAddress == VK_TRUE &&
++        features.vulkan12.vulkanMemoryModel == VK_TRUE &&
+         features.vulkan12.timelineSemaphore == VK_TRUE &&
+         features.vulkan13.synchronization2 == VK_TRUE &&
+         features.vulkan13.dynamicRendering == VK_TRUE &&
+@@ -1919,6 +1921,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
+     enabled_features.core.features.imageCubeArray = selected.image_cube_array;
+     enabled_features.core.features.samplerAnisotropy = VK_TRUE;
+     enabled_features.core.features.shaderInt16 = VK_TRUE;
++    enabled_features.core.features.shaderInt64 = VK_TRUE;
+     enabled_features.core.features.depthBiasClamp = VK_TRUE;
+     enabled_features.core.features.independentBlend = VK_TRUE;
+     enabled_features.core.features.textureCompressionBC = selected.texture_compression_bc;
+@@ -1938,6 +1941,7 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
+     enabled_features.vulkan12.scalarBlockLayout = VK_TRUE;
+     enabled_features.vulkan12.timelineSemaphore = VK_TRUE;
+     enabled_features.vulkan12.bufferDeviceAddress = VK_TRUE;
++    enabled_features.vulkan12.vulkanMemoryModel = VK_TRUE;
+     enabled_features.vulkan13.synchronization2 = VK_TRUE;
+     enabled_features.vulkan13.dynamicRendering = VK_TRUE;
+     enabled_features.vulkan13.maintenance4 = VK_TRUE;

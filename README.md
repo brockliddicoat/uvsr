@@ -39,7 +39,7 @@ the [UVSR Delta postmortems](docs/postmortems/README.md) contain prior lessons. 
 
 ## current status
 
-implementation is active. the [execution record](docs/execution.md) records the verified import, native Windows NGAPI baseline, installed-tool probes, source fixture freeze, and remaining compiler gates. no Rust shader consumer result or upstream PR is claimed yet.
+implementation is active. the [execution record](docs/execution.md) includes scalar Rust shader readback through actual NGAPI on Windows Vulkan, alongside the compiler patches and remaining gates. native resource/sampler shader lookups, the full Rust testbed and an upstream PR remain open.
 
 `.github/workflows` validates the baseline and conditionally runs Rust formatting and workspace tests once a manifest exists. it does not replace RustGPU's upstream CI or actual NGAPI execution.
 

@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/sebbbi/NoGraphicsAPI",
+  "base_commit": "d60b10bdfe15c0f350d6d291d8e06afef3fe7d38",
+  "verified_local_commit": "2d811720e824197ee9cb39092de113e9ac6bba07",
+  "tree": "5dbaaa238c9bcc0b9e35128705d46e8200d54ebe",
+  "patch": "ngapi-rust-features.patch",
+  "patch_sha256": "466a68902eb3d7d5ce92260c1861403ee6859d38009d1260615611b8ca61ed24",
+  "scope": "experimental fixed NGAPI profile for the Rust scalar physical-readback artifact",
+  "required_features": [
+    "shaderInt64",
+    "vulkanMemoryModel"
+  ],
+  "license": "../../legal/licenses/NoGraphicsAPI-MIT.txt",
+  "upstream_publication": false
+}

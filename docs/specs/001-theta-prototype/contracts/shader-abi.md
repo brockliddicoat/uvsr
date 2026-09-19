@@ -46,6 +46,8 @@ raw physical-address APIs state allocation validity, range, alignment, lifetime,
 
 [E-020](../../../execution.md#e-020-2026-09-19-lowered-typed-pointer-operations) verifies typed u32 pointer comparisons and wrapping add/sub/offset as 64-bit address operations, with logical storage still rejected. standard `null_mut` and u32-pointer `is_null` retain explicit unsupported typed-cast diagnostics. these transport-only cases do not establish allocation-dependent pointer methods, complete raw-pointer parity or GPU behavior.
 
+[E-021](../../../execution.md#e-021-2026-09-19-executed-rust-physical-readback-through-ngapi) executes one physical u32 read and three writes through actual NGAPI's Windows Vulkan compute/root path. the two u64 root fields have offsets 0/8 and size 16. transfer/compute/host barriers and timeline retirement establish the bounded [U-002](../../../../UNSAFE.md#u-002-actual-ngapi-physical-u32-readback) caller contract. real addresses are below 4 GiB, explicitly leaving nonzero high-address coverage open. no resource/sampler lookup occurs, so this does not yet prove the native-heap shader interface.
+
 ## minimum cases
 
 use exact arithmetic/buffer readback, nonzero descriptor slots, distinct samplers/textures, uniform/divergent indices, root aggregates, matrix orientation, aligned access, mixed logical/physical operations, optimized/unoptimized modules, missing-feature diagnostics, and valid lifecycle sequences. add stage cases for every promised exposed stage.

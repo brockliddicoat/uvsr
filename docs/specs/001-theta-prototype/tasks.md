@@ -37,6 +37,8 @@ T010-T015 do not depend on a complete AGFX slice. T014 can proceed before T013. 
 
 T018 is supporting work below. M2 does not depend on adding a second full native-heap implementation to the testbed. a replacement host or an ordinary-descriptor mode cannot close T017/T019.
 
+[E-021](../../execution.md#e-021-2026-09-19-executed-rust-physical-readback-through-ngapi) is partial T016/T017/T019 evidence: six actual NGAPI scalar Rust readback cases pass in each Windows Debug/Release host, with opt0/opt3 shaders and validation. this early consumer isolates the working scalar compiler path. full task dependencies, native heap lookups, cube, aggregate/high-address runtime coverage and the direct Rust Vulkan slice remain open, so these tasks are not checked complete.
+
 ## M3. RustGPU contribution draft
 
 - [ ] T033 [US6] reconcile all P, R, H, A, and C rows in [upstream tests](upstream-tests.md) against the proposed diff, tests, results, and limitations. depends on the promised T013/T015 features and T019 for actual-consumer claims. refresh relevant upstream comments and CI once before final draft preparation.
