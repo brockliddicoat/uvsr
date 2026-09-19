@@ -155,3 +155,28 @@ failed grammar experiments: simply updating SPIR-T headers to SDK 1.4.357.0 (`29
 publication: the diagnostic checkpoint merged through [PR #67](https://github.com/brockliddicoat/uvsr/pull/67) as `6277950d7c130018251a42f017774a9d1379de97`. its PR and [main checks](https://github.com/brockliddicoat/uvsr/actions/runs/35438891024) passed. the branch was deleted after verifying the merged tree.
 
 next action: finish grammar metadata compatibility, rerun the concrete-interface control cases, then address the demonstrated untyped/heap IR gaps. T005 and H07 stay open. no Rust shader execution, physical-pointer API, native-heap shader behavior, source parity or M1-M3 completion is claimed.
+
+## E-010. 2026-09-19, restored logical and physical pipeline controls
+
+tasks / requirements: T005 prerequisite work. FR-001, FR-013, FR-015, FR-021, FR-022. [the patch record](../patches/rustgpu-prerequisites/README.md#modern-grammar-and-concrete-interfaces) now preserves SPIR-T's modern grammar support and RustGPU's grammar API adaptation plus concrete-interface specialization fix. patch hashes, exact bases and local commits are in its manifest. applying each patch to an isolated index at its base reproduces the verified commit tree exactly. licenses remain upstream MIT OR Apache-2.0.
+
+source identities: SPIR-T `94fbc6dd7357ce99f69af525d77e48af5fc5c56d` over published 0.4.0, with SDK header `29981f65241605e08b0ede4cfeb999fe3b723c6a`. RustGPU `9c8a26f8a4290d66b63e67c33c7959492374badc` over `e6394e08eb3356083b12f732a01906f8e49f7c4a`, with the already tracked diagnostic module installed locally and the E-009 rspirv override. ordinary generic specialization is retained. already-concrete entry-point globals keep their existing IDs.
+
+result: all three SPIR-T grammar unit tests pass, including loading every extended grammar, alias equivalence, full-word enum values, optional operand counts and old/new operand-name spelling. there are zero documentation tests, which is not additional coverage. the actual RustGPU release unit run took 2m 54s to compile, then executed 32 of 36 registered cases: **26 passed, six failed, four existing macOS-only cases ignored**. all 16 applicable pre-existing unit tests passed. none of the 16 required diagnostic cases was skipped.
+
+| diagnostic fixture | parser | SPIR-T | default linker and optimizer | qptr linker and optimizer |
+| --- | --- | --- | --- | --- |
+| logical store | pass | pass | pass | pass |
+| physical store | pass | pass | pass | pass |
+| untyped store | pass | fails on module-scope untyped variable | fails at reserved untyped-pointer opcode | same |
+| native resource/sampler heaps | pass | fails on ID decoration | fails at reserved untyped-pointer opcode | same |
+
+this is 10/16 diagnostic passes. physical conversion and `Aligned 4` survive both actual linker modes and performance optimization. it does not establish Rust raw-pointer code generation, alignment for other operations or GPU memory correctness. the remaining six failures are retained as failures. T005 and H07 stay open.
+
+format/lint limits: RustGPU `cargo fmt --all -- --check` passes. direct rustfmt checks of the four changed SPIR-T files pass. SPIR-T's full formatter reports unchanged files such as `src/cfg.rs`; strict Clippy stops at unchanged `build.rs:10` (`unnecessary_map_or`). no lint waiver or unrelated formatting churn was introduced. full upstream CI remains unproved.
+
+evidence: ignored `spirt-grammar-tests-final.*`, `rustgpu-grammar-controls.*`, `spirt-grammar-format*`, `spirt-grammar-clippy.*` and `rustgpu-grammar-format.*` contain exact commands, diagnostics and hashes. the earlier aliases, packing, wide-enum, extension-version and test-compilation failures remain in n010 and their separate records. safe-Rust self-review found no new unsafe boundary or U record. no independent review. no additional reusable lesson beyond L-007.
+
+publication: the loader checkpoint merged through [PR #68](https://github.com/brockliddicoat/uvsr/pull/68) as `3c0f7e98e6810d2371c907cc445fd51ec74e61af`, with passing PR and [main checks](https://github.com/brockliddicoat/uvsr/actions/runs/35440146344). its transient branch was deleted after merged-tree verification.
+
+next action: add the demonstrated untyped/ID-bearing IR support and verify the compiled SPIRV-Tools path at its own exact source revision. the latter has been prepared in a separate owned checkout and is being built with one worker. no Rust shader execution, native-heap shader behavior, source parity or M1-M3 completion is claimed.

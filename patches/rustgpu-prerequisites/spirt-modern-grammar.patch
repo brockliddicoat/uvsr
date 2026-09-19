@@ -1,0 +1,218 @@
+diff --git a/khronos-spec/SPIRV-Headers b/khronos-spec/SPIRV-Headers
+index 2acb319..29981f6 160000
+--- a/khronos-spec/SPIRV-Headers
++++ b/khronos-spec/SPIRV-Headers
+@@ -1 +1 @@
+-Subproject commit 2acb319af38d43be3ea76bfabf3998e5281d8d12
++Subproject commit 29981f65241605e08b0ede4cfeb999fe3b723c6a
+diff --git a/src/spv/print.rs b/src/spv/print.rs
+index 1fc99dd..1c1c597 100644
+--- a/src/spv/print.rs
++++ b/src/spv/print.rs
+@@ -216,2 +216 @@ impl<IMMS: Iterator<Item = spv::Imm>, ID, IDS: Iterator<Item = ID>> OperandPrint
+-                let (variant_name, variant_def) =
+-                    variants.get_named(word.try_into().unwrap()).unwrap();
++                let (variant_name, variant_def) = variants.get_named(word).unwrap();
+diff --git a/src/spv/read.rs b/src/spv/read.rs
+index 5817805..0784c05 100644
+--- a/src/spv/read.rs
++++ b/src/spv/read.rs
+@@ -136,4 +136,2 @@ impl InstParser<'_> {
+-                let variant_def = u16::try_from(word)
+-                    .ok()
+-                    .and_then(|v| variants.get(v))
+-                    .ok_or(Error::UnsupportedEnumerand(kind, word))?;
++                let variant_def =
++                    variants.get(word).ok_or(Error::UnsupportedEnumerand(kind, word))?;
+diff --git a/src/spv/spec.rs b/src/spv/spec.rs
+index 9ea6164..3870d36 100644
+--- a/src/spv/spec.rs
++++ b/src/spv/spec.rs
+@@ -271 +271 @@ pub struct InstructionDef {
+-    pub opt_operands: ArrayVec<PackedOperandNameAndKind, 2>,
++    pub opt_operands: ArrayVec<PackedOperandNameAndKind, 3>,
+@@ -374,2 +374,2 @@ impl OperandKind {
+-// HACK(eddyb) only needed because there are more than 256 unique operand names,
+-// but less than 64 `OperandKind`s, so we can split 16 kind:name bits as 6:10.
++// Operand kinds now exceed 64, and operand names exceed the remaining 9 bits
++// of a 16-bit representation. Keep the full 8-bit kind and a 24-bit name index.
+@@ -377 +377 @@ impl OperandKind {
+-pub struct PackedOperandNameAndKind(u16);
++pub struct PackedOperandNameAndKind(u32);
+@@ -396,3 +396,4 @@ impl PackedOperandNameAndKind {
+-        let packed = Self(((name_idx as u16) << 6) | (kind.0 as u16));
+-        assert_eq!(packed.unpack(), (name_idx, kind));
+-        packed
++        // Do not format `OperandKind` here: its Debug implementation calls
++        // Spec::get(), which can deadlock while the spec is being initialized.
++        assert!(name_idx < (1 << 24), "operand name index exceeds 24 bits");
++        Self(((name_idx as u32) << 8) | u32::from(kind.0))
+@@ -403 +404 @@ impl PackedOperandNameAndKind {
+-        ((self.0 >> 6) as usize, OperandKind((self.0 & ((1 << 6) - 1)) as u8))
++        ((self.0 >> 8) as usize, OperandKind((self.0 & 0xff) as u8))
+@@ -427 +428 @@ pub enum OperandKindDef {
+-        variants: indexed::NamedIdxMap<u16, Enumerant, indexed::KhrSegmented>,
++        variants: indexed::NamedIdxMap<u32, Enumerant, indexed::Sparse>,
+@@ -518 +519,2 @@ fn sanitize_operand_name<'a>(name: &Option<raw::CowStr<'a>>) -> &'a str {
+-                s.strip_prefix('\'')?.strip_suffix('\'').filter(|s| {
++                let s = s.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')).unwrap_or(s);
++                Some(s).filter(|s| {
+@@ -544,0 +547,46 @@ fn get_spec_and_all_ext_inst_sets() {
++#[test]
++fn grammar_aliases_resolve_to_the_same_values() {
++    let spec = Spec::get();
++    for (name, alias) in
++        [("OpSDot", "OpSDotKHR"), ("OpDemoteToHelperInvocation", "OpDemoteToHelperInvocationEXT")]
++    {
++        let opcode = spec.instructions.lookup(name).unwrap();
++        assert!(spec.instructions.lookup(alias) == Some(opcode), "{alias}");
++    }
++    let storage_class = spec.operand_kinds.lookup("StorageClass").unwrap();
++    let OperandKindDef::ValueEnum { variants } = &spec.operand_kinds[storage_class] else {
++        panic!("StorageClass must be a value enum");
++    };
++    assert_eq!(
++        variants.lookup("PhysicalStorageBufferEXT"),
++        Some(variants.lookup("PhysicalStorageBuffer").unwrap()),
++    );
++    let memory_access = spec.operand_kinds.lookup("MemoryAccess").unwrap();
++    let OperandKindDef::BitEnum { bits, .. } = &spec.operand_kinds[memory_access] else {
++        panic!("MemoryAccess must be a bit enum");
++    };
++    assert!(
++        bits.lookup("MakePointerAvailableKHR")
++            == Some(bits.lookup("MakePointerAvailable").unwrap()),
++        "MakePointerAvailableKHR",
++    );
++}
++
++#[test]
++fn grammar_numeric_ranges_and_operand_names() {
++    let spec = Spec::get();
++    let component_type = spec.operand_kinds.lookup("ComponentType").unwrap();
++    let OperandKindDef::ValueEnum { variants } = &spec.operand_kinds[component_type] else {
++        panic!("ComponentType must be a value enum");
++    };
++    assert_eq!(variants.lookup("FloatE5M2NV"), Some(1_000_491_003));
++    assert_eq!(variants.get_named(1_000_491_003).unwrap().0, "FloatE5M2NV");
++    assert!(variants.get(u32::MAX).is_none());
++
++    let prefetch = spec.instructions.lookup("OpUntypedPrefetchKHR").unwrap();
++    assert_eq!(spec.instructions[prefetch].opt_operands.len(), 3);
++    let import = spec.instructions.lookup("OpExtInstImport").unwrap();
++    assert_eq!(spec.instructions[import].req_operands[0].name_and_kind().0, "Name");
++    assert_eq!(sanitize_operand_name(&Some(raw::CowStr::Borrowed("'Name'"))), "Name");
++}
++
+@@ -753,2 +801,6 @@ impl Spec {
+-                                .filter_map(|e| {
+-                                    Some((e.enumerant, BitIdx::of_single_set_bit(e.value)?))
++                                .flat_map(|e| {
++                                    std::iter::once(e.enumerant)
++                                        .chain(e.aliases.iter().copied())
++                                        .filter_map(|name| {
++                                            Some((name, BitIdx::of_single_set_bit(e.value)?))
++                                        })
+@@ -769,9 +821,10 @@ impl Spec {
+-                        let variants = indexed::KhrSegmentedVec::from_in_order_iter(
+-                            enumerants.iter().map(|e| {
+-                                (
+-                                    e.value.try_into().unwrap(),
+-                                    (e.enumerant, enumerant_from_raw(e)),
+-                                )
+-                            }),
+-                            // `merge_duplicates` closure:
+-                            |(prev_name, prev_enumerant), (new_name, new_enumerant)| {
++                        // Value enumerants are full words. Some extensions allocate
++                        // values above a billion, so a dense segment index is unsuitable.
++                        let mut variants: FxHashMap<u32, (&'static str, Enumerant)> =
++                            FxHashMap::default();
++                        for e in enumerants {
++                            let new_name = e.enumerant;
++                            let new_enumerant = enumerant_from_raw(e);
++                            let entry = variants.entry(e.value);
++                            let value = if let std::collections::hash_map::Entry::Occupied(ref prev) = entry {
++                                let (prev_name, prev_enumerant) = prev.get();
+@@ -780 +833 @@ impl Spec {
+-                                    prev_enumerant == new_enumerant,
++                                    *prev_enumerant == new_enumerant,
+@@ -791,2 +844,5 @@ impl Spec {
+-                            },
+-                        );
++                            } else {
++                                (new_name, new_enumerant)
++                            };
++                            entry.insert_entry(value);
++                        }
+@@ -798 +854,5 @@ impl Spec {
+-                                .map(|e| (e.enumerant, e.value.try_into().unwrap()))
++                                .flat_map(|e| {
++                                    std::iter::once(e.enumerant)
++                                        .chain(e.aliases.iter().copied())
++                                        .map(|name| (name, e.value))
++                                })
+@@ -849,4 +909,7 @@ impl Spec {
+-                (o.kind, [
+-                    operand_kinds.lookup(bases[0]).unwrap(),
+-                    operand_kinds.lookup(bases[1]).unwrap(),
+-                ])
++                (
++                    o.kind,
++                    [
++                        operand_kinds.lookup(bases[0]).unwrap(),
++                        operand_kinds.lookup(bases[1]).unwrap(),
++                    ],
++                )
+@@ -1014 +1077,5 @@ impl Spec {
+-                .map(|inst| (inst.opname, Opcode(inst.opcode)))
++                .flat_map(|inst| {
++                    std::iter::once(inst.opname)
++                        .chain(inst.aliases.iter().copied())
++                        .map(|name| (name, Opcode(inst.opcode)))
++                })
+@@ -1042,4 +1109,4 @@ impl Spec {
+-            addressing_model: |name| addressing_models.lookup(name).unwrap().into(),
+-            storage_class: |name| storage_classes.lookup(name).unwrap().into(),
+-            decoration: |name| decorations.lookup(name).unwrap().into(),
+-            linkage_type: |name| linkage_types.lookup(name).unwrap().into(),
++            addressing_model: |name| addressing_models.lookup(name).unwrap(),
++            storage_class: |name| storage_classes.lookup(name).unwrap(),
++            decoration: |name| decorations.lookup(name).unwrap(),
++            linkage_type: |name| linkage_types.lookup(name).unwrap(),
+@@ -1091 +1158 @@ pub mod raw {
+-        pub version: Option<u8>,
++        pub version: Option<u32>,
+@@ -1110,0 +1178,2 @@ pub mod raw {
++        pub aliases: Vec<&'a str>,
++        #[serde(default)]
+@@ -1122,0 +1192,2 @@ pub mod raw {
++        pub provisional: Option<bool>,
++
+@@ -1171,0 +1243,2 @@ pub mod raw {
++        #[serde(default)]
++        pub aliases: Vec<&'a str>,
+@@ -1183,0 +1257,2 @@ pub mod raw {
++        pub provisional: Option<bool>,
++
+@@ -1298,0 +1374,10 @@ pub mod indexed {
++    /// Sparse full-word values, without allocating space for gaps.
++    pub enum Sparse {}
++
++    impl<T> StorageShape<u32, T> for Sparse {
++        type Storage = FxHashMap<u32, T>;
++        fn get_by_idx(storage: &Self::Storage, idx: u32) -> Option<&T> {
++            storage.get(&idx)
++        }
++    }
++
+diff --git a/src/spv/write.rs b/src/spv/write.rs
+index 0d0a931..7def7b5 100644
+--- a/src/spv/write.rs
++++ b/src/spv/write.rs
+@@ -112,4 +112,2 @@ impl OperandEmitter<'_> {
+-                let variant_def = u16::try_from(word)
+-                    .ok()
+-                    .and_then(|v| variants.get(v))
+-                    .ok_or(Error::UnsupportedEnumerand(kind, word))?;
++                let variant_def =
++                    variants.get(word).ok_or(Error::UnsupportedEnumerand(kind, word))?;
