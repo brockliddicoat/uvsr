@@ -160,6 +160,22 @@
         "--unidiff-zero",
         "--index"
       ]
+    },
+    {
+      "file": "rustgpu-physical64-abi.patch",
+      "sha256": "842d31c4cc29722168a20f7201320edeafac25330a04c05c5c057d05cbe2eeb9",
+      "repository": "https://github.com/Rust-GPU/rust-gpu",
+      "base": "aecf38db5856fa153bc311e3530bb1f20c9d6b15",
+      "local_verified_commit": "f9f3e575ddc95a47ace76fcce6d328967177873a",
+      "license": "MIT OR Apache-2.0",
+      "license_files": [
+        "../../legal/licenses/RustGPU-MIT.txt",
+        "../../legal/licenses/RustGPU-APACHE.txt"
+      ],
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ]
     }
   ]
 }

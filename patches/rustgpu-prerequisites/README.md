@@ -107,3 +107,21 @@ cargo test --config '<absolute configuration>' -p rustc_codegen_spirv --release 
 ```
 
 the local run additionally used `--offline` after dependencies were cached. it passed **35 tests, zero failures, four existing macOS-only ignores**. all 16 required probes passed with no skips. T005/H07's tool gate is complete, while Rust source compiletests, native execution and full upstream CI remain separate work. the installed and compiled tools have the distinct source identities recorded above. [E-015](../../docs/execution.md#e-015-2026-09-19-completed-the-two-configuration-pipeline-gate) owns the combined conclusion. a directory-local attribute keeps exported patch bytes and manifest hashes unchanged across Windows and Unix checkouts.
+
+## explicit Rust pointer-width foundation
+
+[rustgpu-physical64-abi.patch](rustgpu-physical64-abi.patch) applies after the RustGPU heap-metadata patch at the manifest base. it adds an opt-in `-physical64` Vulkan target with eight-byte Rust pointers and `usize`, exact client/backend target-JSON checks, upstream documentation, and reviewed compiletest controls. ordinary targets keep their four-byte ABI. capabilities alone do not change layouts. this patch does not yet enable physical memory operations or integer-pointer casts.
+
+the source cases prove sizes/alignment, nested raw-pointer-containing layouts, explicit `u64` address fields, high-bit integer transport through `usize`, `u32` overflow/wrapping, truncation and mixed-width comparison. the cast control still expects the existing rejection on both targets and never dereferences an address. the harness now preserves hyphenated target identity in test selectors, using underscores in `only`/`ignore` directives. otherwise `compiletest_rs` conflates the two ABIs.
+
+use the same compiled-tools overrides and local diagnostic-module installation as above:
+
+```powershell
+cargo test --release --locked -p rustc_codegen_spirv-types -p rustc_codegen_spirv --no-default-features --features use-compiled-tools -j 1 -- --test-threads=1 -Z unstable-options --format=json
+cargo run --release --locked -p compiletests --no-default-features --features use-compiled-tools -j 1 -- --target-env vulkan1.3,vulkan1.3-physical64 physical_storage
+cargo fmt --all -- --check
+```
+
+the full selected unit gate passed **37 compiler tests and three shared-type tests**, zero failures, with four pre-existing macOS-only ignores. all 16 instruction probes still passed. the source matrix passed four case/target pairs: the width-specific layout and cast rejection on each target. each target intentionally excludes the other ABI's layout case, and 331 unrelated compiletests are filtered. expected output was manually reviewed before blessing, then the complete selected matrix passed without blessing. the run used `--offline` after caching dependencies.
+
+this is compiler/layout evidence on Windows, not GPU execution, complete upstream CI, raw-pointer parity or a completed physical-address API. [E-016](../../docs/execution.md#e-016-2026-09-19-proved-explicit-rust-pointer-width-layouts) records failed setup/selector attempts and the selected scope. the patch retains MIT OR Apache-2.0 terms and introduces no unsafe operation.

@@ -51,3 +51,9 @@ application: preserve the failed command, then isolate incidental layers with a 
 **observed, pinned compiler probes.** at [E-008](execution.md#e-008-2026-09-19-installed-rust-and-located-compiler-pipeline-failures), SDK SPIRV-Tools accepted the native-heap fixture, but RustGPU's loader rejected its untyped globals and SPIR-T rejected the untyped capability. the bundled C++ tools rejected the heap capability even earlier. rspirv already knew the instruction vocabulary despite its older version label.
 
 application: separate vocabulary, loader placement, IR representation, linking and validation probes. compare installed and compiled tools before changing compiler semantics. limitation: these assembly-input failures locate compatibility work, not Rust source behavior or GPU correctness. a successful parser round trip cannot substitute for the remaining pipeline or consumer gates.
+
+## L-008. verify case selection when adding a target variant
+
+**observed, pinned RustGPU harness.** at [E-016](execution.md#e-016-2026-09-19-proved-explicit-rust-pointer-width-layouts), `compiletest_rs` 0.11.2 split stage IDs at the first hyphen. the new `vulkan1.3-physical64` target therefore ran the 32-bit layout case and skipped its own case. escaping the stage ID preserved the distinct target identity. a separate forward-slash filename filter on Windows matched zero cases despite exit 0.
+
+application: check stable case IDs and the executed denominator for each configuration before accepting a green command or blessing output. limit: these are observed selector rules in this harness/version, not evidence that all hyphenated targets or Windows runners have the same problem. keep the distinct-ABI matrix and revisit its selectors when the harness changes.

@@ -1,0 +1,631 @@
+diff --git a/crates/rustc_codegen_spirv-types/src/target_spec.rs b/crates/rustc_codegen_spirv-types/src/target_spec.rs
+index 9315d2c..aa9c7f3 100644
+--- a/crates/rustc_codegen_spirv-types/src/target_spec.rs
++++ b/crates/rustc_codegen_spirv-types/src/target_spec.rs
+@@ -107 +107,15 @@ impl TargetSpecVersion {
+-        let target_pointer_width = if self >= Rustc_1_93_0 { "32" } else { "\"32\"" };
++        // The physical64 target opts in to a different Rust ABI before rustc
++        // computes layouts or lowers integer-to-pointer casts. Capabilities
++        // alone must not change the width of pointers, usize, or other integers.
++        // Target validity remains the backend's responsibility.
++        let pointer_width =
++            if target_env.starts_with("vulkan") && target_env.ends_with("-physical64") {
++                64
++            } else {
++                32
++            };
++        let target_pointer_width = if self >= Rustc_1_93_0 {
++            pointer_width.to_string()
++        } else {
++            format!("\"{pointer_width}\"")
++        };
+@@ -114 +128 @@ impl TargetSpecVersion {
+-  "data-layout": "e-m:e-p:32:32:32-i64:64-n8:16:32:64",
++  "data-layout": "e-m:e-p:{pointer_width}:{pointer_width}:{pointer_width}-i64:64-n8:16:32:64",
+@@ -137,0 +152,34 @@ impl TargetSpecVersion {
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn pointer_width_is_explicit_in_every_supported_spec_format() {
++        for version in [
++            Rustc_1_76_0,
++            Rustc_1_85_0,
++            Rustc_1_93_0,
++            Rustc_1_94_0,
++            Rustc_1_97_0,
++        ] {
++            for (env, width) in [("vulkan1.3", 32), ("vulkan1.3-physical64", 64)] {
++                let target = SpirvTarget::parse_env(env).unwrap();
++                let spec: serde_json::Value =
++                    serde_json::from_str(&version.format_spec(&target)).unwrap();
++                let expected_width = if version >= Rustc_1_93_0 {
++                    serde_json::json!(width)
++                } else {
++                    serde_json::json!(width.to_string())
++                };
++                assert_eq!(spec["target-pointer-width"], expected_width);
++                assert_eq!(
++                    spec["data-layout"],
++                    format!("e-m:e-p:{width}:{width}:{width}-i64:64-n8:16:32:64")
++                );
++                assert_eq!(spec["env"], env);
++                assert_eq!(spec["llvm-target"], target.target());
++            }
++        }
++    }
++}
+diff --git a/crates/rustc_codegen_spirv/src/target.rs b/crates/rustc_codegen_spirv/src/target.rs
+index 963e24b..e2858f5 100644
+--- a/crates/rustc_codegen_spirv/src/target.rs
++++ b/crates/rustc_codegen_spirv/src/target.rs
+@@ -512,0 +513,3 @@ pub enum SpirvTarget {
++    /// Explicit 64-bit Rust pointer/usize ABI. This does not imply that every
++    /// pointer has PhysicalStorageBuffer storage class.
++    VulkanPhysical64(VulkanTarget),
+@@ -542 +545 @@ impl SpirvTarget {
+-            SpirvTarget::Vulkan(_) => MemoryModel::Vulkan,
++            SpirvTarget::Vulkan(_) | SpirvTarget::VulkanPhysical64(_) => MemoryModel::Vulkan,
+@@ -546,0 +550,7 @@ impl SpirvTarget {
++
++    pub const fn pointer_width(&self) -> u16 {
++        match self {
++            Self::VulkanPhysical64(_) => 64,
++            _ => 32,
++        }
++    }
+@@ -553 +563 @@ impl SpirvTargetVariant for SpirvTarget {
+-            SpirvTarget::Vulkan(t) => t.validate(),
++            SpirvTarget::Vulkan(t) | SpirvTarget::VulkanPhysical64(t) => t.validate(),
+@@ -562 +572 @@ impl SpirvTargetVariant for SpirvTarget {
+-            SpirvTarget::Vulkan(t) => t.to_spirv_tools(),
++            SpirvTarget::Vulkan(t) | SpirvTarget::VulkanPhysical64(t) => t.to_spirv_tools(),
+@@ -571 +581 @@ impl SpirvTargetVariant for SpirvTarget {
+-            SpirvTarget::Vulkan(t) => t.spirv_version(),
++            SpirvTarget::Vulkan(t) | SpirvTarget::VulkanPhysical64(t) => t.spirv_version(),
+@@ -579,0 +590,3 @@ impl SpirvTarget {
++        if let Some(base) = s.strip_suffix("-physical64") {
++            return VulkanTarget::from_str(base).map(Self::VulkanPhysical64);
++        }
+@@ -609,0 +623 @@ impl SpirvTarget {
++            SpirvTarget::VulkanPhysical64(t) => format!("{t}-physical64"),
+@@ -628,0 +643,5 @@ impl SpirvTarget {
++            .chain(
++                VulkanTarget::ALL_VULKAN_TARGETS
++                    .iter()
++                    .map(|t| Self::VulkanPhysical64(*t)),
++            )
+@@ -655,0 +675 @@ impl SpirvTarget {
++        let width = self.pointer_width();
+@@ -659,2 +679,2 @@ impl SpirvTarget {
+-            pointer_width: 32,
+-            data_layout: "e-m:e-p:32:32:32-i64:64-n8:16:32:64".into(),
++            pointer_width: width,
++            data_layout: format!("e-m:e-p:{width}:{width}:{width}-i64:64-n8:16:32:64").into(),
+@@ -712,0 +733,44 @@ mod tests {
++
++    #[test]
++    fn physical64_is_an_explicit_vulkan_abi() {
++        for base in VulkanTarget::ALL_VULKAN_TARGETS {
++            let logical = SpirvTarget::Vulkan(*base);
++            let physical = SpirvTarget::VulkanPhysical64(*base);
++            assert_ne!(physical.target(), logical.target());
++            assert_eq!(logical.rustc_target().pointer_width, 32);
++            assert_eq!(physical.rustc_target().pointer_width, 64);
++            assert_eq!(physical.to_spirv_tools(), logical.to_spirv_tools());
++            assert_eq!(physical.spirv_version(), logical.spirv_version());
++            assert_eq!(physical.memory_model(), logical.memory_model());
++        }
++        for invalid in [
++            "spv1.6-physical64",
++            "naga-wgsl-physical64",
++            "vulkan1.3-physical64-physical64",
++        ] {
++            assert!(SpirvTarget::parse_env(invalid).is_err());
++        }
++        assert!(matches!(
++            SpirvTarget::parse_env("vulkan6.8-physical64"),
++            Err(TargetError::InvalidTargetVersion(_))
++        ));
++    }
++
++    #[test]
++    fn target_json_matches_client_for_all_targets() {
++        use rustc_codegen_spirv_types::TargetSpecVersion;
++        use rustc_target::json::ToJson;
++        // Use rustc_target's serde_json, as in CodegenCx's strict spec check.
++        extern crate serde_json;
++
++        for target in SpirvTarget::all_targets() {
++            let client =
++                rustc_codegen_spirv_types::SpirvTarget::parse_target(&target.target()).unwrap();
++            let client_json: serde_json::Value =
++                serde_json::from_str(&TargetSpecVersion::Rustc_1_97_0.format_spec(&client))
++                    .unwrap();
++            let mut backend_json = target.rustc_target().to_json();
++            backend_json.as_object_mut().unwrap().remove("is-like-gpu");
++            assert_eq!(client_json, backend_json, "{}", target.target());
++        }
++    }
+diff --git a/docs/src/platform-support.md b/docs/src/platform-support.md
+index fd80e7b..b90f1f1 100644
+--- a/docs/src/platform-support.md
++++ b/docs/src/platform-support.md
+@@ -46,0 +47,21 @@ The `rust-gpu` project currently supports a limited number of platforms and grap
++#### experimental 64-bit pointer ABI
++
++Append `-physical64` to a Vulkan target, for example
++`spirv-unknown-vulkan1.3-physical64`, to select eight-byte Rust pointers and
++`usize`. This is an explicit ABI choice made before rustc computes layouts or
++lowers casts. All existing targets retain four-byte pointers and `usize`.
++`u32` stays four bytes and `u64` stays eight bytes on both kinds of target.
++Capabilities alone do not change the Rust ABI.
++
++Build the shader and its dependencies for the same target. The builder's target
++JSON and the compiler's expected target must agree exactly, including pointer
++width and data layout. Do not reuse layouts containing `usize` or raw pointers
++across the two ABIs. An explicit `u64` address field avoids depending on the
++host's pointer width, but does not establish that an address is valid to access.
++
++This initial target support only establishes Rust layout and integer behavior.
++Integer-pointer casts remain rejected, and selecting this target does not yet
++enable physical memory operations or change logical storage classes. Physical
++addressing, alignment and alias rules require separate lowering and validation.
++The layout compiletests do not execute shaders or dereference synthetic values.
++
+@@ -85 +105,0 @@ Currently we don't have specific generations of GPUs for support, as long they s
+-
+diff --git a/tests/compiletests/README.md b/tests/compiletests/README.md
+index 25eb634..ef50895 100644
+--- a/tests/compiletests/README.md
++++ b/tests/compiletests/README.md
+@@ -52,0 +53,3 @@ full reference can be found in the
++* Replace `-` with `_` in target names in `only`/`ignore` directives, e.g.
++  `// only-vulkan1.3_physical64`. The harness escapes hyphens in stage IDs because
++  `compiletest_rs` otherwise matches only the part before the first hyphen.
+diff --git a/tests/compiletests/src/main.rs b/tests/compiletests/src/main.rs
+index 1b3a37d..61ec458 100644
+--- a/tests/compiletests/src/main.rs
++++ b/tests/compiletests/src/main.rs
+@@ -148,0 +149,4 @@ impl Runner {
++            // compiletest_rs only matches the part before the first '-' in a
++            // stage ID. Preserve the full target/variation identity so an
++            // ABI-specific case is neither skipped nor run for the other ABI.
++            let stage_id = stage_id.replace('-', "_");
+diff --git a/tests/compiletests/ui/physical_storage/cast_baseline.rs b/tests/compiletests/ui/physical_storage/cast_baseline.rs
+new file mode 100644
+index 0000000..6b5cdf7
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/cast_baseline.rs
+@@ -0,0 +1,25 @@
++// build-fail
++// compile-flags: -C target-feature=+Int64,+PhysicalStorageBufferAddresses,+ext:SPV_KHR_physical_storage_buffer
++
++#![forbid(unsafe_code)]
++
++use spirv_std::spirv;
++
++#[inline(never)]
++fn to_pointer(address: u64) -> *mut u32 {
++    address as *mut u32
++}
++
++#[inline(never)]
++fn to_address(pointer: *mut u32) -> u64 {
++    pointer as u64
++}
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] address: &u64,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut u64,
++) {
++    // This probe never dereferences the pointer or creates a reference from it.
++    *output = to_address(to_pointer(*address));
++}
+diff --git a/tests/compiletests/ui/physical_storage/cast_baseline.stderr b/tests/compiletests/ui/physical_storage/cast_baseline.stderr
+new file mode 100644
+index 0000000..818704a
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/cast_baseline.stderr
+@@ -0,0 +1,46 @@
++error: cannot convert integers to pointers
++  --> <$DIR/cast_baseline.rs>:10:5
++   |
++LL |     address as *mut u32
++   |     ^^^^^^^^^^^^^^^^^^^
++   |
++note: used from within `cast_baseline::to_pointer`
++  --> <$DIR/cast_baseline.rs>:10:5
++   |
++LL |     address as *mut u32
++   |     ^^^^^^^^^^^^^^^^^^^
++note: called by `cast_baseline::main`
++  --> <$DIR/cast_baseline.rs>:24:26
++   |
++LL |     *output = to_address(to_pointer(*address));
++   |                          ^^^^^^^^^^^^^^^^^^^^
++note: called by `main`
++  --> <$DIR/cast_baseline.rs>:19:8
++   |
++LL | pub fn main(
++   |        ^^^^
++
++error: cannot convert pointers to integers
++  --> <$DIR/cast_baseline.rs>:15:5
++   |
++LL |     pointer as u64
++   |     ^^^^^^^^^^^^^^
++   |
++note: used from within `cast_baseline::to_address`
++  --> <$DIR/cast_baseline.rs>:15:5
++   |
++LL |     pointer as u64
++   |     ^^^^^^^^^^^^^^
++note: called by `cast_baseline::main`
++  --> <$DIR/cast_baseline.rs>:24:15
++   |
++LL |     *output = to_address(to_pointer(*address));
++   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++note: called by `main`
++  --> <$DIR/cast_baseline.rs>:19:8
++   |
++LL | pub fn main(
++   |        ^^^^
++
++error: aborting due to 2 previous errors
++
+diff --git a/tests/compiletests/ui/physical_storage/layout_baseline.rs b/tests/compiletests/ui/physical_storage/layout_baseline.rs
+new file mode 100644
+index 0000000..7c93093
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/layout_baseline.rs
+@@ -0,0 +1,54 @@
++// build-pass
++// only-vulkan1.3
++// compile-flags: -C target-feature=+Int64
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![forbid(unsafe_code)]
++
++use core::mem::{align_of, offset_of, size_of};
++use spirv_std::spirv;
++
++#[repr(C)]
++pub struct Root {
++    tag: u32,
++    address: u64,
++    value: u32,
++}
++
++#[repr(C)]
++struct Nested {
++    tag: u32,
++    roots: [Root; 2],
++}
++
++const _: () = {
++    assert!(size_of::<u32>() == 4);
++    assert!(size_of::<u64>() == 8);
++    assert!(size_of::<usize>() == 4);
++    assert!(size_of::<*mut u32>() == 4);
++    assert!(align_of::<Root>() == 8);
++    assert!(offset_of!(Root, address) == 8);
++    assert!(offset_of!(Root, value) == 16);
++    assert!(size_of::<Root>() == 24);
++    assert!(offset_of!(Nested, roots) == 8);
++    assert!(size_of::<Nested>() == 56);
++};
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] root: &Root,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u32; 8],
++) {
++    let (sum, carry) = root.value.overflowing_add(1);
++    output[0] = sum;
++    output[1] = carry as u32;
++    output[2] = root.address as u32;
++    output[3] = (root.address >> 32) as u32;
++    output[4] = (root.address as usize) as u32;
++    output[5] = (u64::from(root.value) < root.address) as u32;
++    output[6] = root.value.wrapping_add(1);
++    output[7] = (u64::from(root.value) >> 32) as u32;
++}
+diff --git a/tests/compiletests/ui/physical_storage/layout_baseline.stderr b/tests/compiletests/ui/physical_storage/layout_baseline.stderr
+new file mode 100644
+index 0000000..fff6529
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/layout_baseline.stderr
+@@ -0,0 +1,103 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpMemoryModel Logical Vulkan
++               OpEntryPoint GLCompute %1 "main" %root %output
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %Root "Root"
++               OpMemberName %Root 0 "tag"
++               OpMemberName %Root 1 "address"
++               OpMemberName %Root 2 "value"
++               OpName %root "root"
++               OpName %output "output"
++               OpMemberDecorate %Root 0 Offset 0
++               OpMemberDecorate %Root 1 Offset 8
++               OpMemberDecorate %Root 2 Offset 16
++               OpDecorate %_struct_8 Block
++               OpMemberDecorate %_struct_8 0 Offset 0
++               OpDecorate %9 ArrayStride 4
++               OpDecorate %_struct_10 Block
++               OpMemberDecorate %_struct_10 0 Offset 0
++               OpDecorate %output Binding 0
++               OpDecorate %output DescriptorSet 0
++        %u32 = OpTypeInt 32 0
++        %u64 = OpTypeInt 64 0
++       %Root = OpTypeStruct %u32 %u64 %u32
++  %_struct_8 = OpTypeStruct %Root
++%_ptr_PushConstant__struct_8 = OpTypePointer PushConstant %_struct_8
++      %u32_8 = OpConstant %u32 8
++          %9 = OpTypeArray %u32 %u32_8
++ %_struct_10 = OpTypeStruct %9
++%_ptr_StorageBuffer__struct_10 = OpTypePointer StorageBuffer %_struct_10
++       %void = OpTypeVoid
++         %17 = OpTypeFunction %void
++%_ptr_PushConstant_Root = OpTypePointer PushConstant %Root
++       %root = OpVariable %_ptr_PushConstant__struct_8 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_StorageBuffer_9 = OpTypePointer StorageBuffer %9
++     %output = OpVariable %_ptr_StorageBuffer__struct_10 StorageBuffer
++%_ptr_PushConstant_u32 = OpTypePointer PushConstant %u32
++      %u32_2 = OpConstant %u32 2
++      %u32_1 = OpConstant %u32 1
++       %bool = OpTypeBool
++%_ptr_StorageBuffer_u32 = OpTypePointer StorageBuffer %u32
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++     %u64_32 = OpConstant %u64 32
++      %u32_3 = OpConstant %u32 3
++      %u32_4 = OpConstant %u32 4
++      %u32_5 = OpConstant %u32 5
++      %u32_6 = OpConstant %u32 6
++      %u32_7 = OpConstant %u32 7
++          %1 = OpFunction %void None %17
++         %33 = OpLabel
++         %34 = OpInBoundsAccessChain %_ptr_PushConstant_Root %root %u32_0
++         %35 = OpInBoundsAccessChain %_ptr_StorageBuffer_9 %output %u32_0
++         %36 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %34 %u32_2
++         %37 = OpLoad %u32 %36
++         %38 = OpIAdd %u32 %37 %u32_1
++         %39 = OpULessThan %bool %38 %37
++         %40 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_0
++               OpStore %40 %38
++         %41 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_1
++         %42 = OpSelect %u32 %39 %u32_1 %u32_0
++               OpStore %41 %42
++         %43 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %34 %u32_1
++         %44 = OpLoad %u64 %43
++         %45 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_2
++         %46 = OpUConvert %u32 %44
++               OpStore %45 %46
++         %47 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %34 %u32_1
++         %48 = OpLoad %u64 %47
++         %49 = OpShiftRightLogical %u64 %48 %u64_32
++         %50 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_3
++         %51 = OpUConvert %u32 %49
++               OpStore %50 %51
++         %52 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %34 %u32_1
++         %53 = OpLoad %u64 %52
++         %54 = OpUConvert %u32 %53
++         %55 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_4
++               OpStore %55 %54
++         %56 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %34 %u32_2
++         %57 = OpLoad %u32 %56
++         %58 = OpUConvert %u64 %57
++         %59 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %34 %u32_1
++         %60 = OpLoad %u64 %59
++         %61 = OpULessThan %bool %58 %60
++         %62 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_5
++         %63 = OpSelect %u32 %61 %u32_1 %u32_0
++               OpStore %62 %63
++         %64 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %34 %u32_2
++         %65 = OpLoad %u32 %64
++         %66 = OpIAdd %u32 %65 %u32_1
++         %67 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_6
++               OpStore %67 %66
++         %68 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %34 %u32_2
++         %69 = OpLoad %u32 %68
++         %70 = OpUConvert %u64 %69
++         %71 = OpShiftRightLogical %u64 %70 %u64_32
++         %72 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_7
++         %73 = OpUConvert %u32 %71
++               OpStore %72 %73
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/physical_storage/layout_physical64.rs b/tests/compiletests/ui/physical_storage/layout_physical64.rs
+new file mode 100644
+index 0000000..1646fff
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/layout_physical64.rs
+@@ -0,0 +1,67 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+Int64
++// compile-flags: -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![forbid(unsafe_code)]
++
++use core::mem::{align_of, offset_of, size_of};
++use spirv_std::spirv;
++
++#[repr(C)]
++pub struct Root {
++    tag: u32,
++    address: u64,
++    value: u32,
++}
++
++#[repr(C)]
++struct PointerRoot {
++    tag: u32,
++    pointer: *mut u32,
++    length: usize,
++}
++
++#[repr(C)]
++struct Nested {
++    tag: u32,
++    roots: [PointerRoot; 2],
++}
++
++const _: () = {
++    assert!(size_of::<u32>() == 4);
++    assert!(size_of::<u64>() == 8);
++    assert!(size_of::<usize>() == 8);
++    assert!(size_of::<*mut u32>() == 8);
++    assert!(align_of::<*mut u32>() == 8);
++    assert!(align_of::<Root>() == 8);
++    assert!(offset_of!(Root, address) == 8);
++    assert!(offset_of!(Root, value) == 16);
++    assert!(size_of::<Root>() == 24);
++    assert!(offset_of!(PointerRoot, pointer) == 8);
++    assert!(offset_of!(PointerRoot, length) == 16);
++    assert!(size_of::<PointerRoot>() == 24);
++    assert!(offset_of!(Nested, roots) == 8);
++    assert!(size_of::<Nested>() == 56);
++    // A non-dereferenced high-bit pattern only tests integer representation.
++    assert!(0xfedc_ba98_7654_3210_u64 as usize as u64 == 0xfedc_ba98_7654_3210);
++};
++
++#[spirv(compute(threads(1)))]
++pub fn main(
++    #[spirv(push_constant)] root: &Root,
++    #[spirv(storage_buffer, descriptor_set = 0, binding = 0)] output: &mut [u32; 8],
++) {
++    let (sum, carry) = root.value.overflowing_add(1);
++    output[0] = sum;
++    output[1] = carry as u32;
++    output[2] = root.address as u32;
++    output[3] = (root.address >> 32) as u32;
++    output[4] = ((root.address as usize) >> 32) as u32;
++    output[5] = (u64::from(root.value) < root.address) as u32;
++    output[6] = root.value.wrapping_add(1);
++    output[7] = (u64::from(root.value) >> 32) as u32;
++}
+diff --git a/tests/compiletests/ui/physical_storage/layout_physical64.stderr b/tests/compiletests/ui/physical_storage/layout_physical64.stderr
+new file mode 100644
+index 0000000..d16a5dc
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/layout_physical64.stderr
+@@ -0,0 +1,104 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpMemoryModel Logical Vulkan
++               OpEntryPoint GLCompute %1 "main" %root %output
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %Root "Root"
++               OpMemberName %Root 0 "tag"
++               OpMemberName %Root 1 "address"
++               OpMemberName %Root 2 "value"
++               OpName %root "root"
++               OpName %output "output"
++               OpMemberDecorate %Root 0 Offset 0
++               OpMemberDecorate %Root 1 Offset 8
++               OpMemberDecorate %Root 2 Offset 16
++               OpDecorate %_struct_8 Block
++               OpMemberDecorate %_struct_8 0 Offset 0
++               OpDecorate %9 ArrayStride 4
++               OpDecorate %_struct_10 Block
++               OpMemberDecorate %_struct_10 0 Offset 0
++               OpDecorate %output Binding 0
++               OpDecorate %output DescriptorSet 0
++        %u32 = OpTypeInt 32 0
++        %u64 = OpTypeInt 64 0
++       %Root = OpTypeStruct %u32 %u64 %u32
++  %_struct_8 = OpTypeStruct %Root
++%_ptr_PushConstant__struct_8 = OpTypePointer PushConstant %_struct_8
++      %u32_8 = OpConstant %u32 8
++          %9 = OpTypeArray %u32 %u32_8
++ %_struct_10 = OpTypeStruct %9
++%_ptr_StorageBuffer__struct_10 = OpTypePointer StorageBuffer %_struct_10
++       %void = OpTypeVoid
++         %17 = OpTypeFunction %void
++%_ptr_PushConstant_Root = OpTypePointer PushConstant %Root
++       %root = OpVariable %_ptr_PushConstant__struct_8 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_StorageBuffer_9 = OpTypePointer StorageBuffer %9
++     %output = OpVariable %_ptr_StorageBuffer__struct_10 StorageBuffer
++%_ptr_PushConstant_u32 = OpTypePointer PushConstant %u32
++      %u32_2 = OpConstant %u32 2
++      %u32_1 = OpConstant %u32 1
++       %bool = OpTypeBool
++%_ptr_StorageBuffer_u32 = OpTypePointer StorageBuffer %u32
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++     %u64_32 = OpConstant %u64 32
++      %u32_3 = OpConstant %u32 3
++      %u32_4 = OpConstant %u32 4
++      %u32_5 = OpConstant %u32 5
++      %u32_6 = OpConstant %u32 6
++      %u32_7 = OpConstant %u32 7
++          %1 = OpFunction %void None %17
++         %33 = OpLabel
++         %34 = OpInBoundsAccessChain %_ptr_PushConstant_Root %root %u32_0
++         %35 = OpInBoundsAccessChain %_ptr_StorageBuffer_9 %output %u32_0
++         %36 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %34 %u32_2
++         %37 = OpLoad %u32 %36
++         %38 = OpIAdd %u32 %37 %u32_1
++         %39 = OpULessThan %bool %38 %37
++         %40 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_0
++               OpStore %40 %38
++         %41 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_1
++         %42 = OpSelect %u32 %39 %u32_1 %u32_0
++               OpStore %41 %42
++         %43 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %34 %u32_1
++         %44 = OpLoad %u64 %43
++         %45 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_2
++         %46 = OpUConvert %u32 %44
++               OpStore %45 %46
++         %47 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %34 %u32_1
++         %48 = OpLoad %u64 %47
++         %49 = OpShiftRightLogical %u64 %48 %u64_32
++         %50 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_3
++         %51 = OpUConvert %u32 %49
++               OpStore %50 %51
++         %52 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %34 %u32_1
++         %53 = OpLoad %u64 %52
++         %54 = OpShiftRightLogical %u64 %53 %u64_32
++         %55 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_4
++         %56 = OpUConvert %u32 %54
++               OpStore %55 %56
++         %57 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %34 %u32_2
++         %58 = OpLoad %u32 %57
++         %59 = OpUConvert %u64 %58
++         %60 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %34 %u32_1
++         %61 = OpLoad %u64 %60
++         %62 = OpULessThan %bool %59 %61
++         %63 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_5
++         %64 = OpSelect %u32 %62 %u32_1 %u32_0
++               OpStore %63 %64
++         %65 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %34 %u32_2
++         %66 = OpLoad %u32 %65
++         %67 = OpIAdd %u32 %66 %u32_1
++         %68 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_6
++               OpStore %68 %67
++         %69 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %34 %u32_2
++         %70 = OpLoad %u32 %69
++         %71 = OpUConvert %u64 %70
++         %72 = OpShiftRightLogical %u64 %71 %u64_32
++         %73 = OpInBoundsAccessChain %_ptr_StorageBuffer_u32 %35 %u32_7
++         %74 = OpUConvert %u32 %72
++               OpStore %73 %74
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
