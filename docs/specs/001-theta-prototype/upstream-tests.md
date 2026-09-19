@@ -10,6 +10,8 @@ this page is the primary contribution crosswalk for [US6 and FR-015](spec.md). [
 
 [E-022](../../execution.md#e-022-2026-09-19-tested-the-physical-pointer-library) adds P10's explicit-u64 library, native layout/arithmetic checks, target-rejection fixtures and actual scalar library execution. aligned array copies pass source and default/qptr optimizer tests, with aggregate runtime still pending. the unsafe contract and absent restriction/reference APIs remain explicit. this does not close P08/P09/P11 or the full upstream gate.
 
+[E-023](../../execution.md#e-023-2026-09-19-compiled-native-heap-rust-shaders) adds compile-only H01/H02/H04/H08 evidence through explicit Rust assembly and ordinary Rust vector arithmetic. native heap declarations, descriptor-size constants, ID strides, image/sampler lookup and a physical output survive default, optimized and qptr compilation. negative feature cases reject. the two-ABI source matrix passes 24 required pairs. 120 adjacent cases pass, but an existing subpass-coordinate case fails on both candidate and prior compiler sources. no broader-gate pass, heap runtime, divergent index or additional-stage result is claimed.
+
 three different authorities are recorded: the draft author's checklist, a maintainer's concrete review concerns, and repository CI. none alone establishes eventual acceptance.
 
 ## PR #237 checklist
