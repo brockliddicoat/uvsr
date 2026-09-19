@@ -6,10 +6,10 @@
 
 | area | observed state |
 | --- | --- |
-| first-party Theta Rust | one diagnostic Rust test module, with `forbid(unsafe_code)`, and no Cargo workspace or runtime implementation. no first-party Rust unsafe exception exists |
-| proposed native and shader boundaries | candidates only, listed below. none has implementation approval by implication |
+| first-party Theta Rust | the diagnostic module uses `forbid(unsafe_code)`. no Cargo workspace or runtime port exists. the contributed compile-only shader fixture is recorded separately as U-001 |
+| native and shader boundaries | U-001 is implemented for compile-only use. native runtime boundaries remain unimplemented and need their own complete records |
 | dependencies, generated code, macros, external hosts | pinned NGAPI C++ and Vulkan SDK 1.4.357.0 were used by the diagnostic below. these are native dependencies, not safe Rust or an audited finished Rust port |
-| RustGPU contribution | tracked safe-Rust prerequisite patches pass all 16 assembly-input probes with both tool configurations. E-016 additionally compiles and validates Rust layout/integer controls for 32-bit and explicit 64-bit pointer ABIs. physical memory code generation and runtime work remain pending. no verified unsafe shader boundary is claimed |
+| RustGPU contribution | E-015 passed all 16 assembly-input probes in both tool configurations. E-018 adds compiled-tools evidence for aligned scalar reads/writes, mixed memory operands and both pointer ABIs. U-001 has an unsafe entry and three raw accesses with one narrow lint exception. compilation does not establish its runtime obligations |
 | runtime and soundness evidence | actual NGAPI device/command-context probes and non-executed SPIRV-Tools fixtures passed at E-007. no Rust shader execution or Rust boundary soundness result exists |
 
 source pins are in [research](docs/specs/001-theta-prototype/research.md), and current evidence is in [execution](docs/execution.md). **zero Rust implementation is not evidence of a safe completed system.** replace these rows with revision-specific Rust inventories as code is added.
@@ -31,6 +31,8 @@ E-015 audit: the same compiler sources pass the compiled-tools configuration aga
 E-016 audit: the [explicit pointer-width foundation](patches/rustgpu-prerequisites/README.md#explicit-rust-pointer-width-foundation) changes target selection, JSON generation and test selection using safe Rust. source probes use `forbid(unsafe_code)` and no raw-pointer dereference. synthetic high bits test integer representation only. raw casts retain rejection. coordinator self-review checked the complete diff, strict target agreement, layout assertions and all emitted semantic instructions before approving expectations. no unsafe site, native call, FFI or lint waiver is added, and no U record is needed. independent review, physical access and GPU soundness remain unproved.
 
 E-017 audit: the [physical conversion patches](patches/rustgpu-prerequisites/README.md#physical-address-conversions) use safe compiler transformations and non-executed test fixtures. source probes forbid unsafe and only transport addresses. coordinator self-review checked source-signed extension, narrowing after 64-bit conversion, storage-class conflicts, final alias placement, preservation of explicit restrictions, qptr's concrete-address boundary and exact test output. no unsafe operation, FFI, reference fabrication, safe memory-access API or lint waiver is added. pointer-slot/array annotation checks are structural evidence, not a complete aggregate-access guarantee. no new U record, independent review or GPU soundness claim is warranted.
+
+E-018 audit: [U-001](#u-001-compile-only-physical-u32-access) registers the first compile-only shader access boundary. all newly changed compiler transformations and the other new source fixture remain safe Rust. self-review checked the narrow exception, all three operation contracts, exact emitted alignment and logical interfaces, successful deny lints, and the full compiler/source regression gates. native calls, FFI declarations and runtime resource owners did not change. the dependency/compiler/macro implementations are not thereby fully audited, and no GPU execution or independent safety review is claimed.
 
 E-007 diagnostic audit: [capabilities.cpp](tools/theta/ngapi-probe/capabilities.cpp) checks device creation before querying borrowed caps, waits idle and destroys the same device. it exposes no Rust API. the other target compiles unchanged NGAPI `d60b10bdfe15c0f350d6d291d8e06afef3fe7d38` command-context tests, which own their allocations and completion. Vulkan SDK 1.4.357.0 supplies headers/import libraries and the explicit validation layer. these dependencies contain native code and raw memory operations, excluded from the first-party Rust count, not claimed safe through that exclusion. review: coordinator self-review, 2026-09-19, source/control-flow inspection plus Debug/Release execution. no independent review.
 
@@ -61,7 +63,7 @@ a safe signature promises that safe callers cannot violate the implementation's 
 
 ## boundary registry
 
-current implemented entries: **none**. add one `U-nnn` entry here for each distinct implemented boundary. this file owns the overview and complete review record. large supporting proofs may be linked, but the necessity, obligations, status, and source sites must remain visible here.
+current implemented entries: **U-001, a compile-only physical-access shader fixture**. it has not been dispatched. add one `U-nnn` entry here for each distinct implemented boundary. this file owns the overview and complete review record. large supporting proofs may be linked, but the necessity, obligations, status, and source sites must remain visible here.
 
 each entry must contain all fields below. mark an inapplicable field with a reason.
 
@@ -80,10 +82,29 @@ each entry must contain all fields below. mark an inapplicable field with a reas
 | remaining risk and status | proposed, implemented-unreviewed, reviewed, or retired. list open assumptions and blockers without implying tests prove soundness |
 | change history | record contract changes, added/removed sites, changed callers or dependencies, and the reason to repeat review |
 
-inline template for the first implementation:
+### U-001. compile-only physical u32 access
+
+status: reviewed for compile-only use. execution requires a host that establishes the contract below. no runtime safety result is claimed.
+
+| field | record |
+| --- | --- |
+| identity and scope | `tests/compiletests/ui/physical_storage/access_physical64.rs::main` in the [aligned-access patch](patches/rustgpu-prerequisites/rustgpu-physical-access.patch), based on `0983e4e07ca382804c9f0084b36e049f8613d211`. fixture SHA-256 `18722cce7665957041773f09eeb42b6e343d8dc3a8ebbe6fc86868c8e8e33243`. the patch manifest pins the verified compiler commit. sites are the unsafe entry declaration and its two reads and one write. |
+| necessity | T011 needs actual Rust load/store lowering through a physical address. safe address transport cannot generate those memory operations, and an assembly-only fixture cannot prove Rust lowering. a conventional descriptor access would exercise a different pointer class. |
+| interface and owners | `pub unsafe fn main` states the caller obligations. no safe wrapper is exposed. the compiletest harness compiles only and never invokes the entry. a future runtime host must allocate, initialize, validate, synchronize and retire the allocation before this fixture may execute. |
+| pointer and value validity | caller supplies a real device address for a live four-byte allocation containing an initialized u32, with alignment at least four. all u32 representations are valid. address transport is u64 and does not perform offset arithmetic. no Rust reference is fabricated from the raw address. logical output is a separate two-element u32 array. |
+| lifetime and aliasing | physical allocation remains live and exclusively accessible by the one invocation until queue completion. it is disjoint from push constants and output, with no concurrent CPU/GPU aliases. the fixture does not move, map, free or reuse resources. |
+| concurrency and completion | dispatch exactly one invocation. host establishes prior initialization visibility and waits for completion plus visibility before reading or retiring resources. the fixture provides no Send/Sync implementation, queue API or completion primitive. |
+| failure paths | fixture owns no allocation and creates no native object. compilation/validation failure prevents dispatch. it does not attempt to recover from an invalid pointer. a future host must handle allocation/pipeline/submit failure, device loss and retirement separately. |
+| proof at each site | first read relies on the entry's initialization/alignment/exclusivity contract. write uses the same valid allocation and wrapping u32 arithmetic. final read observes this invocation's initialized value. local SAFETY comments enumerate these obligations. the compiler cannot establish host allocation validity or completion. |
+| verification | the baseline failed SPIR-V validation for missing Aligned operands. the corrected Rust source compiles and validates with the pinned nightly and compiled tools. manually reviewed output has two physical loads and one store with Aligned 4, while logical accesses carry no alignment. the two-target source gate passes without blessing. no CPU call or GPU dispatch of this fixture occurred. synthetic addresses are never dereferenced. |
+| review | coordinator self-review, 2026-09-19, fixture hash above and E-018 patch. source inventory found one unsafe function, three explicit unsafe blocks and one narrow `allow(unsafe_code)`, all covered here. crate-level `deny(unsafe_code)` and `deny(unsafe_op_in_unsafe_fn)` compile successfully. reviewed the spirv entry macro's emitted interfaces and complete instruction stream. no independent review or complete dependency/macro safety audit. |
+| remaining risk | compile-only use avoids execution but does not prove GPU safety. the host obligations are currently unenforced because no runtime host for this fixture exists. aggregate access, unaligned access, reference creation, races, atomics and arbitrary dispatch remain outside this record. |
+| change history | introduced for the aligned scalar-access probe after E-017. repeat review when adding sites, changing data types/layout, exporting a callable library API or introducing a runtime caller. |
+
+template for another boundary:
 
 ```text
-### U-001. operation name
+### U-nnn. operation name
 status / revision / scope / source sites:
 required behavior and insufficient safe alternatives:
 public interface and owner/caller obligations:
