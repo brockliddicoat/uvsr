@@ -63,3 +63,9 @@ application: check stable case IDs and the executed denominator for each configu
 **observed, pinned RustGPU cast probes.** at [E-017](execution.md#e-017-2026-09-19-lowered-physical-address-conversions), a shader passed SPIR-V validation while zero-extending a signed integer before conversion to a pointer. the same rustc's native backend and its SSA caller contract required sign extension. the original lowering chose conversion from destination signedness instead of rustc's source-signedness argument. correcting that also required an unsigned intermediate for `OpUConvert` when the final Rust type was signed.
 
 application: test signed and unsigned sources, widening and truncation, and inspect emitted operations against the language's bit-level result. use structural assertions for the compiler's alias policy. the current specification permits absent alias decorations, so validation alone cannot establish that policy. limit: these checks establish compiler behavior for the selected cases, not GPU execution or correctness of every pointer operation.
+
+## L-010. check memory effects after optimization
+
+**observed, pinned compiler/tool regression.** at [E-019](execution.md#e-019-2026-09-19-preserved-qptr-memory-effects), qptr and linking retained both volatile loads, but SPIRV-Tools aggressive dead-code elimination removed the one with an unused result. the optimized module still validated. preserving operands during serialization did not establish their later effects.
+
+application: assert required effect counts, flags and scope identities after optimization. include an ordinary removable access as a control so disabling optimization cannot satisfy the test. limit: this result covers explicit Volatile OpLoad and the tested memory forms. it does not prove all native optimizer semantics, Rust volatile intrinsic support or GPU behavior.

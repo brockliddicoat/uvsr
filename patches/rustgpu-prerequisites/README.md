@@ -2,7 +2,7 @@
 
 these are tested changes from separately owned upstream checkouts. [sources.json](sources.json) pins each base, local verified commit, patch hash and controlling license. they are not published upstream contributions or proof of complete RustGPU support.
 
-latest checkpoint: all 16 required pipeline probes pass with both installed and compiled tools after the [heap metadata patches](#heap-metadata-and-dependency-retention). [the two-configuration gate](#two-configuration-compiler-gate) records the integration. earlier results below preserve the evidence at each incremental patch.
+latest checkpoint: [qptr memory operands and volatile loads](#qptr-memory-operands-and-volatile-loads) adds actual load/store lowering and a separately tested native optimizer prerequisite. the original 16 probes passed both tool configurations at the [two-configuration gate](#two-configuration-compiler-gate). the new volatile regression requires patched compiled tools. earlier results below preserve the evidence at each incremental patch.
 
 ## rspirv untyped globals
 
@@ -153,3 +153,15 @@ cargo run --release --locked -p compiletests --no-default-features --features us
 ```
 
 [E-018](../../docs/execution.md#e-018-2026-09-19-compiled-aligned-physical-accesses) owns exact counts and limits. the scalar raw-access source has an explicitly unsafe entry and a complete caller contract, registered as [U-001](../../UNSAFE.md#u-001-compile-only-physical-u32-access). compilation never dispatches a synthetic address. the panic fixture forbids unsafe and retains the upstream formatter's explicit unprintable 64-bit usize placeholders. no GPU execution, full operation parity or P07 qptr memory-operand lowering is claimed. MIT OR Apache-2.0 terms are unchanged.
+
+## qptr memory operands and volatile loads
+
+[spirt-qptr-memory.patch](spirt-qptr-memory.patch) follows the physical-address patch. QPtr loads/stores retain memory flags and literals, while scope IDs remain ordinary instruction inputs. printing uses the SPIR-V operand grammar, and lifting reconstructs their order. tests require actual qptr operations before lifting, exact operands afterward, and unchanged physical-pointer instructions. [rustgpu-qptr-memory.patch](rustgpu-qptr-memory.patch) follows the aligned-access patch and tests effects through ordinary/qptr linking, aggressive dead-code elimination and performance optimization. both retain MIT OR Apache-2.0 terms.
+
+[spirv-tools-volatile-load.patch](spirv-tools-volatile-load.patch) is a separate native prerequisite under [Apache-2.0](../../legal/licenses/SPIRV-Tools-APACHE.txt). it prevents explicit Volatile OpLoad instructions from being classified as effect-free. the regression requires retention of an unused volatile load, flags, scopes and physical store alignment, while an ordinary unused load is removed. [SPIR-V memory operands](https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html#Memory_Operands) define the observable volatile behavior. validation alone did not catch its loss.
+
+apply the SPIR-T and RustGPU patches at their exact manifest bases with `--unidiff-zero --index`. first apply the earlier wrapper/tool update and regenerate its tables as documented above. then apply the native patch **inside** that wrapper's owned `spirv-tools-sys/spirv-tools` checkout at `9a49b0883b9b635689a85b5647dbfcb223268151`, using the same flags. retain this patched native tree when building the wrapper. the wrapper commit and header pin stay unchanged. the generated tools version string still identifies the native base, so record the native patch hash as well.
+
+run standalone SPIR-T tests, then the compiled-tools compiler/shared-type gate and two-target `physical_storage` source command above. the existing storage/cast/panic command checks adjacent behavior after the native dependency change. [E-019](../../docs/execution.md#e-019-2026-09-19-preserved-qptr-memory-effects) owns results, failed controls and source identities. RustGPU formatting passes, while SPIR-T retains its previously recorded whole-repository format/Clippy limitations.
+
+the installed SDK's unpatched optimizer still fails the volatile reproducer. a patched CLI build and the full native C++/upstream CI suites remain pending. do not skip the new regression to make that configuration pass. these are non-executed assembly/compiler tests, not Rust volatile-intrinsic support, general pointer-operation parity or P07's GPU execution evidence.
