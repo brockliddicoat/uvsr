@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "patches": [
+    {
+      "file": "rspirv-untyped-global.patch",
+      "sha256": "7b31099a3e4fa0b2c09ee1b642f63d046b93d907d9b5498c12e3b3ee47b27af5",
+      "repository": "https://github.com/gfx-rs/rspirv",
+      "base": "8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4",
+      "local_verified_commit": "7e01958be8984892e56af92e7359f897dcaef175",
+      "license": "Apache-2.0",
+      "license_file": "../../legal/licenses/rspirv-Apache-2.0.txt",
+      "existing_upstream_work": "https://github.com/gfx-rs/rspirv/pull/264",
+      "apply_flags": [
+        "--unidiff-zero"
+      ]
+    }
+  ]
+}

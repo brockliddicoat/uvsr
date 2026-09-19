@@ -1,0 +1,89 @@
+diff --git a/rspirv/dr/loader.rs b/rspirv/dr/loader.rs
+index af21f1e..c67d339 100644
+--- a/rspirv/dr/loader.rs
++++ b/rspirv/dr/loader.rs
+@@ -157 +157 @@ impl binary::Consumer for Loader {
+-            spirv::Op::Variable if self.function.is_none() => {
++            spirv::Op::Variable | spirv::Op::UntypedVariableKHR if self.function.is_none() => {
+@@ -284,0 +285 @@ mod tests {
++    use crate::binary::Assemble;
+@@ -287,0 +289,79 @@ mod tests {
++    #[test]
++    fn test_load_untyped_variable() {
++        let mut b = dr::Builder::new();
++        b.set_version(1, 6);
++        let void = b.type_void();
++        let word = b.type_int(32, 0);
++        let global_ptr = b.type_untyped_pointer_khr(spirv::StorageClass::StorageBuffer);
++        let heap_ptr = b.type_untyped_pointer_khr(spirv::StorageClass::UniformConstant);
++        let local_ptr = b.type_untyped_pointer_khr(spirv::StorageClass::Function);
++        let function_type = b.type_function(void, vec![]);
++
++        // Exercise both forms of the optional Data Type operand. The loader
++        // routes instructions; validation of the resource interface is separate.
++        let global = b.id();
++        let heap = b.id();
++        for (id, pointer_type, operands) in [
++            (
++                global,
++                global_ptr,
++                vec![
++                    dr::Operand::StorageClass(spirv::StorageClass::StorageBuffer),
++                    dr::Operand::IdRef(word),
++                ],
++            ),
++            (
++                heap,
++                heap_ptr,
++                vec![dr::Operand::StorageClass(
++                    spirv::StorageClass::UniformConstant,
++                )],
++            ),
++        ] {
++            b.module_mut()
++                .types_global_values
++                .push(dr::Instruction::new(
++                    spirv::Op::UntypedVariableKHR,
++                    Some(pointer_type),
++                    Some(id),
++                    operands,
++                ));
++        }
++        b.begin_function(void, None, spirv::FunctionControl::NONE, function_type)
++            .unwrap();
++        b.begin_block(None).unwrap();
++        let local = b
++            .untyped_variable_khr(
++                local_ptr,
++                None,
++                spirv::StorageClass::Function,
++                Some(word),
++                None,
++            )
++            .unwrap();
++        b.ret().unwrap();
++        b.end_function().unwrap();
++
++        let original = b.module();
++        let words = original.assemble();
++        let loaded = dr::load_words(&words).unwrap();
++        assert_eq!(loaded.assemble(), words);
++        assert_eq!(
++            loaded
++                .types_global_values
++                .iter()
++                .filter(|inst| inst.class.opcode == spirv::Op::UntypedVariableKHR)
++                .map(|inst| inst.result_id.unwrap())
++                .collect::<Vec<_>>(),
++            [global, heap]
++        );
++        assert_eq!(
++            loaded.functions[0].blocks[0].instructions[0].result_id,
++            Some(local)
++        );
++        assert_eq!(
++            loaded.functions[0].blocks[0].instructions[0].class.opcode,
++            spirv::Op::UntypedVariableKHR
++        );
++    }
++
