@@ -1,0 +1,67 @@
+# implementation tasks
+
+implementation began on 2026-09-19. checked boxes have observed checkpoint evidence in [execution](../../execution.md). stable IDs are retained for auditability, with retired IDs listed at the end.
+
+select primary M0-M3 work first. supporting work may proceed when it directly helps the contribution or when independent primary work is blocked. eligibility does not authorize launching agents. each task must retain exact source/configuration, decisive evidence, limitations, and the next action.
+
+**at every meaningful checkpoint:** reconcile [UNSAFE.md](../../../UNSAFE.md), append [execution](../../execution.md), consider [lessons](../../lessons.md), and update the ignored work card. do not mark unrun tasks complete.
+
+## M0. Vulkan baseline
+
+- [x] T001 [US1, US6] compare live main with [research](research.md), read current instructions, pin activation sources and owned paths, and create one work card. inventory the Windows Vulkan loader, tools, adapter/driver and relevant features. record unavailable capabilities without assuming this machine supports native heaps. preserve indexes, workflows, and assets. evidence: execution E-006.
+- [x] T004 [US1, US3] inspect and probe the native Windows Vulkan and actual NGAPI build/loader paths. depends on T001. identify source platform assumptions, Windows surface/presentation requirements, offscreen support, and the RustGPU-to-SPIR-V artifact boundary. keep Linux portability requirements visible. output exact commands and the first failing layer. no additional-language or secondary-backend adapter work. evidence: execution E-007.
+- [ ] T005 [US1, US6] probe physical-pointer, descriptor-heap, and untyped-pointer modules through the actual parser, SPIR-T, linker, optimizer, serializer, and validator. depends on T001. cover installed-tools and compiled-tools configurations when relevant. record exact versions and tool failures before editing compiler semantics.
+
+## M1. compiler and small Vulkan slice
+
+- [x] T002 [US2] map the AGFX source items needed for the minimal Vulkan slice, their source tests/oracles, ownership, and notices. depends on T001. retain the existing full inventory as pending scope and distinguish primary/supporting/deferred variants. full API/example enumeration continues in T025 and T026, so it does not block compiler work. evidence: execution E-007.
+- [x] T003 [US2, US4] freeze unchanged source references, license identities, and the first slice's fixtures and expected results. depends on T002. compare matched source behavior where reference execution is available and label unavailable evidence. candidate output never becomes its own golden. broader ShaderToHuman fixtures are frozen in T027. evidence: execution E-007.
+- [ ] T006 [US2] create only the Cargo owners needed for a small native Vulkan Rust AGFX slice. depends on T002 and T004. keep source concepts traceable, artifact data explicit, and enforce safe-default lints. document and review each necessary exception in UNSAFE.md with local safety explanations.
+- [ ] T007 [US1, US2] implement device, shader, buffer/resource, recording, submission, readback, and retirement on native Windows Vulkan. depends on T003 and T006. isolate actual platform assumptions without a generic platform framework. validate deterministic Rust-shader output and record presentation separately if used.
+- [ ] T008 [US2] test handles, descriptors, states, barriers, completion, native access, and failure behavior of that slice. depends on T007. preserve source ownership assertions. detect premature reuse or invalid supported API use through host checks and valid controlled fixtures, not undefined GPU accesses.
+- [ ] T009 [US5] emit minimal versioned case/run records and stable IDs from real slice results. depends on T007. add relevant empty/all-skipped, missing-output, stale-identity, and interruption controls. preserve the required denominator. no full report or query framework is needed for M1.
+- [ ] T010 [US1, US6] decide the physical-address/target-width API from layout, conversion, and overflow probes in the separate RustGPU checkout. depends on T005. cover P01-P04, P10-P11, R05, A01-A02 in [upstream tests](upstream-tests.md). preserve ordinary integer and logical-pointer semantics.
+- [ ] T011 [US1, US6] implement physical addressing, casts, aligned operations, and SPIR-T memory-operand preservation. depends on T010. cover P02-P07 and P09 with positive, negative, mixed-storage, and disassembly regressions.
+- [ ] T012 [US1, US6] implement necessary shader-library address utilities and real alias/restriction semantics, or diagnose unsupported operations. depends on T011. cover P08-P11 and R06. test size/offset contracts and real allocated-address operations. register every changed unsafe boundary and avoid unsafe in ordinary address transport or compiler transformations.
+- [ ] T013 [US6] run focused physical-pointer compiletests/difftests and relevant unchanged regressions at the candidate revision. depends on T012. cover overflow, optimized/unoptimized shaders, logical-pointer compatibility, and invalid-operation diagnostics. prepare a reviewable generic diff before broader testbed work.
+- [ ] T014 [US1, US6] implement resource/sampler heap interfaces and required untyped-pointer lowering. depends on T005. reuse existing entry-point facilities where sufficient. cover H01-H03 and H05-H07 with actual instructions, not a descriptor-array substitute.
+- [ ] T015 [US1, US6] verify mixed physical-pointer/native-heap modules, divergent indices, exposed stage interfaces, and optimizer survival. depends on T011 and T014. cover H04 and H06-H08 with instruction, validation, and supported-device evidence. retain explicit pending runtime cases when hardware is unavailable.
+- [ ] T016 [US1] implement exact Windows Vulkan and NGAPI capability queries and feature enablement for the fixtures. depends on T004 and the relevant T014 requirements. query features/properties and loader/tool identity. enable memory-model/int64 features only where the chosen artifact and API require them.
+
+T010-T015 do not depend on a complete AGFX slice. T014 can proceed before T013. M1 closes only when the promised compiler evidence and small direct Windows Vulkan slice are both recorded.
+
+## M2. actual NGAPI on Windows Vulkan
+
+- [ ] T017 [US1, US6] load Rust-authored pointer/readback and textured-cube shaders into actual NGAPI on native Windows Vulkan. depends on T013, T015, and T016. preserve entry points, root ABI, native heap behavior, and real resource lifetimes. keep any narrow NGAPI host patch separate, with exact source/shader hashes and commands.
+- [ ] T019 [US1, US6] verify the actual-consumer gate with deterministic readback, nonzero resource/sampler distinction, root layout, synchronization, and image oracles in optimized/unoptimized variants. depends on T017. cross-check the direct Vulkan evidence from T007-T009 for boundary diagnosis. record extension/device limitations and every remaining promised case.
+
+T018 is supporting work below. M2 does not depend on adding a second full native-heap implementation to the testbed. a replacement host or an ordinary-descriptor mode cannot close T017/T019.
+
+## M3. RustGPU contribution draft
+
+- [ ] T033 [US6] reconcile all P, R, H, A, and C rows in [upstream tests](upstream-tests.md) against the proposed diff, tests, results, and limitations. depends on the promised T013/T015 features and T019 for actual-consumer claims. refresh relevant upstream comments and CI once before final draft preparation.
+- [ ] T034 [US6] run the complete applicable upstream CI gate and supported-device checks when available at the proposed revision. depends on T033. keep unavailable jobs explicitly pending with reproducible configurations. this task remains open until its required evidence exists. its pending status does not prevent an honest local draft in T035.
+- [ ] T035 [US6] prepare minimal generic patches and local PR title/body with safety/ABI decisions, docs, test evidence, exact consumer recipe, attribution, and remaining CI status. depends on T033 and the available T034 evidence, not on T034 being complete. do not add AGFX, Gigi, or NGAPI dependencies to generic compiler tests. publication follows actual authority.
+- [ ] T036 [US6] audit the primary M0-M3 outcome against SC-001, the primary portions of SC-003/SC-005, and SC-006/SC-007/SC-009-SC-011. depends on T007-T009, T019, and T035. report the local draft, pending CI, supporting parity, Linux portability, unsafe inventory, execution/lessons, and matched-scope size separately. do not wait for supporting T018/T023-T032 to call a proven primary draft complete.
+
+## supporting testbed parity
+
+these tasks retain the source-parity direction without making it the contribution's critical path. full upstream backend parity remains unclaimed while future API variants are deferred.
+
+- [ ] T018 [US1, US2] where useful, exercise the combined NGAPI shader contract through a narrow Rust AGFX Vulkan native-heap profile. depends on T008 and T017. keep ordinary AGFX descriptor behavior separate. record actual artifact differences and avoid a second RHI. do this earlier only for a concrete primary-path diagnostic need.
+- [ ] T023 [US2, US3] exercise the Vulkan slice and required source features on Linux, preserving the same API/ABI contracts and separate device evidence. depends on T008 and relevant compiler features. review future payload/backend boundaries without implementing speculative routes or weakening Windows Vulkan.
+- [ ] T024 [US2] expand the AGFX public/native/Ez port owner by owner for the declared Vulkan scope. depends on T008 and the relevant source/oracle mappings. preserve meaningful source assertions and lifecycle behavior. retain optional feature capability rules and Windows/Linux distinctions.
+- [ ] T025 [US2] complete the AGFX API, test, shader-helper, and example inventory and its Rust mappings. depends on T024 for completed port claims. report direct/equivalent mappings, unresolved required behaviors, deferred variants, runtime-discovered counts, and matched-scope code/dependency measurements. zero unresolved scoped behaviors is required for scoped parity.
+- [ ] T026 [US4] enumerate and translate ShaderToHuman's shader library to Rust, preserving algorithms and behavior beyond the existing regressions. depends on T002 and relevant compiler support. map exact source files/functions, notices, target owners, tests, and pending/deferred variants.
+- [ ] T027 [US4] freeze full ShaderToHuman fixture/oracle identities and replace Gigi hosting with portable Vulkan fixtures for GatherTest, ScatterTest, 3DTest, 2DTest, and TableTest. depends on T009 and needed T026 functions. preserve 800 x 600 RGBA, camera/color/state, two-execution captures, and expected images.
+- [ ] T028 [US4] port distinct documentation/example behavior and deterministic interactions. depends on relevant T026-T027 fixtures. account for Intro and GaussianSplatting-specific behavior, with explicit equivalent mappings where justified. reduced fixtures do not close omitted behavior.
+- [ ] T029 [US4] prove ShaderToHuman parity in the declared Vulkan scope with exact reference comparisons and justified numeric rules. depends on T027-T028, and T023 for Linux claims. detect glyph, clipping, alpha, formatting, scatter-write, and state defects.
+- [ ] T030 [US5] adapt the pinned AGFX report with separate AGFX and ShaderToHuman tabs, source visual character, stable links, and suite-local counts/filters. depends on T009 and real records from both suites. verify populated results, keyboard navigation, screenshots, and agreement with JSON.
+- [ ] T031 [US5] add bounded list/show/run/compare/explain queries over those same records. depends on T009. include first mismatch, expected/actual values, source locations, argument-array reproduction, and explicit truncation. verify negative controls agree across records, exit status, and report.
+- [ ] T032 [US5] evaluate matched seeded faults and separate unseen variants with independent diagnosis/repair checks. depends on T030-T031. record human navigation, localization, verified fixes, false passes, unnecessary edits, repeated experiments, tool calls, and context use before claiming usability gains.
+
+## superseded work and audit notes
+
+T020, T021, and T022 are retired from the active plan. their former additional-language adapters and cross-API translation routes were removed by the user's priority revision, not implemented. T004/T023 no longer require nine language/backend cells. T018 is no longer a mandatory second consumer gate. T036 now audits the primary contribution, with supporting outcomes listed separately.
+
+the exact prior version is preserved in ignored `work/theta/archive/spec-v1.1-before-vulkan-focus/`. the earlier S0-S8 packets are historical evidence. current milestones and task dependencies above are authoritative.

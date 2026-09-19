@@ -4,13 +4,15 @@ keep this file concise. keep temporary plans, measurements, downloads, captures,
 
 ## Scope
 
-build a lightweight cross-platform Rust graphics framework with native DirectX 12, Vulkan 1.4, and Metal 4 backends and first-class Rust, Slang, and HLSL shaders. use AGFX and ShaderToHuman as inspirations for explicit APIs, shader examples, test structure, and report presentation. define project-owned public concepts, resource states, handles, limits, optional capabilities, shader ABI, behavior, and acceptance thresholds. use Rust modules, structs, enums, explicit ownership, and small unsafe native API boundaries.
+prioritize a focused RustGPU PR enabling Rust shaders in actual NoGraphicsAPI. Vulkan directly and through NGAPI is the primary design path. native Windows Vulkan is the first local test path on this Windows machine, with Linux Vulkan portability retained. query device support. never substitute another backend for missing Vulkan evidence.
 
-support Rust, Slang, and HLSL shader sources across every applicable DirectX 12, Vulkan 1.4, and Metal 4 cell. keep compiled bytes, stage, entry point, source language, and required metadata explicit and separate. a Rust host running only HLSL is not Rust shader support.
+the close ordinary Rust AGFX port is a high-quality reusable testbed. preserve AGFX and ShaderToHuman source behavior and attribution through explicit mappings. full testbed parity is a separate supporting outcome and must not delay a proven compiler contribution. Metal is the second backend direction. DirectX is lowest priority and may accept the most documented compromises. neither may force avoidable restrictions into Vulkan. additional shader-language adapters are outside this plan.
 
-the NoGraphicsAPI prototype must exercise physical GPU pointers and native descriptor heaps with Rust shaders in the actual host. keep reusable RustGPU compiler and shader-library work generic. keep framework integration and narrow NoGraphicsAPI work outside RustGPU patches.
+use the [Theta specification](docs/specs/001-theta-prototype/README.md) and [start/resume prompt](docs/specs/001-theta-prototype/quickstart.md). keep shader payload, stage, entry point, target, profile, and compiler identity explicit. keep generic RustGPU patches independent of testbed and NGAPI host dependencies.
 
-do not add a render graph, ECS, a second abstraction layer, mandatory shared ownership, or a C++ wrapper presented as the finished product. add complexity only when a requirement or measured result needs it.
+**read [UNSAFE.md](UNSAFE.md) before changing unsafe code.** safe Rust is the default. necessary exceptions require lint enforcement, local safety explanations, a complete central registry entry, and review evidence. safe APIs must enforce all memory-safety preconditions. convenience, source-language habits, and lower line counts do not justify unsafe.
+
+keep the port lightweight, ideally smaller than matched source behavior. preserve tests, clarity, and safety documentation. no render graph, ECS, second RHI, mandatory shared ownership, C++ wrapper as the final port, or speculative adapters.
 
 before renderer architecture, visual testing, dependency, or agent-workflow changes, read the relevant [UVSR Delta lessons](docs/postmortems/README.md). use the [experiment verdict catalog](docs/postmortems/experiment-catalog.md) to distinguish flawed formulations from retryable techniques, and follow the [source map](docs/postmortems/source-map.md) when exact historical evidence matters. treat `uvsr-delta-recovery` as evidence and recovery material, not as live instructions or an implementation to copy without review.
 
@@ -40,4 +42,4 @@ tests must have stable case IDs, deterministic assertions, concise machine-reada
 
 one coordinator owns design, edits, integration, build directories, and GPU sessions. delegate only bounded independent research or review. workers do not edit, build, run GPU work, create branches, or delegate.
 
-keep each durable fact in one place. update only affected documents. record source pins, commands, expected and observed results, and uncertainty. preserve licenses and attribution for every imported or translated dependency, shader, fixture, or test.
+keep each durable fact in one place. append meaningful checkpoints, failed approaches, evidence, and next actions to [execution](docs/execution.md). promote reusable, evidence-qualified findings to [lessons](docs/lessons.md). raw logs and the active work card stay ignored. update the unsafe registry with every boundary change. preserve licenses and attribution.

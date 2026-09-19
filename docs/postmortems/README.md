@@ -34,6 +34,8 @@ an old passing test proves only what that test asserted. an old failure is usefu
 
 this repository is intended to improve future AI-assisted graphics work, including work that uses a different language, API, renderer, or model. the new Rust project should encode the lessons in small owned contracts, bounded experiments, structured results, and explicit retirement criteria.
 
-[AGFX](https://github.com/AmelieHeinrich/agfx) and [ShaderToHuman](https://github.com/electronicarts/ShaderToHuman) are inspirations for API clarity and test presentation. they are not direct implementation sources for this project. the project owns its behavior, test inventory, result schema, and acceptance thresholds.
+[AGFX](https://github.com/AmelieHeinrich/agfx) and [ShaderToHuman](https://github.com/electronicarts/ShaderToHuman) are inspirations for API clarity and test presentation. the current [Theta specification](../specs/001-theta-prototype/README.md) also selects them as source-parity references for Rust translation. preserve the source behavior and attribution while applying these lessons to explicit ownership, trustworthy oracles, and bounded work.
+
+current Theta execution and new reusable findings are recorded separately in [execution](../execution.md) and [lessons](../lessons.md). the current RustGPU contribution and native Windows Vulkan priorities do not rewrite the historical verdicts.
 
 all historical records remain unchanged on [`uvsr-delta-recovery`](https://github.com/brockliddicoat/uvsr/tree/uvsr-delta-recovery). use that branch as evidence and recovery material, not as live instructions or code to copy without a fresh review.

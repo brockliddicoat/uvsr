@@ -1,0 +1,66 @@
+{
+  "project": "AGFX",
+  "revision": "f91b108a111d2ca3ca4b6586b6cb5dd750064fd7",
+  "license": "MIT",
+  "license_path": "legal/licenses/AGFX-MIT.txt",
+  "source_files": [
+    {
+      "path": "LICENSE",
+      "sha256": "19e9ff46f48babb762ddda985744ea88a363b456ec6ced3bd57b47f65fa8630e"
+    },
+    {
+      "path": "src/agfx/xmake.lua",
+      "sha256": "043df03f93fed430dfec2062df3c8049cd4f0580759c7f867afb5bd10c49c21d"
+    },
+    {
+      "path": "src/agfx/agfx/agfx.h",
+      "sha256": "c1ceb28cee3962a9127120b8aa0527369d1bcf62af63127a2efa9bd6ba545bd1"
+    },
+    {
+      "path": "src/agfx/agfx/agfx_vulkan.cpp",
+      "sha256": "533950470e8f6f45a29008b7808d83a70c609e861af047c051902dda8d459402"
+    },
+    {
+      "path": "src/agfx/agfx/agfx.hpp",
+      "sha256": "30ad00df1d25005849da46fa112becd2986c1b7280ebb8dae0d755577c18058b"
+    },
+    {
+      "path": "src/agfx/agfx/agfx_ez.hpp",
+      "sha256": "6a73d8d29cf1be7622346f295e85df20dca54e6abba0f86fcf98708c3047c121"
+    },
+    {
+      "path": "src/agfx/agfx_tests/test_gpu.cpp",
+      "sha256": "677d81439bf7e8bd84f1ce253023899fba5b07809e84c777cba2b88451ec636e"
+    },
+    {
+      "path": "src/agfx/agfx_tests/tests/test_copy_buffer_to_buffer.cpp",
+      "sha256": "695e3da09515cdca70b04c3c6204bee45e7040c63b089cceda07c0eb7615ebfe"
+    },
+    {
+      "path": "src/agfx/agfx_tests/tests/test_compute_multi_dispatch_buffer.cpp",
+      "sha256": "8c5f2fe4837cef1962ecfb0fc3905e8f50a83cecb7d52e7c141cd4f1424f69ad"
+    },
+    {
+      "path": "data/shaders/tests/multi_dispatch.hlsl",
+      "sha256": "046836db34cdc0cb7b70e78b16ca5f36b86d0f4eec2a8ce25654bb4c51bd08ff"
+    },
+    {
+      "path": "data/shaders/agfx.h",
+      "sha256": "222df4360569ae3c16354128e8ee8eec6bcd52746d988ad0e4f8da332431e9cc"
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "tests/parity/fixtures/agfx/copy_buffer_to_buffer.bin",
+      "sha256": "a253433bb763b7e07e5f8c9434d7e38cf0588e4a59cd257e6abd53dcdb59af0d",
+      "bytes": 256
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/compute_multi_dispatch_buffer.bin",
+      "sha256": "360590a25cf40f384993ef66de49dcf29376f7224da64caa8ffc024c1e00e211",
+      "bytes": 256
+    }
+  ],
+  "source_runtime": "not executed",
+  "oracle_check": "frozen upstream bytes agree with independently evaluated source formulas"
+}

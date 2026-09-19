@@ -1,54 +1,37 @@
-# Testing Contract
+# testing contract
 
-the test system must serve two audiences from the same facts. a person needs a compact visual report, while a tool or coding agent needs structured results and bounded detail queries. neither view owns separate truth.
+the first testing priority is a reproducible RustGPU contribution with Rust-authored shaders in actual NGAPI on **native Windows Vulkan**. a small direct Windows Vulkan testbed fixture helps isolate compiler and host failures. record Linux Vulkan portability independently.
 
-## Inspiration Inventories
+## primary evidence
 
-the inspected AGFX revision contains a broad GPU test inventory with validation, byte-golden, and image-golden cases. its runner uses FLIP for image comparison and writes JSON consumed by a browser report. this is an inspiration for explicit, queryable evidence. AGFX's case list, default threshold, and report layout do not become this project's requirements.
+use upstream compile-pass/fail/disassembly tests, optimizer/layout regressions, deterministic GPU readback, and exact image/state oracles. cover physical addresses, native resource/sampler heaps, required untyped instructions, root layout, enabled features, and valid resource/descriptor lifetime.
 
-ShaderToHuman contains golden-image regression groups, documentation branches, and examples that can inspire shader-language and presentation cases. they are examples to evaluate, not pre-existing passes or a required compatibility suite.
+record source/diff and build identity, host OS, Vulkan loader, adapter/driver, enabled features, compiler/options, shader hashes, authored language, profile, fixtures, seed, oracle, expected/actual values, first failure, and reproduction arguments. distinguish offscreen readback from native Windows presentation.
 
-every project case must begin with a named risk and project-owned expected behavior. record which inspiration motivated it when useful. do not create one-to-one source dispositions merely to imitate another repository's inventory.
+unsupported local extension hardware blocks that device proof. another backend, a Linux-only run, ordinary arrays, or a replacement host cannot establish Windows NGAPI support. upstream platform CI remains a separate compiler regression obligation under the [crosswalk](specs/001-theta-prototype/upstream-tests.md).
 
-## Required Oracles
+## source-parity evidence
 
-- exact or numeric buffer and image assertions where appropriate.
-- alpha checks, because RGB-only comparison can miss failures.
-- focused regions or crops for local defects.
-- perceptual comparison with reviewed thresholds, never as the only oracle.
-- short named frame sequences for temporal behavior.
-- nonzero executed-case counts and explicit skipped or unsupported results.
-- backend, adapter, driver, compiler, shader language, commit, executable hash, seed, and fixture identity.
+[the parity contract](specs/001-theta-prototype/contracts/source-parity.md) accounts for all AGFX and ShaderToHuman source items while separating the primary slice, supporting Vulkan parity, and deferred future variants. preserve meaningful source tests, API/Ez assertions, algorithms, fixtures, and notices.
 
-goldens are reviewed inputs. missing goldens must fail rather than being silently generated and accepted. random tests use stable recorded seeds. repeated runs distinguish deterministic failures from instability.
+the supporting ShaderToHuman work includes its library, five golden groups, documentation branches, and distinct examples. replace Gigi hosting without silently deleting its behavior. exact source inventories and candidate comparisons are required for parity claims, not for starting a useful compiler experiment.
 
-at inspected revision [`f91b108a`](https://github.com/AmelieHeinrich/agfx/tree/f91b108a111d2ca3ca4b6586b6cb5dd750064fd7), AGFX records FLIP mean and maximum error, a threshold, case duration, status, and artifact paths in JSON. [visual verification](postmortems/visual-verification.md) explains which parts are useful here and why FLIP alone cannot prove graphics correctness.
+confirm source oracle defects with focused reproducers and correct them separately. missing goldens must fail, not become candidate-generated references. preserve source thresholds. use alpha, local masks/regions, exact structural buffers, numeric rules, and perceptual scores as appropriate. an LLM's visual opinion is not an oracle.
 
-## Report and Query Interface
+## results and reports
 
-the report should present project-owned API behavior and shader regression views. filters include suite, case, backend, shader language, feature, outcome, and run identity. failed rows lead to expected, actual, and difference images, numeric summaries, first mismatches, source locations, reproduction commands, and artifacts.
+use one canonical result model for minimal primary records and the supporting report/query views. [result contracts](specs/001-theta-prototype/contracts/test-results.md) and [data](specs/001-theta-prototype/data-model.md) own the schema and acceptance. stable IDs and bounded first-failure records matter more than verbose logs.
 
-the machine-readable result format should include:
+required empty/all-skipped selections, missing output, stale identity, interruption, and missing cases cannot pass. keep the acceptance denominator separate from diagnostic selection and report deferred variants honestly.
 
-```text
-schema_version, run_id, source_revision, build_identity, executable_sha256,
-case_id, hypothesis, suite, backend, shader_language, adapter, driver,
-compiler, scene, camera, viewport, seed, outcome, assertions, metrics,
-thresholds, first_failure, artifacts, command, duration_ms, skip_reason
-```
+the full AGFX-style report has separate AGFX and ShaderToHuman tabs, expected/actual/difference artifacts, suite-local counts/filters, deep links, and keyboard access. report polish and measured human/agent usability are supporting tasks, not RustGPU draft prerequisites.
 
-support concise summaries and bounded detail queries. stable case IDs and result paths matter more than verbose logs. an LLM may navigate results, but its visual judgment is never a correctness oracle.
+## checks and learning
 
-## Test Tiers and Duration
+run pure ABI and compiler checks before device tests, structural readback before image comparison, and still cases before temporal sequences. set duration budgets. after a failure, rerun the decisive case instead of the unchanged broad suite. run the applicable full gate once at a coherent checkpoint.
 
-run pure contracts and compiler checks before GPU work. run structural readback before image comparison. run deterministic still cases before temporal sequences. measure performance only after correctness holds, then validate the exact package separately.
+[UNSAFE.md](../UNSAFE.md) defines lint, documentation, inventory, and review checks. test unsafe obligations where meaningful, while preserving the distinction between tests and soundness proof. no undefined GPU dereference is a valid negative-test oracle.
 
-set a duration budget for each tier. after a broad failure, rerun the exact case rather than the unchanged suite. avoid Cartesian scene and setting expansion when schema tests can cover domains and named rendered cases can cover causal behavior.
+append meaningful outcomes, failures, source/configuration, limits, and next actions to [execution](execution.md). promote evidence-qualified reusable findings to [lessons](lessons.md). raw logs stay ignored.
 
-## Upstream Compiler Tests
-
-RustGPU changes need focused compile-pass, compile-fail, disassembly, validation, optimizer-survival, layout, and runtime consumer tests. place generic compiler regressions upstream. keep framework and NoGraphicsAPI integration tests in this project. passing isolated compiler tests does not prove the actual consumer path.
-
-## Retained Scene Fixtures
-
-the Bistro Interior and San Miguel files under `assets/scenes` are protected future integration fixtures. their current presence proves only source retention. a test may claim scene support only after it records the exact scene identity, backend, adapter, shader language, load result, rendered assertion, and applicable license boundary.
+retained Bistro Interior and San Miguel assets are future inputs with protected provenance. their presence is not new-project build or render evidence, and they are not prerequisites for the minimal compiler contribution.

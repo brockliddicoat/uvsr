@@ -1,0 +1,24 @@
+; theta.tools.logical_store. Ordinary logical-pointer regression control.
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "computeMain" %output
+OpExecutionMode %main LocalSize 1 1 1
+OpDecorate %Block Block
+OpMemberDecorate %Block 0 Offset 0
+OpDecorate %output DescriptorSet 0
+OpDecorate %output Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%u32 = OpTypeInt 32 0
+%zero = OpConstant %u32 0
+%value = OpConstant %u32 42
+%Block = OpTypeStruct %u32
+%buffer = OpTypePointer StorageBuffer %Block
+%word = OpTypePointer StorageBuffer %u32
+%output = OpVariable %buffer StorageBuffer
+%main = OpFunction %void None %fn
+%entry = OpLabel
+%pointer = OpAccessChain %word %output %zero
+OpStore %pointer %value
+OpReturn
+OpFunctionEnd

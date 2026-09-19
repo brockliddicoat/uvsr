@@ -1,71 +1,50 @@
 # UVSR Theta
 
 ![host: Rust](https://img.shields.io/badge/host-Rust-000000?logo=rust&logoColor=white&style=flat)
-![shaders: Rust | Slang | HLSL](https://img.shields.io/badge/shaders-Rust%20%7C%20Slang%20%7C%20HLSL-C62828?style=flat)
-![backends: DirectX 12 | Vulkan 1.4 | Metal 4](https://img.shields.io/badge/backends-DirectX%2012%20%7C%20Vulkan%201.4%20%7C%20Metal%204-4C8F20?style=flat)
+![primary: Vulkan + NGAPI](https://img.shields.io/badge/primary-Vulkan%20%2B%20NGAPI-C62828?style=flat)
 [![license: Polyfrom Noncommercial](https://img.shields.io/badge/license-Polyfrom%20Noncommercial-8250DF?style=flat)](LICENSE.md)
 
-this repository is the working home for a lightweight Rust graphics framework with explicit DirectX 12, Vulkan 1.4, and Metal 4 backends. the finished system is intended to make Rust, Slang, and HLSL equally usable shader languages, expose modern bindless and GPU-pointer capabilities without hiding native behavior, and provide one conformance system for interactive review and automated diagnosis.
+the main goal is a focused, reviewable **RustGPU PR that lets Rust-authored shaders work in actual [NoGraphicsAPI](https://github.com/sebbbi/NoGraphicsAPI)**. Vulkan, both directly and through NGAPI, drives the design. **native Windows Vulkan is the primary local test path on the current development machine.** Linux Vulkan is also a portability target. neither path is replaced by DirectX or a translation layer.
 
-[AGFX](https://github.com/AmelieHeinrich/agfx) and [ShaderToHuman](https://github.com/electronicarts/ShaderToHuman) are design and testing inspirations. their explicit APIs, shader examples, golden-image tests, structured results, and report presentation inform the project, but they are not direct implementation sources or compatibility specifications. this project defines and tests its own Rust contracts.
+> **unsafe Rust:** read [UNSAFE.md](UNSAFE.md) for the policy, current inventory, necessary exceptions, safety contracts, and review evidence. every implemented exception must be visible there and documented beside its code.
+>
+> **audit and progress:** [specification and prompt](docs/specs/001-theta-prototype/README.md), [execution record](docs/execution.md), [lessons for future agents](docs/lessons.md).
 
-the first end-to-end proof will run a Rust-authored shader through the real [NoGraphicsAPI](https://github.com/sebbbi/NoGraphicsAPI) host, exercising physical GPU pointers and native descriptor heaps. reusable compiler and shader-library work will be designed for contribution to [RustGPU](https://github.com/Rust-GPU/rust-gpu).
+[AGFX](https://github.com/AmelieHeinrich/agfx) provides the base for a close, ordinary Rust port used as a high-quality reusable testbed. [ShaderToHuman](https://github.com/electronicarts/ShaderToHuman) supplies shader-library, regression, and example behavior to preserve. both are inspirations and source-parity references. translation retains exact attribution and license notices. complete testbed parity is a separate outcome, not a prerequisite for drafting the RustGPU contribution.
 
-## Target Matrix
+## priorities
 
-the project plans to support shaders authored in Rust, Slang, and HLSL across each applicable native backend:
+| priority | direction | effect on this plan |
+| --- | --- | --- |
+| primary | RustGPU to SPIR-V to Vulkan, directly and through actual NGAPI | most design and testing effort. Windows first, Linux portability retained. prove physical pointers and native descriptor heaps |
+| supporting | lightweight Rust AGFX testbed and ShaderToHuman source parity | build the smallest useful Vulkan slice first, then extend matched source coverage |
+| second backend | Metal | preserve room for a later native implementation without diluting Vulkan semantics |
+| lowest | DirectX | later work may accept the largest explicitly documented compromises |
 
-| platform | backend | Rust | Slang | HLSL |
-| --- | --- | :---: | :---: | :---: |
-| Windows | DirectX 12 | planned | planned | planned |
-| Linux | Vulkan 1.4 | planned | planned | planned |
-| MacOS | Metal 4 | planned | planned | planned |
+additional shader languages are future pivots. this plan does not implement Slang or HLSL adapters or a nine-cell compatibility matrix. keep shader payload, stage, entry point, target, profile, and compiler identity explicit so future routes can be added without a new framework.
 
-compiled bytes, shader stage, entry point, source language, and required backend metadata remain explicit. a Rust host that executes only HLSL does not count as Rust shader support.
+## design direction
 
-## Design Direction
+use safe Rust and explicit ownership. keep Vulkan capabilities and native escape hatches visible. isolate necessary unsafe operations and asynchronous resource retirement. generic RustGPU changes belong upstream, while AGFX and NGAPI integration remain separate consumer evidence.
 
-- provide a small explicit API with project-owned behavior and native escape hatches.
-- use explicit Rust ownership with small reviewed `unsafe` boundaries around native graphics APIs.
-- retain backend-specific capabilities and failure modes where flattening them would hide real behavior.
-- keep generic RustGPU changes separate from framework integration and narrow NoGraphicsAPI work.
-- use one result model for human reports and concise machine-readable failure analysis.
-- prove one vertical slice before expanding API coverage, settings, or backend variants.
+keep the port as small as the preserved behavior permits, ideally smaller than equivalent source material. compare matched functionality with a fixed counting method. do not remove tests, safety documentation, or behavior to reduce a number. do not add a render graph, ECS, second RHI, speculative backend skeletons, or a general compiler-plugin system.
 
-the detailed contracts live in [architecture](docs/architecture.md), [testing](docs/testing.md), and [upstream contribution boundaries](docs/upstream.md).
+the [architecture](docs/architecture.md), [testing contract](docs/testing.md), and [contribution boundary](docs/upstream.md) define the project rules. the [roadmap](docs/roadmap.md) leads with the compiler contribution and separates later parity work.
 
-## Lessons from UVSR Delta
+## retained history and inputs
 
-the repository also preserves what people and LLMs can learn from UVSR Delta. its experiments exposed recurring problems in rendering strategy, visual verification, dependency ownership, agent competence, test duration, product evidence, and feature growth. the [postmortem index](docs/postmortems/README.md) reorganizes every historical postmortem into general guidance, while the [experiment verdict catalog](docs/postmortems/experiment-catalog.md) separates fundamentally flawed formulations from work that could be retried with a better scope, harness, or owner.
+the [UVSR Delta postmortems](docs/postmortems/README.md) contain prior lessons. the [experiment verdict catalog](docs/postmortems/experiment-catalog.md) distinguishes flawed formulations from work worth retrying. exact historical source remains on [`uvsr-delta-recovery`](https://github.com/brockliddicoat/uvsr/tree/uvsr-delta-recovery), as recovery evidence.
 
-the prior C++ implementation and exact historical records remain on [`uvsr-delta-recovery`](https://github.com/brockliddicoat/uvsr/tree/uvsr-delta-recovery). that branch is evidence and recovery material. it is not duplicated into the new product source tree.
+`assets/scenes` retains Bistro Interior and San Miguel with their provenance and controlling notices. [`assets/fonts`](assets/fonts/README.md) retains MIT-licensed ProggyClean and ProggyForever assets and local Windows Segoe UI copies excluded from Git. the [legal index](legal/README.md) records font and scene restrictions. these inputs do not prove the new project builds or renders them.
 
-## Planned Stages
+## current status
 
-1. pin inspected inspirations, compiler targets, consumer baselines, and available platform capabilities.
-2. choose a small project-owned API slice and a structured test-result contract.
-3. prove device creation, one shader, one resource, one submission, readback, and retirement on each native backend.
-4. prove the risky Rust shader, physical-pointer, descriptor-heap, and translation paths with bounded probes.
-5. expand only the API and shader-language cells supported by executed evidence.
-6. contribute reusable RustGPU changes as focused upstream patches.
+implementation is active. the [execution record](docs/execution.md) records the verified import, native Windows NGAPI baseline, installed-tool probes, source fixture freeze, and remaining compiler gates. no Rust shader consumer result or upstream PR is claimed yet.
 
-the complete sequence and exit criteria are in the [roadmap](docs/roadmap.md).
+`.github/workflows` validates the baseline and conditionally runs Rust formatting and workspace tests once a manifest exists. it does not replace RustGPU's upstream CI or actual NGAPI execution.
 
-## Repository Contents
+## contributing
 
-- `.github/workflows` validates the repository baseline and automatically runs Rust formatting and workspace tests once `Cargo.toml` exists.
-- `assets/scenes` retains Bistro Interior and San Miguel as future graphics fixtures, together with their provenance, conversion reports, and controlling notices.
-- [`assets/fonts`](assets/fonts/README.md) retains MIT-licensed ProggyClean and ProggyForever assets and local Windows Segoe UI copies excluded from Git. the [legal index](legal/README.md) documents fonts and scene assets.
-- `docs` defines the architecture, roadmap, testing contract, upstream boundary, and lessons from prior experiments.
-- `AGENTS.md` and `CONTRIBUTING.md` define the direct-to-`main` pull request and checkpoint commit workflow.
-- `NOTICES.md` records pinned inspirations, research references, and retained scene restrictions.
+read [AGENTS.md](AGENTS.md), [UNSAFE.md](UNSAFE.md), and [CONTRIBUTING.md](CONTRIBUTING.md). use the [start/resume prompt](docs/specs/001-theta-prototype/quickstart.md), preserve unrelated work, and record meaningful checkpoints and lessons. publication and Git actions follow actual task authority.
 
-## Current Status
-
-the planning baseline is ready for implementation. there is not yet a Rust workspace, compiler patch, successful build, GPU result, backend parity result, or upstream pull request. retained scene files are source material, not evidence that the new project builds or renders them.
-
-## Contributing
-
-read [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md) before changing the repository. use one purpose-named task branch, commit coherent verified checkpoints, and open the pull request directly into `main`. do not create merge-only branches.
-
-first-party material remains under the [Polyfrom Noncommercial License](LICENSE.md). upstream projects and retained assets keep their own licenses and notices. review [notices](NOTICES.md) before importing code, translating shaders, or redistributing scene data.
+first-party material remains under the [Polyfrom Noncommercial License](LICENSE.md). upstream code and retained assets keep their own terms. review [NOTICES.md](NOTICES.md) before importing or translating material.
