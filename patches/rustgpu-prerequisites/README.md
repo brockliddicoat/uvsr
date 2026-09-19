@@ -253,3 +253,9 @@ cargo clippy --release --locked -p rustc_codegen_spirv --no-default-features --f
 ```
 
 this does not add a volatile library API, effectful/scoped copy support, concurrent alias guarantees or complete pointer parity. the existing broader subpass-coordinate failure and full upstream/native CI status remain separate from these focused gates.
+
+## raw pointer method limits
+
+[rustgpu-pointer-contracts.patch](rustgpu-pointer-contracts.patch) follows the Function-memory checkpoint. it adds five safe compile-only method families and documents their current boundary. constness changes with the same pointee type compile and retain complete address bits. differing-pointee casts, standard address/byte helpers and alignment queries produce specific diagnostics. the unoptimized align_offset helper also reaches the pre-existing checked-multiply rejection. no production compiler or library behavior changes.
+
+all 43 required pointer/heap source pairs pass, seven logical and 36 physical64. complete diagnostics and the positive instruction stream were inspected before accepting expectations. the negative cases describe the pinned default compilation path, without promising identical diagnostics at every optimization level. use the explicit-u64 PhysicalPtr transport methods for the supported initial API. unlisted methods, reference creation, in-bounds operations and full raw-pointer parity remain open. [E-031](../../docs/execution.md#e-031-2026-09-19-recorded-raw-pointer-method-limits) records the source identity and review limits.
