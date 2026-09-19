@@ -50,6 +50,8 @@ raw physical-address APIs state allocation validity, range, alignment, lifetime,
 
 [E-022](../../../execution.md#e-022-2026-09-19-tested-the-physical-pointer-library) adds transparent PhysicalPtr<T> transport with u64 size/alignment and explicit u64/i64 wrapping counts. U-003 documents unsafe Copy-value access. the actual scalar consumer preserves its two-u64 host ABI and runtime oracle. a u32-array copy validates with Aligned 4 through source/default/qptr compilation, with aggregate runtime still pending. pointee layout remains a separate host/shader agreement.
 
+[E-024](../../../execution.md#e-024-2026-09-19-executed-native-heap-rust-shaders) executes the bounded native heap compute profile. its root is a u64 output address followed by u32 resource/sampler indices at offsets 0/8/12, size 16. the module declares ResourceHeapEXT and SamplerHeapEXT with untyped pointers, native-size ID strides and no conventional bindings. uniform nonzero indices select initialized sampled RGBA8 images and nearest repeat/clamp samplers. a PhysicalPtr<Vec4> writes the doubled color with Aligned 16. [U-005](../../../../UNSAFE.md#u-005-actual-ngapi-native-heap-sample) owns the native caller contract. divergent indices and other exposed stages/resources remain separate requirements.
+
 ## minimum cases
 
 use exact arithmetic/buffer readback, nonzero descriptor slots, distinct samplers/textures, uniform/divergent indices, root aggregates, matrix orientation, aligned access, mixed logical/physical operations, optimized/unoptimized modules, missing-feature diagnostics, and valid lifecycle sequences. add stage cases for every promised exposed stage.

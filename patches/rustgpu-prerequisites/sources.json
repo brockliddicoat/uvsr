@@ -317,6 +317,51 @@
         "--unidiff-zero",
         "--index"
       ]
+    },
+    {
+      "file": "spirv-tools-id-constants.patch",
+      "sha256": "49abd4334bbb9bc0f8caefb1deacd93b28fa1d02e2699eb4bfa3711caf1dfddb",
+      "repository": "https://github.com/KhronosGroup/SPIRV-Tools",
+      "base": "cb001ee6bf925867e98f5846e2806d8677c46415",
+      "local_verified_commit": "f3a552c4de669d53a3c7d4debf50d2b61dd34c22",
+      "license": "Apache-2.0",
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ],
+      "license_file": "../../legal/licenses/SPIRV-Tools-APACHE.txt"
+    },
+    {
+      "file": "spirv-tools-id-constant-tests.patch",
+      "sha256": "1e905be9a93b1ce7ed0e854e181f237944d54bbc0cead94fd8a1263903984bd1",
+      "repository": "https://github.com/EmbarkStudios/spirv-tools-rs",
+      "base": "1f283e5106cb5eb7c2cf486b540e4af03fca53ed",
+      "local_verified_commit": "de1f413c99abcfee3c2a18e11c153b8607d89e02",
+      "license": "MIT OR Apache-2.0",
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ],
+      "license_files": [
+        "../../legal/licenses/SPIRV-Tools-rs-MIT.txt",
+        "../../legal/licenses/SPIRV-Tools-rs-APACHE.txt"
+      ]
+    },
+    {
+      "file": "rustgpu-debug-strip-heaps.patch",
+      "sha256": "889290062fdd3eea2d7f012efab45dac0820ec561278b75a7d36fdff1bfc36a6",
+      "repository": "https://github.com/Rust-GPU/rust-gpu",
+      "base": "570c18a45024c5c35159ca21a06ca95f23dd1993",
+      "local_verified_commit": "e2858253836b9236263c20c6e372e3b7913e822f",
+      "license": "MIT OR Apache-2.0",
+      "license_files": [
+        "../../legal/licenses/RustGPU-MIT.txt",
+        "../../legal/licenses/RustGPU-APACHE.txt"
+      ],
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ]
     }
   ]
 }

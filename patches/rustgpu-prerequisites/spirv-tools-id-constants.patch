@@ -1,0 +1,61 @@
+diff --git a/source/opt/eliminate_dead_constant_pass.cpp b/source/opt/eliminate_dead_constant_pass.cpp
+index 500fd8a..6fcd0b7 100644
+--- a/source/opt/eliminate_dead_constant_pass.cpp
++++ b/source/opt/eliminate_dead_constant_pass.cpp
+@@ -32,2 +32,2 @@ Pass::Status EliminateDeadConstantPass::Process() {
+-  // working list and count number of real uses for constants. Uses in
+-  // annotation instructions do not count.
++  // working list and count number of real uses for constants. An annotation's
++  // target is not a use, but ID-valued decoration operands are dependencies.
+@@ -41 +40,0 @@ Pass::Status EliminateDeadConstantPass::Process() {
+-          (void)index;
+@@ -43 +42,5 @@ Pass::Status EliminateDeadConstantPass::Process() {
+-          if (!(IsAnnotationInst(op) || IsDebug1Inst(op) || IsDebug2Inst(op) ||
++          const bool decoration_dependency =
++              (op == spv::Op::OpDecorateId && index >= 2) ||
++              (op == spv::Op::OpMemberDecorateIdEXT && index >= 3);
++          if (decoration_dependency ||
++              !(IsAnnotationInst(op) || IsDebug1Inst(op) || IsDebug2Inst(op) ||
+diff --git a/test/opt/eliminate_dead_const_test.cpp b/test/opt/eliminate_dead_const_test.cpp
+index ec4c284..e035eb1 100644
+--- a/test/opt/eliminate_dead_const_test.cpp
++++ b/test/opt/eliminate_dead_const_test.cpp
+@@ -29,0 +30,38 @@ using EliminateDeadConstantBasicTest = PassTest<::testing::Test>;
++TEST_F(EliminateDeadConstantBasicTest, IdDecorationDependencies) {
++  SetTargetEnv(SPV_ENV_VULKAN_1_3);
++  const std::string text = R"(
++; CHECK-NOT: OpName
++; CHECK-NOT: RelaxedPrecision
++; CHECK: OpDecorateId {{%\w+}} ArrayStrideIdEXT %[[STRIDE:\w+]]
++; CHECK: OpMemberDecorateIdEXT {{%\w+}} 0 OffsetIdEXT %[[OFFSET:\w+]]
++; CHECK: %[[STRIDE]] = OpConstantSizeOfEXT
++; CHECK: %[[OFFSET]] = OpSpecConstant
++; CHECK-NOT: OpConstant {{%\w+}} 99
++OpCapability Shader
++OpCapability DescriptorHeapEXT
++OpExtension "SPV_EXT_descriptor_heap"
++OpMemoryModel Logical GLSL450
++OpEntryPoint GLCompute %main "main"
++OpExecutionMode %main LocalSize 1 1 1
++OpName %unused "unused"
++OpDecorate %unused RelaxedPrecision
++OpDecorateId %array ArrayStrideIdEXT %stride
++OpMemberDecorateIdEXT %record 0 OffsetIdEXT %offset
++%void = OpTypeVoid
++%fn = OpTypeFunction %void
++%u32 = OpTypeInt 32 0
++%f32 = OpTypeFloat 32
++%image = OpTypeImage %f32 2D 0 0 0 1 Unknown
++%stride = OpConstantSizeOfEXT %u32 %image
++%offset = OpSpecConstant %u32 0
++%array = OpTypeRuntimeArray %image
++%record = OpTypeStruct %image
++%unused = OpConstant %u32 99
++%main = OpFunction %void None %fn
++%entry = OpLabel
++OpReturn
++OpFunctionEnd
++)";
++  SinglePassRunAndMatch<EliminateDeadConstantPass>(text, true);
++}
++
