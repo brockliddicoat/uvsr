@@ -1,0 +1,194 @@
+diff --git a/.gitmodules b/.gitmodules
+index 4927b4d..f81bbee 100644
+--- a/.gitmodules
++++ b/.gitmodules
+@@ -4 +4 @@
+-	branch = vulkan-sdk-1.4.321
++	branch = vulkan-sdk-1.4.357
+@@ -8 +8 @@
+-	branch = vulkan-sdk-1.4.321
++	branch = vulkan-sdk-1.4.357
+diff --git a/spirv-tools-sys/spirv-headers b/spirv-tools-sys/spirv-headers
+index 2a611a9..29981f6 160000
+--- a/spirv-tools-sys/spirv-headers
++++ b/spirv-tools-sys/spirv-headers
+@@ -1 +1 @@
+-Subproject commit 2a611a970fdbc41ac2e3e328802aed9985352dca
++Subproject commit 29981f65241605e08b0ede4cfeb999fe3b723c6a
+diff --git a/spirv-tools-sys/spirv-tools b/spirv-tools-sys/spirv-tools
+index 33e0256..9a49b08 160000
+--- a/spirv-tools-sys/spirv-tools
++++ b/spirv-tools-sys/spirv-tools
+@@ -1 +1 @@
+-Subproject commit 33e02568181e3312f49a3cf33df470bf96ef293a
++Subproject commit 9a49b0883b9b635689a85b5647dbfcb223268151
+diff --git a/spirv-tools/tests/descriptor_heap.rs b/spirv-tools/tests/descriptor_heap.rs
+new file mode 100644
+index 0000000..d2d4dc0
+--- /dev/null
++++ b/spirv-tools/tests/descriptor_heap.rs
+@@ -0,0 +1,87 @@
++//! Non-dispatched native descriptor-heap compatibility regressions.
++#![forbid(unsafe_code)]
++
++use spirv_tools::{TargetEnv, assembler::Assembler, opt::Optimizer, val::Validator};
++
++const SOURCE: &str = include_str!("descriptor_heap.spvasm");
++const REQUIRED: &[&str] = &[
++    "OpCapability DescriptorHeapEXT",
++    "ResourceHeapEXT",
++    "SamplerHeapEXT",
++    "OpUntypedVariableKHR",
++    "OpUntypedAccessChainKHR",
++    "OpConstantSizeOfEXT",
++    "ArrayStrideIdEXT",
++    "OpImageSampleExplicitLod",
++    "Aligned 16",
++];
++
++fn roundtrip<A: Assembler, V: Validator, O: Optimizer>() {
++    let assembler = A::with_env(TargetEnv::Vulkan_1_4);
++    let validator = V::with_env(TargetEnv::Vulkan_1_4);
++    let mut optimizer = O::with_env(TargetEnv::Vulkan_1_4);
++    optimizer.register_performance_passes();
++    let input = assembler.assemble(SOURCE, Default::default()).unwrap();
++    validator.validate(&input, None).unwrap();
++    let optimized = optimizer
++        .optimize(&input, &mut |message| eprintln!("{message:?}"), None)
++        .unwrap();
++    for binary in [&input, &optimized] {
++        validator.validate(binary, None).unwrap();
++        let text = assembler
++            .disassemble(binary, Default::default())
++            .unwrap()
++            .unwrap();
++        for needle in REQUIRED {
++            assert!(text.contains(needle), "missing {needle}:\n{text}");
++        }
++        let reassembled = assembler.assemble(&text, Default::default()).unwrap();
++        validator.validate(&reassembled, None).unwrap();
++    }
++}
++
++fn rejects_missing_capability<A: Assembler, V: Validator>() {
++    let assembler = A::with_env(TargetEnv::Vulkan_1_4);
++    let validator = V::with_env(TargetEnv::Vulkan_1_4);
++    let source = SOURCE.replace("OpCapability DescriptorHeapEXT", "");
++    let binary = assembler.assemble(&source, Default::default()).unwrap();
++    assert!(validator.validate(&binary, None).is_err());
++}
++
++#[cfg(feature = "use-compiled-tools")]
++#[test]
++fn compiled_heap_roundtrip() {
++    roundtrip::<
++        spirv_tools::assembler::compiled::CompiledAssembler,
++        spirv_tools::val::compiled::CompiledValidator,
++        spirv_tools::opt::compiled::CompiledOptimizer,
++    >();
++}
++
++#[cfg(feature = "use-installed-tools")]
++#[test]
++fn installed_heap_roundtrip() {
++    roundtrip::<
++        spirv_tools::assembler::tool::ToolAssembler,
++        spirv_tools::val::tool::ToolValidator,
++        spirv_tools::opt::tool::ToolOptimizer,
++    >();
++}
++
++#[cfg(feature = "use-compiled-tools")]
++#[test]
++fn compiled_heap_requires_capability() {
++    rejects_missing_capability::<
++        spirv_tools::assembler::compiled::CompiledAssembler,
++        spirv_tools::val::compiled::CompiledValidator,
++    >();
++}
++
++#[cfg(feature = "use-installed-tools")]
++#[test]
++fn installed_heap_requires_capability() {
++    rejects_missing_capability::<
++        spirv_tools::assembler::tool::ToolAssembler,
++        spirv_tools::val::tool::ToolValidator,
++    >();
++}
+diff --git a/spirv-tools/tests/descriptor_heap.spvasm b/spirv-tools/tests/descriptor_heap.spvasm
+new file mode 100644
+index 0000000..0cb5a27
+--- /dev/null
++++ b/spirv-tools/tests/descriptor_heap.spvasm
+@@ -0,0 +1,62 @@
++; theta.tools.descriptor_heaps. Real heap instructions plus a physical output.
++; Slots 1 and 2, texture and sampler respectively. Never dispatched by this probe.
++; Extension contracts: SPV_EXT_descriptor_heap and SPV_KHR_untyped_pointers.
++OpCapability Shader
++OpCapability Int64
++OpCapability PhysicalStorageBufferAddresses
++OpCapability UntypedPointersKHR
++OpCapability DescriptorHeapEXT
++OpExtension "SPV_KHR_physical_storage_buffer"
++OpExtension "SPV_KHR_untyped_pointers"
++OpExtension "SPV_EXT_descriptor_heap"
++OpMemoryModel PhysicalStorageBuffer64 GLSL450
++OpEntryPoint GLCompute %main "computeMain" %root %resources %samplers
++OpExecutionMode %main LocalSize 1 1 1
++OpDecorate %Root Block
++OpMemberDecorate %Root 0 Offset 0
++OpDecorate %resources BuiltIn ResourceHeapEXT
++OpDecorate %samplers BuiltIn SamplerHeapEXT
++OpDecorateId %image_array ArrayStrideIdEXT %image_size
++OpDecorateId %sampler_array ArrayStrideIdEXT %sampler_size
++%void = OpTypeVoid
++%fn = OpTypeFunction %void
++%u32 = OpTypeInt 32 0
++%u64 = OpTypeInt 64 0
++%f32 = OpTypeFloat 32
++%v2 = OpTypeVector %f32 2
++%v4 = OpTypeVector %f32 4
++%zero = OpConstant %u32 0
++%one = OpConstant %u32 1
++%two = OpConstant %u32 2
++%lod = OpConstant %f32 0
++%half = OpConstant %f32 0.5
++%coords = OpConstantComposite %v2 %half %half
++%image = OpTypeImage %f32 2D 0 0 0 1 Unknown
++%sampler = OpTypeSampler
++%sampled_image = OpTypeSampledImage %image
++%image_size = OpConstantSizeOfEXT %u32 %image
++%sampler_size = OpConstantSizeOfEXT %u32 %sampler
++%image_array = OpTypeRuntimeArray %image
++%sampler_array = OpTypeRuntimeArray %sampler
++%uniform_untyped = OpTypeUntypedPointerKHR UniformConstant
++%resources = OpUntypedVariableKHR %uniform_untyped UniformConstant
++%samplers = OpUntypedVariableKHR %uniform_untyped UniformConstant
++%Root = OpTypeStruct %u64
++%push_root = OpTypePointer PushConstant %Root
++%push_address = OpTypePointer PushConstant %u64
++%physical_v4 = OpTypePointer PhysicalStorageBuffer %v4
++%root = OpVariable %push_root PushConstant
++%main = OpFunction %void None %fn
++%entry = OpLabel
++%image_slot = OpUntypedAccessChainKHR %uniform_untyped %image_array %resources %one
++%sampler_slot = OpUntypedAccessChainKHR %uniform_untyped %sampler_array %samplers %two
++%texture = OpLoad %image %image_slot
++%filter = OpLoad %sampler %sampler_slot
++%sampled = OpSampledImage %sampled_image %texture %filter
++%color = OpImageSampleExplicitLod %v4 %sampled %coords Lod %lod
++%address_slot = OpAccessChain %push_address %root %zero
++%address = OpLoad %u64 %address_slot
++%pointer = OpConvertUToPtr %physical_v4 %address
++OpStore %pointer %color Aligned 16
++OpReturn
++OpFunctionEnd
+diff --git a/tools/generate/main.rs b/tools/generate/main.rs
+index 972ea54..92077d8 100644
+--- a/tools/generate/main.rs
++++ b/tools/generate/main.rs
+@@ -64,0 +65,4 @@ fn grammar_tables() {
++		format!("--extinst=TOSA_,{GRAMMAR_DIR}/extinst.tosa.001000.1.grammar.json"),
++		format!("--extinst=,{GRAMMAR_DIR}/extinst.arm.motion-engine.100.grammar.json"),
++		format!("--extinst=,{GRAMMAR_DIR}/extinst.nonsemantic.graph.debuginfo.grammar.json"),
++		format!("--extinst=,{GRAMMAR_DIR}/extinst.arm.experimental-ml-operations.grammar.json"),

@@ -41,3 +41,5 @@ recorded.
 the [prerequisite patch record](../patches/rustgpu-prerequisites/README.md) identifies rspirv source and local modifications, with its complete [Apache-2.0 license](licenses/rspirv-Apache-2.0.txt). source pins, patch hashes and existing upstream work remain explicit.
 
 the same record retains full MIT and Apache-2.0 texts for SPIR-T and RustGPU source patches, separately from the project's own license.
+
+the SPIRV-Tools wrapper source patch retains its full [MIT](licenses/SPIRV-Tools-rs-MIT.txt) and [Apache-2.0](licenses/SPIRV-Tools-rs-APACHE.txt) texts. native tool/header submodules are source-pin references, and generated tables remain outside this repository.

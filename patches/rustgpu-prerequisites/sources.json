@@ -48,6 +48,54 @@
         "--unidiff-zero",
         "--index"
       ]
+    },
+    {
+      "file": "spirv-tools-descriptor-heaps.patch",
+      "sha256": "b380fd8be783dc939affce9b46a9c225974a642e292acae47a717809f282df6f",
+      "repository": "https://github.com/Rust-GPU/spirv-tools-rs",
+      "base": "39c1ec2dee67ee4c8541cfbd8e32cf018320cb73",
+      "local_verified_commit": "1f283e5106cb5eb7c2cf486b540e4af03fca53ed",
+      "license": "MIT OR Apache-2.0",
+      "license_files": [
+        "../../legal/licenses/SPIRV-Tools-rs-MIT.txt",
+        "../../legal/licenses/SPIRV-Tools-rs-APACHE.txt"
+      ],
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ],
+      "submodules": {
+        "spirv-tools-sys/spirv-tools": "9a49b0883b9b635689a85b5647dbfcb223268151",
+        "spirv-tools-sys/spirv-headers": "29981f65241605e08b0ede4cfeb999fe3b723c6a"
+      },
+      "regenerate_after_apply": [
+        "cargo",
+        "+nightly-2026-07-03",
+        "run",
+        "--locked",
+        "-p",
+        "generate",
+        "-j",
+        "1"
+      ],
+      "omitted_generated_outputs": [
+        {
+          "path": "spirv-tools-sys/generated/build-version.inc",
+          "sha256_lf": "c7b36a7c0fb24b951cf3522809fa96ca42fd5860b69fb4aab357bb5ed3f49e1c"
+        },
+        {
+          "path": "spirv-tools-sys/generated/core_tables_body.inc",
+          "sha256_lf": "45a6a59ac4ff79b57ae2bbfef309afb8184bafc430aa501972acef2562faefcc"
+        },
+        {
+          "path": "spirv-tools-sys/generated/core_tables_header.inc",
+          "sha256_lf": "31a7fcca272dfa5a6afb30323407bf89d8216a5367bc5144f425338847d5e7c8"
+        },
+        {
+          "path": "spirv-tools-sys/generated/generators.inc",
+          "sha256_lf": "94043bba8edeeedec848981e90087c13d2790322aa4bd62f84e37299b96ed3ab"
+        }
+      ]
     }
   ]
 }

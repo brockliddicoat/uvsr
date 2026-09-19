@@ -54,3 +54,19 @@ cargo test --config '<absolute configuration>' -p rustc_codegen_spirv --release 
 in SPIR-T, run `cargo +nightly-2026-07-03 test --locked -j 1`. all three grammar unit tests passed. the RustGPU run had 26 passed, six failed and four existing macOS-only skips. its 16 diagnostic cases comprise 10 passes and six failures, with no skips. all logical and physical-store stages pass, including optimization after both linker modes. untyped and native-heap parsing passes, but the later inference and IR stages remain unsupported. the run intentionally returns failure until those requirements are implemented.
 
 RustGPU's full formatting check and formatting of the four changed SPIR-T files pass. SPIR-T's whole-repository formatting check reports unchanged legacy files, and its strict Clippy check stops in unchanged `build.rs` on `unnecessary_map_or`. those gates remain failed, not waived or claimed passed. these patches establish grammar/control progress only, with no shader execution or complete upstream CI claim. [execution E-010](../../docs/execution.md#e-010-2026-09-19-restored-logical-and-physical-pipeline-controls) records the evidence.
+
+## compiled descriptor-heap tools
+
+[spirv-tools-descriptor-heaps.patch](spirv-tools-descriptor-heaps.patch) updates the wrapper's SPIRV-Tools and SPIRV-Headers pins to SDK 1.4.357 sources, adds the extension grammars required by their generator, and tests heap assembly, validation, optimization and serialization through both tool implementations. the regression also requires rejection when `DescriptorHeapEXT` is absent. the wrapper retains its [MIT](../../legal/licenses/SPIRV-Tools-rs-MIT.txt) OR [Apache-2.0](../../legal/licenses/SPIRV-Tools-rs-APACHE.txt) terms. the native tools and headers remain pinned upstream submodules under their own licenses.
+
+apply to an owned clean checkout at the manifest's exact base using `git apply --unidiff-zero --index --check <patch>` and `git apply --unidiff-zero --index <patch>`. then run `git submodule update --init`. generated tables are deliberately omitted from this repository. regenerate them in the owned upstream checkout before compiling:
+
+```powershell
+cargo +nightly-2026-07-03 run --locked -p generate -j 1
+cargo +nightly-2026-07-03 test -p spirv-tools --all-features --locked -j 1
+cargo +nightly-2026-07-03 fmt --all -- --check
+```
+
+Python and the installed SDK's `spirv-as`, `spirv-val`, `spirv-opt` and `spirv-dis` must be on PATH. the manifest records SHA-256 hashes of the four changed generated files with LF line endings. source patch application plus those verified outputs reproduces the recorded commit tree. retain the generator's output and the resolved lockfile with each reproduction.
+
+the Windows run passed all eight integration tests, with zero failures or skips. four are new heap cases, and four are existing assembler, optimizer, validator and issue regressions. there are zero unit and documentation cases. formatting passed. compiled SPIRV-Tools is `v2026.3`, source `9a49b0883b9b635689a85b5647dbfcb223268151`. installed SDK tools are `v2026.3rc1`, source `b707790a`; these are distinct implementations/revisions, not byte-identical builds. this standalone wrapper result does not establish RustGPU integration or shader execution. [execution E-011](../../docs/execution.md#e-011-2026-09-19-enabled-compiled-descriptor-heap-tools) records the boundary.

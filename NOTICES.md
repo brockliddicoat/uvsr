@@ -22,6 +22,8 @@ the [compiler prerequisite patches](patches/rustgpu-prerequisites/README.md) inc
 
 the SPIR-T and RustGPU prerequisite patches retain their upstream MIT OR Apache-2.0 licensing. complete texts are linked from the same patch record. SPIR-T's MIT notice preserves copyright 2019-2024 Embark Studios and 2024 SPIR-T developers. the SPIRV-Headers update is a source-pin reference, not a vendored header copy. no upstream compiler contribution or endorsement is implied.
 
+the SPIRV-Tools wrapper patch retains MIT OR Apache-2.0 licensing, including copyright 2019 Embark Studios. its full license texts are linked from the patch record. native SPIRV-Tools and SPIRV-Headers are pinned submodule references. their source and generated grammar tables are not vendored here. the new generic heap regression is included under the wrapper's contribution terms.
+
 ## Retained Scene Assets
 
 `assets/scenes` retains converted Bistro Interior and San Miguel data. their adjacent licenses, provenance manifests, and generated conversion reports control the exact files:
