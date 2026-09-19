@@ -176,6 +176,38 @@
         "--unidiff-zero",
         "--index"
       ]
+    },
+    {
+      "file": "spirt-physical-addresses.patch",
+      "sha256": "8d51e1c4d3aa1ddef56d5d614a2b3a235222cae8b5863545cb3572d72aa04e17",
+      "repository": "https://github.com/Rust-GPU/spirt",
+      "base": "2259d009f9a70d16cebc0cd5b18256b815a8514b",
+      "local_verified_commit": "c41f85a5c7320c8718d046d2072315acbb739dcb",
+      "license": "MIT OR Apache-2.0",
+      "license_files": [
+        "../../legal/licenses/SPIR-T-MIT.txt",
+        "../../legal/licenses/SPIR-T-APACHE.txt"
+      ],
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ]
+    },
+    {
+      "file": "rustgpu-physical-casts.patch",
+      "sha256": "e1f503944d50ad6ce2792f81b13ef68def9db15cb5fa5281c7601c87199f0c08",
+      "repository": "https://github.com/Rust-GPU/rust-gpu",
+      "base": "f9f3e575ddc95a47ace76fcce6d328967177873a",
+      "local_verified_commit": "0983e4e07ca382804c9f0084b36e049f8613d211",
+      "license": "MIT OR Apache-2.0",
+      "license_files": [
+        "../../legal/licenses/RustGPU-MIT.txt",
+        "../../legal/licenses/RustGPU-APACHE.txt"
+      ],
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ]
     }
   ]
 }

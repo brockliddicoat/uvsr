@@ -57,3 +57,9 @@ application: separate vocabulary, loader placement, IR representation, linking a
 **observed, pinned RustGPU harness.** at [E-016](execution.md#e-016-2026-09-19-proved-explicit-rust-pointer-width-layouts), `compiletest_rs` 0.11.2 split stage IDs at the first hyphen. the new `vulkan1.3-physical64` target therefore ran the 32-bit layout case and skipped its own case. escaping the stage ID preserved the distinct target identity. a separate forward-slash filename filter on Windows matched zero cases despite exit 0.
 
 application: check stable case IDs and the executed denominator for each configuration before accepting a green command or blessing output. limit: these are observed selector rules in this harness/version, not evidence that all hyphenated targets or Windows runners have the same problem. keep the distinct-ABI matrix and revisit its selectors when the harness changes.
+
+## L-009. separate valid instructions from correct Rust conversions
+
+**observed, pinned RustGPU cast probes.** at [E-017](execution.md#e-017-2026-09-19-lowered-physical-address-conversions), a shader passed SPIR-V validation while zero-extending a signed integer before conversion to a pointer. the same rustc's native backend and its SSA caller contract required sign extension. the original lowering chose conversion from destination signedness instead of rustc's source-signedness argument. correcting that also required an unsigned intermediate for `OpUConvert` when the final Rust type was signed.
+
+application: test signed and unsigned sources, widening and truncation, and inspect emitted operations against the language's bit-level result. use structural assertions for required metadata when the validator does not enforce its absence. limit: these checks establish compiler behavior for the selected cases, not GPU execution or correctness of every pointer operation.

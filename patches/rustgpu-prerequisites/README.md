@@ -125,3 +125,19 @@ cargo fmt --all -- --check
 the full selected unit gate passed **37 compiler tests and three shared-type tests**, zero failures, with four pre-existing macOS-only ignores. all 16 instruction probes still passed. the source matrix passed four case/target pairs: the width-specific layout and cast rejection on each target. each target intentionally excludes the other ABI's layout case, and 331 unrelated compiletests are filtered. expected output was manually reviewed before blessing, then the complete selected matrix passed without blessing. the run used `--offline` after caching dependencies.
 
 this is compiler/layout evidence on Windows, not GPU execution, complete upstream CI, raw-pointer parity or a completed physical-address API. [E-016](../../docs/execution.md#e-016-2026-09-19-proved-explicit-rust-pointer-width-layouts) records failed setup/selector attempts and the selected scope. the patch retains MIT OR Apache-2.0 terms and introduces no unsafe operation.
+
+## physical address conversions
+
+[spirt-physical-addresses.patch](spirt-physical-addresses.patch) preserves concrete PhysicalStorageBuffer types, conversions, access chains and function arguments through qptr. logical pointer legalization remains active. [rustgpu-physical-casts.patch](rustgpu-physical-casts.patch) enables the hybrid addressing model on explicit `-physical64` Vulkan targets, constrains raw address conversions to physical storage, preserves physical function parameters/returns, emits conservative alias decorations on final declarations, and reports incompatible storage classes through rustc. it also corrects integer extension to use rustc's source-signedness argument, with a separate unsigned intermediate where SPIR-V requires it.
+
+apply after the preceding patches at the exact manifest bases, using `--unidiff-zero --index`. the source pins and licenses remain in [sources.json](sources.json). optional assembly diagnostics use the updated, version-independent [registration recipe](../../tests/compiler-probes/rustgpu.md). keep RustGPU's local dependency overrides out of a standalone SPIR-T run so its unchanged lockfile remains valid.
+
+run SPIR-T's `cargo test --locked -j 1`, then the full compiler/shared-type unit command and two-target source command from the preceding section. additionally run:
+
+```powershell
+cargo run --release --locked -p compiletests --no-default-features --features use-compiled-tools -j 1 -- --target-env vulkan1.3 storage_class const-int-cast const-narrowing-cast const-from-cast u8-const-cast
+```
+
+[E-017](../../docs/execution.md#e-017-2026-09-19-lowered-physical-address-conversions) owns the complete counts, failed approaches and verification limits. the six required Rust source pairs now include physical casts, mixed-storage rejection and signed/unsigned integer controls. source oracles were reviewed before acceptance. alias tests assert exact decorations because the pinned validator does not enforce their absence. conservative aliasing is not a `Restrict` promise.
+
+this checkpoint does not establish aligned raw memory access, raw-pointer operation parity, aggregate pointer storage, atomics, reference validity or GPU execution. physical instructions remain explicit through qptr, so this does not close memory-operand lowering/lifting requirement P07. T010-T013 and actual NGAPI shader execution remain open. all added Rust tests forbid unsafe, and the source probes never dereference addresses.
