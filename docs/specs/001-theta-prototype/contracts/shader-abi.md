@@ -34,7 +34,9 @@ actual NGAPI on Windows Vulkan is the primary consumer proof. a small direct Vul
 
 ## physical addresses
 
-decide explicitly between a device-address representation and deliberate target-pointer-width changes using layout and overflow evidence. the inspected RustGPU target has 32-bit logical pointers. never widen arbitrary `u32` operations or patch emitted output instead of correct typed lowering.
+the selected compiler foundation adds an explicit Vulkan `-physical64` target with eight-byte Rust pointers and `usize`, while existing targets retain their four-byte ABI. [E-016](../../../execution.md#e-016-2026-09-19-proved-explicit-rust-pointer-width-layouts) records source layout/conversion checks and the unchanged `u32` operations. this is a layout decision, not completed physical access or raw-pointer parity. generic integer-pointer casts still diagnose. T010 remains open until the physical-address API and its supported operation boundary are proved.
+
+use explicit `u64` fields for device-address transport. do not share pointer/`usize`-containing layouts between target ABIs or reuse dependencies built for the other target. never widen arbitrary `u32` operations or patch emitted output instead of correct typed lowering. the upstream-facing target documentation is included in the [ABI patch](../../../../patches/rustgpu-prerequisites/README.md#explicit-rust-pointer-width-foundation).
 
 validate eight-byte address representation, nested address-containing structures, offsets, array strides, scalar/vector/matrix layout, conversions, supported pointer operations, alignment operands, and alias decorations. preserve logical-pointer behavior and diagnose unsupported operations cleanly.
 
