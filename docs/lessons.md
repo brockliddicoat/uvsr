@@ -69,3 +69,9 @@ application: test signed and unsigned sources, widening and truncation, and insp
 **observed, pinned compiler/tool regression.** at [E-019](execution.md#e-019-2026-09-19-preserved-qptr-memory-effects), qptr and linking retained both volatile loads, but SPIRV-Tools aggressive dead-code elimination removed the one with an unused result. the optimized module still validated. preserving operands during serialization did not establish their later effects.
 
 application: assert required effect counts, flags and scope identities after optimization. include an ordinary removable access as a control so disabling optimization cannot satisfy the test. limit: this result covers explicit Volatile OpLoad and the tested memory forms. it does not prove all native optimizer semantics, Rust volatile intrinsic support or GPU behavior.
+
+## L-011. follow aggregate accesses through copy lowering
+
+**observed, pinned RustGPU regression.** at [E-022](execution.md#e-022-2026-09-19-tested-the-physical-pointer-library), scalar accesses carried valid alignment but an array read/write failed validation. rustc routed the aggregate through memcpy, whose lowering discarded both alignments. preserving alignment also required transferring it when the linker split a copy into a load/store, then cleaning newly introduced logical accesses.
+
+application: cover a whole aggregate and mixed physical/logical temporaries when changing memory access metadata. inspect the final accesses after legalization and optimization. a single SPIR-V copy mask applies to both endpoints, so the weaker known alignment is valid for both. limit: the regression proves the tested array compiler path with pure Aligned metadata. it does not establish effectful/scoped-copy semantics or aggregate GPU execution.

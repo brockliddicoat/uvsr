@@ -8,6 +8,8 @@ this page is the primary contribution crosswalk for [US6 and FR-015](spec.md). [
 
 [E-021](../../execution.md#e-021-2026-09-19-executed-rust-physical-readback-through-ngapi) adds actual Windows NGAPI scalar read/write, wrapping u32 arithmetic, two-u64 root and completion/readback evidence for P03/P05 and A01-A04. both Rust optimization levels pass in Debug/Release hosts. actual allocations are below 4 GiB, so nonzero high-address runtime coverage remains absent. native heap shader lookups, aggregate access and full P07/P09/P11 execution coverage remain open. this partial consumer does not close T017/T019 or M2.
 
+[E-022](../../execution.md#e-022-2026-09-19-tested-the-physical-pointer-library) adds P10's explicit-u64 library, native layout/arithmetic checks, target-rejection fixtures and actual scalar library execution. aligned array copies pass source and default/qptr optimizer tests, with aggregate runtime still pending. the unsafe contract and absent restriction/reference APIs remain explicit. this does not close P08/P09/P11 or the full upstream gate.
+
 three different authorities are recorded: the draft author's checklist, a maintainer's concrete review concerns, and repository CI. none alone establishes eventual acceptance.
 
 ## PR #237 checklist

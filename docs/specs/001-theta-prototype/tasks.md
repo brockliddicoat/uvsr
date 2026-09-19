@@ -28,6 +28,8 @@ select primary M0-M3 work first. supporting work may proceed when it directly he
 - [ ] T015 [US1, US6] verify mixed physical-pointer/native-heap modules, divergent indices, exposed stage interfaces, and optimizer survival. depends on T011 and T014. cover H04 and H06-H08 with instruction, validation, and supported-device evidence. retain explicit pending runtime cases when hardware is unavailable.
 - [ ] T016 [US1] implement exact Windows Vulkan and NGAPI capability queries and feature enablement for the fixtures. depends on T004 and the relevant T014 requirements. query features/properties and loader/tool identity. enable memory-model/int64 features only where the chosen artifact and API require them.
 
+[E-022](../../execution.md#e-022-2026-09-19-tested-the-physical-pointer-library) is partial T011/T012/T013 evidence: the explicit-u64 PhysicalPtr library has passing native, source and actual NGAPI scalar checks. aggregate copy alignment passes compiler tests. full operation/alias semantics, aggregate runtime and the full upstream gate remain open.
+
 T010-T015 do not depend on a complete AGFX slice. T014 can proceed before T013. M1 closes only when the promised compiler evidence and small direct Windows Vulkan slice are both recorded.
 
 ## M2. actual NGAPI on Windows Vulkan
