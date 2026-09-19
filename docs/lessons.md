@@ -45,3 +45,9 @@ application: link each operation to its invariant owner and keep the summary dis
 **observed, Windows probe.** with loader 1.4.341.0 and NVIDIA 616.56, full `vulkaninfo` timed out at 45 seconds. setting `VK_LOADER_LAYERS_DISABLE=~implicit~` only for the probe process produced a complete inventory in 2.2 seconds. see [E-006](execution.md#e-006-2026-09-19-activated-implementation-and-queried-windows-vulkan).
 
 application: preserve the failed command, then isolate incidental layers with a process-local setting. limitation: this comparison does not identify the responsible layer or prove the same cause for other stalls. required explicit validation layers remain a separate gate. reported extensions/features establish a candidate path, not successful device creation or shader execution.
+
+## L-007. probe the compiler's representations and both tool configurations
+
+**observed, pinned compiler probes.** at [E-008](execution.md#e-008-2026-09-19-installed-rust-and-located-compiler-pipeline-failures), SDK SPIRV-Tools accepted the native-heap fixture, but RustGPU's loader rejected its untyped globals and SPIR-T rejected the untyped capability. the bundled C++ tools rejected the heap capability even earlier. rspirv already knew the instruction vocabulary despite its older version label.
+
+application: separate vocabulary, loader placement, IR representation, linking and validation probes. compare installed and compiled tools before changing compiler semantics. limitation: these assembly-input failures locate compatibility work, not Rust source behavior or GPU correctness. a successful parser round trip cannot substitute for the remaining pipeline or consumer gates.

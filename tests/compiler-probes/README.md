@@ -2,6 +2,8 @@
 
 these four authored assembly fixtures isolate tool support before RustGPU semantics change. they do not establish Rust-authored shaders, SPIR-T support, an upstream compiler regression pass, or GPU output. all generated binaries and logs remain ignored.
 
+the separate [RustGPU pipeline recipe](rustgpu.md) runs these same inputs through the compiler's parser, SPIR-T and linker in both tool configurations.
+
 ```powershell
 python tools/theta/probe_spirv.py --tools <SDK>/Bin --output work/theta/evidence/spirv-tools
 ```
