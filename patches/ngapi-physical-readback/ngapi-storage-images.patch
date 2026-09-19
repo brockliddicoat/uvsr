@@ -1,0 +1,8 @@
+diff --git a/src/NoGraphicsAPI.cpp b/src/NoGraphicsAPI.cpp
+index ffa25fa..526ec22 100644
+--- a/src/NoGraphicsAPI.cpp
++++ b/src/NoGraphicsAPI.cpp
+@@ -1669,0 +1670 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface,
++        features.vulkan12.shaderStorageImageArrayNonUniformIndexing == VK_TRUE &&
+@@ -1946,0 +1948 @@ DeviceInit create_device(const DeviceDesc& desc) noexcept
++    enabled_features.vulkan12.shaderStorageImageArrayNonUniformIndexing = VK_TRUE;

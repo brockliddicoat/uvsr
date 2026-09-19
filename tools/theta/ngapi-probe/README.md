@@ -220,3 +220,35 @@ foreach ($configuration in @('Debug', 'Release')) {
 the required denominator is 12 shader cases per host configuration. a skip, timeout, missing case or validation diagnostic fails this gate. high-address coverage is reported from real allocations separately. the fixture does not establish arbitrary Copy-type support, concurrent aliases, volatile intrinsics, effectful copies or full pointer parity.
 
 [E-030](../../../docs/execution.md#e-030-2026-09-19-tested-aggregate-aliases-and-function-effects) records all 12 passing cases in each Debug/Release host, 25 native controls per run and zero validation diagnostics. actual addresses were below 4 GiB. the ten existing consumer modules remain byte-identical under the changed compiler.
+
+## native storage images
+
+[native_heap_storage.cpp](native_heap_storage.cpp) executes the generic RustGPU `descriptor_heap/auxiliary/storage_body.rs` through actual native heaps. it reads texel(1,0) from one rgba32ui image, adds 1/2/3/4 with wrapping u32 arithmetic, writes texel(0,1) in the other image and copies the value to a separate physical output. four phases swap nonzero source/destination slots 1/3 and include overflowing input. default/qptr and opt0/opt3 give 16 required cases per host configuration.
+
+each case compares all 160 readback bytes, including unchanged image texels and output guards. the host passes 169 CPU controls. the runner rejects missing/skipped/duplicate cases, stale embedded identities, changed descriptor selection/stride and incomplete completion. preflight requires exact source/host/payload hashes and shader metadata. phase records and native streams survive failure, with unknown execution retained on timeout. [U-013](../../../UNSAFE.md#u-013-native-storage-image-fixture) owns the complete pre-GPU review.
+
+apply the [storage-image NGAPI prerequisite](../../../patches/ngapi-physical-readback/README.md#storage-image-profile) before building. after the current compiler and physical64 test sysroot are built:
+
+```powershell
+python tools/theta/ngapi-probe/compile_native_heap_storage.py `
+  --upstream work/theta/upstream/rust-gpu `
+  --backend work/theta/build/rust-gpu/release/rustc_codegen_spirv.dll `
+  --output-dir work/theta/build/ngapi-storage-shaders
+if ($LASTEXITCODE -ne 0) { throw 'storage-image shader compilation failed' }
+cmake -S tools/theta/ngapi-probe -B work/theta/build/ngapi-owned `
+  "-DTHETA_STORAGE_SHADER_DIR=$thetaRoot/work/theta/build/ngapi-storage-shaders"
+if ($LASTEXITCODE -ne 0) { throw 'storage-image configure failed' }
+foreach ($configuration in @('Debug', 'Release')) {
+  cmake --build work/theta/build/ngapi-owned --config $configuration `
+    --target theta_ngapi_native_heap_storage --parallel 1
+  if ($LASTEXITCODE -ne 0) { throw 'storage-image build failed' }
+  python tools/theta/ngapi-probe/run_native_heap_storage.py `
+    --executable "work/theta/build/ngapi-owned/$configuration/theta_ngapi_native_heap_storage.exe" `
+    --sdk $sdk --shader-dir work/theta/build/ngapi-storage-shaders `
+    --upstream work/theta/upstream/rust-gpu `
+    --output-dir "work/theta/evidence/ngapi-storage-$configuration"
+  if ($LASTEXITCODE -ne 0) { throw 'storage-image consumer failed' }
+}
+```
+
+[E-032](../../../docs/execution.md#e-032-2026-09-19-executed-native-storage-image-operations) records 16/16 cases and 169 native controls in each Debug/Release host with zero validation diagnostics. actual image descriptors are 32 bytes and physical addresses remain below 4 GiB. other storage formats, atomics, divergent storage indices and additional stages remain separate evidence obligations.

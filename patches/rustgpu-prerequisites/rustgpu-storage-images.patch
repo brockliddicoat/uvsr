@@ -1,0 +1,537 @@
+diff --git a/crates/spirv-std/README.md b/crates/spirv-std/README.md
+index ab3631a..a775d29 100644
+--- a/crates/spirv-std/README.md
++++ b/crates/spirv-std/README.md
+@@ -66,0 +67,8 @@ for every image parameter, storage access, stage or device.
++The shared `descriptor_heap/auxiliary/storage_body.rs` fixture also compiles
++typed rgba32ui storage-image reads/writes and a physical output through default
++and qptr lowering at opt0/opt3. Its profile declares `ShaderNonUniform` and
++`StorageImageArrayNonUniformIndexing`, so the consumer must query and enable the
++corresponding storage-image device feature. Its complete unsafe entry contract
++is in the fixture. These compiletests do not dispatch an image or prove runtime
++support for untested formats, access modes or stages.
++
+diff --git a/tests/compiletests/ui/descriptor_heap/auxiliary/storage_body.rs b/tests/compiletests/ui/descriptor_heap/auxiliary/storage_body.rs
+new file mode 100644
+index 0000000..ab87e61
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/auxiliary/storage_body.rs
+@@ -0,0 +1,58 @@
++use spirv_std::glam::{UVec2, UVec4};
++use spirv_std::{Image, PhysicalPtr, spirv};
++
++type StorageImage = Image!(2D, format = rgba32ui, sampled = false);
++
++#[repr(C)]
++pub struct Root {
++    pub output: PhysicalPtr<[u32; 4]>,
++    pub source: u32,
++    pub destination: u32,
++}
++
++const _: () = {
++    assert!(core::mem::size_of::<Root>() == 16);
++    assert!(core::mem::align_of::<Root>() == 8);
++    assert!(core::mem::offset_of!(Root, output) == 0);
++    assert!(core::mem::offset_of!(Root, source) == 8);
++    assert!(core::mem::offset_of!(Root, destination) == 12);
++};
++
++/// Read and write native storage images, with an independent physical output.
++///
++/// # Safety
++/// Bind a live native resource heap whose selected complete, aligned descriptor
++/// ranges describe distinct 2D rgba32ui storage images, at least 2 by 2 texels.
++/// Both images and their initialization must be visible in GENERAL layout.
++/// This invocation exclusively writes the destination's texel (0, 1). No other
++/// access may conflict, and descriptors must remain unchanged through completion.
++/// Output is a separate, live, nonzero, four-byte-aligned exclusive 16-byte range.
++/// Enable every declared shader capability and corresponding device feature.
++/// Dispatch exactly one invocation with this 16-byte root. Keep all allocations
++/// live through queue completion and establish visibility before readback/reuse.
++/// Neither construction nor compiler validation establishes these obligations.
++#[allow(unsafe_code, non_snake_case)]
++#[spirv(compute(threads(1)))]
++pub unsafe fn computeMain(#[spirv(push_constant)] root: &Root) {
++    // SAFETY: The entry contract provides initialized native-size descriptors
++    // for the exact storage image type, with complete bounds and live resources.
++    let (source, destination) = unsafe {
++        (
++            StorageImage::from_resource_heap(root.source),
++            StorageImage::from_resource_heap(root.destination),
++        )
++    };
++    let original = source.read(UVec2::new(1, 0));
++    let value = UVec4::new(
++        original.x.wrapping_add(1),
++        original.y.wrapping_add(2),
++        original.z.wrapping_add(3),
++        original.w.wrapping_add(4),
++    );
++    // SAFETY: Texel (0, 1) is in the live destination, with exclusive access by
++    // this invocation. The rgba32ui value matches the descriptor's storage type.
++    unsafe { destination.write(UVec2::new(0, 1), value) };
++    // SAFETY: The entry guarantees a disjoint complete aligned physical range
++    // and exclusive write access. Every u32 representation is a valid value.
++    unsafe { root.output.write([value.x, value.y, value.z, value.w]) };
++}
+diff --git a/tests/compiletests/ui/descriptor_heap/storage_optimized_physical64.rs b/tests/compiletests/ui/descriptor_heap/storage_optimized_physical64.rs
+new file mode 100644
+index 0000000..864c285
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/storage_optimized_physical64.rs
+@@ -0,0 +1,13 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+DescriptorHeapEXT,+ShaderNonUniform,+StorageImageArrayNonUniformIndexing,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// compile-flags: -C debuginfo=0 -C llvm-args=--disassemble
++// compile-flags: -C opt-level=3 -C lto=off
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/storage_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/storage_optimized_physical64.stderr b/tests/compiletests/ui/descriptor_heap/storage_optimized_physical64.stderr
+new file mode 100644
+index 0000000..132070a
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/storage_optimized_physical64.stderr
+@@ -0,0 +1,94 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability UntypedPointersKHR
++               OpCapability DescriptorHeapEXT
++               OpCapability ShaderNonUniform
++               OpCapability StorageImageArrayNonUniformIndexing
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpExtension "SPV_EXT_descriptor_heap"
++               OpExtension "SPV_KHR_untyped_pointers"
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "computeMain" %root %3
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %Root "Root"
++               OpMemberName %Root 0 "output"
++               OpMemberName %Root 1 "source"
++               OpMemberName %Root 2 "destination"
++               OpName %root "root"
++               OpName %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ "core::mem::MaybeDangling<spirv_std::image::Image<u32, 1, 2, 0, 0, 2, 30, 4>>"
++               OpName %_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into "<glam::u32::uvec4::UVec4 as spirv_std::vector::VectorTruncateInto<glam::u32::uvec4::UVec4>>::truncate_into"
++               OpMemberDecorate %Root 0 Offset 0
++               OpMemberDecorate %Root 1 Offset 8
++               OpMemberDecorate %Root 2 Offset 12
++               OpDecorate %_struct_14 Block
++               OpMemberDecorate %_struct_14 0 Offset 0
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ ArrayStrideIdEXT %16
++               OpDecorate %3 BuiltIn ResourceHeapEXT
++               OpDecorate %17 ArrayStride 4
++               OpDecorate %18 NonUniform
++        %u64 = OpTypeInt 64 0
++        %u32 = OpTypeInt 32 0
++       %Root = OpTypeStruct %u64 %u32 %u32
++ %_struct_14 = OpTypeStruct %Root
++%_ptr_PushConstant__struct_14 = OpTypePointer PushConstant %_struct_14
++       %void = OpTypeVoid
++         %23 = OpTypeFunction %void
++%_ptr_PushConstant_Root = OpTypePointer PushConstant %Root
++       %root = OpVariable %_ptr_PushConstant__struct_14 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_PushConstant_u32 = OpTypePointer PushConstant %u32
++      %u32_1 = OpConstant %u32 1
++%core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ = OpTypeImage %u32 2D 2 0 0 2 Rgba32ui
++         %16 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__
++%_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__
++         %28 = OpTypeUntypedPointerKHR UniformConstant
++          %3 = OpUntypedVariableKHR %28 UniformConstant
++      %u32_2 = OpConstant %u32 2
++      %v2u32 = OpTypeVector %u32 2
++      %v4u32 = OpTypeVector %u32 4
++         %32 = OpTypeFunction %v4u32 %v4u32
++      %u32_3 = OpConstant %u32 3
++      %u32_4 = OpConstant %u32 4
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++         %17 = OpTypeArray %u32 %u32_4
++%_ptr_PhysicalStorageBuffer_17 = OpTypePointer PhysicalStorageBuffer %17
++          %1 = OpFunction %void None %23
++         %37 = OpLabel
++         %38 = OpInBoundsAccessChain %_ptr_PushConstant_Root %root %u32_0
++         %39 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %38 %u32_1
++         %40 = OpLoad %u32 %39
++         %41 = OpUntypedAccessChainKHR %28 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %3 %40
++         %42 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %41
++         %43 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %38 %u32_2
++         %44 = OpLoad %u32 %43
++         %45 = OpUntypedAccessChainKHR %28 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %3 %44
++         %46 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %45
++         %47 = OpCompositeConstruct %v2u32 %u32_1 %u32_0
++         %18 = OpImageRead %v4u32 %42 %47
++         %48 = OpFunctionCall %v4u32 %_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into %18
++         %49 = OpCompositeExtract %u32 %48 0
++         %50 = OpIAdd %u32 %49 %u32_1
++         %51 = OpCompositeExtract %u32 %48 1
++         %52 = OpIAdd %u32 %51 %u32_2
++         %53 = OpCompositeExtract %u32 %48 2
++         %54 = OpIAdd %u32 %53 %u32_3
++         %55 = OpCompositeExtract %u32 %48 3
++         %56 = OpIAdd %u32 %55 %u32_4
++         %57 = OpCompositeConstruct %v4u32 %u32_1 %u32_2 %u32_3 %u32_4
++         %58 = OpIAdd %v4u32 %48 %57
++         %59 = OpCompositeConstruct %v2u32 %u32_0 %u32_1
++               OpImageWrite %46 %59 %58
++         %60 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %38 %u32_0
++         %61 = OpLoad %u64 %60
++         %62 = OpCompositeConstruct %17 %50 %52 %54 %56
++         %63 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_17 %61
++               OpStore %63 %62 Aligned 4
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
++%_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into = OpFunction %v4u32 None %32
++         %64 = OpFunctionParameter %v4u32
++         %65 = OpLabel
++               OpReturnValue %64
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/descriptor_heap/storage_physical64.rs b/tests/compiletests/ui/descriptor_heap/storage_physical64.rs
+new file mode 100644
+index 0000000..173c9cc
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/storage_physical64.rs
+@@ -0,0 +1,12 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+DescriptorHeapEXT,+ShaderNonUniform,+StorageImageArrayNonUniformIndexing,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// compile-flags: -C debuginfo=0 -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/storage_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/storage_physical64.stderr b/tests/compiletests/ui/descriptor_heap/storage_physical64.stderr
+new file mode 100644
+index 0000000..132070a
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/storage_physical64.stderr
+@@ -0,0 +1,94 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability UntypedPointersKHR
++               OpCapability DescriptorHeapEXT
++               OpCapability ShaderNonUniform
++               OpCapability StorageImageArrayNonUniformIndexing
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpExtension "SPV_EXT_descriptor_heap"
++               OpExtension "SPV_KHR_untyped_pointers"
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "computeMain" %root %3
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %Root "Root"
++               OpMemberName %Root 0 "output"
++               OpMemberName %Root 1 "source"
++               OpMemberName %Root 2 "destination"
++               OpName %root "root"
++               OpName %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ "core::mem::MaybeDangling<spirv_std::image::Image<u32, 1, 2, 0, 0, 2, 30, 4>>"
++               OpName %_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into "<glam::u32::uvec4::UVec4 as spirv_std::vector::VectorTruncateInto<glam::u32::uvec4::UVec4>>::truncate_into"
++               OpMemberDecorate %Root 0 Offset 0
++               OpMemberDecorate %Root 1 Offset 8
++               OpMemberDecorate %Root 2 Offset 12
++               OpDecorate %_struct_14 Block
++               OpMemberDecorate %_struct_14 0 Offset 0
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ ArrayStrideIdEXT %16
++               OpDecorate %3 BuiltIn ResourceHeapEXT
++               OpDecorate %17 ArrayStride 4
++               OpDecorate %18 NonUniform
++        %u64 = OpTypeInt 64 0
++        %u32 = OpTypeInt 32 0
++       %Root = OpTypeStruct %u64 %u32 %u32
++ %_struct_14 = OpTypeStruct %Root
++%_ptr_PushConstant__struct_14 = OpTypePointer PushConstant %_struct_14
++       %void = OpTypeVoid
++         %23 = OpTypeFunction %void
++%_ptr_PushConstant_Root = OpTypePointer PushConstant %Root
++       %root = OpVariable %_ptr_PushConstant__struct_14 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_PushConstant_u32 = OpTypePointer PushConstant %u32
++      %u32_1 = OpConstant %u32 1
++%core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ = OpTypeImage %u32 2D 2 0 0 2 Rgba32ui
++         %16 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__
++%_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__
++         %28 = OpTypeUntypedPointerKHR UniformConstant
++          %3 = OpUntypedVariableKHR %28 UniformConstant
++      %u32_2 = OpConstant %u32 2
++      %v2u32 = OpTypeVector %u32 2
++      %v4u32 = OpTypeVector %u32 4
++         %32 = OpTypeFunction %v4u32 %v4u32
++      %u32_3 = OpConstant %u32 3
++      %u32_4 = OpConstant %u32 4
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++         %17 = OpTypeArray %u32 %u32_4
++%_ptr_PhysicalStorageBuffer_17 = OpTypePointer PhysicalStorageBuffer %17
++          %1 = OpFunction %void None %23
++         %37 = OpLabel
++         %38 = OpInBoundsAccessChain %_ptr_PushConstant_Root %root %u32_0
++         %39 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %38 %u32_1
++         %40 = OpLoad %u32 %39
++         %41 = OpUntypedAccessChainKHR %28 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %3 %40
++         %42 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %41
++         %43 = OpInBoundsAccessChain %_ptr_PushConstant_u32 %38 %u32_2
++         %44 = OpLoad %u32 %43
++         %45 = OpUntypedAccessChainKHR %28 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %3 %44
++         %46 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %45
++         %47 = OpCompositeConstruct %v2u32 %u32_1 %u32_0
++         %18 = OpImageRead %v4u32 %42 %47
++         %48 = OpFunctionCall %v4u32 %_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into %18
++         %49 = OpCompositeExtract %u32 %48 0
++         %50 = OpIAdd %u32 %49 %u32_1
++         %51 = OpCompositeExtract %u32 %48 1
++         %52 = OpIAdd %u32 %51 %u32_2
++         %53 = OpCompositeExtract %u32 %48 2
++         %54 = OpIAdd %u32 %53 %u32_3
++         %55 = OpCompositeExtract %u32 %48 3
++         %56 = OpIAdd %u32 %55 %u32_4
++         %57 = OpCompositeConstruct %v4u32 %u32_1 %u32_2 %u32_3 %u32_4
++         %58 = OpIAdd %v4u32 %48 %57
++         %59 = OpCompositeConstruct %v2u32 %u32_0 %u32_1
++               OpImageWrite %46 %59 %58
++         %60 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %38 %u32_0
++         %61 = OpLoad %u64 %60
++         %62 = OpCompositeConstruct %17 %50 %52 %54 %56
++         %63 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_17 %61
++               OpStore %63 %62 Aligned 4
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
++%_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into = OpFunction %v4u32 None %32
++         %64 = OpFunctionParameter %v4u32
++         %65 = OpLabel
++               OpReturnValue %64
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/descriptor_heap/storage_qptr_optimized_physical64.rs b/tests/compiletests/ui/descriptor_heap/storage_qptr_optimized_physical64.rs
+new file mode 100644
+index 0000000..8411e3f
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/storage_qptr_optimized_physical64.rs
+@@ -0,0 +1,14 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+DescriptorHeapEXT,+ShaderNonUniform,+StorageImageArrayNonUniformIndexing,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// compile-flags: -C debuginfo=0 -C llvm-args=--disassemble
++// compile-flags: -C opt-level=3 -C lto=off
++// compile-flags: -C llvm-args=--spirt-passes=qptr
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/storage_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/storage_qptr_optimized_physical64.stderr b/tests/compiletests/ui/descriptor_heap/storage_qptr_optimized_physical64.stderr
+new file mode 100644
+index 0000000..1f7ff81
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/storage_qptr_optimized_physical64.stderr
+@@ -0,0 +1,86 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability UntypedPointersKHR
++               OpCapability DescriptorHeapEXT
++               OpCapability ShaderNonUniform
++               OpCapability StorageImageArrayNonUniformIndexing
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpExtension "SPV_EXT_descriptor_heap"
++               OpExtension "SPV_KHR_untyped_pointers"
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "computeMain" %root %3
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %root "root"
++               OpName %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ "core::mem::MaybeDangling<spirv_std::image::Image<u32, 1, 2, 0, 0, 2, 30, 4>>"
++               OpName %_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into "<glam::u32::uvec4::UVec4 as spirv_std::vector::VectorTruncateInto<glam::u32::uvec4::UVec4>>::truncate_into"
++               OpDecorate %_struct_13 Block
++               OpMemberDecorate %_struct_13 0 Offset 0
++               OpMemberDecorate %_struct_13 1 Offset 8
++               OpMemberDecorate %_struct_13 2 Offset 12
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ ArrayStrideIdEXT %15
++               OpDecorate %3 BuiltIn ResourceHeapEXT
++               OpDecorate %16 ArrayStride 4
++               OpDecorate %17 NonUniform
++        %u64 = OpTypeInt 64 0
++        %u32 = OpTypeInt 32 0
++ %_struct_13 = OpTypeStruct %u64 %u32 %u32
++%_ptr_PushConstant__struct_13 = OpTypePointer PushConstant %_struct_13
++       %void = OpTypeVoid
++         %22 = OpTypeFunction %void
++%_ptr_PushConstant_u32 = OpTypePointer PushConstant %u32
++       %root = OpVariable %_ptr_PushConstant__struct_13 PushConstant
++      %u32_1 = OpConstant %u32 1
++%core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ = OpTypeImage %u32 2D 2 0 0 2 Rgba32ui
++         %15 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__
++%_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__
++         %25 = OpTypeUntypedPointerKHR UniformConstant
++          %3 = OpUntypedVariableKHR %25 UniformConstant
++      %u32_2 = OpConstant %u32 2
++      %v2u32 = OpTypeVector %u32 2
++      %u32_0 = OpConstant %u32 0
++      %v4u32 = OpTypeVector %u32 4
++         %30 = OpTypeFunction %v4u32 %v4u32
++      %u32_3 = OpConstant %u32 3
++      %u32_4 = OpConstant %u32 4
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++         %16 = OpTypeArray %u32 %u32_4
++%_ptr_PhysicalStorageBuffer_16 = OpTypePointer PhysicalStorageBuffer %16
++          %1 = OpFunction %void None %22
++         %35 = OpLabel
++         %36 = OpAccessChain %_ptr_PushConstant_u32 %root %u32_1
++         %37 = OpLoad %u32 %36
++         %38 = OpUntypedAccessChainKHR %25 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %3 %37
++         %39 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %38
++         %40 = OpAccessChain %_ptr_PushConstant_u32 %root %u32_2
++         %41 = OpLoad %u32 %40
++         %42 = OpUntypedAccessChainKHR %25 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %3 %41
++         %43 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %42
++         %44 = OpCompositeConstruct %v2u32 %u32_1 %u32_0
++         %17 = OpImageRead %v4u32 %39 %44
++         %45 = OpFunctionCall %v4u32 %_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into %17
++         %46 = OpCompositeExtract %u32 %45 0
++         %47 = OpIAdd %u32 %46 %u32_1
++         %48 = OpCompositeExtract %u32 %45 1
++         %49 = OpIAdd %u32 %48 %u32_2
++         %50 = OpCompositeExtract %u32 %45 2
++         %51 = OpIAdd %u32 %50 %u32_3
++         %52 = OpCompositeExtract %u32 %45 3
++         %53 = OpIAdd %u32 %52 %u32_4
++         %54 = OpCompositeConstruct %v4u32 %u32_1 %u32_2 %u32_3 %u32_4
++         %55 = OpIAdd %v4u32 %45 %54
++         %56 = OpCompositeConstruct %v2u32 %u32_0 %u32_1
++               OpImageWrite %43 %56 %55
++         %57 = OpAccessChain %_ptr_PushConstant_u64 %root %u32_0
++         %58 = OpLoad %u64 %57
++         %59 = OpCompositeConstruct %16 %47 %49 %51 %53
++         %60 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_16 %58
++               OpStore %60 %59 Aligned 4
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
++%_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into = OpFunction %v4u32 None %30
++         %61 = OpFunctionParameter %v4u32
++         %62 = OpLabel
++               OpReturnValue %61
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/descriptor_heap/storage_qptr_physical64.rs b/tests/compiletests/ui/descriptor_heap/storage_qptr_physical64.rs
+new file mode 100644
+index 0000000..0a6be20
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/storage_qptr_physical64.rs
+@@ -0,0 +1,13 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C target-feature=+UntypedPointersKHR,+DescriptorHeapEXT,+ShaderNonUniform,+StorageImageArrayNonUniformIndexing,+ext:SPV_KHR_untyped_pointers,+ext:SPV_EXT_descriptor_heap
++// compile-flags: -C debuginfo=0 -C llvm-args=--disassemble
++// compile-flags: -C llvm-args=--spirt-passes=qptr
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/storage_body.rs");
+diff --git a/tests/compiletests/ui/descriptor_heap/storage_qptr_physical64.stderr b/tests/compiletests/ui/descriptor_heap/storage_qptr_physical64.stderr
+new file mode 100644
+index 0000000..1f7ff81
+--- /dev/null
++++ b/tests/compiletests/ui/descriptor_heap/storage_qptr_physical64.stderr
+@@ -0,0 +1,86 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability UntypedPointersKHR
++               OpCapability DescriptorHeapEXT
++               OpCapability ShaderNonUniform
++               OpCapability StorageImageArrayNonUniformIndexing
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpExtension "SPV_EXT_descriptor_heap"
++               OpExtension "SPV_KHR_untyped_pointers"
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "computeMain" %root %3
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %root "root"
++               OpName %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ "core::mem::MaybeDangling<spirv_std::image::Image<u32, 1, 2, 0, 0, 2, 30, 4>>"
++               OpName %_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into "<glam::u32::uvec4::UVec4 as spirv_std::vector::VectorTruncateInto<glam::u32::uvec4::UVec4>>::truncate_into"
++               OpDecorate %_struct_13 Block
++               OpMemberDecorate %_struct_13 0 Offset 0
++               OpMemberDecorate %_struct_13 1 Offset 8
++               OpMemberDecorate %_struct_13 2 Offset 12
++               OpDecorateId %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ ArrayStrideIdEXT %15
++               OpDecorate %3 BuiltIn ResourceHeapEXT
++               OpDecorate %16 ArrayStride 4
++               OpDecorate %17 NonUniform
++        %u64 = OpTypeInt 64 0
++        %u32 = OpTypeInt 32 0
++ %_struct_13 = OpTypeStruct %u64 %u32 %u32
++%_ptr_PushConstant__struct_13 = OpTypePointer PushConstant %_struct_13
++       %void = OpTypeVoid
++         %22 = OpTypeFunction %void
++%_ptr_PushConstant_u32 = OpTypePointer PushConstant %u32
++       %root = OpVariable %_ptr_PushConstant__struct_13 PushConstant
++      %u32_1 = OpConstant %u32 1
++%core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ = OpTypeImage %u32 2D 2 0 0 2 Rgba32ui
++         %15 = OpConstantSizeOfEXT %u32 %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__
++%_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ = OpTypeRuntimeArray %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__
++         %25 = OpTypeUntypedPointerKHR UniformConstant
++          %3 = OpUntypedVariableKHR %25 UniformConstant
++      %u32_2 = OpConstant %u32 2
++      %v2u32 = OpTypeVector %u32 2
++      %u32_0 = OpConstant %u32 0
++      %v4u32 = OpTypeVector %u32 4
++         %30 = OpTypeFunction %v4u32 %v4u32
++      %u32_3 = OpConstant %u32 3
++      %u32_4 = OpConstant %u32 4
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++         %16 = OpTypeArray %u32 %u32_4
++%_ptr_PhysicalStorageBuffer_16 = OpTypePointer PhysicalStorageBuffer %16
++          %1 = OpFunction %void None %22
++         %35 = OpLabel
++         %36 = OpAccessChain %_ptr_PushConstant_u32 %root %u32_1
++         %37 = OpLoad %u32 %36
++         %38 = OpUntypedAccessChainKHR %25 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %3 %37
++         %39 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %38
++         %40 = OpAccessChain %_ptr_PushConstant_u32 %root %u32_2
++         %41 = OpLoad %u32 %40
++         %42 = OpUntypedAccessChainKHR %25 %_runtimearr_core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %3 %41
++         %43 = OpLoad %core__mem__MaybeDangling_spirv_std__image__Image_u32__1__2__0__0__2__30__4__ %42
++         %44 = OpCompositeConstruct %v2u32 %u32_1 %u32_0
++         %17 = OpImageRead %v4u32 %39 %44
++         %45 = OpFunctionCall %v4u32 %_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into %17
++         %46 = OpCompositeExtract %u32 %45 0
++         %47 = OpIAdd %u32 %46 %u32_1
++         %48 = OpCompositeExtract %u32 %45 1
++         %49 = OpIAdd %u32 %48 %u32_2
++         %50 = OpCompositeExtract %u32 %45 2
++         %51 = OpIAdd %u32 %50 %u32_3
++         %52 = OpCompositeExtract %u32 %45 3
++         %53 = OpIAdd %u32 %52 %u32_4
++         %54 = OpCompositeConstruct %v4u32 %u32_1 %u32_2 %u32_3 %u32_4
++         %55 = OpIAdd %v4u32 %45 %54
++         %56 = OpCompositeConstruct %v2u32 %u32_0 %u32_1
++               OpImageWrite %43 %56 %55
++         %57 = OpAccessChain %_ptr_PushConstant_u64 %root %u32_0
++         %58 = OpLoad %u64 %57
++         %59 = OpCompositeConstruct %16 %47 %49 %51 %53
++         %60 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_16 %58
++               OpStore %60 %59 Aligned 4
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
++%_glam__u32__uvec4__UVec4_as_spirv_std__vector__VectorTruncateInto_glam__u32__uvec4__UVec4____truncate_into = OpFunction %v4u32 None %30
++         %61 = OpFunctionParameter %v4u32
++         %62 = OpLabel
++               OpReturnValue %61
++               OpFunctionEnd

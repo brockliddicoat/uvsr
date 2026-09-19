@@ -32,3 +32,9 @@ if ($LASTEXITCODE -ne 0) { throw 'divergent NGAPI prerequisite failed' }
 ```
 
 [E-026](../../docs/execution.md#e-026-2026-09-19-tested-divergent-native-heap-access) records the four-lane actual consumer and unchanged scalar/uniform regression gates. native heaps permit non-uniform indexing by default, while the [Vulkan SPIR-V environment](https://docs.vulkan.org/spec/latest/appendices/spirvenv.html) still requires the sampled-image capability and its device feature for this artifact. this patch is not part of the generic RustGPU contribution and has not been published to NGAPI upstream.
+
+## storage-image profile
+
+apply [ngapi-storage-images.patch](ngapi-storage-images.patch) after the divergent-sampling patch, using `git apply --unidiff-zero`. [storage-source.json](storage-source.json) pins its base, reconstructed tree, exact hash and MIT license. the two added lines query/require and enable shaderStorageImageArrayNonUniformIndexing for the fixture's declared StorageImageArrayNonUniformIndexing capability, as required by the [Vulkan feature contract](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceDescriptorIndexingFeatures.html). this preserves the fixed experimental profile, with no new negotiation API or fallback. it does not claim that every uniform storage-image shader needs this feature.
+
+[E-032](../../docs/execution.md#e-032-2026-09-19-executed-native-storage-image-operations) records the actual storage-image cases. no descriptor writing, image allocation, pipeline, root or command implementation changed. this prerequisite remains separate from RustGPU and has not been published upstream.

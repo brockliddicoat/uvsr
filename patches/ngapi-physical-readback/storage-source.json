@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/sebbbi/NoGraphicsAPI",
+  "base_commit": "a9b7e3fb00704385f186ba804483f5e7b0be5a9e",
+  "prerequisite_manifest": "divergent-source.json",
+  "verified_local_commit": "b52ffa02ecbe9b9ed2a74b3e5032deb305caa801",
+  "tree": "37d0c57af78f7d4e9a9c88738bcbd8d5d89a8f86",
+  "patch": "ngapi-storage-images.patch",
+  "patch_sha256": "4b0a93c123fd419b0740f2dc09a8f65331459101a729bb61e34456481d0d0081",
+  "apply_flags": [
+    "--unidiff-zero",
+    "--index"
+  ],
+  "scope": "experimental fixed NGAPI profile for native storage-image shaders",
+  "additional_required_features": [
+    "shaderStorageImageArrayNonUniformIndexing"
+  ],
+  "license": "../../legal/licenses/NoGraphicsAPI-MIT.txt",
+  "upstream_publication": false
+}
