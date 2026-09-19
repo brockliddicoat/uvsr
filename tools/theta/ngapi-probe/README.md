@@ -186,3 +186,37 @@ foreach ($configuration in @('Debug', 'Release')) {
 ```
 
 [E-027](../../../docs/execution.md#e-027-2026-09-19-verified-the-native-heap-textured-cube) records eight passing GPU cases in each Debug/Release host, zero validation diagnostics and all 31 Python image/record tests. existing scalar/uniform/divergent compute gates still pass. this adds vertex/fragment and a bounded aggregate-read runtime result. storage images, task/mesh, presentation, direct Rust Vulkan, Linux and complete upstream CI remain open.
+
+## aggregate writes and loaded aliases
+
+[physical_operations.cpp](physical_operations.cpp) consumes the single generic RustGPU `physical_storage/auxiliary/operations_body.rs` fixture. its nested source contains the destination address, three u32 values and a tag. one invocation writes the array through the root address, reads and changes it through the loaded alias, then reads it through the root again. explicit Function-memory assembly retains one volatile store and two volatile loads, including an unused load. final instruction inspection is required alongside numeric readback. [U-012](../../../UNSAFE.md#u-012-aggregate-physical-access-and-loaded-alias-probe) owns the complete contract.
+
+four shader variants cover default/qptr lowering and opt0/opt3. three seeds per variant include wrapping arithmetic. each case checks all 64 readback bytes: changed destination, alias address, tag, guard and unchanged source allocation. 25 native CPU controls and independent Python corruption controls run without synthetic GPU dereferences. the runner checks embedded source/host/root/payload identities before dispatch, requires explicit core/synchronization validation and retains phase records plus both streams on failure.
+
+after applying the prerequisite patches and building the current compiler and physical64 test sysroot:
+
+```powershell
+python tools/theta/ngapi-probe/compile_physical_operations.py `
+  --upstream work/theta/upstream/rust-gpu `
+  --backend work/theta/build/rust-gpu/release/rustc_codegen_spirv.dll `
+  --output-dir work/theta/build/ngapi-operations-shaders
+if ($LASTEXITCODE -ne 0) { throw 'operations shader compilation failed' }
+cmake -S tools/theta/ngapi-probe -B work/theta/build/ngapi-owned `
+  "-DTHETA_OPERATIONS_SHADER_DIR=$thetaRoot/work/theta/build/ngapi-operations-shaders"
+if ($LASTEXITCODE -ne 0) { throw 'operations configure failed' }
+foreach ($configuration in @('Debug', 'Release')) {
+  cmake --build work/theta/build/ngapi-owned --config $configuration `
+    --target theta_ngapi_physical_operations --parallel 1
+  if ($LASTEXITCODE -ne 0) { throw 'operations build failed' }
+  python tools/theta/ngapi-probe/run_physical_operations.py `
+    --executable "work/theta/build/ngapi-owned/$configuration/theta_ngapi_physical_operations.exe" `
+    --sdk $sdk --shader-dir work/theta/build/ngapi-operations-shaders `
+    --upstream work/theta/upstream/rust-gpu `
+    --output-dir "work/theta/evidence/ngapi-operations-$configuration"
+  if ($LASTEXITCODE -ne 0) { throw 'operations consumer failed' }
+}
+```
+
+the required denominator is 12 shader cases per host configuration. a skip, timeout, missing case or validation diagnostic fails this gate. high-address coverage is reported from real allocations separately. the fixture does not establish arbitrary Copy-type support, concurrent aliases, volatile intrinsics, effectful copies or full pointer parity.
+
+[E-030](../../../docs/execution.md#e-030-2026-09-19-tested-aggregate-aliases-and-function-effects) records all 12 passing cases in each Debug/Release host, 25 native controls per run and zero validation diagnostics. actual addresses were below 4 GiB. the ten existing consumer modules remain byte-identical under the changed compiler.

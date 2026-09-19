@@ -1,0 +1,131 @@
+diff --git a/spirv-tools/tests/volatile_function.rs b/spirv-tools/tests/volatile_function.rs
+new file mode 100644
+index 0000000..5c1cfca
+--- /dev/null
++++ b/spirv-tools/tests/volatile_function.rs
+@@ -0,0 +1,89 @@
++//! Function-memory effects must survive the native optimizer's local passes.
++#![forbid(unsafe_code)]
++#![cfg(feature = "use-compiled-tools")]
++
++use spirv_tools::{
++    assembler::Assembler,
++    opt::{Optimizer, Passes},
++    val::Validator,
++    TargetEnv,
++};
++
++fn check(derived: bool, store_only: bool) {
++    let mut source = include_str!("volatile_function.spvasm").replace("\r\n", "\n");
++    if !derived {
++        source = source
++            .replace(
++                "%local = OpVariable %local_array Function",
++                "%local = OpVariable %local_u32 Function",
++            )
++            .replace("%element = OpAccessChain %local_u32 %local %one\n", "")
++            .replace("%element", "%local");
++    }
++    if store_only {
++        source = source
++            .lines()
++            .filter(|line| {
++                !line.starts_with("%used =")
++                    && !line.starts_with("%unused =")
++                    && !line.starts_with("OpStore %output")
++            })
++            .collect::<Vec<_>>()
++            .join("\n");
++    }
++    let assembler =
++        spirv_tools::assembler::compiled::CompiledAssembler::with_env(TargetEnv::Vulkan_1_3);
++    let validator = spirv_tools::val::compiled::CompiledValidator::with_env(TargetEnv::Vulkan_1_3);
++    let input = assembler.assemble(&source, Default::default()).unwrap();
++    validator.validate(&input, None).unwrap();
++    for pass in [
++        Some(Passes::AggressiveDCE),
++        Some(Passes::LocalSingleBlockLoadStoreElim),
++        Some(Passes::LocalSingleStoreElim),
++        Some(Passes::SSARewrite),
++        Some(Passes::LocalAccessChainConvert),
++        None,
++    ] {
++        let mut optimizer =
++            spirv_tools::opt::compiled::CompiledOptimizer::with_env(TargetEnv::Vulkan_1_3);
++        if let Some(pass) = pass {
++            optimizer.register_pass(pass);
++        } else {
++            optimizer.register_performance_passes();
++        }
++        let output = optimizer
++            .optimize(&input, &mut |message| eprintln!("{message:?}"), None)
++            .unwrap();
++        validator.validate(&output, None).unwrap();
++        let text = assembler
++            .disassemble(&output, Default::default())
++            .unwrap()
++            .unwrap();
++        for (opcode, count) in [("OpLoad", if store_only { 0 } else { 2 }), ("OpStore", 1)] {
++            assert_eq!(
++                text.lines()
++                    .filter(|line| line.contains(opcode) && line.contains("Volatile"))
++                    .count(),
++                count,
++                "derived={derived}, store_only={store_only}, pass={pass:?}:\n{text}"
++            );
++        }
++    }
++}
++
++#[test]
++fn scalar_function_memory() {
++    check(false, false);
++}
++#[test]
++fn derived_function_memory() {
++    check(true, false);
++}
++#[test]
++fn unused_scalar_volatile_store() {
++    check(false, true);
++}
++#[test]
++fn unused_derived_volatile_store() {
++    check(true, true);
++}
+diff --git a/spirv-tools/tests/volatile_function.spvasm b/spirv-tools/tests/volatile_function.spvasm
+new file mode 100644
+index 0000000..76be5c4
+--- /dev/null
++++ b/spirv-tools/tests/volatile_function.spvasm
+@@ -0,0 +1,30 @@
++
++OpCapability Shader
++OpCapability VulkanMemoryModel
++OpMemoryModel Logical Vulkan
++OpEntryPoint GLCompute %main "main" %output
++OpExecutionMode %main LocalSize 1 1 1
++%void = OpTypeVoid
++%u32 = OpTypeInt 32 0
++%two = OpConstant %u32 2
++%one = OpConstant %u32 1
++%value = OpConstant %u32 42
++%array = OpTypeArray %u32 %two
++%local_array = OpTypePointer Function %array
++%local_u32 = OpTypePointer Function %u32
++%shared_u32 = OpTypePointer Workgroup %u32
++%function = OpTypeFunction %void
++%output = OpVariable %shared_u32 Workgroup
++%main = OpFunction %void None %function
++%entry = OpLabel
++%local = OpVariable %local_array Function
++%ordinary = OpVariable %local_u32 Function
++OpStore %ordinary %value
++%input = OpLoad %u32 %ordinary
++%element = OpAccessChain %local_u32 %local %one
++OpStore %element %input Volatile|Nontemporal
++%used = OpLoad %u32 %element Volatile|Nontemporal
++%unused = OpLoad %u32 %element Volatile|Nontemporal
++OpStore %output %used
++OpReturn
++OpFunctionEnd

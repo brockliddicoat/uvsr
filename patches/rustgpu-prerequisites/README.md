@@ -2,7 +2,7 @@
 
 these are tested changes from separately owned upstream checkouts. [sources.json](sources.json) pins each base, local verified commit, patch hash and controlling license. they are not published upstream contributions or proof of complete RustGPU support.
 
-latest checkpoint: [typed pointer operations](#typed-pointer-operations) adds address comparisons, wrapping offsets and explicit rejection controls. it retains the [native optimizer prerequisite](#qptr-memory-operands-and-volatile-loads) for volatile effects. the original 16 probes passed both tool configurations at the [two-configuration gate](#two-configuration-compiler-gate). the new volatile regression requires patched compiled tools. earlier results below preserve the evidence at each incremental patch.
+latest work: [Function memory and aggregate aliases](#function-memory-and-aggregate-aliases) extends the pointer and native-heap library candidate with memory-effect regressions and a shared aggregate/alias fixture. volatile regressions require patched compiled tools. the original 16 assembly probes passed both configurations at the [two-configuration gate](#two-configuration-compiler-gate). earlier sections preserve evidence at each incremental patch.
 
 ## rspirv untyped globals
 
@@ -234,3 +234,22 @@ the unpatched SDK 1.4.357.0 optimizer independently reproduces missing constant 
 eight added source cases cover divergent four-lane compute at opt0/opt3/qptr, repeated float/integer image construction in fragment shaders under both ABIs, missing features and unsafe-call enforcement. the full physical_storage/descriptor_heap gate passes 34 required pairs, with opposite-ABI exclusions stated separately. five final positive modules also pass independent validation and structural inspection. source/fragment/divergent success is not runtime proof for those fixtures.
 
 [E-025](../../docs/execution.md#e-025-2026-09-19-tested-native-heap-library-constructors) records the current library-based actual NGAPI uniform consumer: eight cases each in Debug/Release, both Rust optimization levels, exact output and zero native validation diagnostics. the tested compiler revision is `101153ea8fd0275468c271f03038302bbe7ded6f`, with 22 exported patches in the manifest. the wider upstream/native gates, divergent runtime, storage images and other stages remain open.
+
+## Function memory and aggregate aliases
+
+[rustgpu-physical-operations.patch](rustgpu-physical-operations.patch) prevents mem2reg from promoting locals with memory operands beyond alignment or the non-temporal hint. derived access chains are included. default/qptr regressions retain one volatile store and both used/unused volatile loads, while an ordinary local still disappears. the patch also resolves candidate Clippy findings without lint exceptions. compiler transformations add no unsafe operation.
+
+four source wrappers share one generic body with a nested address-containing Source, whole-array reads/writes and sequential accesses through a separately loaded alias. all data layouts and the complete unsafe entry contract are in that body. default/qptr and opt0/opt3 source cases retain explicit Function-memory effects. compiler snapshots precede native optimization, so the separate consumer compiler also checks the final four modules. the [NGAPI diagnostic](../../tools/theta/ngapi-probe/README.md#aggregate-writes-and-loaded-aliases) is outside RustGPU's dependencies.
+
+[spirv-tools-volatile-function.patch](spirv-tools-volatile-function.patch) follows the native ID-constant fix. local promotion follows derived pointers and refuses explicit volatile accesses, the single-store pass retains them, and aggressive dead-code elimination treats them as live effects. [spirv-tools-volatile-function-tests.patch](spirv-tools-volatile-function-tests.patch) adds scalar/derived and unused-store wrapper regressions across five individual passes plus the performance pipeline. all four cases and three existing heap regressions pass. the included native C++ GTest remains unrun. Apache-2.0 and MIT OR Apache-2.0 licenses remain as recorded in the manifest.
+
+from the corresponding owned checkout, with the pinned tools and one worker:
+
+```powershell
+cargo test --release --locked -p spirv-tools --no-default-features --features use-compiled-tools -j 1 --test volatile_function --test descriptor_heap -- --test-threads=1
+cargo test --release --locked -p rustc_codegen_spirv-types -p rustc_codegen_spirv --no-default-features --features use-compiled-tools -j 1 -- --test-threads=1
+cargo run --release --locked -p compiletests --no-default-features --features use-compiled-tools -j 1 -- --target-env vulkan1.3,vulkan1.3-physical64 physical_storage descriptor_heap
+cargo clippy --release --locked -p rustc_codegen_spirv --no-default-features --features use-compiled-tools --all-targets -j 1 -- -D warnings
+```
+
+this does not add a volatile library API, effectful/scoped copy support, concurrent alias guarantees or complete pointer parity. the existing broader subpass-coordinate failure and full upstream/native CI status remain separate from these focused gates.

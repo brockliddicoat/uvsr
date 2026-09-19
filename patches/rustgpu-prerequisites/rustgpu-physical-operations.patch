@@ -1,0 +1,1113 @@
+diff --git a/crates/rustc_codegen_spirv/src/builder/builder_methods.rs b/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
+index e7871e1..565d36a 100644
+--- a/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
++++ b/crates/rustc_codegen_spirv/src/builder/builder_methods.rs
+@@ -1067,13 +1067,13 @@ impl<'a, 'tcx> Builder<'a, 'tcx> {
+-        if self.tcx.data_layout.pointer_size().bits() == 64 {
+-            if let Some(stride) = self.lookup_type(stride_elem_ty).sizeof(self) {
+-                // Only physical pointers can convert to addresses after storage
+-                // inference. Keep the existing logical legalization above, and
+-                // use modular address arithmetic for this remaining raw case.
+-                let address_ty = self.type_usize();
+-                let address = self.ptrtoint(ptr, address_ty);
+-                let index = self.intcast(index, address_ty, true);
+-                let stride = self.const_usize(stride.bytes());
+-                let offset = self.mul(index, stride);
+-                let address = self.add(address, offset);
+-                return self.inttoptr(address, ptr.ty);
+-            }
++        if self.tcx.data_layout.pointer_size().bits() == 64
++            && let Some(stride) = self.lookup_type(stride_elem_ty).sizeof(self)
++        {
++            // Only physical pointers can convert to addresses after storage
++            // inference. Keep the existing logical legalization above, and
++            // use modular address arithmetic for this remaining raw case.
++            let address_ty = self.type_usize();
++            let address = self.ptrtoint(ptr, address_ty);
++            let index = self.intcast(index, address_ty, true);
++            let stride = self.const_usize(stride.bytes());
++            let offset = self.mul(index, stride);
++            let address = self.add(address, offset);
++            return self.inttoptr(address, ptr.ty);
+diff --git a/crates/rustc_codegen_spirv/src/linker/dce.rs b/crates/rustc_codegen_spirv/src/linker/dce.rs
+index 3a7ff0a..29849fe 100644
+--- a/crates/rustc_codegen_spirv/src/linker/dce.rs
++++ b/crates/rustc_codegen_spirv/src/linker/dce.rs
+@@ -188,67 +187,0 @@ pub fn dce_phi(blocks: &mut FxIndexMap<impl Eq + Hash, &mut Block>) {
+-#[cfg(test)]
+-mod tests {
+-    use super::*;
+-
+-    fn id_decoration_dependencies(opcode: Op, decoration: Decoration) {
+-        let annotation = |target| {
+-            let mut operands = vec![Operand::IdRef(target)];
+-            if opcode == Op::MemberDecorateIdEXT {
+-                operands.push(Operand::LiteralBit32(0));
+-            }
+-            operands.extend([Operand::Decoration(decoration), Operand::IdRef(3)]);
+-            Instruction::new(opcode, None, None, operands)
+-        };
+-        let type_opcode = if opcode == Op::MemberDecorateIdEXT {
+-            Op::TypeStruct
+-        } else {
+-            Op::TypeRuntimeArray
+-        };
+-        let mut module = Module::new();
+-        module.types_global_values = vec![
+-            Instruction::new(
+-                Op::TypeInt,
+-                None,
+-                Some(1),
+-                vec![Operand::LiteralBit32(32), Operand::LiteralBit32(0)],
+-            ),
+-            Instruction::new(Op::TypeSampler, None, Some(2), vec![]),
+-            Instruction::new(
+-                Op::ConstantSizeOfEXT,
+-                Some(1),
+-                Some(3),
+-                vec![Operand::IdRef(2)],
+-            ),
+-            Instruction::new(type_opcode, None, Some(4), vec![Operand::IdRef(2)]),
+-            Instruction::new(type_opcode, None, Some(5), vec![Operand::IdRef(2)]),
+-        ];
+-        module.annotations = vec![annotation(4), annotation(5)];
+-
+-        // Isolate the dependency walk: only type 4 is initially live. Both
+-        // decorations use constant 3, but the dead target 5 must stay dead.
+-        let mut rooted = FxIndexSet::default();
+-        rooted.insert(4);
+-        while spread_roots(&module, &mut rooted) {}
+-        kill_unrooted(&mut module, &rooted);
+-
+-        assert_eq!(
+-            module
+-                .types_global_values
+-                .iter()
+-                .map(|inst| inst.result_id.unwrap())
+-                .collect::<Vec<_>>(),
+-            [1, 2, 3, 4]
+-        );
+-        assert_eq!(module.annotations, [annotation(4)]);
+-    }
+-
+-    #[test]
+-    fn retained_id_decoration_roots_constant_without_retaining_dead_target() {
+-        id_decoration_dependencies(Op::DecorateId, Decoration::ArrayStrideIdEXT);
+-    }
+-
+-    #[test]
+-    fn retained_member_id_decoration_roots_constant_without_retaining_dead_target() {
+-        id_decoration_dependencies(Op::MemberDecorateIdEXT, Decoration::OffsetIdEXT);
+-    }
+-}
+-
+@@ -386,0 +320,67 @@ fn instruction_is_pure(inst: &Instruction) -> bool {
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn id_decoration_dependencies(opcode: Op, decoration: Decoration) {
++        let annotation = |target| {
++            let mut operands = vec![Operand::IdRef(target)];
++            if opcode == Op::MemberDecorateIdEXT {
++                operands.push(Operand::LiteralBit32(0));
++            }
++            operands.extend([Operand::Decoration(decoration), Operand::IdRef(3)]);
++            Instruction::new(opcode, None, None, operands)
++        };
++        let type_opcode = if opcode == Op::MemberDecorateIdEXT {
++            Op::TypeStruct
++        } else {
++            Op::TypeRuntimeArray
++        };
++        let mut module = Module::new();
++        module.types_global_values = vec![
++            Instruction::new(
++                Op::TypeInt,
++                None,
++                Some(1),
++                vec![Operand::LiteralBit32(32), Operand::LiteralBit32(0)],
++            ),
++            Instruction::new(Op::TypeSampler, None, Some(2), vec![]),
++            Instruction::new(
++                Op::ConstantSizeOfEXT,
++                Some(1),
++                Some(3),
++                vec![Operand::IdRef(2)],
++            ),
++            Instruction::new(type_opcode, None, Some(4), vec![Operand::IdRef(2)]),
++            Instruction::new(type_opcode, None, Some(5), vec![Operand::IdRef(2)]),
++        ];
++        module.annotations = vec![annotation(4), annotation(5)];
++
++        // Isolate the dependency walk: only type 4 is initially live. Both
++        // decorations use constant 3, but the dead target 5 must stay dead.
++        let mut rooted = FxIndexSet::default();
++        rooted.insert(4);
++        while spread_roots(&module, &mut rooted) {}
++        kill_unrooted(&mut module, &rooted);
++
++        assert_eq!(
++            module
++                .types_global_values
++                .iter()
++                .map(|inst| inst.result_id.unwrap())
++                .collect::<Vec<_>>(),
++            [1, 2, 3, 4]
++        );
++        assert_eq!(module.annotations, [annotation(4)]);
++    }
++
++    #[test]
++    fn retained_id_decoration_roots_constant_without_retaining_dead_target() {
++        id_decoration_dependencies(Op::DecorateId, Decoration::ArrayStrideIdEXT);
++    }
++
++    #[test]
++    fn retained_member_id_decoration_roots_constant_without_retaining_dead_target() {
++        id_decoration_dependencies(Op::MemberDecorateIdEXT, Decoration::OffsetIdEXT);
++    }
++}
+diff --git a/crates/rustc_codegen_spirv/src/linker/duplicates.rs b/crates/rustc_codegen_spirv/src/linker/duplicates.rs
+index 6cb06f9..3cdd75a 100644
+--- a/crates/rustc_codegen_spirv/src/linker/duplicates.rs
++++ b/crates/rustc_codegen_spirv/src/linker/duplicates.rs
+@@ -276,53 +275,0 @@ pub fn remove_duplicate_types(module: &mut Module) {
+-#[cfg(test)]
+-mod tests {
+-    use super::*;
+-
+-    #[test]
+-    fn member_id_offsets_distinguish_descriptor_structs() {
+-        let mut module = Module::new();
+-        module.types_global_values = vec![
+-            Instruction::new(
+-                Op::TypeInt,
+-                None,
+-                Some(1),
+-                vec![Operand::LiteralBit32(32), Operand::LiteralBit32(0)],
+-            ),
+-            Instruction::new(
+-                Op::Constant,
+-                Some(1),
+-                Some(2),
+-                vec![Operand::LiteralBit32(0)],
+-            ),
+-            Instruction::new(
+-                Op::Constant,
+-                Some(1),
+-                Some(3),
+-                vec![Operand::LiteralBit32(16)],
+-            ),
+-            Instruction::new(Op::TypeSampler, None, Some(4), vec![]),
+-            Instruction::new(Op::TypeStruct, None, Some(5), vec![Operand::IdRef(4)]),
+-            Instruction::new(Op::TypeStruct, None, Some(6), vec![Operand::IdRef(4)]),
+-        ];
+-        module.annotations = [(5, 2), (6, 3)]
+-            .into_iter()
+-            .map(|(target, offset)| {
+-                Instruction::new(
+-                    Op::MemberDecorateIdEXT,
+-                    None,
+-                    None,
+-                    vec![
+-                        Operand::IdRef(target),
+-                        Operand::LiteralBit32(0),
+-                        Operand::Decoration(rspirv::spirv::Decoration::OffsetIdEXT),
+-                        Operand::IdRef(offset),
+-                    ],
+-                )
+-            })
+-            .collect();
+-        let original = module.clone();
+-        remove_duplicate_types(&mut module);
+-        assert_eq!(module.types_global_values, original.types_global_values);
+-        assert_eq!(module.annotations, original.annotations);
+-    }
+-}
+-
+@@ -611,0 +559,53 @@ impl DebuginfoDeduplicator {
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn member_id_offsets_distinguish_descriptor_structs() {
++        let mut module = Module::new();
++        module.types_global_values = vec![
++            Instruction::new(
++                Op::TypeInt,
++                None,
++                Some(1),
++                vec![Operand::LiteralBit32(32), Operand::LiteralBit32(0)],
++            ),
++            Instruction::new(
++                Op::Constant,
++                Some(1),
++                Some(2),
++                vec![Operand::LiteralBit32(0)],
++            ),
++            Instruction::new(
++                Op::Constant,
++                Some(1),
++                Some(3),
++                vec![Operand::LiteralBit32(16)],
++            ),
++            Instruction::new(Op::TypeSampler, None, Some(4), vec![]),
++            Instruction::new(Op::TypeStruct, None, Some(5), vec![Operand::IdRef(4)]),
++            Instruction::new(Op::TypeStruct, None, Some(6), vec![Operand::IdRef(4)]),
++        ];
++        module.annotations = [(5, 2), (6, 3)]
++            .into_iter()
++            .map(|(target, offset)| {
++                Instruction::new(
++                    Op::MemberDecorateIdEXT,
++                    None,
++                    None,
++                    vec![
++                        Operand::IdRef(target),
++                        Operand::LiteralBit32(0),
++                        Operand::Decoration(rspirv::spirv::Decoration::OffsetIdEXT),
++                        Operand::IdRef(offset),
++                    ],
++                )
++            })
++            .collect();
++        let original = module.clone();
++        remove_duplicate_types(&mut module);
++        assert_eq!(module.types_global_values, original.types_global_values);
++        assert_eq!(module.annotations, original.annotations);
++    }
++}
+diff --git a/crates/rustc_codegen_spirv/src/linker/mem2reg.rs b/crates/rustc_codegen_spirv/src/linker/mem2reg.rs
+index c5de866..721893b 100644
+--- a/crates/rustc_codegen_spirv/src/linker/mem2reg.rs
++++ b/crates/rustc_codegen_spirv/src/linker/mem2reg.rs
+@@ -271,0 +272,10 @@ fn collect_access_chains(
++                    // Promotion removes loads/stores, so it must not erase
++                    // volatile or scoped memory effects. Alignment and the
++                    // non-temporal hint alone do not make an access observable.
++                    // Check derived access chains and both copy operands too.
++                    if inst.operands.iter().any(|operand| {
++                        matches!(operand, Operand::MemoryAccess(mask)
++                            if !(*mask & !(MemoryAccess::ALIGNED | MemoryAccess::NONTEMPORAL)).is_empty())
++                    }) {
++                        return None;
++                    }
+diff --git a/crates/rustc_codegen_spirv/src/linker/simple_passes.rs b/crates/rustc_codegen_spirv/src/linker/simple_passes.rs
+index 76ec475..177f025 100644
+--- a/crates/rustc_codegen_spirv/src/linker/simple_passes.rs
++++ b/crates/rustc_codegen_spirv/src/linker/simple_passes.rs
+@@ -103,7 +103,6 @@ pub fn decorate_physical_pointer_aliases(module: &mut Module) {
+-        .filter_map(|inst| {
+-            (inst.class.opcode == Op::Decorate).then(|| {
+-                (
+-                    inst.operands[0].unwrap_id_ref(),
+-                    inst.operands[1].unwrap_decoration(),
+-                )
+-            })
++        .filter(|inst| inst.class.opcode == Op::Decorate)
++        .map(|inst| {
++            (
++                inst.operands[0].unwrap_id_ref(),
++                inst.operands[1].unwrap_decoration(),
++            )
+diff --git a/crates/rustc_codegen_spirv/src/linker/simple_passes/physical_pointer_tests.rs b/crates/rustc_codegen_spirv/src/linker/simple_passes/physical_pointer_tests.rs
+index 856d7d6..30d0427 100644
+--- a/crates/rustc_codegen_spirv/src/linker/simple_passes/physical_pointer_tests.rs
++++ b/crates/rustc_codegen_spirv/src/linker/simple_passes/physical_pointer_tests.rs
+@@ -61 +61 @@ OpFunctionEnd
+-    validator.validate(&module.assemble(), None).unwrap();
++    validator.validate(module.assemble(), None).unwrap();
+diff --git a/crates/rustc_codegen_spirv/src/linker/specializer.rs b/crates/rustc_codegen_spirv/src/linker/specializer.rs
+index f3ff5aa..eb475f1 100644
+--- a/crates/rustc_codegen_spirv/src/linker/specializer.rs
++++ b/crates/rustc_codegen_spirv/src/linker/specializer.rs
+@@ -1038 +1038 @@ struct Match<'a> {
+-    /// Storage classes constrained to PhysicalStorageBuffer in the hybrid model.
++    /// Storage classes constrained to `PhysicalStorageBuffer` in the hybrid model.
+diff --git a/crates/rustc_codegen_spirv/src/linker/test.rs b/crates/rustc_codegen_spirv/src/linker/test.rs
+index a0a5924..fe07f73 100644
+--- a/crates/rustc_codegen_spirv/src/linker/test.rs
++++ b/crates/rustc_codegen_spirv/src/linker/test.rs
+@@ -170,4 +170,2 @@ fn link_with_linker_opts(
+-            sess.source_map().new_source_file(
+-                FileName::Custom("<linker-test>".into()).into(),
+-                String::new(),
+-            );
++            sess.source_map()
++                .new_source_file(FileName::Custom("<linker-test>".into()), String::new());
+diff --git a/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs b/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
+index 91cb3ae..d2687d6 100644
+--- a/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
++++ b/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
+@@ -314,0 +315,96 @@ fn aligned_aggregate_copies_qptr() {
++
++fn check_volatile_function_storage(qptr: bool) {
++    let binary = assemble_spirv(
++        r#"
++OpCapability Shader
++OpCapability VulkanMemoryModel
++OpMemoryModel Logical Vulkan
++OpEntryPoint GLCompute %main "main" %output
++OpExecutionMode %main LocalSize 1 1 1
++%void = OpTypeVoid
++%u32 = OpTypeInt 32 0
++%two = OpConstant %u32 2
++%one = OpConstant %u32 1
++%value = OpConstant %u32 42
++%array = OpTypeArray %u32 %two
++%local_array = OpTypePointer Function %array
++%local_u32 = OpTypePointer Function %u32
++%shared_u32 = OpTypePointer Workgroup %u32
++%function = OpTypeFunction %void
++%output = OpVariable %shared_u32 Workgroup
++%main = OpFunction %void None %function
++%entry = OpLabel
++%local = OpVariable %local_array Function
++%ordinary = OpVariable %local_u32 Function
++OpStore %ordinary %value
++%input = OpLoad %u32 %ordinary
++%element = OpAccessChain %local_u32 %local %one
++OpStore %element %input Volatile|Nontemporal
++%used = OpLoad %u32 %element Volatile|Nontemporal
++%unused = OpLoad %u32 %element Volatile|Nontemporal
++OpStore %output %used
++OpReturn
++OpFunctionEnd
++"#,
++    );
++    let module = link_with_linker_opts(
++        &[&binary],
++        &crate::linker::Options {
++            infer_storage_classes: true,
++            structurize: true,
++            spirt_passes: if qptr { vec!["qptr".into()] } else { vec![] },
++            ..Default::default()
++        },
++    )
++    .unwrap();
++    validate(&module.assemble());
++    let check = |module: &rspirv::dr::Module| {
++        for (op, index, count) in [(Op::Load, 1, 2), (Op::Store, 2, 1)] {
++            assert_eq!(
++                module
++                    .all_inst_iter()
++                    .filter(|inst| inst.class.opcode == op
++                        && matches!(inst.operands.get(index), Some(Operand::MemoryAccess(mask))
++                            if mask.contains(MemoryAccess::VOLATILE)))
++                    .count(),
++                count,
++                "retain Function memory effects through promotion and qptr:\n{}",
++                module.disassemble()
++            );
++        }
++        assert_eq!(
++            module
++                .all_inst_iter()
++                .filter(|inst| inst.class.opcode == Op::Variable
++                    && inst.operands.first()
++                        == Some(&Operand::StorageClass(
++                            rspirv::spirv::StorageClass::Function
++                        )))
++                .count(),
++            1,
++            "promote only the ordinary Function variable"
++        );
++    };
++    check(&module);
++    let mut optimizer = spirv_tools::opt::create(None);
++    optimizer.register_performance_passes();
++    let optimized = optimizer
++        .optimize(module.assemble(), &mut |_| {}, None)
++        .unwrap();
++    validate(optimized.as_words());
++    let optimized = crate::link::with_rspirv_loader(|loader| {
++        rspirv::binary::parse_words(optimized.as_words(), loader)
++    })
++    .unwrap();
++    check(&optimized);
++}
++
++#[test]
++fn volatile_function_storage() {
++    check_volatile_function_storage(false);
++}
++
++#[test]
++fn volatile_function_storage_qptr() {
++    check_volatile_function_storage(true);
++}
+diff --git a/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs b/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
+index c8f7d74..900eacc 100644
+--- a/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
++++ b/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
+@@ -36,2 +36,2 @@ pub enum StorageClassPat {
+-    /// A physical pointer's storage class. In the PhysicalStorageBuffer64
+-    /// addressing model, this must be PhysicalStorageBuffer. Physical32/64
++    /// A physical pointer's storage class. In the `PhysicalStorageBuffer64`
++    /// addressing model, this must be `PhysicalStorageBuffer`. Physical32/64
+diff --git a/crates/rustc_codegen_spirv/src/target.rs b/crates/rustc_codegen_spirv/src/target.rs
+index 1973015..d2ea026 100644
+--- a/crates/rustc_codegen_spirv/src/target.rs
++++ b/crates/rustc_codegen_spirv/src/target.rs
+@@ -514 +514 @@ pub enum SpirvTarget {
+-    /// pointer has PhysicalStorageBuffer storage class.
++    /// pointer has `PhysicalStorageBuffer` storage class.
+diff --git a/docs/src/platform-support.md b/docs/src/platform-support.md
+index ffd01ae..63af796 100644
+--- a/docs/src/platform-support.md
++++ b/docs/src/platform-support.md
+@@ -138,0 +139,9 @@ soundness, aggregate runtime behavior or complete `*mut` parity.
++The `physical_storage/operations_*` source cases combine a nested device
++address, aggregate reads/writes and sequential accesses through separately
++loaded aliases. They also exercise explicit volatile Function-memory operands
++through the default and qptr pipelines at opt0/opt3. Promotion must retain these
++accesses, including an unused volatile load, while ordinary locals remain
++eligible for promotion. These are compiletests. Their shared body's complete
++entry contract also permits a separate consumer to dispatch it on real live
++allocations. No host framework is a dependency of these compiler tests.
++
+diff --git a/tests/compiletests/ui/physical_storage/auxiliary/operations_body.rs b/tests/compiletests/ui/physical_storage/auxiliary/operations_body.rs
+new file mode 100644
+index 0000000..55c8683
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/auxiliary/operations_body.rs
+@@ -0,0 +1,93 @@
++use core::arch::asm;
++use spirv_std::{PhysicalPtr, spirv};
++
++#[repr(C)]
++#[derive(Clone, Copy)]
++pub struct Source {
++    alias: PhysicalPtr<[u32; 3]>,
++    values: [u32; 3],
++    tag: u32,
++}
++
++#[repr(C)]
++pub struct Root {
++    source: PhysicalPtr<Source>,
++    destination: PhysicalPtr<[u32; 3]>,
++}
++
++const _: () = {
++    assert!(core::mem::size_of::<Source>() == 24);
++    assert!(core::mem::align_of::<Source>() == 8);
++    assert!(core::mem::offset_of!(Source, alias) == 0);
++    assert!(core::mem::offset_of!(Source, values) == 8);
++    assert!(core::mem::offset_of!(Source, tag) == 20);
++    assert!(core::mem::size_of::<Root>() == 16);
++    assert!(core::mem::align_of::<Root>() == 8);
++    assert!(core::mem::offset_of!(Root, destination) == 8);
++};
++
++/// Aggregate access with a separately loaded alias and logical volatile memory.
++///
++/// # Safety
++/// Dispatch exactly one invocation. Source names a live nonzero eight-byte-
++/// aligned allocation containing an initialized, visible Source. Its alias
++/// must equal destination, which names a disjoint live allocation of at least
++/// 32 bytes aligned to eight. Both remain live through queue completion.
++/// This invocation exclusively writes destination with no concurrent readers,
++/// writers or incompatible Rust reference aliases. Establish initialization
++/// visibility before execution and output visibility before reading or reuse.
++/// Synthetic addresses must never be dispatched. The compiletest does not run
++/// this entry. An external host must establish every obligation before doing so.
++#[allow(unsafe_code, non_snake_case)]
++#[spirv(compute(threads(1)))]
++pub unsafe fn computeMain(#[spirv(push_constant)] root: &Root) {
++    // SAFETY: The complete initialized 24-byte Source has the
++    // asserted layout/alignment, is live and visible, and contains valid bits.
++    let source = unsafe { root.source.read() };
++    // SAFETY: The first 12 destination bytes are aligned, live and
++    // exclusively writable. Values are Copy and no reference is manufactured.
++    unsafe { root.destination.write(source.values) };
++    // SAFETY: The separately loaded address equals destination.
++    // The preceding write initialized its three words in this invocation.
++    let before = unsafe { source.alias.read() };
++    let changed = [
++        before[0].wrapping_add(1),
++        before[1].wrapping_add(2),
++        before[2].wrapping_add(3),
++    ];
++    // SAFETY: This is the same exclusive 12-byte range, accessed
++    // sequentially through address values without competing Rust references.
++    unsafe { source.alias.write(changed) };
++    // SAFETY: The alias write is sequenced before this read.
++    let after = unsafe { root.destination.read() };
++    let sum = after[0].wrapping_add(after[1]).wrapping_add(after[2]);
++    let mut local = 0_u32;
++    let mut observed = 0_u32;
++    // SAFETY: The Function variable belongs only to this invocation and
++    // is initialized before both loads. The live, aligned output reference is
++    // used only to store a valid u32 within the assembly block. No pointer
++    // escapes. The unused volatile load must survive lowering and optimization.
++    unsafe {
++        asm!(
++            "%uint = OpTypeInt 32 0",
++            "OpStore {local} {value} Volatile",
++            "%used = OpLoad %uint {local} Volatile",
++            "%unused = OpLoad %uint {local} Volatile",
++            "OpStore {output} %used",
++            value = in(reg) sum,
++            local = in(reg) &mut local,
++            output = in(reg) &mut observed,
++        );
++    }
++    let words = root.destination.cast::<u32>();
++    // SAFETY: These distinct aligned words 3..6 fit inside the
++    // exclusive 32-byte destination. Word 7 remains an untouched host guard.
++    unsafe {
++        words.wrapping_add(3).write(observed);
++        words.wrapping_add(4).write(source.alias.address() as u32);
++        words
++            .wrapping_add(5)
++            .write((source.alias.address() >> 32) as u32);
++        words.wrapping_add(6).write(source.tag);
++    }
++}
+diff --git a/tests/compiletests/ui/physical_storage/operations_optimized_physical64.rs b/tests/compiletests/ui/physical_storage/operations_optimized_physical64.rs
+new file mode 100644
+index 0000000..45d8dbc
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/operations_optimized_physical64.rs
+@@ -0,0 +1,12 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C opt-level=3 -C lto=off
++// compile-flags: -C debuginfo=0 -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/operations_body.rs");
+diff --git a/tests/compiletests/ui/physical_storage/operations_optimized_physical64.stderr b/tests/compiletests/ui/physical_storage/operations_optimized_physical64.stderr
+new file mode 100644
+index 0000000..68e6efd
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/operations_optimized_physical64.stderr
+@@ -0,0 +1,115 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "computeMain" %root
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %Root "Root"
++               OpMemberName %Root 0 "source"
++               OpMemberName %Root 1 "destination"
++               OpName %root "root"
++               OpName %ops__try_trait__NeverShortCircuit__char__3__ "ops::try_trait::NeverShortCircuit<[char; 3]>"
++               OpName %Source "Source"
++               OpMemberName %Source 0 "alias"
++               OpMemberName %Source 1 "values"
++               OpMemberName %Source 2 "tag"
++               OpMemberDecorate %Root 0 Offset 0
++               OpMemberDecorate %Root 1 Offset 8
++               OpDecorate %_struct_10 Block
++               OpMemberDecorate %_struct_10 0 Offset 0
++               OpDecorate %ops__try_trait__NeverShortCircuit__char__3__ ArrayStride 4
++               OpMemberDecorate %Source 0 Offset 0
++               OpMemberDecorate %Source 1 Offset 8
++               OpMemberDecorate %Source 2 Offset 20
++        %u64 = OpTypeInt 64 0
++       %Root = OpTypeStruct %u64 %u64
++ %_struct_10 = OpTypeStruct %Root
++%_ptr_PushConstant__struct_10 = OpTypePointer PushConstant %_struct_10
++       %void = OpTypeVoid
++         %14 = OpTypeFunction %void
++        %u32 = OpTypeInt 32 0
++%_ptr_Function_u32 = OpTypePointer Function %u32
++%_ptr_PushConstant_Root = OpTypePointer PushConstant %Root
++       %root = OpVariable %_ptr_PushConstant__struct_10 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++      %u32_3 = OpConstant %u32 3
++%ops__try_trait__NeverShortCircuit__char__3__ = OpTypeArray %u32 %u32_3
++     %Source = OpTypeStruct %u64 %ops__try_trait__NeverShortCircuit__char__3__ %u32
++%_ptr_PhysicalStorageBuffer_Source = OpTypePointer PhysicalStorageBuffer %Source
++      %u32_1 = OpConstant %u32 1
++%_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ = OpTypePointer PhysicalStorageBuffer %ops__try_trait__NeverShortCircuit__char__3__
++      %u32_2 = OpConstant %u32 2
++      %u64_3 = OpConstant %u64 3
++      %u64_4 = OpConstant %u64 4
++%_ptr_PhysicalStorageBuffer_u32 = OpTypePointer PhysicalStorageBuffer %u32
++      %u64_5 = OpConstant %u64 5
++     %u64_32 = OpConstant %u64 32
++      %u64_6 = OpConstant %u64 6
++          %1 = OpFunction %void None %14
++         %31 = OpLabel
++         %32 = OpVariable %_ptr_Function_u32 Function
++         %33 = OpInBoundsAccessChain %_ptr_PushConstant_Root %root %u32_0
++         %34 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_0
++         %35 = OpLoad %u64 %34
++         %36 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_Source %35
++         %37 = OpLoad %Source %36 Aligned 8
++         %38 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_1
++         %39 = OpLoad %u64 %38
++         %40 = OpCompositeExtract %ops__try_trait__NeverShortCircuit__char__3__ %37 1
++         %41 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %39
++               OpStore %41 %40 Aligned 4
++         %42 = OpCompositeExtract %u64 %37 0
++         %43 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %42
++         %44 = OpLoad %ops__try_trait__NeverShortCircuit__char__3__ %43 Aligned 4
++         %45 = OpCompositeExtract %u32 %44 0
++         %46 = OpIAdd %u32 %45 %u32_1
++         %47 = OpCompositeExtract %u32 %44 1
++         %48 = OpIAdd %u32 %47 %u32_2
++         %49 = OpCompositeExtract %u32 %44 2
++         %50 = OpIAdd %u32 %49 %u32_3
++         %51 = OpCompositeConstruct %ops__try_trait__NeverShortCircuit__char__3__ %46 %48 %50
++         %52 = OpCompositeExtract %u64 %37 0
++         %53 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %52
++               OpStore %53 %51 Aligned 4
++         %54 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_1
++         %55 = OpLoad %u64 %54
++         %56 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %55
++         %57 = OpLoad %ops__try_trait__NeverShortCircuit__char__3__ %56 Aligned 4
++         %58 = OpCompositeExtract %u32 %57 0
++         %59 = OpCompositeExtract %u32 %57 1
++         %60 = OpIAdd %u32 %58 %59
++         %61 = OpCompositeExtract %u32 %57 2
++         %62 = OpIAdd %u32 %60 %61
++               OpStore %32 %u32_0
++               OpStore %32 %62 Volatile
++         %63 = OpLoad %u32 %32 Volatile
++         %64 = OpLoad %u32 %32 Volatile
++         %65 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_1
++         %66 = OpLoad %u64 %65
++         %67 = OpIMul %u64 %u64_3 %u64_4
++         %68 = OpIAdd %u64 %66 %67
++         %69 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %68
++               OpStore %69 %63 Aligned 4
++         %70 = OpIMul %u64 %u64_4 %u64_4
++         %71 = OpIAdd %u64 %66 %70
++         %72 = OpCompositeExtract %u64 %37 0
++         %73 = OpUConvert %u32 %72
++         %74 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %71
++               OpStore %74 %73 Aligned 4
++         %75 = OpIMul %u64 %u64_5 %u64_4
++         %76 = OpIAdd %u64 %66 %75
++         %77 = OpCompositeExtract %u64 %37 0
++         %78 = OpShiftRightLogical %u64 %77 %u64_32
++         %79 = OpUConvert %u32 %78
++         %80 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %76
++               OpStore %80 %79 Aligned 4
++         %81 = OpIMul %u64 %u64_6 %u64_4
++         %82 = OpIAdd %u64 %66 %81
++         %83 = OpCompositeExtract %u32 %37 2
++         %84 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %82
++               OpStore %84 %83 Aligned 4
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/physical_storage/operations_physical64.rs b/tests/compiletests/ui/physical_storage/operations_physical64.rs
+new file mode 100644
+index 0000000..302685d
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/operations_physical64.rs
+@@ -0,0 +1,11 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C debuginfo=0 -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/operations_body.rs");
+diff --git a/tests/compiletests/ui/physical_storage/operations_physical64.stderr b/tests/compiletests/ui/physical_storage/operations_physical64.stderr
+new file mode 100644
+index 0000000..68e6efd
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/operations_physical64.stderr
+@@ -0,0 +1,115 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "computeMain" %root
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %Root "Root"
++               OpMemberName %Root 0 "source"
++               OpMemberName %Root 1 "destination"
++               OpName %root "root"
++               OpName %ops__try_trait__NeverShortCircuit__char__3__ "ops::try_trait::NeverShortCircuit<[char; 3]>"
++               OpName %Source "Source"
++               OpMemberName %Source 0 "alias"
++               OpMemberName %Source 1 "values"
++               OpMemberName %Source 2 "tag"
++               OpMemberDecorate %Root 0 Offset 0
++               OpMemberDecorate %Root 1 Offset 8
++               OpDecorate %_struct_10 Block
++               OpMemberDecorate %_struct_10 0 Offset 0
++               OpDecorate %ops__try_trait__NeverShortCircuit__char__3__ ArrayStride 4
++               OpMemberDecorate %Source 0 Offset 0
++               OpMemberDecorate %Source 1 Offset 8
++               OpMemberDecorate %Source 2 Offset 20
++        %u64 = OpTypeInt 64 0
++       %Root = OpTypeStruct %u64 %u64
++ %_struct_10 = OpTypeStruct %Root
++%_ptr_PushConstant__struct_10 = OpTypePointer PushConstant %_struct_10
++       %void = OpTypeVoid
++         %14 = OpTypeFunction %void
++        %u32 = OpTypeInt 32 0
++%_ptr_Function_u32 = OpTypePointer Function %u32
++%_ptr_PushConstant_Root = OpTypePointer PushConstant %Root
++       %root = OpVariable %_ptr_PushConstant__struct_10 PushConstant
++      %u32_0 = OpConstant %u32 0
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++      %u32_3 = OpConstant %u32 3
++%ops__try_trait__NeverShortCircuit__char__3__ = OpTypeArray %u32 %u32_3
++     %Source = OpTypeStruct %u64 %ops__try_trait__NeverShortCircuit__char__3__ %u32
++%_ptr_PhysicalStorageBuffer_Source = OpTypePointer PhysicalStorageBuffer %Source
++      %u32_1 = OpConstant %u32 1
++%_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ = OpTypePointer PhysicalStorageBuffer %ops__try_trait__NeverShortCircuit__char__3__
++      %u32_2 = OpConstant %u32 2
++      %u64_3 = OpConstant %u64 3
++      %u64_4 = OpConstant %u64 4
++%_ptr_PhysicalStorageBuffer_u32 = OpTypePointer PhysicalStorageBuffer %u32
++      %u64_5 = OpConstant %u64 5
++     %u64_32 = OpConstant %u64 32
++      %u64_6 = OpConstant %u64 6
++          %1 = OpFunction %void None %14
++         %31 = OpLabel
++         %32 = OpVariable %_ptr_Function_u32 Function
++         %33 = OpInBoundsAccessChain %_ptr_PushConstant_Root %root %u32_0
++         %34 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_0
++         %35 = OpLoad %u64 %34
++         %36 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_Source %35
++         %37 = OpLoad %Source %36 Aligned 8
++         %38 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_1
++         %39 = OpLoad %u64 %38
++         %40 = OpCompositeExtract %ops__try_trait__NeverShortCircuit__char__3__ %37 1
++         %41 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %39
++               OpStore %41 %40 Aligned 4
++         %42 = OpCompositeExtract %u64 %37 0
++         %43 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %42
++         %44 = OpLoad %ops__try_trait__NeverShortCircuit__char__3__ %43 Aligned 4
++         %45 = OpCompositeExtract %u32 %44 0
++         %46 = OpIAdd %u32 %45 %u32_1
++         %47 = OpCompositeExtract %u32 %44 1
++         %48 = OpIAdd %u32 %47 %u32_2
++         %49 = OpCompositeExtract %u32 %44 2
++         %50 = OpIAdd %u32 %49 %u32_3
++         %51 = OpCompositeConstruct %ops__try_trait__NeverShortCircuit__char__3__ %46 %48 %50
++         %52 = OpCompositeExtract %u64 %37 0
++         %53 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %52
++               OpStore %53 %51 Aligned 4
++         %54 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_1
++         %55 = OpLoad %u64 %54
++         %56 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %55
++         %57 = OpLoad %ops__try_trait__NeverShortCircuit__char__3__ %56 Aligned 4
++         %58 = OpCompositeExtract %u32 %57 0
++         %59 = OpCompositeExtract %u32 %57 1
++         %60 = OpIAdd %u32 %58 %59
++         %61 = OpCompositeExtract %u32 %57 2
++         %62 = OpIAdd %u32 %60 %61
++               OpStore %32 %u32_0
++               OpStore %32 %62 Volatile
++         %63 = OpLoad %u32 %32 Volatile
++         %64 = OpLoad %u32 %32 Volatile
++         %65 = OpInBoundsAccessChain %_ptr_PushConstant_u64 %33 %u32_1
++         %66 = OpLoad %u64 %65
++         %67 = OpIMul %u64 %u64_3 %u64_4
++         %68 = OpIAdd %u64 %66 %67
++         %69 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %68
++               OpStore %69 %63 Aligned 4
++         %70 = OpIMul %u64 %u64_4 %u64_4
++         %71 = OpIAdd %u64 %66 %70
++         %72 = OpCompositeExtract %u64 %37 0
++         %73 = OpUConvert %u32 %72
++         %74 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %71
++               OpStore %74 %73 Aligned 4
++         %75 = OpIMul %u64 %u64_5 %u64_4
++         %76 = OpIAdd %u64 %66 %75
++         %77 = OpCompositeExtract %u64 %37 0
++         %78 = OpShiftRightLogical %u64 %77 %u64_32
++         %79 = OpUConvert %u32 %78
++         %80 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %76
++               OpStore %80 %79 Aligned 4
++         %81 = OpIMul %u64 %u64_6 %u64_4
++         %82 = OpIAdd %u64 %66 %81
++         %83 = OpCompositeExtract %u32 %37 2
++         %84 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %82
++               OpStore %84 %83 Aligned 4
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/physical_storage/operations_qptr_optimized_physical64.rs b/tests/compiletests/ui/physical_storage/operations_qptr_optimized_physical64.rs
+new file mode 100644
+index 0000000..5f1b71a
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/operations_qptr_optimized_physical64.rs
+@@ -0,0 +1,13 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C llvm-args=--spirt-passes=qptr
++// compile-flags: -C opt-level=3 -C lto=off
++// compile-flags: -C debuginfo=0 -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/operations_body.rs");
+diff --git a/tests/compiletests/ui/physical_storage/operations_qptr_optimized_physical64.stderr b/tests/compiletests/ui/physical_storage/operations_qptr_optimized_physical64.stderr
+new file mode 100644
+index 0000000..cb1fc16
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/operations_qptr_optimized_physical64.stderr
+@@ -0,0 +1,108 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "computeMain" %root
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %root "root"
++               OpName %ops__try_trait__NeverShortCircuit__char__3__ "ops::try_trait::NeverShortCircuit<[char; 3]>"
++               OpName %Source "Source"
++               OpMemberName %Source 0 "alias"
++               OpMemberName %Source 1 "values"
++               OpMemberName %Source 2 "tag"
++               OpDecorate %_struct_9 Block
++               OpMemberDecorate %_struct_9 0 Offset 0
++               OpMemberDecorate %_struct_9 1 Offset 8
++               OpDecorate %ops__try_trait__NeverShortCircuit__char__3__ ArrayStride 4
++               OpMemberDecorate %Source 0 Offset 0
++               OpMemberDecorate %Source 1 Offset 8
++               OpMemberDecorate %Source 2 Offset 20
++        %u64 = OpTypeInt 64 0
++  %_struct_9 = OpTypeStruct %u64 %u64
++%_ptr_PushConstant__struct_9 = OpTypePointer PushConstant %_struct_9
++       %void = OpTypeVoid
++         %13 = OpTypeFunction %void
++        %u32 = OpTypeInt 32 0
++%_ptr_Function_u32 = OpTypePointer Function %u32
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++       %root = OpVariable %_ptr_PushConstant__struct_9 PushConstant
++      %u32_0 = OpConstant %u32 0
++      %u32_3 = OpConstant %u32 3
++%ops__try_trait__NeverShortCircuit__char__3__ = OpTypeArray %u32 %u32_3
++     %Source = OpTypeStruct %u64 %ops__try_trait__NeverShortCircuit__char__3__ %u32
++%_ptr_PhysicalStorageBuffer_Source = OpTypePointer PhysicalStorageBuffer %Source
++      %u32_1 = OpConstant %u32 1
++%_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ = OpTypePointer PhysicalStorageBuffer %ops__try_trait__NeverShortCircuit__char__3__
++      %u32_2 = OpConstant %u32 2
++      %u64_3 = OpConstant %u64 3
++      %u64_4 = OpConstant %u64 4
++%_ptr_PhysicalStorageBuffer_u32 = OpTypePointer PhysicalStorageBuffer %u32
++      %u64_5 = OpConstant %u64 5
++     %u64_32 = OpConstant %u64 32
++      %u64_6 = OpConstant %u64 6
++          %1 = OpFunction %void None %13
++         %29 = OpLabel
++         %30 = OpVariable %_ptr_Function_u32 Function
++         %31 = OpAccessChain %_ptr_PushConstant_u64 %root %u32_0
++         %32 = OpLoad %u64 %31
++         %33 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_Source %32
++         %34 = OpLoad %Source %33 Aligned 8
++         %35 = OpAccessChain %_ptr_PushConstant_u64 %root %u32_1
++         %36 = OpLoad %u64 %35
++         %37 = OpCompositeExtract %ops__try_trait__NeverShortCircuit__char__3__ %34 1
++         %38 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %36
++               OpStore %38 %37 Aligned 4
++         %39 = OpCompositeExtract %u64 %34 0
++         %40 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %39
++         %41 = OpLoad %ops__try_trait__NeverShortCircuit__char__3__ %40 Aligned 4
++         %42 = OpCompositeExtract %u32 %41 0
++         %43 = OpIAdd %u32 %42 %u32_1
++         %44 = OpCompositeExtract %u32 %41 1
++         %45 = OpIAdd %u32 %44 %u32_2
++         %46 = OpCompositeExtract %u32 %41 2
++         %47 = OpIAdd %u32 %46 %u32_3
++         %48 = OpCompositeConstruct %ops__try_trait__NeverShortCircuit__char__3__ %43 %45 %47
++         %49 = OpCompositeExtract %u64 %34 0
++         %50 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %49
++               OpStore %50 %48 Aligned 4
++         %51 = OpAccessChain %_ptr_PushConstant_u64 %root %u32_1
++         %52 = OpLoad %u64 %51
++         %53 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %52
++         %54 = OpLoad %ops__try_trait__NeverShortCircuit__char__3__ %53 Aligned 4
++         %55 = OpCompositeExtract %u32 %54 0
++         %56 = OpCompositeExtract %u32 %54 1
++         %57 = OpIAdd %u32 %55 %56
++         %58 = OpCompositeExtract %u32 %54 2
++         %59 = OpIAdd %u32 %57 %58
++               OpStore %30 %u32_0
++               OpStore %30 %59 Volatile
++         %60 = OpLoad %u32 %30 Volatile
++         %61 = OpLoad %u32 %30 Volatile
++         %62 = OpAccessChain %_ptr_PushConstant_u64 %root %u32_1
++         %63 = OpLoad %u64 %62
++         %64 = OpIMul %u64 %u64_3 %u64_4
++         %65 = OpIAdd %u64 %63 %64
++         %66 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %65
++               OpStore %66 %60 Aligned 4
++         %67 = OpIMul %u64 %u64_4 %u64_4
++         %68 = OpIAdd %u64 %63 %67
++         %69 = OpCompositeExtract %u64 %34 0
++         %70 = OpUConvert %u32 %69
++         %71 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %68
++               OpStore %71 %70 Aligned 4
++         %72 = OpIMul %u64 %u64_5 %u64_4
++         %73 = OpIAdd %u64 %63 %72
++         %74 = OpCompositeExtract %u64 %34 0
++         %75 = OpShiftRightLogical %u64 %74 %u64_32
++         %76 = OpUConvert %u32 %75
++         %77 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %73
++               OpStore %77 %76 Aligned 4
++         %78 = OpIMul %u64 %u64_6 %u64_4
++         %79 = OpIAdd %u64 %63 %78
++         %80 = OpCompositeExtract %u32 %34 2
++         %81 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %79
++               OpStore %81 %80 Aligned 4
++               OpNoLine
++               OpReturn
++               OpFunctionEnd
+diff --git a/tests/compiletests/ui/physical_storage/operations_qptr_physical64.rs b/tests/compiletests/ui/physical_storage/operations_qptr_physical64.rs
+new file mode 100644
+index 0000000..c7d612c
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/operations_qptr_physical64.rs
+@@ -0,0 +1,12 @@
++// build-pass
++// only-vulkan1.3_physical64
++// compile-flags: -C llvm-args=--spirt-passes=qptr
++// compile-flags: -C debuginfo=0 -C llvm-args=--disassemble
++// normalize-stderr-test "\n\W*OpSource .*" -> ""
++// normalize-stderr-test "\n\W*OpLine .*" -> ""
++// normalize-stderr-test "\n\W*%\d+ = OpString .*" -> ""
++
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++include!("auxiliary/operations_body.rs");
+diff --git a/tests/compiletests/ui/physical_storage/operations_qptr_physical64.stderr b/tests/compiletests/ui/physical_storage/operations_qptr_physical64.stderr
+new file mode 100644
+index 0000000..cb1fc16
+--- /dev/null
++++ b/tests/compiletests/ui/physical_storage/operations_qptr_physical64.stderr
+@@ -0,0 +1,108 @@
++               OpCapability Shader
++               OpCapability Int64
++               OpCapability VulkanMemoryModel
++               OpCapability PhysicalStorageBufferAddresses
++               OpMemoryModel PhysicalStorageBuffer64 Vulkan
++               OpEntryPoint GLCompute %1 "computeMain" %root
++               OpExecutionMode %1 LocalSize 1 1 1
++               OpName %root "root"
++               OpName %ops__try_trait__NeverShortCircuit__char__3__ "ops::try_trait::NeverShortCircuit<[char; 3]>"
++               OpName %Source "Source"
++               OpMemberName %Source 0 "alias"
++               OpMemberName %Source 1 "values"
++               OpMemberName %Source 2 "tag"
++               OpDecorate %_struct_9 Block
++               OpMemberDecorate %_struct_9 0 Offset 0
++               OpMemberDecorate %_struct_9 1 Offset 8
++               OpDecorate %ops__try_trait__NeverShortCircuit__char__3__ ArrayStride 4
++               OpMemberDecorate %Source 0 Offset 0
++               OpMemberDecorate %Source 1 Offset 8
++               OpMemberDecorate %Source 2 Offset 20
++        %u64 = OpTypeInt 64 0
++  %_struct_9 = OpTypeStruct %u64 %u64
++%_ptr_PushConstant__struct_9 = OpTypePointer PushConstant %_struct_9
++       %void = OpTypeVoid
++         %13 = OpTypeFunction %void
++        %u32 = OpTypeInt 32 0
++%_ptr_Function_u32 = OpTypePointer Function %u32
++%_ptr_PushConstant_u64 = OpTypePointer PushConstant %u64
++       %root = OpVariable %_ptr_PushConstant__struct_9 PushConstant
++      %u32_0 = OpConstant %u32 0
++      %u32_3 = OpConstant %u32 3
++%ops__try_trait__NeverShortCircuit__char__3__ = OpTypeArray %u32 %u32_3
++     %Source = OpTypeStruct %u64 %ops__try_trait__NeverShortCircuit__char__3__ %u32
++%_ptr_PhysicalStorageBuffer_Source = OpTypePointer PhysicalStorageBuffer %Source
++      %u32_1 = OpConstant %u32 1
++%_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ = OpTypePointer PhysicalStorageBuffer %ops__try_trait__NeverShortCircuit__char__3__
++      %u32_2 = OpConstant %u32 2
++      %u64_3 = OpConstant %u64 3
++      %u64_4 = OpConstant %u64 4
++%_ptr_PhysicalStorageBuffer_u32 = OpTypePointer PhysicalStorageBuffer %u32
++      %u64_5 = OpConstant %u64 5
++     %u64_32 = OpConstant %u64 32
++      %u64_6 = OpConstant %u64 6
++          %1 = OpFunction %void None %13
++         %29 = OpLabel
++         %30 = OpVariable %_ptr_Function_u32 Function
++         %31 = OpAccessChain %_ptr_PushConstant_u64 %root %u32_0
++         %32 = OpLoad %u64 %31
++         %33 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_Source %32
++         %34 = OpLoad %Source %33 Aligned 8
++         %35 = OpAccessChain %_ptr_PushConstant_u64 %root %u32_1
++         %36 = OpLoad %u64 %35
++         %37 = OpCompositeExtract %ops__try_trait__NeverShortCircuit__char__3__ %34 1
++         %38 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %36
++               OpStore %38 %37 Aligned 4
++         %39 = OpCompositeExtract %u64 %34 0
++         %40 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %39
++         %41 = OpLoad %ops__try_trait__NeverShortCircuit__char__3__ %40 Aligned 4
++         %42 = OpCompositeExtract %u32 %41 0
++         %43 = OpIAdd %u32 %42 %u32_1
++         %44 = OpCompositeExtract %u32 %41 1
++         %45 = OpIAdd %u32 %44 %u32_2
++         %46 = OpCompositeExtract %u32 %41 2
++         %47 = OpIAdd %u32 %46 %u32_3
++         %48 = OpCompositeConstruct %ops__try_trait__NeverShortCircuit__char__3__ %43 %45 %47
++         %49 = OpCompositeExtract %u64 %34 0
++         %50 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %49
++               OpStore %50 %48 Aligned 4
++         %51 = OpAccessChain %_ptr_PushConstant_u64 %root %u32_1
++         %52 = OpLoad %u64 %51
++         %53 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_ops__try_trait__NeverShortCircuit__char__3__ %52
++         %54 = OpLoad %ops__try_trait__NeverShortCircuit__char__3__ %53 Aligned 4
++         %55 = OpCompositeExtract %u32 %54 0
++         %56 = OpCompositeExtract %u32 %54 1
++         %57 = OpIAdd %u32 %55 %56
++         %58 = OpCompositeExtract %u32 %54 2
++         %59 = OpIAdd %u32 %57 %58
++               OpStore %30 %u32_0
++               OpStore %30 %59 Volatile
++         %60 = OpLoad %u32 %30 Volatile
++         %61 = OpLoad %u32 %30 Volatile
++         %62 = OpAccessChain %_ptr_PushConstant_u64 %root %u32_1
++         %63 = OpLoad %u64 %62
++         %64 = OpIMul %u64 %u64_3 %u64_4
++         %65 = OpIAdd %u64 %63 %64
++         %66 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %65
++               OpStore %66 %60 Aligned 4
++         %67 = OpIMul %u64 %u64_4 %u64_4
++         %68 = OpIAdd %u64 %63 %67
++         %69 = OpCompositeExtract %u64 %34 0
++         %70 = OpUConvert %u32 %69
++         %71 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %68
++               OpStore %71 %70 Aligned 4
++         %72 = OpIMul %u64 %u64_5 %u64_4
++         %73 = OpIAdd %u64 %63 %72
++         %74 = OpCompositeExtract %u64 %34 0
++         %75 = OpShiftRightLogical %u64 %74 %u64_32
++         %76 = OpUConvert %u32 %75
++         %77 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %73
++               OpStore %77 %76 Aligned 4
++         %78 = OpIMul %u64 %u64_6 %u64_4
++         %79 = OpIAdd %u64 %63 %78
++         %80 = OpCompositeExtract %u32 %34 2
++         %81 = OpConvertUToPtr %_ptr_PhysicalStorageBuffer_u32 %79
++               OpStore %81 %80 Aligned 4
++               OpNoLine
++               OpReturn
++               OpFunctionEnd

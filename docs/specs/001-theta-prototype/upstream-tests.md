@@ -24,6 +24,8 @@ three different authorities are recorded: the draft author's checklist, a mainta
 
 [E-029](../../execution.md#e-029-2026-09-19-executed-the-ordinary-rust-compute-slice) supplies the separate direct Rust Windows Vulkan buffer/compute cross-check. it executes an ordinary logical32 descriptor-array shader against the unchanged AGFX golden, with opt0/opt3, nonzero selected slots, untouched sentinel buffers and explicit lifecycle/validation evidence. this closes the bounded host slice, without substituting ordinary descriptors for any H-row native-heap obligation.
 
+[E-030](../../execution.md#e-030-2026-09-19-tested-aggregate-aliases-and-function-effects) adds bounded P05/P07/P08 and A01/A02 execution evidence. a nested address-containing Source and three-word aggregate are read/written through separately loaded aliases in one invocation. default/qptr and opt0/opt3 retain explicit Function-memory effects and pass 12 cases in each actual NGAPI host configuration. the complete compiler/native prerequisites and remaining broader-gate failure are recorded there. high-address execution, concurrent aliasing, effectful copies, general pointer operations and full row/task completion remain open.
+
 ## PR #237 checklist
 
 the [draft, refreshed on 2026-09-19](https://github.com/Rust-GPU/rust-gpu/pull/237) was open at `e14a70d9260c7df7fab1542810f2ca0276233331`. its checked boxes refer to that draft, not proof in current main or the new implementation. all checklist items are mapped below.

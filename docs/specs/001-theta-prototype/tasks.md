@@ -53,6 +53,8 @@ T018 is supporting work below. M2 does not depend on adding a second full native
 
 [E-024](../../execution.md#e-024-2026-09-19-executed-native-heap-rust-shaders) adds eight actual native resource/sampler heap cases in each Debug/Release host. uniform nonzero indices, distinct sampler address modes, queried descriptor sizes, physical Vec4 output, guards and unchanged texture bytes pass at Rust opt0/opt3 with validation. debug stripping required a separate native optimizer fix. divergent indices, other resource types/stages, cube, the direct Rust Vulkan slice and full upstream CI remain open. no full task or milestone closes on this bounded compute fixture.
 
+[E-030](../../execution.md#e-030-2026-09-19-tested-aggregate-aliases-and-function-effects) advances T011-T013/T017/T019 with aggregate writes, loaded-alias access and default/qptr Function-memory effects in the actual host. the bounded new source and runtime gates pass. remaining operation/resource/stage coverage and broader upstream CI still prevent closing those complete tasks.
+
 ## M3. RustGPU contribution draft
 
 - [ ] T033 [US6] reconcile all P, R, H, A, and C rows in [upstream tests](upstream-tests.md) against the proposed diff, tests, results, and limitations. depends on the promised T013/T015 features and T019 for actual-consumer claims. refresh relevant upstream comments and CI once before final draft preparation.
