@@ -1,0 +1,438 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 3710c6a..9ece494 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -571,0 +572,4 @@ pub struct GlobalVarDecl {
++    /// Optional Data Type operand of an SPIR-V `OpUntypedVariableKHR`.
++    /// Typed globals use their pointer's pointee type and leave this absent.
++    pub spv_untyped_data_type: Option<Type>,
++
+@@ -904,0 +909,7 @@ pub enum DataInstKind {
++    /// SPIR-V instructions with static type IDs interleaved with value IDs.
++    /// Indices are into the original input ID list, in increasing order.
++    /// Result Type and Result ID are not part of that list.
++    SpvInstWithTypeInputs {
++        spv_inst: spv::Inst,
++        type_inputs: SmallVec<[(u32, Type); 1]>,
++    },
+diff --git a/src/print/mod.rs b/src/print/mod.rs
+index c30a4fb..94db8aa 100644
+--- a/src/print/mod.rs
++++ b/src/print/mod.rs
+@@ -562,0 +563 @@ impl<'a> Visitor<'a> for Plan<'a> {
++                    spv_untyped_data_type: None,
+@@ -2621 +2622 @@ impl Print for GlobalVarDecl {
+-        let Self { attrs, type_of_ptr_to, shape, addr_space, def } = self;
++        let Self { attrs, type_of_ptr_to, spv_untyped_data_type, shape, addr_space, def } = self;
+@@ -2627,0 +2629,8 @@ impl Print for GlobalVarDecl {
++            TypeKind::SpvInst { spv_inst, .. } if spv_inst.opcode == wk.OpTypeUntypedPointerKHR => {
++                pretty::Fragment::new([
++                    ": untyped".into(),
++                    spv_untyped_data_type.map(|ty| {
++                        pretty::Fragment::new(["(".into(), ty.print(printer), ")".into()])
++                    }).unwrap_or_default(),
++                ])
++            }
+@@ -3241,0 +3251,9 @@ impl Print for FuncAt<'_, DataInst> {
++            DataInstKind::SpvInstWithTypeInputs { spv_inst, type_inputs } => {
++                let mut operands: SmallVec<[_; 4]> = inputs.iter().map(|v| v.print(printer)).collect();
++                for &(idx, ty) in type_inputs {
++                    operands.insert(idx as usize, ty.print(printer));
++                }
++                printer.pretty_spv_inst(
++                    printer.spv_op_style(), spv_inst.opcode, &spv_inst.imms, operands.into_iter(),
++                )
++            }
+diff --git a/src/qptr/analyze.rs b/src/qptr/analyze.rs
+index 57134f7..cfa3996 100644
+--- a/src/qptr/analyze.rs
++++ b/src/qptr/analyze.rs
+@@ -1158 +1158,3 @@ impl<'a> InferUsage<'a> {
+-                    DataInstKind::SpvInst(_) | DataInstKind::SpvExtInst { .. } => {
++                    DataInstKind::SpvInst(_)
++                    | DataInstKind::SpvInstWithTypeInputs { .. }
++                    | DataInstKind::SpvExtInst { .. } => {
+diff --git a/src/qptr/lift.rs b/src/qptr/lift.rs
+index 1aca985..8297e2f 100644
+--- a/src/qptr/lift.rs
++++ b/src/qptr/lift.rs
+@@ -44,0 +45,5 @@ impl<'a> LiftToSpvPtrs<'a> {
++        if matches!(&self.cx[global_var_decl.type_of_ptr_to].kind,
++            TypeKind::SpvInst { spv_inst, .. } if spv_inst.opcode == self.wk.OpTypeUntypedPointerKHR)
++        {
++            return;
++        }
+@@ -836 +841,3 @@ impl LiftToSpvPtrInstsInFunc<'_> {
+-            DataInstKind::SpvInst(_) | DataInstKind::SpvExtInst { .. } => {
++            DataInstKind::SpvInst(_)
++            | DataInstKind::SpvInstWithTypeInputs { .. }
++            | DataInstKind::SpvExtInst { .. } => {
+diff --git a/src/qptr/lower.rs b/src/qptr/lower.rs
+index 5f880da..342f968 100644
+--- a/src/qptr/lower.rs
++++ b/src/qptr/lower.rs
+@@ -44,0 +45,8 @@ impl<'a> LowerFromSpvPtrs<'a> {
++        // Untyped SPIR-V globals already carry an explicit storage class and
++        // optional data type. They do not need typed-pointer legalization.
++        if matches!(&self.cx[global_var_decl.type_of_ptr_to].kind,
++            TypeKind::SpvInst { spv_inst, .. } if spv_inst.opcode == wk.OpTypeUntypedPointerKHR)
++        {
++            return;
++        }
++
+@@ -434,0 +443,3 @@ impl LowerFromSpvPtrInstsInFunc<'_> {
++            if self.lowerer.as_spv_ptr_type(func.at(data_inst_def.inputs[0]).type_of(cx)).is_none() {
++                return Ok(Transformed::Unchanged);
++            }
+@@ -441,0 +453,3 @@ impl LowerFromSpvPtrInstsInFunc<'_> {
++            if self.lowerer.as_spv_ptr_type(func.at(data_inst_def.inputs[0]).type_of(cx)).is_none() {
++                return Ok(Transformed::Unchanged);
++            }
+@@ -629 +643,3 @@ impl LowerFromSpvPtrInstsInFunc<'_> {
+-            DataInstKind::SpvInst(_) | DataInstKind::SpvExtInst { .. } => {}
++            DataInstKind::SpvInst(_)
++            | DataInstKind::SpvInstWithTypeInputs { .. }
++            | DataInstKind::SpvExtInst { .. } => {}
+diff --git a/src/spv/lift.rs b/src/spv/lift.rs
+index f23f6f0..4e3f060 100644
+--- a/src/spv/lift.rs
++++ b/src/spv/lift.rs
+@@ -229 +229 @@ impl Visitor<'_> for NeedsIdsCollector<'_> {
+-            DataInstKind::SpvInst(_) => {}
++            DataInstKind::SpvInst(_) | DataInstKind::SpvInstWithTypeInputs { .. } => {}
+@@ -1156,0 +1157,3 @@ impl LazyInst<'_, '_> {
++                            let untyped = matches!(&cx[ct_def.ty].kind,
++                                TypeKind::SpvInst { spv_inst, .. }
++                                    if spv_inst.opcode == wk.OpTypeUntypedPointerKHR);
+@@ -1159 +1162 @@ impl LazyInst<'_, '_> {
+-                                    opcode: wk.OpVariable,
++                                    opcode: if untyped { wk.OpUntypedVariableKHR } else { wk.OpVariable },
+@@ -1164 +1167,3 @@ impl LazyInst<'_, '_> {
+-                                ids: initializer.into_iter().collect(),
++                                ids: gv_decl.spv_untyped_data_type
++                                    .map(|ty| ids.globals[&Global::Type(ty)])
++                                    .into_iter().chain(initializer).collect(),
+@@ -1246 +1251,2 @@ impl LazyInst<'_, '_> {
+-                    DataInstKind::SpvInst(inst) => (inst.clone(), None),
++                    DataInstKind::SpvInst(inst)
++                    | DataInstKind::SpvInstWithTypeInputs { spv_inst: inst, .. } => (inst.clone(), None),
+@@ -1255,0 +1262,9 @@ impl LazyInst<'_, '_> {
++                let mut input_ids: SmallVec<[_; 4]> = extra_initial_id_operand
++                    .into_iter()
++                    .chain(data_inst_def.inputs.iter().map(|&v| value_to_id(parent_func, v)))
++                    .collect();
++                if let DataInstKind::SpvInstWithTypeInputs { type_inputs, .. } = kind {
++                    for &(idx, ty) in type_inputs {
++                        input_ids.insert(idx as usize, ids.globals[&Global::Type(ty)]);
++                    }
++                }
+@@ -1260,4 +1275 @@ impl LazyInst<'_, '_> {
+-                    ids: extra_initial_id_operand
+-                        .into_iter()
+-                        .chain(data_inst_def.inputs.iter().map(|&v| value_to_id(parent_func, v)))
+-                        .collect(),
++                    ids: input_ids,
+diff --git a/src/spv/lower.rs b/src/spv/lower.rs
+index 1ec1aa8..9642ec7 100644
+--- a/src/spv/lower.rs
++++ b/src/spv/lower.rs
+@@ -616 +616,3 @@ impl Module {
+-            } else if opcode == wk.OpVariable && current_func_body.is_none() {
++            } else if [wk.OpVariable, wk.OpUntypedVariableKHR].contains(&opcode)
++                && current_func_body.is_none()
++            {
+@@ -631 +633,15 @@ impl Module {
+-                let initializer = match inst.ids[..] {
++                let (data_type_id, initializer_ids) = if opcode == wk.OpUntypedVariableKHR {
++                    match inst.ids.split_first() {
++                        Some((&data_type, rest)) => (Some(data_type), rest),
++                        None => (None, &[][..]),
++                    }
++                } else {
++                    (None, &inst.ids[..])
++                };
++                let spv_untyped_data_type = data_type_id.map(|id| {
++                    match id_defs.get(&id) {
++                        Some(&IdDef::Type(ty)) => Ok(ty),
++                        _ => Err(invalid(&format!("untyped variable Data Type %{id} is not a defined type"))),
++                    }
++                }).transpose()?;
++                let initializer = match *initializer_ids {
+@@ -665,0 +682 @@ impl Module {
++                    spv_untyped_data_type,
+@@ -1527 +1544,14 @@ impl Module {
+-                        DataInstKind::SpvInst(raw_inst.without_ids.clone())
++                        let type_inputs: SmallVec<[_; 1]> = ids.iter().enumerate().filter_map(|(idx, id)| {
++                            match id_defs.get(id) {
++                                Some(&IdDef::Type(ty)) => Some((idx.try_into().unwrap(), ty)),
++                                _ => None,
++                            }
++                        }).collect();
++                        if type_inputs.is_empty() {
++                            DataInstKind::SpvInst(raw_inst.without_ids.clone())
++                        } else {
++                            DataInstKind::SpvInstWithTypeInputs {
++                                spv_inst: raw_inst.without_ids.clone(),
++                                type_inputs,
++                            }
++                        }
+@@ -1529,0 +1560,16 @@ impl Module {
++                    let inputs = ids.iter().enumerate().filter(|(idx, _)| {
++                        match &kind {
++                            DataInstKind::SpvInstWithTypeInputs { type_inputs, .. } => {
++                                !type_inputs.iter().any(|(type_idx, _)| *type_idx as usize == *idx)
++                            }
++                            _ => true,
++                        }
++                    }).map(|(_, &id)| {
++                        match lookup_global_or_local_id_for_data_or_control_inst_input(id)? {
++                            LocalIdDef::Value(v) => Ok(v),
++                            LocalIdDef::BlockLabel { .. } => Err(invalid(
++                                "unsupported use of block label as a value, in non-terminator instruction",
++                            )),
++                        }
++                    }).collect::<io::Result<_>>()?;
++
+@@ -1545,13 +1591 @@ impl Module {
+-                        inputs: ids
+-                            .iter()
+-                            .map(|&id| {
+-                                match lookup_global_or_local_id_for_data_or_control_inst_input(id)?
+-                                {
+-                                    LocalIdDef::Value(v) => Ok(v),
+-                                    LocalIdDef::BlockLabel { .. } => Err(invalid(
+-                                        "unsupported use of block label as a value, \
+-                                         in non-terminator instruction",
+-                                    )),
+-                                }
+-                            })
+-                            .collect::<io::Result<_>>()?,
++                        inputs,
+diff --git a/src/spv/spec.rs b/src/spv/spec.rs
+index 3870d36..7ecadac 100644
+--- a/src/spv/spec.rs
++++ b/src/spv/spec.rs
+@@ -129,0 +130 @@ def_well_known! {
++        OpTypeUntypedPointerKHR,
+@@ -141,0 +143 @@ def_well_known! {
++        OpUntypedVariableKHR,
+diff --git a/src/transform.rs b/src/transform.rs
+index 3fbefc2..ead06cc 100644
+--- a/src/transform.rs
++++ b/src/transform.rs
+@@ -496 +496 @@ impl InnerInPlaceTransform for GlobalVarDecl {
+-        let Self { attrs, type_of_ptr_to, shape, addr_space, def } = self;
++        let Self { attrs, type_of_ptr_to, spv_untyped_data_type, shape, addr_space, def } = self;
+@@ -499,0 +500,3 @@ impl InnerInPlaceTransform for GlobalVarDecl {
++        if let Some(ty) = spv_untyped_data_type {
++            transformer.transform_type_use(*ty).apply_to(ty);
++        }
+@@ -727,0 +731,8 @@ impl InnerTransform for DataInstFormDef {
++                DataInstKind::SpvInstWithTypeInputs { spv_inst, type_inputs } => {
++                    Transformed::map_iter(type_inputs.iter(), |&(idx, ty)| {
++                        transformer.transform_type_use(ty).map(|ty| (idx, ty))
++                    }).map(|type_inputs| DataInstKind::SpvInstWithTypeInputs {
++                        spv_inst: spv_inst.clone(),
++                        type_inputs: type_inputs.collect(),
++                    })
++                },
+diff --git a/src/visit.rs b/src/visit.rs
+index 55de833..ddc2247 100644
+--- a/src/visit.rs
++++ b/src/visit.rs
+@@ -362 +362 @@ impl InnerVisit for GlobalVarDecl {
+-        let Self { attrs, type_of_ptr_to, shape, addr_space, def } = self;
++        let Self { attrs, type_of_ptr_to, spv_untyped_data_type, shape, addr_space, def } = self;
+@@ -365,0 +366,3 @@ impl InnerVisit for GlobalVarDecl {
++        if let Some(ty) = spv_untyped_data_type {
++            visitor.visit_type_use(*ty);
++        }
+@@ -545,0 +549,5 @@ impl InnerVisit for DataInstFormDef {
++            DataInstKind::SpvInstWithTypeInputs { type_inputs, .. } => {
++                for &(_, ty) in type_inputs {
++                    visitor.visit_type_use(ty);
++                }
++            }
+diff --git a/tests/untyped_pointers.rs b/tests/untyped_pointers.rs
+new file mode 100644
+index 0000000..8f024dc
+--- /dev/null
++++ b/tests/untyped_pointers.rs
+@@ -0,0 +1,177 @@
++//! Structural IR regressions. Full SPIR-V validation is exercised by consumers.
++#![forbid(unsafe_code)]
++
++use spirt::{Context, Module, spv};
++use std::rc::Rc;
++
++fn emit(words: &mut Vec<u32>, name: &str, operands: &[u32]) {
++    let opcode = spv::spec::Spec::get().instructions.lookup(name).unwrap();
++    words.push((((operands.len() + 1) as u32) << 16) | u32::from(opcode.as_u16()));
++    words.extend_from_slice(operands);
++}
++
++fn string_words(text: &str) -> Vec<u32> {
++    let mut bytes = text.as_bytes().to_vec();
++    bytes.push(0);
++    while bytes.len() % 4 != 0 {
++        bytes.push(0);
++    }
++    bytes.chunks_exact(4).map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap())).collect()
++}
++
++fn fixture(typed_base: bool, whole_buffer: bool) -> Vec<u32> {
++    let mut w = vec![0x07230203, 0x00010600, 0, 64, 0];
++    for cap in [1, 4473, 5128] {
++        // Shader, UntypedPointersKHR, DescriptorHeapEXT.
++        emit(&mut w, "OpCapability", &[cap]);
++    }
++    for ext in ["SPV_KHR_untyped_pointers", "SPV_EXT_descriptor_heap"] {
++        emit(&mut w, "OpExtension", &string_words(ext));
++    }
++    emit(&mut w, "OpMemoryModel", &[0, 1]); // Logical GLSL450.
++    let mut entry = vec![5, 9]; // GLCompute %main.
++    entry.extend(string_words("computeMain"));
++    entry.extend([8, 16, 18]);
++    emit(&mut w, "OpEntryPoint", &entry);
++    emit(&mut w, "OpExecutionMode", &[9, 17, 1, 1, 1]);
++    if whole_buffer {
++        emit(&mut w, "OpDecorate", &[6, 2]); // Block.
++        emit(&mut w, "OpMemberDecorate", &[6, 0, 35, 0]); // Offset 0.
++        emit(&mut w, "OpDecorate", &[8, 34, 0]); // DescriptorSet 0.
++        emit(&mut w, "OpDecorate", &[8, 33, 0]); // Binding 0.
++    }
++    emit(&mut w, "OpDecorate", &[18, 11, 5123]); // BuiltIn ResourceHeapEXT.
++    emit(&mut w, "OpTypeVoid", &[1]);
++    emit(&mut w, "OpTypeFunction", &[2, 1]);
++    emit(&mut w, "OpTypeInt", &[3, 32, 0]);
++    emit(&mut w, "OpConstant", &[3, 4, 0]);
++    emit(&mut w, "OpConstant", &[3, 5, 42]);
++    emit(&mut w, "OpTypeStruct", &[6, 3]);
++    let storage_class = if whole_buffer { 12 } else { 6 }; // StorageBuffer or Private.
++    emit(&mut w, "OpTypeUntypedPointerKHR", &[7, storage_class]);
++    if typed_base {
++        emit(&mut w, "OpTypePointer", &[19, storage_class, 6]);
++        emit(&mut w, "OpVariable", &[19, 8, storage_class]);
++    } else {
++        emit(&mut w, "OpUntypedVariableKHR", &[7, 8, storage_class, 6]);
++    }
++    emit(&mut w, "OpTypeUntypedPointerKHR", &[12, 7]); // Function.
++    emit(&mut w, "OpTypeUntypedPointerKHR", &[15, 6]); // Private.
++    emit(&mut w, "OpUntypedVariableKHR", &[15, 16, 6, 3, 4]);
++    emit(&mut w, "OpTypeUntypedPointerKHR", &[17, 0]); // UniformConstant.
++    emit(&mut w, "OpUntypedVariableKHR", &[17, 18, 0]); // No Data Type.
++    emit(&mut w, "OpFunction", &[1, 9, 0, 2]);
++    emit(&mut w, "OpLabel", &[10]);
++    emit(&mut w, "OpUntypedVariableKHR", &[12, 13, 7, 3, 4]);
++    emit(&mut w, "OpUntypedAccessChainKHR", &[7, 11, 6, 8, 4]);
++    emit(&mut w, "OpStore", &[13, 5]);
++    emit(&mut w, "OpLoad", &[3, 14, 13]);
++    emit(&mut w, "OpStore", &[11, 14]);
++    emit(&mut w, "OpReturn", &[]);
++    emit(&mut w, "OpFunctionEnd", &[]);
++    w
++}
++
++fn bytes(words: &[u32]) -> Vec<u8> {
++    words.iter().flat_map(|word| word.to_le_bytes()).collect()
++}
++
++fn roundtrip(typed_base: bool, qptr: bool) {
++    let mut module = Module::lower_from_spv_bytes(
++        Rc::new(Context::new()),
++        bytes(&fixture(typed_base, !typed_base)),
++    )
++    .unwrap();
++    if qptr {
++        let layout = &spirt::qptr::LayoutConfig {
++            abstract_bool_size_align: (1, 1),
++            logical_ptr_size_align: (4, 4),
++            ..spirt::qptr::LayoutConfig::VULKAN_SCALAR_LAYOUT
++        };
++        spirt::passes::qptr::lower_from_spv_ptrs(&mut module, layout);
++        spirt::passes::qptr::analyze_uses(&mut module, layout);
++        spirt::passes::qptr::lift_to_spv_ptrs(&mut module, layout);
++    }
++    let printed = spirt::print::Plan::for_module(&module).pretty_print().to_string();
++    assert!(printed.contains("untyped"));
++    let output = module.lift_to_spv_module_emitter().unwrap().words;
++    let insts: Vec<_> = spv::read::ModuleParser::read_from_spv_bytes(bytes(&output))
++        .unwrap()
++        .collect::<std::io::Result<_>>()
++        .unwrap();
++    let named = |name: &'static str| {
++        insts.iter().filter(move |inst| inst.without_ids.opcode.name() == name)
++    };
++    let def = |id| insts.iter().find(|inst| inst.result_id == Some(id)).unwrap();
++    let mut globals = 0;
++    let mut locals = 0;
++    let mut in_func = false;
++    for inst in &insts {
++        let name = inst.without_ids.opcode.name();
++        if name == "OpFunction" {
++            in_func = true;
++        }
++        if name != "OpUntypedVariableKHR" {
++            continue;
++        }
++        if in_func {
++            locals += 1;
++        } else {
++            globals += 1;
++        }
++        if let Some(&data_type) = inst.ids.first() {
++            assert!(def(data_type).without_ids.opcode.name().starts_with("OpType"));
++        }
++        if let Some(&initializer) = inst.ids.get(1) {
++            assert_eq!(def(initializer).without_ids.opcode.name(), "OpConstant");
++        }
++    }
++    assert_eq!((globals, locals), (if typed_base { 2 } else { 3 }, 1));
++    assert_eq!(named("OpUntypedVariableKHR").filter(|inst| inst.ids.is_empty()).count(), 1);
++    let chain = named("OpUntypedAccessChainKHR").next().unwrap();
++    assert_eq!(chain.ids.len(), 3);
++    assert_eq!(def(chain.ids[0]).without_ids.opcode.name(), "OpTypeStruct");
++    assert_eq!(
++        def(chain.ids[1]).without_ids.opcode.name(),
++        if typed_base { "OpVariable" } else { "OpUntypedVariableKHR" }
++    );
++    assert_eq!(def(chain.ids[2]).without_ids.opcode.name(), "OpConstant");
++    assert_eq!(named("OpLoad").count(), 1);
++    assert_eq!(named("OpStore").count(), 2);
++    // Re-lowering also verifies every newly emitted type/constant reference.
++    let again = Module::lower_from_spv_bytes(Rc::new(Context::new()), bytes(&output)).unwrap();
++    assert_eq!(again.lift_to_spv_module_emitter().unwrap().words, output);
++}
++
++#[test]
++fn untyped_globals_locals_and_type_operands() {
++    roundtrip(false, false);
++}
++
++#[test]
++fn qptr_preserves_untyped_memory_operations() {
++    roundtrip(false, true);
++}
++
++#[test]
++fn untyped_access_chain_accepts_typed_base() {
++    roundtrip(true, false);
++}
++
++#[test]
++fn qptr_preserves_untyped_access_chain_with_typed_base() {
++    roundtrip(true, true);
++}
++
++#[test]
++fn qptr_diagnoses_typed_whole_buffer_base() {
++    // qptr already rejects opaque operations consuming a whole typed Block.
++    // Keep that restriction explicit rather than silently dropping its usage.
++    let mut module =
++        Module::lower_from_spv_bytes(Rc::new(Context::new()), bytes(&fixture(true, true))).unwrap();
++    let layout = &spirt::qptr::LayoutConfig::VULKAN_SCALAR_LAYOUT;
++    spirt::passes::qptr::lower_from_spv_ptrs(&mut module, layout);
++    spirt::passes::qptr::analyze_uses(&mut module, layout);
++    let printed = spirt::print::Plan::for_module(&module).pretty_print().to_string();
++    assert!(printed.contains("ToSpvPtrInput: whole Buffer ambiguous"), "{printed}");
++}
