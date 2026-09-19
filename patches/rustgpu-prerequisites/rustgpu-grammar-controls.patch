@@ -1,0 +1,42 @@
+diff --git a/crates/rustc_codegen_spirv/src/linker/specializer.rs b/crates/rustc_codegen_spirv/src/linker/specializer.rs
+index 6de9db0..63e0320 100644
+--- a/crates/rustc_codegen_spirv/src/linker/specializer.rs
++++ b/crates/rustc_codegen_spirv/src/linker/specializer.rs
+@@ -2298,0 +2299,5 @@ impl<'a, S: Specialization> Expander<'a, S> {
++                // Already-concrete interface variables have no specialization
++                // instances and keep their original IDs.
++                if !self.specializer.generics.contains_key(&interface_id) {
++                    continue;
++                }
+diff --git a/crates/rustc_codegen_spirv/src/linker/spirt_passes/mod.rs b/crates/rustc_codegen_spirv/src/linker/spirt_passes/mod.rs
+index f41dc5a..c6e448b 100644
+--- a/crates/rustc_codegen_spirv/src/linker/spirt_passes/mod.rs
++++ b/crates/rustc_codegen_spirv/src/linker/spirt_passes/mod.rs
+@@ -76,2 +76,2 @@ macro_rules! def_spv_spec_with_extra_well_known {
+-                            decoration: |name| decorations.lookup(name).unwrap().into(),
+-                            storage_class: |name| storage_classes.lookup(name).unwrap().into(),
++                            decoration: |name| decorations.lookup(name).unwrap(),
++                            storage_class: |name| storage_classes.lookup(name).unwrap(),
+diff --git a/crates/rustc_codegen_spirv/src/linker/spirt_passes/validate.rs b/crates/rustc_codegen_spirv/src/linker/spirt_passes/validate.rs
+index 8e54ed5..ecad62e 100644
+--- a/crates/rustc_codegen_spirv/src/linker/spirt_passes/validate.rs
++++ b/crates/rustc_codegen_spirv/src/linker/spirt_passes/validate.rs
+@@ -57 +57 @@ struct Validator<'a> {
+-        u16,
++        u32,
+@@ -59 +59 @@ struct Validator<'a> {
+-        spv::spec::indexed::KhrSegmented,
++        spv::spec::indexed::Sparse,
+@@ -261,3 +261 @@ impl Validator<'_> {
+-                    let cap_name = u16::try_from(cap)
+-                        .ok()
+-                        .and_then(|cap| Some(self.spv_spec_caps.get_named(cap)?.0));
++                    let cap_name = self.spv_spec_caps.get_named(cap).map(|(name, _)| name);
+@@ -302 +300 @@ impl Validator<'_> {
+-            match self.spv_spec_caps.lookup(cap_name).map(u32::from) {
++            match self.spv_spec_caps.lookup(cap_name) {
+@@ -349,3 +347 @@ impl Validator<'_> {
+-                                    u16::try_from(imm)
+-                                        .ok()
+-                                        .and_then(|imm| Some(variants.get_named(imm)?.0))
++                                    variants.get_named(imm).map(|(name, _)| name)
