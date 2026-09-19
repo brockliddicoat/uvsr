@@ -36,6 +36,9 @@ namespace test
                 const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
                 for (;;)
                 {
+                    // observe exit before peeking so bytes written during the wait are still drained.
+                    const DWORD state = WaitForSingleObject(process, 10);
+                    WinCheck(state != WAIT_FAILED, "wait for exact engine identity process");
                     DWORD available = 0;
                     const BOOL pipe = PeekNamedPipe(read, nullptr, 0, nullptr, &available, nullptr);
                     if (!pipe) Require(GetLastError() == ERROR_BROKEN_PIPE, "identity output pipe failed");
@@ -46,11 +49,12 @@ namespace test
                         WinCheck(::ReadFile(read, bytes.data(), available, &received, nullptr), "read exact engine identity");
                         output.append(bytes.data(), received);
                     }
-                    else if (WaitForSingleObject(process, 10) == WAIT_OBJECT_0) break;
+                    else if (state == WAIT_OBJECT_0) break;
                     Require(std::chrono::steady_clock::now() < deadline, "engine identity process timed out");
                 }
                 DWORD exit = 1; WinCheck(GetExitCodeProcess(process, &exit), "read engine identity exit");
                 Require(exit == 0, "exact engine identity command failed");
+                Require(!output.empty(), "exact engine identity command returned no JSON");
                 return ParseJson(output);
             }
             catch (...)

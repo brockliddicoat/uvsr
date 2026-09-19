@@ -2,6 +2,8 @@ name: Windows Launcher
 
 on:
   push:
+    # the renderer workflow already builds and tests the launcher on preservation pushes.
+    branches-ignore: [uvsr-delta-recovery]
     paths:
       - "launcher/**"
       - "installer/launcher-feed-v1.json"
