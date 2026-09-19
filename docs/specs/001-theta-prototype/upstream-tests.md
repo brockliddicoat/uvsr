@@ -4,6 +4,8 @@ this page is the primary contribution crosswalk for [US6 and FR-015](spec.md). [
 
 [E-019](../../execution.md#e-019-2026-09-19-preserved-qptr-memory-effects) adds P07 compiler evidence for actual qptr lowering/lifting and optimized memory effects. its new volatile cases need the native optimizer prerequisite. unpatched installed tools still fail that reproducer, and P07's GPU execution requirement remains open.
 
+[E-020](../../execution.md#e-020-2026-09-19-lowered-typed-pointer-operations) starts P09/P11's operation inventory with typed comparisons/wrapping offsets and clean logical/null-helper rejections. its upstream-facing table distinguishes tested transport operations from unsupported or pending memory operations. P09/P11 and runtime requirements are not complete.
+
 three different authorities are recorded: the draft author's checklist, a maintainer's concrete review concerns, and repository CI. none alone establishes eventual acceptance.
 
 ## PR #237 checklist
