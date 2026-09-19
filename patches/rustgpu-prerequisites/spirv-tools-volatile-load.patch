@@ -1,0 +1,12 @@
+diff --git a/source/opt/ir_context.h b/source/opt/ir_context.h
+index f4a69fc..83f8455 100644
+--- a/source/opt/ir_context.h
++++ b/source/opt/ir_context.h
+@@ -524,0 +525,7 @@ class IRContext {
++    // A volatile load has an observable effect even when its result is unused.
++    // It must not be eliminated or combined with another access.
++    if (inst->opcode() == spv::Op::OpLoad && inst->NumInOperands() > 1 &&
++        (inst->GetSingleWordInOperand(1) &
++         uint32_t(spv::MemoryAccessMask::Volatile))) {
++      return false;
++    }

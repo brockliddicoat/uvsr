@@ -1,0 +1,287 @@
+diff --git a/src/print/mod.rs b/src/print/mod.rs
+index f49dd99..98fed97 100644
+--- a/src/print/mod.rs
++++ b/src/print/mod.rs
+@@ -3233,7 +3233,17 @@ impl Print for FuncAt<'_, DataInst> {
+-                    QPtrOp::Load => {
+-                        assert_eq!(extra_inputs.len(), 0);
+-                        ("load", [].into_iter().collect())
+-                    }
+-                    QPtrOp::Store => {
+-                        assert_eq!(extra_inputs.len(), 1);
+-                        ("store", [extra_inputs[0].print(printer)].into_iter().collect())
++                    QPtrOp::Load { spv_memory_operands }
++                    | QPtrOp::Store { spv_memory_operands } => {
++                        let wk = &spv::spec::Spec::get().well_known;
++                        let (name, opcode, data_inputs) = match op {
++                            QPtrOp::Load { .. } => ("load", wk.OpLoad, 1),
++                            QPtrOp::Store { .. } => ("store", wk.OpStore, 2),
++                            _ => unreachable!(),
++                        };
++                        let memory = spv::print::inst_operands(
++                            opcode,
++                            spv_memory_operands.iter().copied(),
++                            inputs.iter().map(|v| Some(v.print(printer))),
++                        ).skip(data_inputs).map(|operand| {
++                            printer.pretty_spv_print_tokens_for_operand(operand)
++                        });
++                        (name, inputs[1..data_inputs].iter().map(|v| v.print(printer))
++                            .chain(memory).collect())
+diff --git a/src/qptr/analyze.rs b/src/qptr/analyze.rs
+index cfa3996..d9b5455 100644
+--- a/src/qptr/analyze.rs
++++ b/src/qptr/analyze.rs
+@@ -1110 +1110 @@ impl<'a> InferUsage<'a> {
+-                    DataInstKind::QPtr(op @ (QPtrOp::Load | QPtrOp::Store)) => {
++                    DataInstKind::QPtr(op @ (QPtrOp::Load { .. } | QPtrOp::Store { .. })) => {
+@@ -1112,2 +1112,2 @@ impl<'a> InferUsage<'a> {
+-                            QPtrOp::Load => ("Load", data_inst_form_def.output_type.unwrap()),
+-                            QPtrOp::Store => {
++                            QPtrOp::Load { .. } => ("Load", data_inst_form_def.output_type.unwrap()),
++                            QPtrOp::Store { .. } => {
+diff --git a/src/qptr/lift.rs b/src/qptr/lift.rs
+index e64fdfe..2a64b2e 100644
+--- a/src/qptr/lift.rs
++++ b/src/qptr/lift.rs
+@@ -782,4 +782,6 @@ impl LiftToSpvPtrInstsInFunc<'_> {
+-            DataInstKind::QPtr(op @ (QPtrOp::Load | QPtrOp::Store)) => {
+-                let (spv_opcode, access_type) = match op {
+-                    QPtrOp::Load => (wk.OpLoad, data_inst_form_def.output_type.unwrap()),
+-                    QPtrOp::Store => (wk.OpStore, type_of_val(data_inst_def.inputs[1])),
++            DataInstKind::QPtr(op @ (QPtrOp::Load { .. } | QPtrOp::Store { .. })) => {
++                let (spv_opcode, access_type, spv_memory_operands) = match op {
++                    QPtrOp::Load { spv_memory_operands } =>
++                        (wk.OpLoad, data_inst_form_def.output_type.unwrap(), spv_memory_operands),
++                    QPtrOp::Store { spv_memory_operands } =>
++                        (wk.OpStore, type_of_val(data_inst_def.inputs[1]), spv_memory_operands),
+@@ -806 +808,4 @@ impl LiftToSpvPtrInstsInFunc<'_> {
+-                        kind: DataInstKind::SpvInst(spv_opcode.into()),
++                        kind: DataInstKind::SpvInst(spv::Inst {
++                            opcode: spv_opcode,
++                            imms: spv_memory_operands.clone(),
++                        }),
+diff --git a/src/qptr/lower.rs b/src/qptr/lower.rs
+index 1fc2b7a..88e0480 100644
+--- a/src/qptr/lower.rs
++++ b/src/qptr/lower.rs
+@@ -450,6 +450,5 @@ impl LowerFromSpvPtrInstsInFunc<'_> {
+-            // FIXME(eddyb) support memory operands somehow.
+-            if !spv_inst.imms.is_empty() {
+-                return Ok(Transformed::Unchanged);
+-            }
+-            assert_eq!(data_inst_def.inputs.len(), 1);
+-            (QPtrOp::Load.into(), data_inst_def.inputs.clone())
++            assert!(!data_inst_def.inputs.is_empty());
++            (
++                QPtrOp::Load { spv_memory_operands: spv_inst.imms.clone() }.into(),
++                data_inst_def.inputs.clone(),
++            )
+@@ -460,6 +459,5 @@ impl LowerFromSpvPtrInstsInFunc<'_> {
+-            // FIXME(eddyb) support memory operands somehow.
+-            if !spv_inst.imms.is_empty() {
+-                return Ok(Transformed::Unchanged);
+-            }
+-            assert_eq!(data_inst_def.inputs.len(), 2);
+-            (QPtrOp::Store.into(), data_inst_def.inputs.clone())
++            assert!(data_inst_def.inputs.len() >= 2);
++            (
++                QPtrOp::Store { spv_memory_operands: spv_inst.imms.clone() }.into(),
++                data_inst_def.inputs.clone(),
++            )
+diff --git a/src/qptr/mod.rs b/src/qptr/mod.rs
+index a9e9c97..3586ef8 100644
+--- a/src/qptr/mod.rs
++++ b/src/qptr/mod.rs
+@@ -7 +7,2 @@
+-use crate::{AddrSpace, OrdAssertEq, Type};
++use crate::{AddrSpace, OrdAssertEq, Type, spv};
++use smallvec::SmallVec;
+@@ -199 +200,6 @@ pub enum QPtrOp {
+-    Load,
++    Load {
++        /// Preserve the SPIR-V memory mask and literal payloads, including
++        /// observable effects such as Volatile. Any associated ID operands
++        /// follow the pointer in `inputs[1..]` and remain ordinary value uses.
++        spv_memory_operands: SmallVec<[spv::Imm; 2]>,
++    },
+@@ -204 +210,6 @@ pub enum QPtrOp {
+-    Store,
++    Store {
++        /// As for [`QPtrOp::Load`], with associated ID operands in `inputs[2..]`
++        /// after the pointer and stored value. Transforms must retain the
++        /// memory semantics and the original operand ordering.
++        spv_memory_operands: SmallVec<[spv::Imm; 2]>,
++    },
+diff --git a/src/transform.rs b/src/transform.rs
+index 45182be..d329f2b 100644
+--- a/src/transform.rs
++++ b/src/transform.rs
+@@ -738,2 +738,2 @@ impl InnerTransform for DataInstFormDef {
+-                    | QPtrOp::Load
+-                    | QPtrOp::Store => Transformed::Unchanged,
++                    | QPtrOp::Load { .. }
++                    | QPtrOp::Store { .. } => Transformed::Unchanged,
+diff --git a/src/visit.rs b/src/visit.rs
+index cdf78b5..eec0e66 100644
+--- a/src/visit.rs
++++ b/src/visit.rs
+@@ -552,2 +552,2 @@ impl InnerVisit for DataInstFormDef {
+-                | QPtrOp::Load
+-                | QPtrOp::Store => {}
++                | QPtrOp::Load { .. }
++                | QPtrOp::Store { .. } => {}
+diff --git a/tests/memory_operands.rs b/tests/memory_operands.rs
+new file mode 100644
+index 0000000..c10ac38
+--- /dev/null
++++ b/tests/memory_operands.rs
+@@ -0,0 +1,149 @@
++//! Memory operands must survive actual QPtr lowering, not just raw SPIR-V transport.
++#![forbid(unsafe_code)]
++
++use spirt::{Context, Module, spv};
++use std::rc::Rc;
++
++fn emit(words: &mut Vec<u32>, name: &str, operands: &[u32]) {
++    let opcode = spv::spec::Spec::get().instructions.lookup(name).unwrap();
++    words.push((((operands.len() + 1) as u32) << 16) | u32::from(opcode.as_u16()));
++    words.extend_from_slice(operands);
++}
++
++fn bytes(words: &[u32]) -> Vec<u8> {
++    words.iter().flat_map(|word| word.to_le_bytes()).collect()
++}
++
++fn fixture(load_memory: &[u32], store_memory: &[u32]) -> Vec<u32> {
++    let mut words = vec![0x07230203, 0x00010600, 0, 32, 0];
++    for cap in [1, 11, 5345, 5347] {
++        // Shader, Int64, VulkanMemoryModel, PhysicalStorageBufferAddresses.
++        emit(&mut words, "OpCapability", &[cap]);
++    }
++    emit(&mut words, "OpMemoryModel", &[5348, 3]);
++    emit(&mut words, "OpEntryPoint", &[5, 11, 0x6e69616d, 0, 10]);
++    emit(&mut words, "OpExecutionMode", &[11, 17, 1, 1, 1]);
++    emit(&mut words, "OpTypeVoid", &[1]);
++    emit(&mut words, "OpTypeInt", &[2, 32, 0]);
++    emit(&mut words, "OpTypeInt", &[3, 64, 0]);
++    emit(&mut words, "OpTypeFunction", &[4, 1]);
++    emit(&mut words, "OpTypePointer", &[5, 4, 2]); // Workgroup u32.
++    emit(&mut words, "OpTypePointer", &[6, 5349, 2]); // PhysicalStorageBuffer u32.
++    emit(&mut words, "OpConstant", &[3, 7, 4096, 0]);
++    emit(&mut words, "OpConstant", &[2, 8, 42]);
++    emit(&mut words, "OpConstant", &[2, 9, 2]); // Workgroup scope.
++    emit(&mut words, "OpVariable", &[5, 10, 4]);
++    emit(&mut words, "OpFunction", &[1, 11, 0, 4]);
++    emit(&mut words, "OpLabel", &[12]);
++    emit(&mut words, "OpConvertUToPtr", &[6, 13, 7]);
++    let mut store = vec![10, 8];
++    store.extend_from_slice(store_memory);
++    emit(&mut words, "OpStore", &store);
++    let mut load = vec![2, 14, 10];
++    load.extend_from_slice(load_memory);
++    emit(&mut words, "OpLoad", &load);
++    emit(&mut words, "OpStore", &[13, 14, 2, 4]); // Aligned 4.
++    emit(&mut words, "OpLoad", &[2, 15, 13, 2, 4]);
++    emit(&mut words, "OpReturn", &[]);
++    emit(&mut words, "OpFunctionEnd", &[]);
++    words
++}
++
++fn roundtrip(load_memory: &[u32], store_memory: &[u32], scoped: bool) {
++    let input = fixture(load_memory, store_memory);
++    let mut module = Module::lower_from_spv_bytes(Rc::new(Context::new()), bytes(&input)).unwrap();
++    let layout = &spirt::qptr::LayoutConfig {
++        abstract_bool_size_align: (1, 1),
++        logical_ptr_size_align: (4, 4),
++        ..spirt::qptr::LayoutConfig::VULKAN_SCALAR_LAYOUT
++    };
++    spirt::passes::qptr::lower_from_spv_ptrs(&mut module, layout);
++    let lowered = spirt::print::Plan::for_module(&module).pretty_print().to_string();
++    assert_eq!(lowered.matches("qptr.load(").count(), 1, "{lowered}");
++    assert_eq!(lowered.matches("qptr.store(").count(), 1, "{lowered}");
++    if scoped {
++        for flag in [
++            "Aligned",
++            "Nontemporal",
++            "MakePointerAvailable",
++            "MakePointerVisible",
++            "NonPrivatePointer",
++        ] {
++            assert!(lowered.contains(flag), "missing {flag}:\n{lowered}");
++        }
++    }
++    spirt::passes::qptr::analyze_uses(&mut module, layout);
++    spirt::passes::qptr::lift_to_spv_ptrs(&mut module, layout);
++    let output = module.lift_to_spv_module_emitter().unwrap().words;
++    let instructions: Vec<_> = spv::read::ModuleParser::read_from_spv_bytes(bytes(&output))
++        .unwrap()
++        .collect::<std::io::Result<_>>()
++        .unwrap();
++    let def = |id| instructions.iter().find(|inst| inst.result_id == Some(id)).unwrap();
++    for (op, expected, data_ids) in [("OpLoad", load_memory, 1), ("OpStore", store_memory, 2)] {
++        let mut logical = 0;
++        let mut physical = 0;
++        for inst in instructions.iter().filter(|inst| inst.without_ids.opcode.name() == op) {
++            let pointer = def(inst.ids[0]);
++            let ty = def(pointer.result_type_id.unwrap());
++            let storage = match ty.without_ids.imms[..] {
++                [spv::Imm::Short(_, sc)] => sc,
++                _ => panic!("expected a pointer storage class"),
++            };
++            let imms: Vec<_> = inst
++                .without_ids
++                .imms
++                .iter()
++                .map(|imm| match *imm {
++                    spv::Imm::Short(_, word) => word,
++                    _ => panic!("unexpected long memory operand"),
++                })
++                .collect();
++            if storage == 5349 {
++                physical += 1;
++                assert_eq!(imms, [2, 4]);
++                assert_eq!(inst.ids.len(), data_ids);
++            } else {
++                logical += 1;
++                assert_eq!(storage, 4);
++                let literal_count = expected.len() - usize::from(scoped);
++                assert_eq!(imms, expected[..literal_count]);
++                assert_eq!(inst.ids.len(), data_ids + usize::from(scoped));
++                if scoped {
++                    let scope = def(*inst.ids.last().unwrap());
++                    assert_eq!(scope.without_ids.opcode.name(), "OpConstant");
++                    assert!(matches!(scope.without_ids.imms[..], [spv::Imm::Short(_, 2)]));
++                }
++            }
++        }
++        assert_eq!((logical, physical), (1, 1));
++    }
++    let again = Module::lower_from_spv_bytes(Rc::new(Context::new()), bytes(&output)).unwrap();
++    assert_eq!(again.lift_to_spv_module_emitter().unwrap().words, output);
++}
++
++#[test]
++fn absent() {
++    roundtrip(&[], &[], false);
++}
++
++#[test]
++fn explicit_none() {
++    roundtrip(&[0], &[0], false);
++}
++
++#[test]
++fn aligned() {
++    roundtrip(&[2, 4], &[2, 4], false);
++}
++
++#[test]
++fn volatile_and_nontemporal() {
++    roundtrip(&[7, 4], &[7, 4], false);
++}
++
++#[test]
++fn availability_and_visibility_scopes() {
++    // Aligned|Nontemporal|MakePointerVisible/Available|NonPrivatePointer, alignment, scope ID.
++    roundtrip(&[54, 4, 9], &[46, 4, 9], true);
++}

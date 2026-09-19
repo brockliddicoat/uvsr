@@ -1,0 +1,146 @@
+diff --git a/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs b/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
+index 40f28be..7240789 100644
+--- a/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
++++ b/crates/rustc_codegen_spirv/src/linker/test/physical_address.rs
+@@ -7,0 +8 @@ use rspirv::spirv::{MemoryAccess, Op};
++use spirv_tools::opt::{Optimizer, Passes};
+@@ -9 +10 @@ use rspirv::spirv::{MemoryAccess, Op};
+-fn check_casts(untyped: bool, qptr: bool) {
++fn check_casts(untyped: bool, qptr: bool, volatile: bool) {
+@@ -57,0 +59,8 @@ OpFunctionEnd
++    if volatile {
++        source = source
++            .replace("Aligned|Nontemporal", "Volatile|Aligned|Nontemporal")
++            .replace(
++                "%other =",
++                "%unused = OpLoad %u64 %output Volatile|Aligned|Nontemporal|MakePointerVisible|NonPrivatePointer 8 %scope\n%ordinary_unused = OpLoad %u64 %output Nontemporal|MakePointerVisible|NonPrivatePointer %scope\n%other =",
++            );
++    }
+@@ -76 +85,5 @@ OpFunctionEnd
+-        "Aligned|Nontemporal 4",
++        if volatile {
++            "Volatile|Aligned|Nontemporal 4"
++        } else {
++            "Aligned|Nontemporal 4"
++        },
+@@ -97,7 +110,19 @@ OpFunctionEnd
+-        let mask = MemoryAccess::NONTEMPORAL | MemoryAccess::NON_PRIVATE_POINTER | flag;
+-        assert!(
+-            module.all_inst_iter().any(|inst| {
+-                inst.class.opcode == op
+-                    && inst.operands.get(mask_index..)
+-                        == Some(&[Operand::MemoryAccess(mask), Operand::IdScope(scope)][..])
+-            }),
++        let mask = MemoryAccess::NONTEMPORAL
++            | MemoryAccess::NON_PRIVATE_POINTER
++            | flag
++            | if volatile {
++                MemoryAccess::VOLATILE
++            } else {
++                MemoryAccess::empty()
++            };
++        let expected_count = if volatile && op == Op::Load { 2 } else { 1 };
++        assert_eq!(
++            module
++                .all_inst_iter()
++                .filter(|inst| {
++                    inst.class.opcode == op
++                        && inst.operands.get(mask_index..)
++                            == Some(&[Operand::MemoryAccess(mask), Operand::IdScope(scope)][..])
++                })
++                .count(),
++            expected_count,
+@@ -106,0 +132,71 @@ OpFunctionEnd
++    if volatile {
++        for performance in [false, true] {
++            let mut optimizer = spirv_tools::opt::create(None);
++            if performance {
++                optimizer.register_performance_passes();
++            } else {
++                optimizer.register_pass(Passes::AggressiveDCE);
++            }
++            let optimized = optimizer
++                .optimize(module.assemble(), &mut |_| {}, None)
++                .unwrap();
++            validate(optimized.as_words());
++            let optimized = crate::link::with_rspirv_loader(|loader| {
++                rspirv::binary::parse_words(optimized.as_words(), loader)
++            })
++            .unwrap();
++            // The second load's result is unused, but its volatile effect must
++            // survive qptr and optimization. Nontemporal is only a hint.
++            let scope = optimized
++                .types_global_values
++                .iter()
++                .find_map(|inst| {
++                    (inst.class.opcode == Op::Constant
++                        && inst.operands == [Operand::LiteralBit32(2)])
++                    .then(|| inst.result_id.unwrap())
++                })
++                .expect("retain the Workgroup scope after optimization");
++            for (op, flag, mask_index, count) in [
++                (Op::Load, MemoryAccess::MAKE_POINTER_VISIBLE, 1, 2),
++                (Op::Store, MemoryAccess::MAKE_POINTER_AVAILABLE, 2, 1),
++            ] {
++                let required = MemoryAccess::VOLATILE | MemoryAccess::NON_PRIVATE_POINTER | flag;
++                assert_eq!(
++                    optimized
++                        .all_inst_iter()
++                        .filter(|inst| {
++                            inst.class.opcode == op
++                                && matches!(inst.operands.get(mask_index),
++                                Some(Operand::MemoryAccess(mask)) if mask.contains(required))
++                                && inst.operands.last() == Some(&Operand::IdScope(scope))
++                        })
++                        .count(),
++                    count,
++                    "preserve {op:?} effects and scope (performance={performance}):\n{}",
++                    optimized.disassemble()
++                );
++            }
++            assert_eq!(
++                optimized
++                    .all_inst_iter()
++                    .filter(|inst| {
++                        inst.class.opcode == Op::Store
++                            && matches!(inst.operands.get(2), Some(Operand::MemoryAccess(mask))
++                            if mask.contains(MemoryAccess::VOLATILE | MemoryAccess::ALIGNED))
++                            && inst.operands.get(3) == Some(&Operand::LiteralBit32(4))
++                    })
++                    .count(),
++                1,
++                "preserve the aligned physical volatile store"
++            );
++            assert_eq!(
++                optimized
++                    .all_inst_iter()
++                    .filter(|inst| inst.class.opcode == Op::Load)
++                    .count(),
++                2,
++                "eliminate only the ordinary unused load (performance={performance}):\n{}",
++                optimized.disassemble()
++            );
++        }
++    }
+@@ -111 +207 @@ fn typed_casts() {
+-    check_casts(false, false);
++    check_casts(false, false, false);
+@@ -116 +212 @@ fn untyped_casts() {
+-    check_casts(true, false);
++    check_casts(true, false, false);
+@@ -121 +217 @@ fn typed_casts_qptr() {
+-    check_casts(false, true);
++    check_casts(false, true, false);
+@@ -126 +222,11 @@ fn untyped_casts_qptr() {
+-    check_casts(true, true);
++    check_casts(true, true, false);
++}
++
++#[test]
++fn volatile_memory_operands() {
++    check_casts(false, false, true);
++}
++
++#[test]
++fn volatile_memory_operands_qptr() {
++    check_casts(false, true, true);

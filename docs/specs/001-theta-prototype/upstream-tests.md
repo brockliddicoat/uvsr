@@ -2,6 +2,8 @@
 
 this page is the primary contribution crosswalk for [US6 and FR-015](spec.md). [tasks T010-T016 and T033-T035](tasks.md) own the work. every row needs an implementation/test pointer, observed result, source/configuration identity, and remaining limitation in the contribution evidence. H07's assembly-input tool gate passes at E-015. shader implementation and runtime rows remain incomplete.
 
+[E-019](../../execution.md#e-019-2026-09-19-preserved-qptr-memory-effects) adds P07 compiler evidence for actual qptr lowering/lifting and optimized memory effects. its new volatile cases need the native optimizer prerequisite. unpatched installed tools still fail that reproducer, and P07's GPU execution requirement remains open.
+
 three different authorities are recorded: the draft author's checklist, a maintainer's concrete review concerns, and repository CI. none alone establishes eventual acceptance.
 
 ## PR #237 checklist

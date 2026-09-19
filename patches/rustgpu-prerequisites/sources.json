@@ -224,6 +224,51 @@
         "--unidiff-zero",
         "--index"
       ]
+    },
+    {
+      "file": "spirt-qptr-memory.patch",
+      "sha256": "4ec875e0e777b48e7cd34b5307d472113041a7b8b33fa095621c0f53d974fc7e",
+      "repository": "https://github.com/Rust-GPU/spirt",
+      "base": "c41f85a5c7320c8718d046d2072315acbb739dcb",
+      "local_verified_commit": "53ace0c85f9659f2a62c2e9234c84cfe53bad13a",
+      "license": "MIT OR Apache-2.0",
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ],
+      "license_files": [
+        "../../legal/licenses/SPIR-T-MIT.txt",
+        "../../legal/licenses/SPIR-T-APACHE.txt"
+      ]
+    },
+    {
+      "file": "spirv-tools-volatile-load.patch",
+      "sha256": "ca47082de723fe747d11720e9dfce0eeec718598891a244018a066e4be51acaf",
+      "repository": "https://github.com/KhronosGroup/SPIRV-Tools",
+      "base": "9a49b0883b9b635689a85b5647dbfcb223268151",
+      "local_verified_commit": "cb001ee6bf925867e98f5846e2806d8677c46415",
+      "license": "Apache-2.0",
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ],
+      "license_file": "../../legal/licenses/SPIRV-Tools-APACHE.txt"
+    },
+    {
+      "file": "rustgpu-qptr-memory.patch",
+      "sha256": "a2404d69882abf02ecfda76e8cb6889db7393d7b5d1a7c06fca27582d907e99e",
+      "repository": "https://github.com/Rust-GPU/rust-gpu",
+      "base": "92eea1c02f80a8b99c5209ce1630c828d2294487",
+      "local_verified_commit": "133bbb542b4ade422e96b3134fef5fc242233a46",
+      "license": "MIT OR Apache-2.0",
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ],
+      "license_files": [
+        "../../legal/licenses/RustGPU-MIT.txt",
+        "../../legal/licenses/RustGPU-APACHE.txt"
+      ]
     }
   ]
 }
