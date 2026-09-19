@@ -16,6 +16,8 @@ if ($LASTEXITCODE -ne 0) { throw 'NGAPI prerequisite failed' }
 
 run from this repository's root. no RustGPU patch depends on NGAPI or this file.
 
+this directory's attributes preserve exact patch bytes across Windows and Unix checkouts, so manifest hashes remain valid with core.autocrlf enabled. root repository metadata and the exported patches are unchanged.
+
 [E-021](../../docs/execution.md#e-021-2026-09-19-executed-rust-physical-readback-through-ngapi) records the actual Windows Debug/Release tests, limitations and exact shader identity. the change has not been submitted to NGAPI upstream. it changes neither device-address allocation nor descriptor-heap/pipeline/root-data implementation.
 
 
