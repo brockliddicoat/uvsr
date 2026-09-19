@@ -6,6 +6,8 @@ this page is the primary contribution crosswalk for [US6 and FR-015](spec.md). [
 
 [E-020](../../execution.md#e-020-2026-09-19-lowered-typed-pointer-operations) starts P09/P11's operation inventory with typed comparisons/wrapping offsets and clean logical/null-helper rejections. its upstream-facing table distinguishes tested transport operations from unsupported or pending memory operations. P09/P11 and runtime requirements are not complete.
 
+[E-021](../../execution.md#e-021-2026-09-19-executed-rust-physical-readback-through-ngapi) adds actual Windows NGAPI scalar read/write, wrapping u32 arithmetic, two-u64 root and completion/readback evidence for P03/P05 and A01-A04. both Rust optimization levels pass in Debug/Release hosts. actual allocations are below 4 GiB, so nonzero high-address runtime coverage remains absent. native heap shader lookups, aggregate access and full P07/P09/P11 execution coverage remain open. this partial consumer does not close T017/T019 or M2.
+
 three different authorities are recorded: the draft author's checklist, a maintainer's concrete review concerns, and repository CI. none alone establishes eventual acceptance.
 
 ## PR #237 checklist
