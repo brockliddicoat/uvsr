@@ -22,6 +22,8 @@ three different authorities are recorded: the draft author's checklist, a mainta
 
 [E-027](../../execution.md#e-027-2026-09-19-verified-the-native-heap-textured-cube) adds partial T015/T017/T019 and H04/H06/A01-A04 evidence: the actual NGAPI textured cube passes eight opt/view/resource/sampler cases per Debug/Release host with exact color, bounded depth error, input/guard checks and zero native validation diagnostics. vertex PhysicalPtr aggregate reads and fragment native heap sampling now execute together. the generic compiler/library is unchanged. wider resources/stages, full upstream gates and the direct Rust Vulkan slice remain open.
 
+[E-029](../../execution.md#e-029-2026-09-19-executed-the-ordinary-rust-compute-slice) supplies the separate direct Rust Windows Vulkan buffer/compute cross-check. it executes an ordinary logical32 descriptor-array shader against the unchanged AGFX golden, with opt0/opt3, nonzero selected slots, untouched sentinel buffers and explicit lifecycle/validation evidence. this closes the bounded host slice, without substituting ordinary descriptors for any H-row native-heap obligation.
+
 ## PR #237 checklist
 
 the [draft, refreshed on 2026-09-19](https://github.com/Rust-GPU/rust-gpu/pull/237) was open at `e14a70d9260c7df7fab1542810f2ca0276233331`. its checked boxes refer to that draft, not proof in current main or the new implementation. all checklist items are mapped below.

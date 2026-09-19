@@ -8,10 +8,11 @@ import re
 import subprocess
 import time
 import uuid
+from run_log import RunLog
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = ["Cargo.toml", "Cargo.lock", "crates/agfx/Cargo.toml", "crates/agfx/src/lib.rs",
-           "crates/agfx/src/vulkan.rs", "crates/agfx/src/bin/buffer_copy.rs",
+           "crates/agfx/src/vulkan.rs", "crates/agfx/src/vulkan/compute.rs", "crates/agfx/src/bin/buffer_copy.rs",
            "tests/parity/fixtures/agfx/copy_buffer_to_buffer.bin"]
 CONTROLS = {"agfx.control." + name for name in (
     "zero_size", "unaligned_size", "unrepresentable_size", "uninitialized_read", "partial_write",
@@ -54,7 +55,7 @@ def check_record(record, token, identity, actual, golden):
     require(len(controls) == len(CONTROLS) and {row.get("case_id") for row in controls} == CONTROLS and all(row.get("status") == "pass" for row in controls), "required native controls missing or failed")
     device = record.get("device", {})
     require(device.get("validation") is True and device.get("synchronization_validation") is True, "validation not enabled")
-    require(device.get("api_version", 0) >= (1 << 22 | 4 << 12) and set(device.get("enabled_features", [])) == FEATURES, "required API/features missing")
+    require(min(device.get("api_version", 0), device.get("loader_api_version", 0)) >= (1 << 22 | 4 << 12) and set(device.get("enabled_features", [])) == FEATURES, "required API/features missing")
     flags = record.get("memory_flags", {})
     require(flags.get("upload", 0) & 6 == 6 and flags.get("readback", 0) & 6 == 6 and flags.get("device", 0) & 1 == 1, "memory role flags missing")
 
@@ -65,9 +66,12 @@ def main():
     parser.add_argument("--sdk", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
-    executable, sdk, output = args.executable.resolve(strict=True), args.sdk.resolve(strict=True), args.output_dir.resolve()
+    output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    (output / "result.json").unlink(missing_ok=True)
     token = str(uuid.uuid4())
+    log = RunLog(output, token)
+    executable, sdk = args.executable.resolve(strict=True), args.sdk.resolve(strict=True)
     identity = {path: sha256((ROOT / path).read_bytes()) for path in SOURCES}
     report = {"schema_version": 1, "case_id": "agfx.copy_buffer_to_buffer.run", "status": "fail",
               "run_token": token, "executable_sha256": sha256(executable.read_bytes()), "host_source_sha256": identity,
@@ -88,7 +92,11 @@ def main():
         # This mode never opens Vulkan. Reject an old build before any GPU work.
         compiled = subprocess.run([str(executable), "--identity"], capture_output=True, timeout=10, check=True)
         require(json.loads(compiled.stdout) == identity, "stale executable rejected before GPU execution")
+        log.event("identity_checked")
+        report["executed"] = None  # A killed process may have executed unknown work.
+        log.event("native_started", command=command)
         result = subprocess.run(command, cwd=output, env=environment, capture_output=True, timeout=45)
+        log.event("native_finished", exit_code=result.returncode)
         (output / "native.stdout.txt").write_bytes(result.stdout)
         (output / "native.stderr.txt").write_bytes(result.stderr)
         report["exit_code"] = result.returncode
@@ -96,20 +104,25 @@ def main():
         diagnostics, loader_notices = validation_messages(out + err)
         inserted = 'Insert instance layer "VK_LAYER_KHRONOS_validation"' in err and 'Inserted device layer "VK_LAYER_KHRONOS_validation"' in err
         report.update(validation_inserted=inserted, validation_diagnostics=diagnostics, intentional_loader_notices=loader_notices)
-        require(result.returncode == 0 and inserted and not diagnostics, "native exit or explicit validation failed")
         record = json.loads(out)
+        if type(record.get("executed")) is int:
+            report["executed"] = record["executed"]
+        require(result.returncode == 0 and inserted and not diagnostics, "native exit or explicit validation failed")
         actual = (output / "copy-buffer.bin").read_bytes()
         golden = (ROOT / SOURCES[-1]).read_bytes()
         check_record(record, token, identity, actual, golden)
         report.update(status="pass", executed=1, passed=1, native=record, raw_sha256=sha256(actual))
+        log.event("verified", cases=1)
     except subprocess.TimeoutExpired as error:
         (output / "native.stdout.txt").write_bytes(error.stdout or b"")
         (output / "native.stderr.txt").write_bytes(error.stderr or b"")
         report.update(failure="native timeout", timed_out=True)
     except (ValueError, OSError, subprocess.SubprocessError) as error:
         report["failure"] = str(error)
+    except KeyboardInterrupt:
+        report.update(status="incomplete", failure="interrupted")
     report["elapsed_seconds"] = time.monotonic() - start
-    (output / "result.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    log.finish(report)
     print(json.dumps({k: report.get(k) for k in ("case_id", "status", "failure", "required", "executed", "passed", "validation_inserted", "elapsed_seconds")}))
     return report["status"] != "pass"
 

@@ -18,6 +18,7 @@ fn identity() -> Value {
         "crates/agfx/Cargo.toml": hash(include_bytes!("../../Cargo.toml")),
         "crates/agfx/src/lib.rs": hash(include_bytes!("../lib.rs")),
         "crates/agfx/src/vulkan.rs": hash(include_bytes!("../vulkan.rs")),
+        "crates/agfx/src/vulkan/compute.rs": hash(include_bytes!("../vulkan/compute.rs")),
         "crates/agfx/src/bin/buffer_copy.rs": hash(include_bytes!("buffer_copy.rs")),
         "tests/parity/fixtures/agfx/copy_buffer_to_buffer.bin": hash(include_bytes!("../../../../tests/parity/fixtures/agfx/copy_buffer_to_buffer.bin")),
     })
@@ -191,7 +192,7 @@ fn run(token: &str) -> Result<Value, Box<dyn std::error::Error>> {
     let info = device.info();
     Ok(json!({
         "schema_version": 1, "run_token": token, "status": "pass", "host_source_sha256": identity(),
-        "device": {"name": info.name, "api_version": info.api_version, "driver_version": info.driver_version,
+        "device": {"name": info.name, "loader_api_version": info.loader_api_version, "api_version": info.api_version, "driver_version": info.driver_version,
             "vendor_id": info.vendor_id, "device_id": info.device_id, "queue_family": info.queue_family,
             "validation": info.validation, "synchronization_validation": true,
             "enabled_features": ["timelineSemaphore", "vulkanMemoryModel", "runtimeDescriptorArray", "shaderStorageBufferArrayDynamicIndexing"]},

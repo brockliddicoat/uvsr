@@ -5,7 +5,10 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod vulkan;
-pub use vulkan::{Buffer, Completion, Device, DeviceInfo, Memory};
+pub use vulkan::{
+    Buffer, BufferCompute, Completion, ComputeRoot, Device, DeviceInfo, Memory, ShaderCode,
+    ShaderStage,
+};
 
 use std::fmt;
 
