@@ -1,0 +1,2 @@
+# Keep source-patch hashes identical on Windows and Unix checkouts.
+*.patch -text

@@ -2,7 +2,7 @@
 
 T002/T003 source mapping and fixture freeze, 2026-09-19. source: AGFX `f91b108a111d2ca3ca4b6586b6cb5dd750064fd7`. [file and fixture hashes](primary-slice-sources.json) freeze this read scope. all port dispositions below are **blocked/unimplemented**, with equivalent mappings proposed for the duplicate C/Cpp/Ez paths. no Rust or AGFX reference execution is claimed.
 
-[AGFX port notes](../../docs/agfx-port-notes.md) retain source behaviors worth revisiting for optimization or cleaner Rust. A-001 through A-005 cover transfer waits/resource churn, submission allocations, descriptor index types, mapped views and barrier scope. update inheritance and disposition as each owner is implemented.
+[AGFX port notes](../../docs/agfx-port-notes.md) retain source behaviors worth revisiting for optimization or cleaner Rust. A-001 through A-007 cover transfer waits/resource churn, submission allocations, descriptor index types, mapped views, barrier scope, memory selection and queue-family assumptions. update inheritance and disposition as each owner is implemented.
 
 ## cases and exact oracles
 

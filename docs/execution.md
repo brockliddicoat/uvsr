@@ -228,3 +228,22 @@ evidence: ignored `spirt-heap-ir-final.*` and `rustgpu-heap-ir-final.*` retain c
 publication: the untyped-pointer and AGFX-note checkpoint merged through [PR #71](https://github.com/brockliddicoat/uvsr/pull/71) as `b712f35fa4adb432cc86e83c6366d268a6146989`. PR and [main checks](https://github.com/brockliddicoat/uvsr/actions/runs/35442359466) passed. its branch was deleted after matching the merged tree.
 
 next action: run this exact compiler candidate with the E-011 compiled SPIRV-Tools wrapper, then begin the Rust pointer-width/code-generation probes. Rust shader GPU results, native heap runtime behavior, source parity and M1-M3 remain unproved.
+
+## E-015. 2026-09-19, completed the two-configuration pipeline gate
+
+tasks / requirements: T005 and H07's assembly-input tool gate are complete. the exact E-014 RustGPU/SPIR-T/rspirv candidate passes with both installed SDK tools and the E-011 compiled spirv-tools-rs candidate. [the reproduction recipe](../patches/rustgpu-prerequisites/README.md#two-configuration-compiler-gate) records the two additional local wrapper overrides and full command. native source and generated-output identities remain in the prerequisite manifest.
+
+| tool configuration | required diagnostic cases | full compiler unit gate | result |
+| --- | --- | --- | --- |
+| installed SDK `v2026.3rc1`, `b707790a` | 16 passed, zero failed/skipped | 35 passed, zero failed, four existing macOS-only ignores | E-014, exit 0 |
+| compiled `v2026.3`, `9a49b0883b9b635689a85b5647dbfcb223268151` | 16 passed, zero failed/skipped | 35 passed, zero failed, four existing macOS-only ignores | exit 0, 667.77 seconds including 11m 07s compilation |
+
+all four fixtures pass parser, SPIR-T, default linker and qptr linker stages. both linker variants also validate optimized and unoptimized output and reparse serialized words. these are actual compiler-pipeline probes with assembly inputs. they do not establish Rust raw casts, Rust-authored heap declarations, GPU memory behavior, images or full upstream CI.
+
+evidence: ignored `rustgpu-compiled-heap-final.*`, `compiled-overrides.toml` and the retained installed/compiled Cargo.lock files. the targeted Cargo update proposed unrelated dependency-edge rewrites. those were discarded, retaining only the two intended source/checksum changes, and the locked offline build accepted that resolution. no package version or unrelated dependency edge changed. no new unsafe site, FFI or waiver. E-015's audit retains coordinator self-review and no independent or runtime safety claim. no additional reusable lesson beyond L-007.
+
+inherited behavior: [A-006 and A-007](agfx-port-notes.md) add source-observed coherent-memory selection and the concurrent-sharing comment versus exclusive-buffer creation mismatch. the pinned AGFX checkout remains clean and read only. no performance cost or GPU failure was measured. the initial Rust contract must make memory and queue-family ownership explicit. these notes remain candidates with no implemented Rust owner.
+
+publication: E-014 merged through [PR #72](https://github.com/brockliddicoat/uvsr/pull/72) as `aab83c9442ea46f65dd5400c85b816f3d338b05b`. its PR and [main checks](https://github.com/brockliddicoat/uvsr/actions/runs/35443351551) passed. the transient branch was deleted after exact merged-tree verification.
+
+next action: T010's Rust layout/cast baseline, then an explicit address/target-width decision with unchanged u32 semantics. M1-M3, runtime parity and the contribution draft remain open.
