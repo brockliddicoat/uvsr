@@ -212,3 +212,17 @@ cargo run --release --locked -p compiletests --no-default-features --features us
 ```
 
 [E-023](../../docs/execution.md#e-023-2026-09-19-compiled-native-heap-rust-shaders) records 24 required source pairs and the broader adjacent gate's unresolved subpass-coordinate failure, reproduced with the previous compiler sources. keep that existing test enabled. native heap runtime, reusable interfaces, divergent indices, additional stages/resources and full upstream CI remain pending. malformed assembly also retains a pre-existing parser recovery limitation.
+
+## ID constants during debug stripping
+
+[spirv-tools-id-constants.patch](spirv-tools-id-constants.patch) follows the native volatile-load patch at its manifest base. dead-constant elimination now counts ID decoration operands as uses, while ignoring annotation targets and debug references as before. this preserves ArrayStrideIdEXT and OffsetIdEXT dependencies. an unused constant with a name and ordinary decoration still disappears. the native patch retains Apache-2.0 terms and includes a C++ regression whose full native test target remains pending.
+
+[spirv-tools-id-constant-tests.patch](spirv-tools-id-constant-tests.patch) follows the wrapper's descriptor-heap tools patch and retains MIT OR Apache-2.0 terms. its compiled-tool regression validates the mixed heap module and a minimal array/member-ID fixture before and after dead-constant elimination plus debug stripping. all three selected wrapper cases pass, including the existing performance-optimization and missing-capability controls. from the owned wrapper checkout, with the pinned nightly and one build worker:
+
+```powershell
+cargo test --release --locked -p spirv-tools --no-default-features --features use-compiled-tools -j 1 --test descriptor_heap -- --test-threads=1
+```
+
+the unpatched SDK 1.4.357.0 optimizer independently reproduces missing constant IDs after `--eliminate-dead-const`, despite returning exit 0. validate its output explicitly. a patched standalone CLI and the full native suite remain pending. RustGPU's debug-stripped source and actual-consumer checks are separate gates. generated tool version text may still name the original native base, so use the manifest's explicit patch/commit identity as well.
+
+[rustgpu-debug-strip-heaps.patch](rustgpu-debug-strip-heaps.patch) follows the native-heap assembly patch, retaining MIT OR Apache-2.0 terms. two additional wrappers run the shared source with debug stripping at opt0/opt3. the full two-ABI matrix passes 26 required pairs, with 46 compiler and three shared-type tests passing and four existing macOS ignores. its diagnostic snapshots are linked code before final tool passes. both actual final modules were separately inspected and validated. [E-024](../../docs/execution.md#e-024-2026-09-19-executed-native-heap-rust-shaders) records those gates and actual NGAPI execution. E-023's pre-existing subpass failure and broader upstream/native CI limits remain open.

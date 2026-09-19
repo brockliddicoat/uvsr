@@ -81,3 +81,35 @@ the runner enables explicit Khronos core/synchronization validation with process
 [E-022](../../../docs/execution.md#e-022-2026-09-19-tested-the-physical-pointer-library) passes six library cases each in Debug and Release, with both Rust opt0 and opt3 modules. these tiny driver allocations had zero upper address words. the records explicitly report `nonzero_high_address_bits_covered: false`. compiler/native-CPU high-bit transport tests remain separate evidence. do not allocate excessive GPU memory or fabricate a high address to disguise this coverage limit.
 
 this proves scalar physical reads/writes and a two-u64 root through NGAPI. the modules contain no resource/sampler heap lookup, so native descriptor shader support, textured cube, aggregate runtime, complete pointer parity, direct Rust Vulkan host, presentation, Linux and full upstream CI remain open. the [compute pipeline rules](https://docs.vulkan.org/refpages/latest/refpages/source/VkComputePipelineCreateInfo.html) permit NGAPI's heap pipeline with null layout and no conventional resource bindings. the [Vulkan 1.2 feature definition](https://docs.vulkan.org/refpages/latest/refpages/source/VkPhysicalDeviceVulkan12Features.html) distinguishes the memory-model feature from device-scope support.
+
+## native resource/sampler heap readback
+
+[native_heap_sample.rs](native_heap_sample.rs) uses actual native heaps and dynamic uniform indices from a 16-byte root. [the native caller](native_heap_sample.cpp) initializes all four slots per heap, then tests resource slots 1/3 with sampler slots 2/3. two 2 x 2 RGBA8 images and nearest repeat/clamp addressing at UV (1.25, 0.25) produce four distinct exact colors. the Rust shader doubles the sampled Vec4 and writes it through PhysicalPtr. the host checks all output bits, a 16-byte destination guard and unchanged source textures after barriers and timeline completion.
+
+apply the compiler prerequisites through the ID-constant/debug-stripping patches. verified source pins and observed results belong to [E-024](../../../docs/execution.md#e-024-2026-09-19-executed-native-heap-rust-shaders). NGAPI retains the same separate physical-readback feature patch. after preparing the physical64 sysroot above, use the owned nightly and SDK environment:
+
+```powershell
+python tools/theta/ngapi-probe/compile_readback.py --fixture native_heap_sample `
+  --rustgpu-source work/theta/upstream/rust-gpu `
+  --codegen-backend work/theta/build/rust-gpu/release/rustc_codegen_spirv.dll `
+  --output-dir work/theta/build/ngapi-heap-shaders
+if ($LASTEXITCODE -ne 0) { throw 'heap shader compilation failed' }
+cmake -S tools/theta/ngapi-probe -B work/theta/build/ngapi-owned `
+  -G "Visual Studio 17 2022" -A x64 `
+  "-DNGAPI_SOURCE_DIR=$thetaRoot/work/theta/upstream/NoGraphicsAPI" `
+  "-DTHETA_HEAP_SHADER_DIR=$thetaRoot/work/theta/build/ngapi-heap-shaders" `
+  "-DVulkan_INCLUDE_DIR=$sdk/Include" "-DVulkan_LIBRARY=$sdk/Lib/vulkan-1.lib"
+if ($LASTEXITCODE -ne 0) { throw 'native configure failed' }
+foreach ($configuration in @('Debug', 'Release')) {
+  cmake --build work/theta/build/ngapi-owned --config $configuration `
+    --target theta_ngapi_native_heap_sample --parallel 1
+  if ($LASTEXITCODE -ne 0) { throw 'native build failed' }
+  python tools/theta/ngapi-probe/run_readback.py --fixture native_heap_sample `
+    --executable "work/theta/build/ngapi-owned/$configuration/theta_ngapi_native_heap_sample.exe" `
+    --sdk $sdk --shader-dir work/theta/build/ngapi-heap-shaders `
+    --output-dir "work/theta/evidence/native-heap-$configuration"
+  if ($LASTEXITCODE -ne 0) { throw 'native heap consumer failed' }
+}
+```
+
+the runner requires eight unique GPU cases, one CPU-control record, current source/payload hashes, exact bytes and native validation insertion without diagnostics. the native `--self-test` runs 74 CPU checks without creating a device. all 14 Python record tests run with the earlier unittest command. [U-005](../../../UNSAFE.md#u-005-actual-ngapi-native-heap-sample) records the reviewed boundary. this compute fixture leaves divergent indices, unequal descriptor sizes, nonzero high address bits, additional resources/stages, cube, direct Rust Vulkan and Linux coverage open.

@@ -43,6 +43,8 @@ T018 is supporting work below. M2 does not depend on adding a second full native
 
 [E-021](../../execution.md#e-021-2026-09-19-executed-rust-physical-readback-through-ngapi) is partial T016/T017/T019 evidence: six actual NGAPI scalar Rust readback cases pass in each Windows Debug/Release host, with opt0/opt3 shaders and validation. this early consumer isolates the working scalar compiler path. full task dependencies, native heap lookups, cube, aggregate/high-address runtime coverage and the direct Rust Vulkan slice remain open, so these tasks are not checked complete.
 
+[E-024](../../execution.md#e-024-2026-09-19-executed-native-heap-rust-shaders) adds eight actual native resource/sampler heap cases in each Debug/Release host. uniform nonzero indices, distinct sampler address modes, queried descriptor sizes, physical Vec4 output, guards and unchanged texture bytes pass at Rust opt0/opt3 with validation. debug stripping required a separate native optimizer fix. divergent indices, other resource types/stages, cube, the direct Rust Vulkan slice and full upstream CI remain open. no full task or milestone closes on this bounded compute fixture.
+
 ## M3. RustGPU contribution draft
 
 - [ ] T033 [US6] reconcile all P, R, H, A, and C rows in [upstream tests](upstream-tests.md) against the proposed diff, tests, results, and limitations. depends on the promised T013/T015 features and T019 for actual-consumer claims. refresh relevant upstream comments and CI once before final draft preparation.

@@ -12,6 +12,8 @@ this page is the primary contribution crosswalk for [US6 and FR-015](spec.md). [
 
 [E-023](../../execution.md#e-023-2026-09-19-compiled-native-heap-rust-shaders) adds compile-only H01/H02/H04/H08 evidence through explicit Rust assembly and ordinary Rust vector arithmetic. native heap declarations, descriptor-size constants, ID strides, image/sampler lookup and a physical output survive default, optimized and qptr compilation. negative feature cases reject. the two-ABI source matrix passes 24 required pairs. 120 adjacent cases pass, but an existing subpass-coordinate case fails on both candidate and prior compiler sources. no broader-gate pass, heap runtime, divergent index or additional-stage result is claimed.
 
+[E-024](../../execution.md#e-024-2026-09-19-executed-native-heap-rust-shaders) adds actual NGAPI H01/H02/H04 and A01-A04 evidence. eight cases per Debug/Release host distinguish resource slots 1/3 and repeat/clamp sampler slots 2/3 at opt0/opt3, with exact physical Vec4 output, guard and source-image readback. native descriptor sizes are queried, both 32 bytes on this device. core/synchronization validation reports no diagnostics. debug-stripped source variants retain ID constants after the native optimizer fix, bringing the source matrix to 26 required pairs. unequal native strides, nonzero high address bits, divergent indices, additional resources/stages and the cube remain unproved.
+
 three different authorities are recorded: the draft author's checklist, a maintainer's concrete review concerns, and repository CI. none alone establishes eventual acceptance.
 
 ## PR #237 checklist

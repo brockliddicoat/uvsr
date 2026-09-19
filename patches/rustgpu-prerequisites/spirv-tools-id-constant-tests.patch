@@ -1,0 +1,78 @@
+diff --git a/spirv-tools/tests/descriptor_heap.rs b/spirv-tools/tests/descriptor_heap.rs
+index d2d4dc0..02c74fe 100644
+--- a/spirv-tools/tests/descriptor_heap.rs
++++ b/spirv-tools/tests/descriptor_heap.rs
+@@ -4 +4 @@
+-use spirv_tools::{TargetEnv, assembler::Assembler, opt::Optimizer, val::Validator};
++use spirv_tools::{assembler::Assembler, opt::Optimizer, val::Validator, TargetEnv};
+@@ -6,0 +7 @@ const SOURCE: &str = include_str!("descriptor_heap.spvasm");
++const ID_CONSTANTS: &str = include_str!("id_decoration_constants.spvasm");
+@@ -79,0 +81,38 @@ fn compiled_heap_requires_capability() {
++#[cfg(feature = "use-compiled-tools")]
++#[test]
++fn compiled_id_decoration_constants_survive_debug_stripping() {
++    use spirv_tools::opt::Passes;
++    let assembler =
++        spirv_tools::assembler::compiled::CompiledAssembler::with_env(TargetEnv::Vulkan_1_3);
++    let validator = spirv_tools::val::compiled::CompiledValidator::with_env(TargetEnv::Vulkan_1_3);
++    for source in [SOURCE, ID_CONSTANTS] {
++        let input = assembler.assemble(source, Default::default()).unwrap();
++        validator.validate(&input, None).unwrap();
++        let mut optimizer =
++            spirv_tools::opt::compiled::CompiledOptimizer::with_env(TargetEnv::Vulkan_1_3);
++        optimizer
++            .register_pass(Passes::EliminateDeadConstant)
++            .register_pass(Passes::StripDebugInfo);
++        let output = optimizer
++            .optimize(&input, &mut |message| eprintln!("{message:?}"), None)
++            .unwrap();
++        validator.validate(&output, None).unwrap();
++        let text = assembler
++            .disassemble(&output, Default::default())
++            .unwrap()
++            .unwrap();
++        assert!(text.contains("OpConstantSizeOfEXT"));
++        assert!(text.contains("ArrayStrideIdEXT"));
++        if source == ID_CONSTANTS {
++            assert!(text.contains("OpMemberDecorateIdEXT"));
++            assert!(text.contains("OpSpecConstant"));
++            assert!(
++                !text.contains(" 99"),
++                "unused constant must still disappear: {text}"
++            );
++            assert!(!text.contains("RelaxedPrecision"));
++            assert!(!text.contains("OpName"));
++        }
++    }
++}
++
+diff --git a/spirv-tools/tests/id_decoration_constants.spvasm b/spirv-tools/tests/id_decoration_constants.spvasm
+new file mode 100644
+index 0000000..1f20e2c
+--- /dev/null
++++ b/spirv-tools/tests/id_decoration_constants.spvasm
+@@ -0,0 +1,24 @@
++OpCapability Shader
++OpCapability DescriptorHeapEXT
++OpExtension "SPV_EXT_descriptor_heap"
++OpMemoryModel Logical GLSL450
++OpEntryPoint GLCompute %main "main"
++OpExecutionMode %main LocalSize 1 1 1
++OpName %unused "unused"
++OpDecorate %unused RelaxedPrecision
++OpDecorateId %array ArrayStrideIdEXT %stride
++OpMemberDecorateIdEXT %record 0 OffsetIdEXT %offset
++%void = OpTypeVoid
++%fn = OpTypeFunction %void
++%u32 = OpTypeInt 32 0
++%f32 = OpTypeFloat 32
++%image = OpTypeImage %f32 2D 0 0 0 1 Unknown
++%stride = OpConstantSizeOfEXT %u32 %image
++%offset = OpSpecConstant %u32 0
++%array = OpTypeRuntimeArray %image
++%record = OpTypeStruct %image
++%unused = OpConstant %u32 99
++%main = OpFunction %void None %fn
++%entry = OpLabel
++OpReturn
++OpFunctionEnd

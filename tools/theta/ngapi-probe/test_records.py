@@ -3,7 +3,7 @@
 import copy
 import unittest
 
-from run_readback import check_records
+from run_readback import check_heap_records, check_records
 
 
 class ReadbackRecords(unittest.TestCase):
@@ -64,6 +64,60 @@ class ReadbackRecords(unittest.TestCase):
         self.rows[0]["checks"] = 0
         with self.assertRaises(ValueError):
             check_records(self.rows, self.metadata)
+
+
+class HeapRecords(unittest.TestCase):
+    def setUp(self):
+        self.metadata = {opt: {"identity": {"source_sha256": "source"}, "payload_sha256": f"module{opt}"} for opt in [0, 3]}
+        self.rows = [{"case_id": "theta.m2.ngapi.native_heap_sample.controls", "status": "pass", "checks": 74, "shader_cases_executed": 0}]
+        colors = [[0x40000000, 0, 0, 0x40000000], [0, 0x40000000, 0, 0x40000000],
+                  [0, 0, 0x40000000, 0x40000000], [0x40000000] * 4]
+        tail = [0xa5c37e19] * 4 + [0xff0000ff, 0xff00ff00, 0xff000000, 0xff00ffff, 0xffff0000, 0xffffffff, 0xff000000, 0xffff00ff]
+        for opt in [0, 3]:
+            for index, (image, sampler) in enumerate([(1, 2), (1, 3), (3, 2), (3, 3)]):
+                self.rows.append({
+                    "case_id": f"theta.m2.ngapi.native_heap_sample.opt{opt}.resource{image}.sampler{sampler}", "status": "pass",
+                    "source_sha256": "source", "payload_sha256": f"module{opt}", "output_address": "0x1000",
+                    "nonzero_high_address_bits": False, "resource_index": image, "sampler_index": sampler,
+                    "image_descriptor_bytes": 32, "sampler_descriptor_bytes": 16, "heap_slots": 4, "root_bytes": 16,
+                    "first_mismatch_word": -1, "shader_cases_executed": 1, "actual": colors[index] + tail,
+                })
+
+    def test_complete_matrix(self):
+        check_heap_records(self.rows, self.metadata)
+
+    def test_empty_missing_duplicate_cases(self):
+        for rows in [[], self.rows[:-1], self.rows + [self.rows[-1]], self.rows[:-1] + [self.rows[0]]]:
+            with self.subTest(count=len(rows)), self.assertRaises(ValueError):
+                check_heap_records(rows, self.metadata)
+
+    def test_every_color_guard_and_texture_word(self):
+        for index in range(16):
+            rows = copy.deepcopy(self.rows)
+            rows[1]["actual"][index] ^= 1
+            with self.subTest(word=index), self.assertRaises(ValueError):
+                check_heap_records(rows, self.metadata)
+
+    def test_stale_identity_wrong_slot_or_incomplete_run(self):
+        for field, value in [("source_sha256", "stale"), ("payload_sha256", "stale"), ("resource_index", 0), ("sampler_index", 0),
+                             ("root_bytes", 8), ("heap_slots", 3), ("shader_cases_executed", 0), ("status", "blocked"),
+                             ("first_mismatch_word", 0), ("image_descriptor_bytes", 0), ("sampler_descriptor_bytes", 0),
+                             ("image_descriptor_bytes", 64), ("output_address", "0x0"), ("output_address", "0x1004"),
+                             ("output_address", "0xfffffffffffffff0"), ("nonzero_high_address_bits", True)]:
+            rows = copy.deepcopy(self.rows)
+            rows[1][field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                check_heap_records(rows, self.metadata)
+
+    def test_wrong_color_for_selected_sampler(self):
+        self.rows[1]["actual"] = self.rows[2]["actual"]
+        with self.assertRaises(ValueError):
+            check_heap_records(self.rows, self.metadata)
+
+    def test_incomplete_cpu_controls(self):
+        self.rows[0]["checks"] -= 1
+        with self.assertRaises(ValueError):
+            check_heap_records(self.rows, self.metadata)
 
 
 if __name__ == "__main__":
