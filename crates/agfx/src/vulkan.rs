@@ -5,9 +5,13 @@ use std::{cell::Cell, ffi::CStr, io::Write, marker::PhantomData, rc::Rc};
 
 const API_VERSION: u32 = vk::make_api_version(0, 1, 4, 0);
 
+mod compute;
+pub use compute::{BufferCompute, ComputeRoot, ShaderCode, ShaderStage};
+
 #[derive(Clone, Debug)]
 pub struct DeviceInfo {
     pub name: String,
+    pub loader_api_version: u32,
     pub api_version: u32,
     pub driver_version: u32,
     pub vendor_id: u32,
@@ -25,6 +29,7 @@ pub enum Memory {
 
 struct Instance {
     raw: ash::Instance,
+    api_version: u32,
     debug: Option<(ash::ext::debug_utils::Instance, vk::DebugUtilsMessengerEXT)>,
     // The dynamically loaded entry must outlive every instance/device call.
     _entry: ash::Entry,
@@ -51,6 +56,7 @@ pub struct Device {
     timeline: vk::Semaphore,
     value: Cell<u64>,
     memory: vk::PhysicalDeviceMemoryProperties,
+    limits: vk::PhysicalDeviceLimits,
     info: DeviceInfo,
     // Marker only. No allocation or shared ownership. Native host calls cannot
     // race through either Device or the owners borrowing it.
@@ -196,6 +202,7 @@ impl Instance {
         let raw = unsafe { entry.create_instance(&create, None) }?;
         let mut owner = Self {
             raw,
+            api_version: version,
             debug: None,
             _entry: entry,
         };
@@ -231,45 +238,55 @@ impl Device {
         // SAFETY: U-010. The instance owner is live for all physical queries.
         let physicals = unsafe { instance.raw.enumerate_physical_devices() }?;
         let mut selected = None;
-        for physical in physicals {
-            // SAFETY: U-010. Physical handle came from this live instance.
-            let properties = unsafe { instance.raw.get_physical_device_properties(physical) };
-            if properties.api_version < API_VERSION {
-                continue;
+        // AGFX f91b108a device selection, A-012: preserve preference order and
+        // enumeration order within each kind, checking this slice's requirements.
+        'devices: for kind in [
+            vk::PhysicalDeviceType::DISCRETE_GPU,
+            vk::PhysicalDeviceType::INTEGRATED_GPU,
+            vk::PhysicalDeviceType::VIRTUAL_GPU,
+            vk::PhysicalDeviceType::CPU,
+        ] {
+            for &physical in &physicals {
+                // SAFETY: U-010. Physical handle came from this live instance.
+                let properties = unsafe { instance.raw.get_physical_device_properties(physical) };
+                if properties.device_type != kind || properties.api_version < API_VERSION {
+                    continue;
+                }
+                // SAFETY: U-010. Same physical device; returns owned property data.
+                let families = unsafe {
+                    instance
+                        .raw
+                        .get_physical_device_queue_family_properties(physical)
+                };
+                let Some(family) = families.iter().position(|q| {
+                    q.queue_count > 0
+                        && q.queue_flags
+                            .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
+                }) else {
+                    continue;
+                };
+                let mut features12 = vk::PhysicalDeviceVulkan12Features::default();
+                let mut features =
+                    vk::PhysicalDeviceFeatures2::default().push_next(&mut features12);
+                // SAFETY: U-010. Supported core structure with a live mutable pNext.
+                unsafe {
+                    instance
+                        .raw
+                        .get_physical_device_features2(physical, &mut features)
+                };
+                if features
+                    .features
+                    .shader_storage_buffer_array_dynamic_indexing
+                    == 0
+                    || features12.timeline_semaphore == 0
+                    || features12.vulkan_memory_model == 0
+                    || features12.runtime_descriptor_array == 0
+                {
+                    continue;
+                }
+                selected = Some((physical, properties, family as u32));
+                break 'devices;
             }
-            // SAFETY: U-010. Same physical device; returns owned property data.
-            let families = unsafe {
-                instance
-                    .raw
-                    .get_physical_device_queue_family_properties(physical)
-            };
-            let Some(family) = families.iter().position(|q| {
-                q.queue_count > 0
-                    && q.queue_flags
-                        .contains(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
-            }) else {
-                continue;
-            };
-            let mut features12 = vk::PhysicalDeviceVulkan12Features::default();
-            let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut features12);
-            // SAFETY: U-010. Supported core structure with a live mutable pNext.
-            unsafe {
-                instance
-                    .raw
-                    .get_physical_device_features2(physical, &mut features)
-            };
-            if features
-                .features
-                .shader_storage_buffer_array_dynamic_indexing
-                == 0
-                || features12.timeline_semaphore == 0
-                || features12.vulkan_memory_model == 0
-                || features12.runtime_descriptor_array == 0
-            {
-                continue;
-            }
-            selected = Some((physical, properties, family as u32));
-            break;
         }
         let (physical, properties, family) = selected.ok_or_else(|| Error::Unsupported("Vulkan 1.4 graphics/compute queue, timelineSemaphore, vulkanMemoryModel, runtimeDescriptorArray and shaderStorageBufferArrayDynamicIndexing required".into()))?;
         let name = properties
@@ -298,6 +315,7 @@ impl Device {
         let queue = unsafe { raw.get_device_queue(family, 0) };
         // SAFETY: U-010. Read-only physical query while its instance remains live.
         let memory = unsafe { instance.raw.get_physical_device_memory_properties(physical) };
+        let loader_api_version = instance.api_version;
         let mut owner = Self {
             raw,
             instance,
@@ -306,8 +324,10 @@ impl Device {
             timeline: vk::Semaphore::null(),
             value: Cell::new(0),
             memory,
+            limits: properties.limits,
             info: DeviceInfo {
                 name,
+                loader_api_version,
                 api_version: properties.api_version,
                 driver_version: properties.driver_version,
                 vendor_id: properties.vendor_id,

@@ -12,7 +12,7 @@ class Records(unittest.TestCase):
                        "cases": [{"case_id": "agfx.copy_buffer_to_buffer", "status": "pass", "bytes": 256,
                                   "expected_sha256": sha256(self.golden), "actual_sha256": sha256(self.golden), "completion_values": [1, 2, 3]}],
                        "controls": [{"case_id": name, "status": "pass"} for name in sorted(CONTROLS)],
-                       "device": {"validation": True, "synchronization_validation": True, "api_version": 1 << 22 | 4 << 12, "enabled_features": sorted(FEATURES)},
+                       "device": {"validation": True, "synchronization_validation": True, "api_version": 1 << 22 | 4 << 12, "loader_api_version": 1 << 22 | 4 << 12, "enabled_features": sorted(FEATURES)},
                        "memory_flags": {"upload": 6, "readback": 14, "device": 1}}
 
     def check(self, record=None, actual=None):

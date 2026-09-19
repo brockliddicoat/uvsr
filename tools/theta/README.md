@@ -1,6 +1,6 @@
 # direct Rust Vulkan slice
 
-the [source mapping](../../tests/parity/primary-slice.md) owns the two frozen AGFX cases. the `agfx` crate currently implements the buffer-copy case. its ordinary Rust multi-dispatch shader compiles, but pipeline/descriptor execution is pending. actual NGAPI shader consumers remain in [ngapi-probe](ngapi-probe/README.md).
+the [source mapping](../../tests/parity/primary-slice.md) owns the two frozen AGFX cases. the `agfx` crate executes both the buffer-copy case and the four-pass ordinary Rust compute case on Windows Vulkan. actual NGAPI shader consumers remain in [ngapi-probe](ngapi-probe/README.md).
 
 ## host checks
 
@@ -11,7 +11,7 @@ cargo fmt --all --check
 cargo test --workspace --all-targets --locked
 cargo test --workspace --doc --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-python -m unittest discover -s tools/theta -p test_agfx_copy.py -v
+python -m unittest discover -s tools/theta -p test_agfx_*.py -v
 ```
 
 ordinary Cargo tests never open Vulkan. the three compile-fail examples check buffer/device lifetime, sending a device and sharing device access across threads. one build worker is sufficient. when using the owned RustGPU environment, use a separate host `CARGO_HOME` without its compiler dependency patches and a separate `CARGO_TARGET_DIR`. do not change a user's Rust installation or the compiler's configuration to build this host.
@@ -27,7 +27,7 @@ python tools/theta/run_agfx_copy.py --executable <host-target>/debug/buffer_copy
 python tools/theta/run_agfx_copy.py --executable <host-target>/release/buffer_copy.exe --sdk <Vulkan-SDK-root> --output-dir <ignored-evidence>/copy-release
 ```
 
-the host selects the first enumerated Vulkan 1.4 adapter with a graphics/compute queue and the exact declared features. the record identifies the actual device. missing support is a failed required run, not a pass or backend substitution. the runner uses the SDK's explicit Khronos layer, core/synchronization validation, a 45-second process budget and a fresh token. it compares all 256 bytes with the unchanged source golden and requires all 17 native controls. source hashes embedded at compilation reject stale executables before device creation. raw output, native streams and versioned `result.json` stay in the output directory.
+the host preserves AGFX's discrete/integrated/virtual/CPU preference, choosing the first enumerated Vulkan 1.4 adapter within each kind that has a graphics/compute queue and the exact declared features. the record identifies the actual device. missing support is a failed required run, not a pass or backend substitution. the runner uses the SDK's explicit Khronos layer, core/synchronization validation, a 45-second process budget and a fresh token. it compares all 256 bytes with the unchanged source golden and requires all 17 native controls. source hashes embedded at compilation reject stale executables before device creation. raw output, native streams, incremental `events.jsonl` and atomic versioned `result.json` stay in the output directory. an interrupted native process can leave an unknown execution count (`null`), never a zero-case pass. a new run invalidates the previous result before preflight.
 
 the runner retains exact intentional loader notices about disabled implicit layers separately. every other callback warning/error, VUID, synchronization hazard, missing case, stale identity, interruption or bad output fails. loader notices are not claimed absent.
 
@@ -39,4 +39,20 @@ use the owned RustGPU compiler and its matching ordinary logical32 test sysroot:
 python tools/theta/compile_agfx_shader.py --rustgpu-source <owned-rust-gpu> --codegen-backend <rustc_codegen_spirv.dll> --output-dir <ignored-build>/agfx-shaders
 ```
 
-the command compiles opt0/opt3, validates the final SPIR-V and emits explicit stage, entry, profile, capabilities and compiler/source/payload identities. this is an ordinary storage-buffer descriptor array. it is not NGAPI's native heap profile. the shared input helper preserves all four existing NGAPI fixture payloads. compilation does not establish this shader's GPU execution.
+the command compiles opt0/opt3, validates the final SPIR-V and emits explicit stage, entry, profile, capabilities and compiler/source/payload identities. this is an ordinary storage-buffer descriptor array. it is not NGAPI's native heap profile. the shared input helper preserves all four existing NGAPI fixture payloads. compilation alone does not establish GPU execution. the separate runner below performs that check.
+
+## four-pass ordinary compute execution
+
+review [U-009/U-011](../../UNSAFE.md#u-011-bounded-ordinary-storage-buffer-compute-pipeline) and the final modules before changing the accepted shader hashes. `BufferCompute` uses four ordinary descriptors, a 16-byte root and one 64-thread group per pass. its unsafe constructor has an explicit bounded shader contract. the fixture admits only the two reviewed payload identities and matching source/metadata before opening Vulkan. it exposes no safe arbitrary bytecode loader.
+
+```text
+cargo build --bin multi_dispatch --locked
+cargo build --bin multi_dispatch --release --locked
+python tools/theta/check_agfx_artifacts.py --executable <host-target>/debug/multi_dispatch.exe --shader-dir <agfx-shaders> --output-dir <ignored-evidence>/artifact-controls
+python tools/theta/run_agfx_compute.py --executable <host-target>/debug/multi_dispatch.exe --sdk <Vulkan-SDK-root> --shader-dir <agfx-shaders> --output-dir <ignored-evidence>/compute-debug
+python tools/theta/run_agfx_compute.py --executable <host-target>/release/multi_dispatch.exe --sdk <Vulkan-SDK-root> --shader-dir <agfx-shaders> --output-dir <ignored-evidence>/compute-release
+```
+
+four required cases cover opt0/opt3 and resource slots 1/3. each compares 256 selected bytes with the frozen AGFX golden and all 768 unselected sentinel bytes exactly. ten native controls isolate missing initialization, wrong index, size, memory role and device. eight artifact controls reject missing/corrupt payloads or incompatible metadata before Vulkan. size and foreign-device controls are initialized first, so their rejection cannot be satisfied by an unrelated initialization error.
+
+pipeline/layout/pool/set ownership remains live through completion. every descriptor is rewritten before reuse, including after a prior case's buffers have been destroyed. no test depends on undefined GPU access, invalid descriptor dereferencing or deliberate device loss. these cases do not establish full AGFX C/Cpp/Ez or Linux runtime parity.
