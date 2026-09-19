@@ -16,6 +16,10 @@ AGFX's [MIT license](https://github.com/AmelieHeinrich/agfx/blob/f91b108a111d2ca
 
 the repository's [Polyfrom Noncommercial license](LICENSE.md) covers first-party material only. it does not replace upstream licenses or grant rights the project does not control.
 
+## Compiler Patches
+
+the [compiler prerequisite patches](patches/rustgpu-prerequisites/README.md) include rspirv source context and modifications under its original [Apache-2.0 license](legal/licenses/rspirv-Apache-2.0.txt). their manifest records exact source and patch identities. no separate NOTICE file was present in the pinned rspirv source. these patch contents are excluded from the repository's first-party license. the patch record acknowledges overlapping existing upstream work.
+
 ## Retained Scene Assets
 
 `assets/scenes` retains converted Bistro Interior and San Miguel data. their adjacent licenses, provenance manifests, and generated conversion reports control the exact files:

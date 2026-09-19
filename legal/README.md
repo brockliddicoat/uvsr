@@ -35,3 +35,7 @@ and modifications, and verify that the intended use is covered. a notice,
 attribution, noncommercial label, or absence of a fee does not itself supply
 permission. unresolved items remain unresolved until supporting evidence is
 recorded.
+
+## Compiler Patches
+
+the [prerequisite patch record](../patches/rustgpu-prerequisites/README.md) identifies rspirv source and local modifications, with its complete [Apache-2.0 license](licenses/rspirv-Apache-2.0.txt). source pins, patch hashes and existing upstream work remain explicit.
