@@ -6,13 +6,15 @@
 
 | area | observed state |
 | --- | --- |
-| first-party Theta Rust | at E-007, zero Rust files and no Cargo workspace. no implementation exception exists to audit yet |
+| first-party Theta Rust | one diagnostic Rust test module, with `forbid(unsafe_code)`, and no Cargo workspace or runtime implementation. no first-party Rust unsafe exception exists |
 | proposed native and shader boundaries | candidates only, listed below. none has implementation approval by implication |
 | dependencies, generated code, macros, external hosts | pinned NGAPI C++ and Vulkan SDK 1.4.357.0 were used by the diagnostic below. these are native dependencies, not safe Rust or an audited finished Rust port |
-| RustGPU contribution | no patch exists. any future patch must document new or changed unsafe obligations and follow upstream lint/toolchain rules |
+| RustGPU contribution | the separate checkout has diagnostic tests only. a candidate rspirv loader fix is being checked separately. no semantic feature patch or verified unsafe shader boundary is claimed |
 | runtime and soundness evidence | actual NGAPI device/command-context probes and non-executed SPIRV-Tools fixtures passed at E-007. no Rust shader execution or Rust boundary soundness result exists |
 
 source pins are in [research](docs/specs/001-theta-prototype/research.md), and current evidence is in [execution](docs/execution.md). **zero Rust implementation is not evidence of a safe completed system.** replace these rows with revision-specific Rust inventories as code is added.
+
+the [RustGPU diagnostic module](tools/theta/rustgpu-instruction-probes.rs) uses upstream parser/linker/test APIs and standard owned vectors and strings. its only added lint is `#![forbid(unsafe_code)]`. it contains no unsafe operation, native call, or shader dispatch. the upstream compiler and SPIRV-Tools remain dependency boundaries with their own unsafe code. this probe does not audit those complete implementations or prove runtime soundness.
 
 E-007 diagnostic audit: [capabilities.cpp](tools/theta/ngapi-probe/capabilities.cpp) checks device creation before querying borrowed caps, waits idle and destroys the same device. it exposes no Rust API. the other target compiles unchanged NGAPI `d60b10bdfe15c0f350d6d291d8e06afef3fe7d38` command-context tests, which own their allocations and completion. Vulkan SDK 1.4.357.0 supplies headers/import libraries and the explicit validation layer. these dependencies contain native code and raw memory operations, excluded from the first-party Rust count, not claimed safe through that exclusion. review: coordinator self-review, 2026-09-19, source/control-flow inspection plus Debug/Release execution. no independent review.
 

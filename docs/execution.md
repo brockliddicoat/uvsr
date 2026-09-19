@@ -114,3 +114,28 @@ unsafe review: no first-party Rust exceptions exist. inspected the C++ diagnosti
 Rust setup: after official and RsProxy resets, direct USTC and SJTUG downloads supplied identical nightly manifests with SHA-256 `3fc1dad39caa648c42f716de8cba4e2846d2ce5ff5da75ed10df2bdf6d53f5bf`, matching the published checksum. the compiler commit matches the pinned `c397dae808f70caebab1fc4e11b3edf7e59f58c7`. isolated rustup is now downloading the eight requested components from USTC. earlier failures remain evidence, not a claim of a general server outage. the user's separate default Rust installation does not share this task's `RUSTUP_HOME` or `CARGO_HOME`.
 
 next action: complete the pinned toolchain installation and T005's actual RustGPU pipeline probes, then choose T010/T014 from decisive compiler evidence. no compiler contribution, local PR draft, source parity or M1-M3 completion is claimed at this checkpoint.
+
+## E-008. 2026-09-19, installed Rust and located compiler pipeline failures
+
+tasks / requirements: T005 compatibility inventory, M0. FR-001, FR-013, FR-015, FR-021, FR-022. this checkpoint records diagnostic sources and failures, not completed compiler features.
+
+toolchain: USTC successfully installed `nightly-2026-07-03` in the task-local Rust homes. `rustc -vV` reports 1.98.0-nightly, commit `c397dae808f70caebab1fc4e11b3edf7e59f58c7`, host `x86_64-pc-windows-msvc`, and LLVM 22.1.8. Cargo, rustc-dev, rust-src, llvm-tools, rustfmt and clippy are installed. the pinned RustGPU release build with `--locked --no-default-features --features use-installed-tools -j 1` passed in 12m 10s. the user's default installation remains separate. earlier download failures remain recorded, without asserting a general server outage.
+
+reproduction: [the pipeline recipe](../tests/compiler-probes/rustgpu.md) installs the authored diagnostic module into RustGPU `e6394e08eb3356083b12f732a01906f8e49f7c4a`. compiler semantics and dependencies were unchanged for these baselines. each tools configuration required and executed 16 cases with zero ignored tests. both test binaries built successfully, then returned 101 with **4 passed and 12 failed**. installed-tools test compilation took 2m 23s. compiled-tools took 13m 17s with one worker.
+
+| fixture | installed-tools observation | compiled-tools observation |
+| --- | --- | --- |
+| logical store | parser and SPIR-T round trips pass. default and qptr linker modes panic during storage-class inference on a fully typed interface variable with no specialization instance | same |
+| physical store | parser and SPIR-T round trips preserve the physical conversion and `Aligned 4`. both linker modes encounter the same inference panic | same |
+| untyped store | rspirv's loader rejects a detached `OpUntypedVariableKHR`. direct SPIR-T lowering rejects capability 4473 (`UntypedPointersKHR`). both linker modes stop at the loader | same |
+| combined native heaps | rspirv recognizes the vocabulary but rejects the untyped globals. direct SPIR-T lowering rejects capability 4473 | all four cases stop earlier, because the bundled assembler rejects `DescriptorHeapEXT` |
+
+dependency identity: `rspirv` 0.13.0+sdk-1.4.341.0 comes from `8afc3d0ac8e158128cd1410bb2e4b4c26ab11bb4`. its grammar contains heap instructions, so its version label alone did not explain the failure. `spirt` 0.4.0 comes from `6d89471bb8c810d9d749c7a4009ba47d51811866`, with header pin `2acb319af38d43be3ea76bfabf3998e5281d8d12`. `spirv-tools-sys` 0.13.3 comes from `39c1ec2dee67ee4c8541cfbd8e32cf018320cb73`; its generated build identity is SPIRV-Tools v2025.3, `33e02568`. installed SDK tools are the newer E-007 v2026.3 build. each path needs its own compatibility evidence.
+
+evidence: ignored `rustgpu-baseline-build.json`, `rust-toolchain-ustc.json`, and `rustgpu-{installed,compiled}-probes.{json,stdout.txt,stderr.txt}` retain commands, exits, timings and output hashes. the tracked recipe and module permit reproduction without those logs. no failed result was blessed as a passing expectation.
+
+unsafe audit: the one diagnostic Rust module has `forbid(unsafe_code)` and no unsafe operations or GPU dispatch. coordinator self-review covered fixture preconditions, fixed case IDs, required instruction checks, optimizer/validator calls and nonzero exits. upstream dependencies retain their own unsafe code. no first-party U record is needed. no independent review or runtime soundness result is claimed.
+
+publication: the user authorized frequent verified progress on GitHub main. the E-007 baseline preserved main's independent font changes and merged through [PR #66](https://github.com/brockliddicoat/uvsr/pull/66) as `3191e94ff9879dd324562dffa89c3f6b82799393`. both the PR check and [the resulting main check](https://github.com/brockliddicoat/uvsr/actions/runs/35438429529) passed, then its transient branch was deleted. this authority applies to the owned UVSR repository, not publication to upstream compiler repositories.
+
+next action: fix the demonstrated loader and inference failures, probe the narrowly updated SPIR-T grammar, and implement missing native-heap representation with regressions. T005 and H07 remain open because the full compiler pipeline cannot yet process every required fixture. Rust pointer semantics, native heap shader execution, source parity and M1-M3 remain unproved. lesson L-007 records the dependency distinction.
