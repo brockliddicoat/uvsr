@@ -1,0 +1,167 @@
+diff --git a/crates/rustc_codegen_spirv/src/linker/dce.rs b/crates/rustc_codegen_spirv/src/linker/dce.rs
+index 7e9297e..3a7ff0a 100644
+--- a/crates/rustc_codegen_spirv/src/linker/dce.rs
++++ b/crates/rustc_codegen_spirv/src/linker/dce.rs
+@@ -58,0 +59,8 @@ fn spread_roots(module: &Module, rooted: &mut FxIndexSet<Word>) -> bool {
++    // ID decorations depend on their target, but their extra ID operands are
++    // dependencies of that target. Those operands may be the only uses of a
++    // constant (for example, a descriptor's size in ArrayStrideIdEXT).
++    for inst in &module.annotations {
++        if is_id_decoration(inst) && annotation_is_rooted(inst, rooted) {
++            any |= root(inst, rooted);
++        }
++    }
+@@ -110,0 +119,13 @@ fn is_rooted(inst: &Instruction, rooted: &FxIndexSet<Word>) -> bool {
++fn is_id_decoration(inst: &Instruction) -> bool {
++    matches!(inst.class.opcode, Op::DecorateId | Op::MemberDecorateIdEXT)
++}
++
++fn annotation_is_rooted(inst: &Instruction, rooted: &FxIndexSet<Word>) -> bool {
++    if is_id_decoration(inst) {
++        // A shared live constant must not keep a decoration of a dead target.
++        rooted.contains(&inst.operands[0].unwrap_id_ref())
++    } else {
++        is_rooted(inst, rooted)
++    }
++}
++
+@@ -125 +146,3 @@ fn kill_unrooted(module: &mut Module, rooted: &FxIndexSet<Word>) {
+-    module.annotations.retain(|inst| is_rooted(inst, rooted));
++    module
++        .annotations
++        .retain(|inst| annotation_is_rooted(inst, rooted));
+@@ -164,0 +188,67 @@ pub fn dce_phi(blocks: &mut FxIndexMap<impl Eq + Hash, &mut Block>) {
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn id_decoration_dependencies(opcode: Op, decoration: Decoration) {
++        let annotation = |target| {
++            let mut operands = vec![Operand::IdRef(target)];
++            if opcode == Op::MemberDecorateIdEXT {
++                operands.push(Operand::LiteralBit32(0));
++            }
++            operands.extend([Operand::Decoration(decoration), Operand::IdRef(3)]);
++            Instruction::new(opcode, None, None, operands)
++        };
++        let type_opcode = if opcode == Op::MemberDecorateIdEXT {
++            Op::TypeStruct
++        } else {
++            Op::TypeRuntimeArray
++        };
++        let mut module = Module::new();
++        module.types_global_values = vec![
++            Instruction::new(
++                Op::TypeInt,
++                None,
++                Some(1),
++                vec![Operand::LiteralBit32(32), Operand::LiteralBit32(0)],
++            ),
++            Instruction::new(Op::TypeSampler, None, Some(2), vec![]),
++            Instruction::new(
++                Op::ConstantSizeOfEXT,
++                Some(1),
++                Some(3),
++                vec![Operand::IdRef(2)],
++            ),
++            Instruction::new(type_opcode, None, Some(4), vec![Operand::IdRef(2)]),
++            Instruction::new(type_opcode, None, Some(5), vec![Operand::IdRef(2)]),
++        ];
++        module.annotations = vec![annotation(4), annotation(5)];
++
++        // Isolate the dependency walk: only type 4 is initially live. Both
++        // decorations use constant 3, but the dead target 5 must stay dead.
++        let mut rooted = FxIndexSet::default();
++        rooted.insert(4);
++        while spread_roots(&module, &mut rooted) {}
++        kill_unrooted(&mut module, &rooted);
++
++        assert_eq!(
++            module
++                .types_global_values
++                .iter()
++                .map(|inst| inst.result_id.unwrap())
++                .collect::<Vec<_>>(),
++            [1, 2, 3, 4]
++        );
++        assert_eq!(module.annotations, [annotation(4)]);
++    }
++
++    #[test]
++    fn retained_id_decoration_roots_constant_without_retaining_dead_target() {
++        id_decoration_dependencies(Op::DecorateId, Decoration::ArrayStrideIdEXT);
++    }
++
++    #[test]
++    fn retained_member_id_decoration_roots_constant_without_retaining_dead_target() {
++        id_decoration_dependencies(Op::MemberDecorateIdEXT, Decoration::OffsetIdEXT);
++    }
++}
++
+diff --git a/crates/rustc_codegen_spirv/src/linker/duplicates.rs b/crates/rustc_codegen_spirv/src/linker/duplicates.rs
+index 70554ca..6cb06f9 100644
+--- a/crates/rustc_codegen_spirv/src/linker/duplicates.rs
++++ b/crates/rustc_codegen_spirv/src/linker/duplicates.rs
+@@ -85,0 +86 @@ fn gather_annotations(annotations: &[Instruction]) -> FxHashMap<Word, Vec<u32>>
++            | Op::MemberDecorateIdEXT
+@@ -274,0 +276,53 @@ pub fn remove_duplicate_types(module: &mut Module) {
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn member_id_offsets_distinguish_descriptor_structs() {
++        let mut module = Module::new();
++        module.types_global_values = vec![
++            Instruction::new(
++                Op::TypeInt,
++                None,
++                Some(1),
++                vec![Operand::LiteralBit32(32), Operand::LiteralBit32(0)],
++            ),
++            Instruction::new(
++                Op::Constant,
++                Some(1),
++                Some(2),
++                vec![Operand::LiteralBit32(0)],
++            ),
++            Instruction::new(
++                Op::Constant,
++                Some(1),
++                Some(3),
++                vec![Operand::LiteralBit32(16)],
++            ),
++            Instruction::new(Op::TypeSampler, None, Some(4), vec![]),
++            Instruction::new(Op::TypeStruct, None, Some(5), vec![Operand::IdRef(4)]),
++            Instruction::new(Op::TypeStruct, None, Some(6), vec![Operand::IdRef(4)]),
++        ];
++        module.annotations = [(5, 2), (6, 3)]
++            .into_iter()
++            .map(|(target, offset)| {
++                Instruction::new(
++                    Op::MemberDecorateIdEXT,
++                    None,
++                    None,
++                    vec![
++                        Operand::IdRef(target),
++                        Operand::LiteralBit32(0),
++                        Operand::Decoration(rspirv::spirv::Decoration::OffsetIdEXT),
++                        Operand::IdRef(offset),
++                    ],
++                )
++            })
++            .collect();
++        let original = module.clone();
++        remove_duplicate_types(&mut module);
++        assert_eq!(module.types_global_values, original.types_global_values);
++        assert_eq!(module.annotations, original.annotations);
++    }
++}
++
+diff --git a/crates/rustc_codegen_spirv/src/linker/spirt_passes/validate.rs b/crates/rustc_codegen_spirv/src/linker/spirt_passes/validate.rs
+index ecb775d..432d897 100644
+--- a/crates/rustc_codegen_spirv/src/linker/spirt_passes/validate.rs
++++ b/crates/rustc_codegen_spirv/src/linker/spirt_passes/validate.rs
+@@ -158,0 +159,2 @@ impl Transformer for Validator<'_> {
++            ConstKind::SpvConstantSizeOf(_) => self
++                .validate_spv_inst(&spv::spec::Spec::get().well_known.OpConstantSizeOfEXT.into()),

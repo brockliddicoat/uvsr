@@ -2,6 +2,8 @@
 
 these are tested changes from separately owned upstream checkouts. [sources.json](sources.json) pins each base, local verified commit, patch hash and controlling license. they are not published upstream contributions or proof of complete RustGPU support.
 
+latest checkpoint: all 16 required pipeline probes pass with installed tools after the [heap metadata patches](#heap-metadata-and-dependency-retention). compiled-tools integration remains pending. earlier results below preserve the evidence at each incremental patch.
+
 ## rspirv untyped globals
 
 [rspirv-untyped-global.patch](rspirv-untyped-global.patch) fixes the binary loader's placement of module-scope `OpUntypedVariableKHR`. the regression serializes and parses globals with and without the optional Data Type operand, and a function-local variable. it checks exact word round-trip and placement. this is a loader test, not shader validation or execution.
@@ -78,3 +80,13 @@ the Windows run passed all eight integration tests, with zero failures or skips.
 apply these patches after their preceding patches, at the exact manifest bases, using the same `--unidiff-zero --index` flags. rerun the SPIR-T tests and installed-tools RustGPU command above. SPIR-T passes three grammar tests and five new structural cases, with no skips. the new cases cover global/local placement, optional Data Type and initializer, type/value operand order, qptr preservation and a typed Private base. one negative case preserves qptr's existing whole-buffer input diagnostic. typed whole-buffer inputs remain unsupported by that optional pass, and the fixture tests are structural rather than GPU evidence.
 
 the RustGPU suite now reports 29 passed, three failed and four existing macOS-only skips. all four stages pass for logical, physical and untyped stores. native-heap parsing passes, while its remaining three stages fail on ID decorations. the required matrix is **13/16 passing, zero ignored**, so the overall command still fails intentionally. these patches do not establish complete untyped-operation coverage, physical Rust pointer code generation or shader execution. [execution E-012](../../docs/execution.md#e-012-2026-09-19-preserved-untyped-pointer-pipeline-controls) records the exact boundary and prior failed attempts.
+
+## heap metadata and dependency retention
+
+[spirt-heap-metadata.patch](spirt-heap-metadata.patch) preserves `OpDecorateId`, `OpMemberDecorateIdEXT` and `OpConstantSizeOfEXT` through lowering, dependency traversal, transformation, printing and serialization. decoration operands are resolved before their target, as required by SPIR-V. regressions cover descriptor size/stride/member offset, ID renumbering and definition order, duplicate-decoration diagnostics and rejected forward references.
+
+[rustgpu-heap-metadata.patch](rustgpu-heap-metadata.patch) retains constants referenced only by live ID decorations and removes decorations whose targets are dead. it also includes member ID offsets in type deduplication, preventing descriptor structs with different offsets from being merged. three direct regressions cover these cases. RustGPU's SPIR-T validator recognizes the new size constant representation.
+
+apply each after its untyped-pointer patch at the exact manifest base, with `--unidiff-zero --index`. both retain their existing MIT OR Apache-2.0 terms. rerun the SPIR-T and installed-tools commands above. the verified Windows result is three grammar plus eight structural SPIR-T tests passing, and RustGPU **35 passed, zero failed, four existing macOS-only ignores**. all 16 required diagnostic cases pass, with no skips, including default/qptr linking and performance optimization for logical stores, physical stores, untyped stores and native resource/sampler heaps.
+
+RustGPU full formatting passes. SPIR-T formatting remains limited to changed ranges, with the prior unrelated full-format/Clippy failures still open. compiled-tools integration and Rust source code generation remain separate pending gates. no fixture was dispatched. [execution E-014](../../docs/execution.md#e-014-2026-09-19-preserved-native-heap-metadata-through-the-linker) records exact commits, failed attempts and the boundary of this result.

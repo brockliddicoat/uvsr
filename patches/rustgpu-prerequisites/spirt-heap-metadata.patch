@@ -1,0 +1,264 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index 9ece494..375603b 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -350,0 +351,7 @@ pub enum Attr {
++    /// An ID-bearing decoration. Extra IDs must be constants (including
++    /// global-variable addresses) defined before the decorated target.
++    SpvAnnotationWithIdInputs {
++        spv_inst: spv::Inst,
++        const_inputs: OrdAssertEq<SmallVec<[Const; 1]>>,
++    },
++
+@@ -527,0 +535,3 @@ pub enum ConstKind {
++    /// `OpConstantSizeOfEXT`, whose operand is a descriptor type, not a value.
++    SpvConstantSizeOf(Type),
++
+diff --git a/src/print/mod.rs b/src/print/mod.rs
+index 94db8aa..f49dd99 100644
+--- a/src/print/mod.rs
++++ b/src/print/mod.rs
+@@ -2280,0 +2281,6 @@ impl Print for Attr {
++            Attr::SpvAnnotationWithIdInputs { spv_inst, const_inputs } => {
++                printer.pretty_spv_inst(
++                    printer.attr_style(), spv_inst.opcode, &spv_inst.imms,
++                    std::iter::once(None).chain(const_inputs.0.iter().map(|ct| Some(ct.print(printer)))),
++                )
++            }
+@@ -2582,0 +2589,6 @@ impl Print for ConstDef {
++                &ConstKind::SpvConstantSizeOf(data_type) => pretty::Fragment::new([
++                    printer.pretty_spv_inst(
++                        printer.spv_op_style(), wk.OpConstantSizeOfEXT, &[], [data_type.print(printer)],
++                    ),
++                    printer.pretty_type_ascription_suffix(*ty),
++                ]),
+@@ -3330 +3342 @@ impl Print for FuncAt<'_, DataInst> {
+-                            ConstKind::PtrToGlobalVar(_) => {}
++                            ConstKind::PtrToGlobalVar(_) | ConstKind::SpvConstantSizeOf(_) => {}
+diff --git a/src/spv/lift.rs b/src/spv/lift.rs
+index 4e3f060..ddecd4c 100644
+--- a/src/spv/lift.rs
++++ b/src/spv/lift.rs
+@@ -149 +149 @@ impl Visitor<'_> for NeedsIdsCollector<'_> {
+-            ConstKind::PtrToGlobalVar(_) | ConstKind::SpvInst { .. } => {
++            ConstKind::PtrToGlobalVar(_) | ConstKind::SpvInst { .. } | ConstKind::SpvConstantSizeOf(_) => {
+@@ -209,0 +210 @@ impl Visitor<'_> for NeedsIdsCollector<'_> {
++            | Attr::SpvAnnotationWithIdInputs { .. }
+@@ -1047 +1048 @@ impl LazyInst<'_, '_> {
+-                            ConstKind::SpvInst { .. } => (ct_def.attrs, None),
++                            ConstKind::SpvInst { .. } | ConstKind::SpvConstantSizeOf(_) => (ct_def.attrs, None),
+@@ -1185,0 +1187,7 @@ impl LazyInst<'_, '_> {
++                        &ConstKind::SpvConstantSizeOf(ty) => spv::InstWithIds {
++                            without_ids: wk.OpConstantSizeOfEXT.into(),
++                            result_type_id: Some(ids.globals[&Global::Type(ct_def.ty)]),
++                            result_id,
++                            ids: [ids.globals[&Global::Type(ty)]].into_iter().collect(),
++                        },
++
+@@ -1534,0 +1543,11 @@ impl Module {
++                    Attr::SpvAnnotationWithIdInputs { spv_inst, const_inputs } => {
++                        let target_id = result_id.expect("ID decoration requires a target");
++                        decoration_insts.push(spv::InstWithIds {
++                            without_ids: spv_inst.clone(),
++                            result_type_id: None,
++                            result_id: None,
++                            ids: iter::once(target_id)
++                                .chain(const_inputs.0.iter().map(|&ct| ids.globals[&Global::Const(ct)]))
++                                .collect(),
++                        });
++                    }
+diff --git a/src/spv/lower.rs b/src/spv/lower.rs
+index 9642ec7..886002d 100644
+--- a/src/spv/lower.rs
++++ b/src/spv/lower.rs
+@@ -185,0 +186 @@ impl Module {
++        let mut pending_id_annotations = FxHashMap::<spv::Id, Vec<spv::InstWithIds>>::default();
+@@ -249,0 +251,20 @@ impl Module {
++            if let Some(annotations) = inst.result_id.and_then(|id| pending_id_annotations.remove(&id)) {
++                let mut seen = BTreeSet::new();
++                for annotation in annotations {
++                    if !seen.insert(annotation.without_ids.clone()) {
++                        return Err(invalid("duplicate ID decoration on the same target/member"));
++                    }
++                    let const_inputs = annotation.ids[1..].iter().map(|id| {
++                        match id_defs.get(id) {
++                            Some(&IdDef::Const(ct)) => Ok(ct),
++                            _ => Err(invalid(&format!(
++                                "ID decoration operand %{id} must be a constant or global variable defined before its target"
++                            ))),
++                        }
++                    }).collect::<io::Result<_>>()?;
++                    attrs.attrs.insert(Attr::SpvAnnotationWithIdInputs {
++                        spv_inst: annotation.without_ids,
++                        const_inputs: crate::OrdAssertEq(const_inputs),
++                    });
++                }
++            }
+@@ -482 +503,2 @@ impl Module {
+-                wk.OpDecorateId, // FIXME(eddyb) not actually supported
++                wk.OpDecorateId,
++                wk.OpMemberDecorateIdEXT,
+@@ -491 +513,2 @@ impl Module {
+-                if inst.ids.len() > 1 {
++                let id_decoration = [wk.OpDecorateId, wk.OpMemberDecorateIdEXT].contains(&opcode);
++                if inst.ids.len() > 1 && !id_decoration {
+@@ -516,0 +540,3 @@ impl Module {
++                    _ if id_decoration => {
++                        pending_id_annotations.entry(target_id).or_default().push(inst);
++                    }
+@@ -585 +611,10 @@ impl Module {
+-                let const_inputs = inst
++                let kind = if opcode == wk.OpConstantSizeOfEXT {
++                    let [data_type] = inst.ids[..] else {
++                        return Err(invalid("expected one descriptor type ID"));
++                    };
++                    let Some(&IdDef::Type(ty)) = id_defs.get(&data_type) else {
++                        return Err(invalid("size-of operand is not a defined type"));
++                    };
++                    ConstKind::SpvConstantSizeOf(ty)
++                } else {
++                    let const_inputs = inst
+@@ -598,0 +634,4 @@ impl Module {
++                    ConstKind::SpvInst {
++                        spv_inst_and_const_inputs: Rc::new((inst.without_ids, const_inputs)),
++                    }
++                };
+@@ -603,3 +642 @@ impl Module {
+-                    kind: ConstKind::SpvInst {
+-                        spv_inst_and_const_inputs: Rc::new((inst.without_ids, const_inputs)),
+-                    },
++                    kind,
+@@ -827,0 +865,3 @@ impl Module {
++        if !pending_id_annotations.is_empty() {
++            return Err(invalid("ID decorations target undefined IDs"));
++        }
+diff --git a/src/spv/spec.rs b/src/spv/spec.rs
+index 7ecadac..6f14cb9 100644
+--- a/src/spv/spec.rs
++++ b/src/spv/spec.rs
+@@ -143,0 +144,2 @@ def_well_known! {
++        OpConstantSizeOfEXT,
++        OpMemberDecorateIdEXT,
+diff --git a/src/transform.rs b/src/transform.rs
+index ead06cc..45182be 100644
+--- a/src/transform.rs
++++ b/src/transform.rs
+@@ -338,0 +339,8 @@ impl InnerTransform for Attr {
++            Attr::SpvAnnotationWithIdInputs { spv_inst, const_inputs } => {
++                Transformed::map_iter(const_inputs.0.iter(), |&ct| transformer.transform_const_use(ct))
++                    .map(|inputs| Attr::SpvAnnotationWithIdInputs {
++                        spv_inst: spv_inst.clone(),
++                        const_inputs: OrdAssertEq(inputs.collect()),
++                    })
++            }
++
+@@ -463,0 +472,3 @@ impl InnerTransform for ConstDef {
++                ConstKind::SpvConstantSizeOf(ty) => transformer.transform_type_use(*ty)
++                    .map(ConstKind::SpvConstantSizeOf),
++
+diff --git a/src/visit.rs b/src/visit.rs
+index ddc2247..cdf78b5 100644
+--- a/src/visit.rs
++++ b/src/visit.rs
+@@ -243,0 +244,6 @@ impl InnerVisit for Attr {
++            Attr::SpvAnnotationWithIdInputs { const_inputs, .. } => {
++                for &ct in &const_inputs.0 {
++                    visitor.visit_const_use(ct);
++                }
++            }
++
+@@ -339,0 +346 @@ impl InnerVisit for ConstDef {
++            &ConstKind::SpvConstantSizeOf(ty) => visitor.visit_type_use(ty),
+diff --git a/tests/untyped_pointers.rs b/tests/untyped_pointers.rs
+index 8f024dc..fea6911 100644
+--- a/tests/untyped_pointers.rs
++++ b/tests/untyped_pointers.rs
+@@ -177,0 +178,88 @@ fn qptr_diagnoses_typed_whole_buffer_base() {
++
++fn insert_before(words: &mut Vec<u32>, name: &str, inserted: Vec<u32>) {
++    let opcode = spv::spec::Spec::get().instructions.lookup(name).unwrap().as_u16();
++    let mut offset = 5;
++    while words[offset] as u16 != opcode {
++        offset += (words[offset] >> 16) as usize;
++    }
++    words.splice(offset..offset, inserted);
++}
++
++fn heap_fixture(forward_stride: bool, duplicate_stride: bool) -> Vec<u32> {
++    let mut words = fixture(false, true);
++    let mut annotations = vec![];
++    emit(&mut annotations, "OpDecorateId", &[22, 5124, 21]); // ArrayStrideIdEXT.
++    if duplicate_stride {
++        emit(&mut annotations, "OpDecorateId", &[22, 5124, 4]);
++    }
++    emit(&mut annotations, "OpMemberDecorateIdEXT", &[25, 0, 5125, 4]); // OffsetIdEXT.
++    insert_before(&mut words, "OpTypeVoid", annotations);
++    let mut globals = vec![];
++    emit(&mut globals, "OpTypeSampler", &[20]);
++    if forward_stride {
++        emit(&mut globals, "OpTypeRuntimeArray", &[22, 20]);
++        emit(&mut globals, "OpConstantSizeOfEXT", &[3, 21, 20]);
++    } else {
++        emit(&mut globals, "OpConstantSizeOfEXT", &[3, 21, 20]);
++        emit(&mut globals, "OpTypeRuntimeArray", &[22, 20]);
++    }
++    emit(&mut globals, "OpTypeStruct", &[25, 20]);
++    insert_before(&mut words, "OpFunction", globals);
++    let mut accesses = vec![];
++    emit(&mut accesses, "OpUntypedAccessChainKHR", &[17, 23, 22, 18, 4]);
++    emit(&mut accesses, "OpLoad", &[20, 24, 23]);
++    emit(&mut accesses, "OpUntypedAccessChainKHR", &[17, 26, 25, 18, 4]);
++    insert_before(&mut words, "OpReturn", accesses);
++    words
++}
++
++#[test]
++fn descriptor_size_and_id_decorations_survive_renumbering() {
++    let cx = Rc::new(Context::new());
++    let mut module =
++        Module::lower_from_spv_bytes(cx.clone(), bytes(&heap_fixture(false, false))).unwrap();
++    let layout = &spirt::qptr::LayoutConfig::VULKAN_SCALAR_LAYOUT;
++    spirt::passes::qptr::lower_from_spv_ptrs(&mut module, layout);
++    spirt::passes::qptr::analyze_uses(&mut module, layout);
++    spirt::passes::qptr::lift_to_spv_ptrs(&mut module, layout);
++    let text = spirt::print::Plan::for_module(&module).pretty_print().to_string();
++    assert!(text.contains("ArrayStrideIdEXT"));
++    assert!(text.contains("OffsetIdEXT"));
++    assert!(text.contains("OpConstantSizeOfEXT"));
++    let output = module.lift_to_spv_module_emitter().unwrap().words;
++    let insts: Vec<_> = spv::read::ModuleParser::read_from_spv_bytes(bytes(&output))
++        .unwrap()
++        .collect::<std::io::Result<_>>()
++        .unwrap();
++    let def = |id| insts.iter().position(|inst| inst.result_id == Some(id)).unwrap();
++    let stride = insts.iter().find(|i| i.without_ids.opcode.name() == "OpDecorateId").unwrap();
++    let (array, size) = (def(stride.ids[0]), def(stride.ids[1]));
++    assert!(size < array, "stride constant must precede its decorated type");
++    assert_eq!(insts[size].without_ids.opcode.name(), "OpConstantSizeOfEXT");
++    let sampler = def(insts[size].ids[0]);
++    assert!(sampler < size);
++    assert_eq!(insts[sampler].without_ids.opcode.name(), "OpTypeSampler");
++    let offset =
++        insts.iter().find(|i| i.without_ids.opcode.name() == "OpMemberDecorateIdEXT").unwrap();
++    assert!(def(offset.ids[1]) < def(offset.ids[0]));
++    let again = Module::lower_from_spv_bytes(cx, bytes(&output)).unwrap();
++    assert_eq!(again.lift_to_spv_module_emitter().unwrap().words, output);
++}
++
++#[test]
++fn id_decoration_rejects_operand_defined_after_target() {
++    let error =
++        Module::lower_from_spv_bytes(Rc::new(Context::new()), bytes(&heap_fixture(true, false)))
++            .err()
++            .expect("forward stride operand must be rejected");
++    assert!(error.to_string().contains("defined before its target"), "{error}");
++}
++
++#[test]
++fn duplicate_id_decoration_is_diagnosed() {
++    let error =
++        Module::lower_from_spv_bytes(Rc::new(Context::new()), bytes(&heap_fixture(false, true)))
++            .err()
++            .expect("duplicate stride must be rejected before interning");
++    assert!(error.to_string().contains("duplicate ID decoration"), "{error}");
++}
