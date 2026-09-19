@@ -43,3 +43,5 @@ tests must have stable case IDs, deterministic assertions, concise machine-reada
 one coordinator owns design, edits, integration, build directories, and GPU sessions. delegate only bounded independent research or review. workers do not edit, build, run GPU work, create branches, or delegate.
 
 keep each durable fact in one place. append meaningful checkpoints, failed approaches, evidence, and next actions to [execution](docs/execution.md). promote reusable, evidence-qualified findings to [lessons](docs/lessons.md). raw logs and the active work card stay ignored. update the unsafe registry with every boundary change. preserve licenses and attribution.
+
+record inherited AGFX behavior worth optimizing or simplifying in Rust in the [port notes](docs/agfx-port-notes.md), with source pins, current disposition and evidence needed before a change. distinguish measured costs from candidates.

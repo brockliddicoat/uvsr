@@ -210,3 +210,7 @@ safety / provenance: each patch reproduces its exact verified tree in an isolate
 publication: compiled tools merged through [PR #70](https://github.com/brockliddicoat/uvsr/pull/70) as `b9ef1b7d313ae8552d58aa928429d4677fdead93`, with passing PR and [main checks](https://github.com/brockliddicoat/uvsr/actions/runs/35441726778). its transient branch was deleted after matching the merged tree.
 
 next action: preserve heap stride ID decorations and size-of type operands, then repeat the remaining failing stages and compiled-tools integration. no Rust-authored shader execution, native heap runtime, source parity or M1-M3 completion is claimed.
+
+## E-013. 2026-09-19, recorded AGFX inheritance candidates
+
+at the user's request, [AGFX port notes](agfx-port-notes.md) now retain source behaviors that may deserve later optimization or simpler Rust. five initial entries cover blocking transfer helpers, per-submission allocation, descriptor-index widths, mapped-buffer interfaces and whole-buffer barriers. each separates observed source behavior, the parity/safety contract, a candidate change and the evidence needed. the pinned AGFX checkout was reverified and read only. the Rust slice is still unimplemented, so inheritance and performance benefits are not claimed. contributor instructions and the primary source mapping link this single record. no unsafe boundary or implementation changed. compiler work continues from E-012.
