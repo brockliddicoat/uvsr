@@ -13,6 +13,8 @@ research references. third-party material retains its own terms.
 
 ## Fonts
 
+- [Dear ImGui default fonts](imgui-fonts.md), retained ProggyClean and
+  ProggyForever assets with complete MIT notices and exact source identities.
 - [Microsoft Segoe UI](segoe-ui.md), local
   Windows-sourced fonts with no recorded redistribution license.
 

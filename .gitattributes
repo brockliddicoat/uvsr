@@ -9,9 +9,10 @@ assets/scenes/bistro_interior_retextured/components/bistro_interior.gltf -diff -
 assets/scenes/san_miguel_retextured/LICENSE.txt -diff -text
 assets/scenes/san_miguel_retextured/components/san_miguel.gltf -diff -text
 assets/noise/*.bin -diff -text
-/assets/fonts/noto-sans/*.ttf -diff -text
+/assets/fonts/**/*.ttf -diff -text
 /assets/fonts/noto-sans/OFL.txt text eol=lf -whitespace
 /assets/fonts/proggy-clean/ProggyClean-MIT.txt text eol=lf
+/assets/fonts/proggy-forever/ProggyForever-MIT.txt text eol=lf
 /legal/licenses/Intel-XeGTAO-MIT.txt text eol=lf
 /legal/licenses/Andrew-Helmer-Stochastic-Generation-MIT.txt text eol=lf
 /legal/licenses/TinyEXR-and-OpenEXR-BSD.txt text eol=lf

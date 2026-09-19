@@ -23,7 +23,15 @@ the repository's [Polyfrom Noncommercial license](LICENSE.md) covers first-party
 
 retaining these assets does not establish a build, load, rendering, redistribution, or commercial-use result for the new Rust project.
 
-## Local Fonts
+## Fonts
+
+the repository retains standalone ProggyClean and ProggyForever Regular fonts
+under the MIT License, with complete notices beside their files. ProggyClean
+is copyright (c) 2004, 2005 Tristan Grimmer. ProggyForever is copyright (c) 2026
+Disco Hello and copyright (c) 2019,2023 Tristan Grimmer. their
+[legal record](legal/imgui-fonts.md) owns source pins, hashes, and redistribution
+conditions. these are source assets, not a selected runtime font or packaged
+framework feature.
 
 Segoe UI belongs to Microsoft. local copies under `assets/fonts/segoe-ui` are
 ignored by Git and are not included in repository distribution. no separate

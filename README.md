@@ -55,7 +55,7 @@ the complete sequence and exit criteria are in the [roadmap](docs/roadmap.md).
 
 - `.github/workflows` validates the repository baseline and automatically runs Rust formatting and workspace tests once `Cargo.toml` exists.
 - `assets/scenes` retains Bistro Interior and San Miguel as future graphics fixtures, together with their provenance, conversion reports, and controlling notices.
-- [`assets/fonts/segoe-ui`](assets/fonts/segoe-ui/README.md) holds local Windows font copies, excluded from Git. the [legal index](legal/README.md) documents fonts and scene assets.
+- [`assets/fonts`](assets/fonts/README.md) retains MIT-licensed ProggyClean and ProggyForever assets and local Windows Segoe UI copies excluded from Git. the [legal index](legal/README.md) documents fonts and scene assets.
 - `docs` defines the architecture, roadmap, testing contract, upstream boundary, and lessons from prior experiments.
 - `AGENTS.md` and `CONTRIBUTING.md` define the direct-to-`main` pull request and checkpoint commit workflow.
 - `NOTICES.md` records pinned inspirations, research references, and retained scene restrictions.
