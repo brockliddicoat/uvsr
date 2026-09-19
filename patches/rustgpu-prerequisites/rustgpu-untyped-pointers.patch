@@ -1,0 +1,116 @@
+diff --git a/crates/rustc_codegen_spirv/src/linker/entry_interface.rs b/crates/rustc_codegen_spirv/src/linker/entry_interface.rs
+index 98382a0..e7e965f 100644
+--- a/crates/rustc_codegen_spirv/src/linker/entry_interface.rs
++++ b/crates/rustc_codegen_spirv/src/linker/entry_interface.rs
+@@ -26,10 +26,11 @@ pub fn gather_all_interface_vars_from_uses(module: &mut Module, preserve_binding
+-        let interface_relevant_var = inst.class.opcode == Op::Variable && {
+-            if version > (1, 3) {
+-                // SPIR-V >= v1.4 includes all OpVariables in the interface.
+-                true
+-            } else {
+-                let storage_class = inst.operands[0].unwrap_storage_class();
+-                // SPIR-V <= v1.3 only includes Input and Output in the interface.
+-                storage_class == StorageClass::Input || storage_class == StorageClass::Output
+-            }
+-        };
++        let interface_relevant_var =
++            matches!(inst.class.opcode, Op::Variable | Op::UntypedVariableKHR) && {
++                if version > (1, 3) {
++                    // SPIR-V >= v1.4 includes all OpVariables in the interface.
++                    true
++                } else {
++                    let storage_class = inst.operands[0].unwrap_storage_class();
++                    // SPIR-V <= v1.3 only includes Input and Output in the interface.
++                    storage_class == StorageClass::Input || storage_class == StorageClass::Output
++                }
++            };
+diff --git a/crates/rustc_codegen_spirv/src/linker/specializer.rs b/crates/rustc_codegen_spirv/src/linker/specializer.rs
+index 63e0320..7e20c2c 100644
+--- a/crates/rustc_codegen_spirv/src/linker/specializer.rs
++++ b/crates/rustc_codegen_spirv/src/linker/specializer.rs
+@@ -1295,0 +1296,3 @@ impl<'a, S: Specialization> InferCx<'a, S> {
++                        if generic.def.class.opcode != Op::TypePointer {
++                            return Err(Unapplicable);
++                        }
+@@ -1302,0 +1306,9 @@ impl<'a, S: Specialization> InferCx<'a, S> {
++                    TyPat::UntypedPointer(storage_class_pat) => {
++                        if generic.def.class.opcode != Op::TypeUntypedPointerKHR {
++                            return Err(Unapplicable);
++                        }
++                        Ok(self.match_storage_class_pat(
++                            storage_class_pat,
++                            ty_operands.split_first(self).unwrap().0,
++                        ))
++                    }
+diff --git a/crates/rustc_codegen_spirv/src/linker/spirt_passes/explicit_layout.rs b/crates/rustc_codegen_spirv/src/linker/spirt_passes/explicit_layout.rs
+index fc509be..a2b165c 100644
+--- a/crates/rustc_codegen_spirv/src/linker/spirt_passes/explicit_layout.rs
++++ b/crates/rustc_codegen_spirv/src/linker/spirt_passes/explicit_layout.rs
+@@ -625,0 +626,21 @@ impl<'a> SelectiveEraser<'a> {
++            DataInstKind::SpvInstWithTypeInputs { spv_inst, .. } => {
++                // These operations explicitly supply their data interpretation.
++                // Untyped access chains also accept a typed base whose pointee
++                // need not match that explicit data type.
++                if matches!(
++                    spv_inst.opcode.name(),
++                    "OpUntypedVariableKHR"
++                        | "OpUntypedAccessChainKHR"
++                        | "OpUntypedInBoundsAccessChainKHR"
++                        | "OpUntypedPtrAccessChainKHR"
++                        | "OpUntypedInBoundsPtrAccessChainKHR"
++                ) {
++                    return Ok(());
++                }
++                return Err(Diag::bug([format!(
++                    "unhandled type change in SPIR-V instruction with static type operands ({})",
++                    spv_inst.opcode.name()
++                )
++                .into()]));
++            }
++
+@@ -683 +704 @@ impl<'a> SelectiveEraser<'a> {
+-                            TyPat::Any | TyPat::Void => Self::default(),
++                            TyPat::Any | TyPat::Void | TyPat::UntypedPointer(_) => Self::default(),
+diff --git a/crates/rustc_codegen_spirv/src/linker/spirt_passes/validate.rs b/crates/rustc_codegen_spirv/src/linker/spirt_passes/validate.rs
+index ecad62e..ecb775d 100644
+--- a/crates/rustc_codegen_spirv/src/linker/spirt_passes/validate.rs
++++ b/crates/rustc_codegen_spirv/src/linker/spirt_passes/validate.rs
+@@ -184 +184,4 @@ impl Transformer for Validator<'_> {
+-            DataInstKind::SpvInst(spv_inst) => self.validate_spv_inst(spv_inst),
++            DataInstKind::SpvInst(spv_inst)
++            | DataInstKind::SpvInstWithTypeInputs { spv_inst, .. } => {
++                self.validate_spv_inst(spv_inst)
++            }
+diff --git a/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs b/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
+index 12972ae..32d6f39 100644
+--- a/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
++++ b/crates/rustc_codegen_spirv/src/spirv_type_constraints.rs
+@@ -75,0 +76,4 @@ pub enum TyPat<'a> {
++    /// `OpTypeUntypedPointerKHR`, constrained only by storage class.
++    /// Its access instructions determine the interpreted data type.
++    UntypedPointer(&'a StorageClassPat),
++
+@@ -191 +195 @@ pub fn instruction_signatures(op: Op) -> Option<&'static [InstSig<'static>]> {
+-            Struct, Vector, Vector4, Void,
++            Struct, UntypedPointer, Vector, Vector4, Void,
+@@ -294,0 +299 @@ pub fn instruction_signatures(op: Op) -> Option<&'static [InstSig<'static>]> {
++        | Op::TypeUntypedPointerKHR
+@@ -308 +313 @@ pub fn instruction_signatures(op: Op) -> Option<&'static [InstSig<'static>]> {
+-        Op::ConstantTrue | Op::ConstantFalse | Op::Constant => {}
++        Op::ConstantTrue | Op::ConstantFalse | Op::Constant | Op::ConstantSizeOfEXT => {}
+@@ -333,2 +338,2 @@ pub fn instruction_signatures(op: Op) -> Option<&'static [InstSig<'static>]> {
+-        Op::Load => sig! { (Pointer(_, T)) -> T },
+-        Op::Store => sig! { (Pointer(_, T), T) },
++        Op::Load => sig! { (Either(Pointer(_, T), UntypedPointer(_))) -> T },
++        Op::Store => sig! { (Either(Pointer(_, T), UntypedPointer(_)), T) },
+@@ -343,0 +349,10 @@ pub fn instruction_signatures(op: Op) -> Option<&'static [InstSig<'static>]> {
++        // SPV_KHR_untyped_pointers: the explicit Base Type describes layout,
++        // not the pointee of Base. Both typed and untyped bases are permitted.
++        Op::UntypedVariableKHR => sig! { {S} (..) -> UntypedPointer(S) },
++        Op::UntypedAccessChainKHR
++        | Op::UntypedInBoundsAccessChainKHR
++        | Op::UntypedPtrAccessChainKHR
++        | Op::UntypedInBoundsPtrAccessChainKHR => sig! {
++            (_, Either(Pointer(S, _), UntypedPointer(S)), ..) -> UntypedPointer(S)
++        },
++        Op::UntypedArrayLengthKHR | Op::UntypedPrefetchKHR | Op::UntypedGroupAsyncCopyKHR => {}
