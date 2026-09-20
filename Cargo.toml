@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/agfx"]
+members = ["crates/agfx", "crates/shader-to-human"]
 resolver = "2"
 
 [workspace.package]

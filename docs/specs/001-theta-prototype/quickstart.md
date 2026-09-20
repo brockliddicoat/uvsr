@@ -6,7 +6,7 @@ use [prompt.md](prompt.md) as the clean agent handoff. it follows the Spec Kit c
 
 read current AGENTS.md, the constitution, prompt, and the active work card. T001 is the initial task. compare live main with the pinned baseline, inspect relevant instruction/contract changes, then pin the chosen revision. preserve unrelated work and follow actual authority for branches, commits, and publication.
 
-select eligible primary M0-M3 tasks first. supporting work may resolve a concrete primary-path need or continue when independent primary work is blocked. full parity and report polish do not gate the local RustGPU draft. native Windows Vulkan and actual NGAPI on Windows are required primary evidence, with Linux portability separate.
+M0-M3 produced the local compiler draft in E-035. the active request continues through the complete Vulkan AGFX and ShaderToHuman ports. select T024-T029 and their source mappings first, with T018 integration and separate T023 Linux evidence. use the current task ledger and do not stop at the old compiler milestone. native Windows Vulkan and actual NGAPI on Windows are required primary evidence, with Linux portability separate.
 
 create ignored `work/theta/STATE.md` and `NOTES.md` if absent. tasks owns completion, the card owns current position, and detailed notes own experiments. [execution](../../execution.md) preserves durable checkpoints and [lessons](../../lessons.md) preserves reusable findings. [UNSAFE.md](../../../UNSAFE.md) owns the central safety audit. do not make a competing stage ledger.
 
@@ -46,7 +46,7 @@ before restarting an interrupted command, inspect its process, exit record, and 
 
 ## checkpoint instructions
 
-verify the selected task against its requirement and oracle. update completion only where evidence closes it. reconcile every changed unsafe site and its central record. append exact change, evidence layer, unrun checks, limitations, lessons, and next action to execution. refresh the work card and choose the next eligible primary task.
+verify the selected task against its requirement and oracle. update completion only where evidence closes it. reconcile every changed unsafe site and its central record. append exact change, evidence layer, unrun checks, limitations, lessons, and next action to execution. refresh the work card and choose the next eligible task from the active port track.
 
 at M3 deliver the generic diff, local PR text, actual Windows NGAPI reproduction, safety/ABI decisions, promised-feature evidence, and full CI status. pending remote jobs must stay visible. supporting parity and later APIs retain their own status.
 

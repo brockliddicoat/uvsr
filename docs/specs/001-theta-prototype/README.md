@@ -1,6 +1,6 @@
 # theta specification audit
 
-status: the bounded Windows Vulkan prototype and [local RustGPU draft](../../rustgpu-contribution.md) are prepared. full upstream CI, maintainer acceptance and supporting parity remain pending. the [task ledger](tasks.md) owns completion.
+status: the bounded Windows Vulkan prototype and [local RustGPU draft](../../rustgpu-contribution.md) are prepared. complete AGFX and ShaderToHuman Vulkan ports are now the active objective. full upstream CI and maintainer acceptance remain separate. the [task ledger](tasks.md) owns completion.
 
 **agent handoff: [prompt.md](prompt.md).** copy that file when handing work to an implementing agent. this page contains human review context, not the handoff prompt.
 
@@ -23,17 +23,17 @@ load technical contracts as needed: [source parity](contracts/source-parity.md),
 
 | subject | controlling direction |
 | --- | --- |
-| main deliverable | a focused local RustGPU PR draft enabling actual NGAPI |
+| current deliverable | complete the declared Vulkan AGFX and ShaderToHuman Rust ports after the prepared local RustGPU draft |
 | primary API and host | Vulkan directly and through NGAPI, with native Windows Vulkan first on the current machine and Linux portability retained |
-| AGFX port | close ordinary Rust implementation, high-quality lightweight testbed, separate complete-parity outcome |
-| ShaderToHuman | source-faithful Rust library, regressions, and examples in the supporting parity track |
+| AGFX port | close ordinary Rust implementation, high-quality lightweight testbed, complete declared Vulkan parity now active |
+| ShaderToHuman | source-faithful Rust library, regressions, and examples in the active port track |
 | Metal and DirectX | Metal second, DirectX last with the most acceptable documented compromises. future work, not primary gates |
 | additional shader languages | adaptable boundaries only. former adapter tasks and the nine-cell requirement are retired |
 | unsafe | safe default, local contracts, complete prominent registry, revision-specific review and evidence |
 | execution and learning | tracked checkpoint history and reusable evidence-qualified lessons, with raw logs ignored |
 | size | prefer fewer lines through simpler code, measured against equivalent source behavior |
 
-complete testbed parity, report polish, future APIs, and future shader languages do not delay a proven M3 contribution draft. they also do not acquire success claims from that draft.
+M3 is complete for its bounded prototype scope. the latest user instruction activates M4-M6 and T024-T029. those ports do not acquire parity claims from the compiler draft. report polish and deferred backends remain separate.
 
 ## baseline and evidence
 

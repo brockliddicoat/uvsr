@@ -1,0 +1,420 @@
+{
+  "source": "https://github.com/electronicarts/ShaderToHuman",
+  "revision": "d6f98b7d67da802053cd9c702082fa741dec42e7",
+  "license": "legal/licenses/ShaderToHuman-BSD-3-Clause.txt",
+  "source_files": [
+    {
+      "path": "LICENSE.txt",
+      "sha256": "b7fccbb4c6004e14c6dc925f21404415a6f5edd1469aa4815af908ab3fa2372e",
+      "bytes": 1562
+    },
+    {
+      "path": "docs_src/2D_docs.hlsl",
+      "sha256": "27f4ac6f2553b24a62ac4069d663a3d817c84d0dab4a55f4f76af8aee9166bd0",
+      "bytes": 5650
+    },
+    {
+      "path": "docs_src/3D_docs.hlsl",
+      "sha256": "8c5c21d89d6706252d9aa45cfbb3d18d0d84425147a5e3f7c258046bdfa3dbd8",
+      "bytes": 5851
+    },
+    {
+      "path": "docs_src/Gather_docs.hlsl",
+      "sha256": "2cee5da534a4c0b40c03753334001d9e51af71a74016b9f623e7feffb3ac9b9f",
+      "bytes": 4754
+    },
+    {
+      "path": "docs_src/Intro.hlsl",
+      "sha256": "da207efddcf0e13aa34cc41624f417233adb156c2348bfa7ee060261c876d09c",
+      "bytes": 2166
+    },
+    {
+      "path": "docs_src/Scatter_docs.hlsl",
+      "sha256": "b65eeed4478281cb9c5a2359fb89fd84d2b6cd3d520e8ee4b75cb4fb3d2f9f1e",
+      "bytes": 6787
+    },
+    {
+      "path": "docs_src/UI_docs.hlsl",
+      "sha256": "0bd28579e88d7dd9f10f2e86311e1ab6d9a97132fc8fc356bf384282f12400f0",
+      "bytes": 6065
+    },
+    {
+      "path": "docs_src/common.hlsl",
+      "sha256": "e0d0bd258c0c066c62c7cc628adf8433bf22ecc9322cae632698c67e2b1e6937",
+      "bytes": 363
+    },
+    {
+      "path": "docs_src/s2h_docs.gg",
+      "sha256": "2d6baaa7f13cbd01c25ae8ed69629542843282163ecd530e3113008bc5bd21c2",
+      "bytes": 23232
+    },
+    {
+      "path": "docs_src/s2h_docs.gguser",
+      "sha256": "c26bd4052ee52a5f60a793b155a5b2be6a855ca5c04f80ccb92ba4a7995732f3",
+      "bytes": 297
+    },
+    {
+      "path": "examples/Features/2D_Arrow.hlsl",
+      "sha256": "9b64e4ae48a8a0bd4ead3f5c9e91a58c2ffec5bb7701b14863f442956113cb1f",
+      "bytes": 4486
+    },
+    {
+      "path": "examples/Features/2D_CoordinateSystem.hlsl",
+      "sha256": "149c92123d68bfad88a7443d0001e4e415d88e2d5d2d70be2915426bf21606b3",
+      "bytes": 2441
+    },
+    {
+      "path": "examples/Features/2D_example.hlsl",
+      "sha256": "405b5c7167b6976a5fbcf5877dce2906ded1dd0ec62eaa375be7538779148d83",
+      "bytes": 9634
+    },
+    {
+      "path": "examples/Features/3D_example.hlsl",
+      "sha256": "b41d868b7e876df2902f2c056f37acd03a5b209cae760bfe7c28593947b5e971",
+      "bytes": 4797
+    },
+    {
+      "path": "examples/Features/Clear_example.hlsl",
+      "sha256": "1284b22a66bad92113747757d5b9626f1e9c0853c0e88dcd9446452118401eef",
+      "bytes": 2294
+    },
+    {
+      "path": "examples/Features/DebugZoom_example.hlsl",
+      "sha256": "1cfc29f2bc84f15452ab8e177bc34d03f5cca8dded61c416168390497d27b29d",
+      "bytes": 2780
+    },
+    {
+      "path": "examples/Features/Gather_example.hlsl",
+      "sha256": "0919d6cad8ae5a8886977d3e856a01162e501ddb4998ba9be4616a46f0eaccfe",
+      "bytes": 9194
+    },
+    {
+      "path": "examples/Features/GenUserFont_example.hlsl",
+      "sha256": "52d2ddc45fa4ae07ec8a816fd3fb8b33a07e3b1e27915ce935309bd1e17d2633",
+      "bytes": 1522
+    },
+    {
+      "path": "examples/Features/QuadCommon.hlsl",
+      "sha256": "52cd40598d74722707b28065152bb971a336e7ee3b68f5158345e2420e849924",
+      "bytes": 1137
+    },
+    {
+      "path": "examples/Features/QuadPost_example.hlsl",
+      "sha256": "25bca0775c7ecedd466fbe354c5f7b4af4972cc012fb5caeab9e9aa4c1c54183",
+      "bytes": 7314
+    },
+    {
+      "path": "examples/Features/QuadVSPS_example.hlsl",
+      "sha256": "07b521b85752ee5ffa21433c90c04e53b00c9715e45b8f2d081e5f7e9b318729",
+      "bytes": 3159
+    },
+    {
+      "path": "examples/Features/Scatter_example.hlsl",
+      "sha256": "bc90cab2900c1cc0969d76173df3156b646e7a0f117e82cbe0ddec1da4eed309",
+      "bytes": 3517
+    },
+    {
+      "path": "examples/Features/Table_example.hlsl",
+      "sha256": "9ecbc7710f0adaf1d2a4ea72881dc3d07bfbb449f4dd98bd126a50ee59ab5972",
+      "bytes": 4475
+    },
+    {
+      "path": "examples/Features/UseUserFont_example.hlsl",
+      "sha256": "532005d5a26f4874d285f009b67262133e6133ce18038fba2e2105d9b8ac6c60",
+      "bytes": 1779
+    },
+    {
+      "path": "examples/Features/s2h_features.gg",
+      "sha256": "0dbd830e8fb470977a1730b5f807d54d9fb49b8adaa0af5eb1744c92686b8eeb",
+      "bytes": 36178
+    },
+    {
+      "path": "examples/Features/s2h_features.gguser",
+      "sha256": "455a204745c5eaf7e479e40bc74beec365ef032ec4fd2312ee474f05dcdd1e32",
+      "bytes": 319
+    },
+    {
+      "path": "examples/GaussianSplatting/Clear.hlsl",
+      "sha256": "af1bd52e7000d30231132f6e5e492acccbf4fbca00697b96fdc036b157197eb4",
+      "bytes": 1170
+    },
+    {
+      "path": "examples/GaussianSplatting/ClearColorPS.hlsl",
+      "sha256": "3e78b62735401722832bda9688f0a4b15e352b0c8d047741e246feb3d60f4c41",
+      "bytes": 5212
+    },
+    {
+      "path": "examples/GaussianSplatting/CustomResolveMSAA.hlsl",
+      "sha256": "c7f475607a166616d554d96cc71497de1a153f9dd40e50d9994bc2456838681f",
+      "bytes": 1276
+    },
+    {
+      "path": "examples/GaussianSplatting/Debug.ply.bin",
+      "sha256": "d4309642c238abed54ecfc7426404735457b08a0aec9b40302def929fa4ee28f",
+      "bytes": 51128
+    },
+    {
+      "path": "examples/GaussianSplatting/FullScreenQuadVS.hlsl",
+      "sha256": "a997ea8de6d34f8f8e10c972ef79f50690f94e4c818f01efa5cb5cf0eaca7253",
+      "bytes": 982
+    },
+    {
+      "path": "examples/GaussianSplatting/InitPlyCS.hlsl",
+      "sha256": "00aba219329fcd726449b873fda30ee1b6377ce0c6a884ab6112a0cd1fec2635",
+      "bytes": 3152
+    },
+    {
+      "path": "examples/GaussianSplatting/SplatBaseCS.hlsl",
+      "sha256": "fdb0bafe2edfd46d0555907d2bd328299688a9824337573a3cd4efbf781b76e0",
+      "bytes": 3645
+    },
+    {
+      "path": "examples/GaussianSplatting/SplatCS_example.hlsl",
+      "sha256": "c5eddd8cb794ae2506395b5b60384cb4a78b4bd559aeb68c825cf2507fda285f",
+      "bytes": 8832
+    },
+    {
+      "path": "examples/GaussianSplatting/SplatCommon.hlsl",
+      "sha256": "8f35816a777c091edc43be1060942f0377b2ab03033ad89f68d56573a2db8607",
+      "bytes": 17457
+    },
+    {
+      "path": "examples/GaussianSplatting/SplatPS_example.hlsl",
+      "sha256": "05d82fbe5a437d0a02ffb1285fde53d616a1258a4c5f7f345a6dab41e498feba",
+      "bytes": 5222
+    },
+    {
+      "path": "examples/GaussianSplatting/SplatVS_example.hlsl",
+      "sha256": "b8183c82e0a57a827ca27343bcc3822b038cf894f68cd669ee05a5716ff8d46b",
+      "bytes": 6382
+    },
+    {
+      "path": "examples/GaussianSplatting/Splat_example.hlsl",
+      "sha256": "58fba394a106772117c49763d030fc6e905af2335477ca1eb1c518637aff8319",
+      "bytes": 10629
+    },
+    {
+      "path": "examples/GaussianSplatting/s2h_splat.gg",
+      "sha256": "794a85e1b40fb30bc9f8ccbd78c5b0aba98e790ec142f9122ca277c620191770",
+      "bytes": 36162
+    },
+    {
+      "path": "examples/GaussianSplatting/s2h_splat.gguser",
+      "sha256": "12cb3a3c1db856d1ffb2c61034e8f9ec5905d187676d6f0b30a618fde4487238",
+      "bytes": 1228
+    },
+    {
+      "path": "examples/HelloQuadVSPS/HelloWorldPS.hlsl",
+      "sha256": "457269aaef285d294d7f4b491208cbc0d8ea1be591ee3a6bdfca9ea341638653",
+      "bytes": 3094
+    },
+    {
+      "path": "examples/HelloQuadVSPS/HelloWorldVS.hlsl",
+      "sha256": "40fc6b15a4ef43c37662b9815a27e8319587783f7baa956aad59bcd337165c8c",
+      "bytes": 1931
+    },
+    {
+      "path": "examples/HelloQuadVSPS/s2h_HelloQuadVSPS.gg",
+      "sha256": "f834053c2800ce8b25f84d7d47f6223a3e0049db1d492ae00c1ccd197a017b01",
+      "bytes": 8526
+    },
+    {
+      "path": "examples/HelloQuadVSPS/s2h_HelloQuadVSPS.gguser",
+      "sha256": "b9da14f04b9a30e0bc8b99557223ac8f5c7a343a511e4574525e110e24517b17",
+      "bytes": 376
+    },
+    {
+      "path": "examples/HelloQuadVSPS_Slang/HelloWorldPS_slang.hlsl",
+      "sha256": "4d0cc8546ce38ee2fd7e10e336acc0bf9b48297b10cf2d8eddd4a9bf08c47e0b",
+      "bytes": 3096
+    },
+    {
+      "path": "examples/HelloQuadVSPS_Slang/HelloWorldVS_slang.hlsl",
+      "sha256": "40fc6b15a4ef43c37662b9815a27e8319587783f7baa956aad59bcd337165c8c",
+      "bytes": 1931
+    },
+    {
+      "path": "examples/HelloQuadVSPS_Slang/s2h_HelloQuadVSPS.gguser",
+      "sha256": "b9da14f04b9a30e0bc8b99557223ac8f5c7a343a511e4574525e110e24517b17",
+      "bytes": 376
+    },
+    {
+      "path": "examples/HelloQuadVSPS_Slang/s2h_HelloQuadVSPS_slang.gg",
+      "sha256": "fedc548c67b4bc74542e4ce9aa92184de7396740a3260c8fc8eb28dec9f9aa69",
+      "bytes": 8606
+    },
+    {
+      "path": "examples/HelloScreenVSPS/HelloWorldPS.hlsl",
+      "sha256": "95b009a1728e909baba9d39c319c8495e5d60f699c076221e438d4255b1e22b9",
+      "bytes": 1167
+    },
+    {
+      "path": "examples/HelloScreenVSPS/HelloWorldVS.hlsl",
+      "sha256": "81e2d0a8c7d8a3221c9e88ce48a0d1d705dc3399b91a8e770753fc55737dce2a",
+      "bytes": 1258
+    },
+    {
+      "path": "examples/HelloScreenVSPS/s2h_HelloScreenVSPS.gg",
+      "sha256": "f834053c2800ce8b25f84d7d47f6223a3e0049db1d492ae00c1ccd197a017b01",
+      "bytes": 8526
+    },
+    {
+      "path": "examples/HelloScreenVSPS/s2h_HelloScreenVSPS.gguser",
+      "sha256": "e7d16fdce73634aadf38c7b85a3654bad9b5a0c06faa8907526d32b3c498ac23",
+      "bytes": 130
+    },
+    {
+      "path": "examples/HelloWorldCS/HelloWorldCS.hlsl",
+      "sha256": "6c3522b41df59cfe730dbf24ebc2d5b7bdaa7a175873bc499f8f3283b6244f84",
+      "bytes": 1040
+    },
+    {
+      "path": "examples/HelloWorldCS/s2h_HelloWorldCS.gg",
+      "sha256": "b34deeba49a6325e9162eda1da1d355fb423cf1743a33961fa95b15f147fb219",
+      "bytes": 9383
+    },
+    {
+      "path": "examples/Zoom2D/Pre.hlsl",
+      "sha256": "08f313b13959646f53029201fb85f9cccc28de5648c05666f9790a060efa0d61",
+      "bytes": 2076
+    },
+    {
+      "path": "examples/Zoom2D/Render.hlsl",
+      "sha256": "1d8c47db2cb27c919b6df110bcfc3e2943e7a52f3d9330978b3fbac70f48b560",
+      "bytes": 5840
+    },
+    {
+      "path": "examples/Zoom2D/s2h_zoom2D.gg",
+      "sha256": "598ed30c663a422852c8e5be768186ee9edd8dcc2467ea72c6fa399582a8052e",
+      "bytes": 10849
+    },
+    {
+      "path": "examples/Zoom2D/s2h_zoom2D.gguser",
+      "sha256": "772b5e1118123b8c19f54c32df30abcdf194f752690ab7a4dc32512f1dccd70d",
+      "bytes": 242
+    },
+    {
+      "path": "include/s2h.hlsl",
+      "sha256": "5efd8404ef597bbff71cc1f9d0dc6d963dea19285bcc0f18ae6364a9d1882686",
+      "bytes": 44001
+    },
+    {
+      "path": "include/s2h_3d.hlsl",
+      "sha256": "0da6e37f0f4798dff19f1dc34f0b9a5325b634da7d8d2dd843572494a70ca55d",
+      "bytes": 12159
+    },
+    {
+      "path": "include/s2h_glsl.hlsl",
+      "sha256": "8957882960ab62fb94d9c29081b26cfb35bb4821fec32f2101bcdd9ecb77f82b",
+      "bytes": 980
+    },
+    {
+      "path": "include/s2h_scatter.hlsl",
+      "sha256": "2f68bce8dc6dcb2f24ad07eef0a1a2dc3f5596b2042b798fe1609dd6517001d7",
+      "bytes": 7062
+    },
+    {
+      "path": "unittests/.gitignore",
+      "sha256": "72378bbe0b7d4576cc2eed8d15dc64e0a83e5ce5d16feb5f996a3c1fd53c9a73",
+      "bytes": 6
+    },
+    {
+      "path": "unittests/2D_test.hlsl",
+      "sha256": "b4fa505675deefa880894b3aca0dac0db28489a337afa4ff00c91edfdfb87c92",
+      "bytes": 5436
+    },
+    {
+      "path": "unittests/3D_test.hlsl",
+      "sha256": "7d2acab9c6353e346f784278c58e25fd7d6d54d913d586552134882e85f2bfd2",
+      "bytes": 4484
+    },
+    {
+      "path": "unittests/GigiTest.py",
+      "sha256": "b726e7ffcd93f4a01516884bcd0fcee9ed01f6155ee3497619940db955aaceda",
+      "bytes": 2408
+    },
+    {
+      "path": "unittests/_GoldImages/2DTest.png",
+      "sha256": "a66a6020f1c8ca3108668b259e05d21cba5161a757148cd73918dc20f64e8eb4",
+      "bytes": 23175
+    },
+    {
+      "path": "unittests/_GoldImages/3DTest.png",
+      "sha256": "e869f5ca9d904238581c7b2c1569eb6268dd2ef86dbff8a9eb0b52dbf653b7c4",
+      "bytes": 54982
+    },
+    {
+      "path": "unittests/_GoldImages/GatherTest.png",
+      "sha256": "a52e95be8cb18cf8ed127d52d56eca275007329591e0ffbebf21f1eea523a09b",
+      "bytes": 16372
+    },
+    {
+      "path": "unittests/_GoldImages/ScatterTest.png",
+      "sha256": "060ecfd589113ba0bd4da0ce813f58f02b4cf5a19694bdb397b7c4d38b5378c0",
+      "bytes": 4596
+    },
+    {
+      "path": "unittests/_GoldImages/TableTest.png",
+      "sha256": "d38911fb58b1e50022e22f98973eaa879ac1948f87d691d14d6a66dac4c179bd",
+      "bytes": 9856
+    },
+    {
+      "path": "unittests/gather_test.hlsl",
+      "sha256": "76ee6b3a8e561a2bd54332f5ced2371a534db803aaedab1781bea47517902c97",
+      "bytes": 10417
+    },
+    {
+      "path": "unittests/s2h_unittests.gg",
+      "sha256": "fbed46e6d20d0a22befe904b65807dd0c8f9d14160a7a070798a54caced96ff2",
+      "bytes": 17455
+    },
+    {
+      "path": "unittests/s2h_unittests.gguser",
+      "sha256": "8aefa83a122def44ae0d6daa3923023fa82e59261e68063185c73d7aaf55f8df",
+      "bytes": 195
+    },
+    {
+      "path": "unittests/scatter_test.hlsl",
+      "sha256": "a27bbe46956c7a7223eeaf4341cedbaa8afe67007227df9eef52136b64954486",
+      "bytes": 3511
+    },
+    {
+      "path": "unittests/table_test.hlsl",
+      "sha256": "581a36baa7a12403c2b6cd226ab3ca8e68d3aa02ed356b1d7e274a6f1b49f5db",
+      "bytes": 4620
+    }
+  ],
+  "goldens": [
+    {
+      "path": "tests/parity/fixtures/shader-to-human/2DTest.png",
+      "source": "unittests/_GoldImages/2DTest.png",
+      "sha256": "a66a6020f1c8ca3108668b259e05d21cba5161a757148cd73918dc20f64e8eb4",
+      "bytes": 23175
+    },
+    {
+      "path": "tests/parity/fixtures/shader-to-human/3DTest.png",
+      "source": "unittests/_GoldImages/3DTest.png",
+      "sha256": "e869f5ca9d904238581c7b2c1569eb6268dd2ef86dbff8a9eb0b52dbf653b7c4",
+      "bytes": 54982
+    },
+    {
+      "path": "tests/parity/fixtures/shader-to-human/GatherTest.png",
+      "source": "unittests/_GoldImages/GatherTest.png",
+      "sha256": "a52e95be8cb18cf8ed127d52d56eca275007329591e0ffbebf21f1eea523a09b",
+      "bytes": 16372
+    },
+    {
+      "path": "tests/parity/fixtures/shader-to-human/ScatterTest.png",
+      "source": "unittests/_GoldImages/ScatterTest.png",
+      "sha256": "060ecfd589113ba0bd4da0ce813f58f02b4cf5a19694bdb397b7c4d38b5378c0",
+      "bytes": 4596
+    },
+    {
+      "path": "tests/parity/fixtures/shader-to-human/TableTest.png",
+      "source": "unittests/_GoldImages/TableTest.png",
+      "sha256": "d38911fb58b1e50022e22f98973eaa879ac1948f87d691d14d6a66dac4c179bd",
+      "bytes": 9856
+    }
+  ],
+  "status": "frozen source inputs, no port result yet"
+}

@@ -4,9 +4,9 @@ keep this file concise. keep temporary plans, measurements, downloads, captures,
 
 ## Scope
 
-prioritize a focused RustGPU PR enabling Rust shaders in actual NoGraphicsAPI. Vulkan directly and through NGAPI is the primary design path. native Windows Vulkan is the first local test path on this Windows machine, with Linux Vulkan portability retained. query device support. never substitute another backend for missing Vulkan evidence.
+the active task is to finish the close Rust AGFX and ShaderToHuman ports for the declared Vulkan scope, then use them to test the RustGPU modifications with actual NoGraphicsAPI. the local compiler contribution draft is prepared. preserve its generic patches and evidence while completing the port. Vulkan directly and through NGAPI is the primary design path. native Windows Vulkan is the first local test path on this Windows machine, with Linux Vulkan portability retained. query device support. never substitute another backend for missing Vulkan evidence.
 
-the close ordinary Rust AGFX port is a high-quality reusable testbed. preserve AGFX and ShaderToHuman source behavior and attribution through explicit mappings. full testbed parity is a separate supporting outcome and must not delay a proven compiler contribution. Metal is the second backend direction. DirectX is lowest priority and may accept the most documented compromises. neither may force avoidable restrictions into Vulkan. additional shader-language adapters are outside this plan.
+the close ordinary Rust AGFX port is a high-quality reusable testbed. preserve AGFX and ShaderToHuman source behavior and attribution through explicit mappings. full testbed parity is the current deliverable. a completed compiler milestone or another reduced fixture does not finish this port. Metal is the second backend direction. DirectX is lowest priority and may accept the most documented compromises. neither may force avoidable restrictions into Vulkan. additional shader-language adapters are outside this plan.
 
 use the [Theta specification](docs/specs/001-theta-prototype/README.md) and [start/resume prompt](docs/specs/001-theta-prototype/quickstart.md). keep shader payload, stage, entry point, target, profile, and compiler identity explicit. keep generic RustGPU patches independent of testbed and NGAPI host dependencies.
 

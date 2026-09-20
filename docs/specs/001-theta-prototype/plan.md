@@ -2,9 +2,9 @@
 
 ## summary
 
-deliver a focused local RustGPU PR draft enabling actual NoGraphicsAPI. start on native Windows Vulkan, the API path available for testing on the current development machine subject to capability probes. prioritize direct Vulkan and Vulkan through NGAPI. build only the close Rust AGFX slice needed to support useful experiments before widening the testbed.
+continue after the prepared local RustGPU draft by completing the close Rust AGFX and ShaderToHuman ports, providing the tested foundation for a more advanced NGAPI scene and renderer. start on native Windows Vulkan, the API path available for testing on the current development machine subject to capability probes. prioritize direct Vulkan and Vulkan through NGAPI. build only the close Rust AGFX slice needed to support useful experiments before widening the testbed.
 
-complete AGFX and ShaderToHuman source parity remains valuable supporting work. Metal is the second backend direction and DirectX the lowest, with the most acceptable documented compromises. no additional-language or secondary-backend implementation belongs on the primary critical path.
+complete declared Vulkan AGFX and ShaderToHuman source parity is now the active deliverable. Metal is the second backend direction and DirectX the lowest, with the most acceptable documented compromises. no additional-language or secondary-backend implementation belongs on the primary critical path.
 
 ## technical context
 
@@ -12,7 +12,7 @@ active shader route: RustGPU to SPIR-V to native Vulkan. primary host OS: Window
 
 keep the RustGPU contribution checkout separate from Theta and the actual NGAPI host checkout. unchanged AGFX/ShaderToHuman references are read-only. record ownership, tools, patches, and hashes. adapt source platform assumptions so the AGFX Vulkan implementation can run on Windows, with native loader and window/surface handling where required. no DirectX fallback can close the Vulkan gate.
 
-use [source pins](research.md), [shader contracts](contracts/shader-abi.md), and the [upstream checklist](upstream-tests.md). no implementation currently exists.
+use [source pins](research.md), [shader contracts](contracts/shader-abi.md), and the [upstream checklist](upstream-tests.md). the bounded compiler and two-behavior Rust slice are implemented. the task ledger records the remaining port.
 
 ## constitution check
 
@@ -70,9 +70,17 @@ the active route does not require a cross-compiler to another graphics API. pres
 
 if local hardware lacks required heap features, keep that runtime proof blocked and continue eligible compiler, ABI, or reference work. record the exact missing capability and a reproducible supported-device recipe. never substitute ordinary arrays or another backend for native heaps.
 
-## supporting parity track
+## active port milestones
 
-after the decisive slice, expand AGFX owner by owner and the ShaderToHuman Rust library and portable fixtures. keep source public/native/Ez behaviors, assertions, ownership, examples, and all variant dispositions traceable. reference goldens and algorithms are preserved.
+after E-035, continue these milestones without treating the compiler draft as completion of the port.
+
+| milestone | exit evidence | tasks |
+| --- | --- | --- |
+| M4, complete AGFX Vulkan port | public/native/Ez behavior, shader helpers, tests and examples have reviewed mappings and passing required cases. native-heap integration retains ordinary descriptor behavior separately | T024-T025, T018 |
+| M5, complete ShaderToHuman Rust port | all library behavior, five golden groups, documentation branches, distinct examples and deterministic state sequences have source-backed Rust implementations and parity evidence | T026-T029 |
+| M6, reusable scene testbed | both suites execute through the maintained Rust/Vulkan owners, expose the needed NGAPI shader contract and produce complete failure records for later advanced scene/renderer work. Linux and report evaluations retain separate evidence | T018, T023, T030-T032 |
+
+expand AGFX owner by owner and the ShaderToHuman Rust library and portable fixtures. keep source public/native/Ez behaviors, assertions, ownership, examples, and all variant dispositions traceable. reference goldens and algorithms are preserved.
 
 implement full report tabs and bounded queries when real results from both suites justify them. use the same minimal result records already serving compiler diagnosis. measured report usability is separate from correctness and contribution readiness.
 

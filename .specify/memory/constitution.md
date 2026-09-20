@@ -4,7 +4,7 @@ version: 2.0.0. priorities and execution documentation revised on 2026-09-19.
 
 the current [agent contract](../../AGENTS.md) governs execution. this is the Spec Kit entry to project principles, not an independent authorization source.
 
-1. **RustGPU contribution first.** the main deliverable is a reviewable RustGPU PR enabling actual NoGraphicsAPI. complete AGFX or ShaderToHuman parity must not delay a proven compiler contribution.
+1. **complete the active Vulkan ports.** the local RustGPU contribution draft is prepared. the current deliverable is the close Rust AGFX and ShaderToHuman port with complete declared-scope mappings and parity evidence, enabling a more advanced NGAPI scene and renderer to test the compiler changes. preserve the independent compiler contribution.
 2. **Vulkan first, including Windows.** native Windows Vulkan is the primary development and consumer proof path. direct Vulkan and Vulkan through NGAPI receive the most design attention. retain Linux portability. future Metal and DirectX limits must not force avoidable compromises into Vulkan.
 3. **source-faithful testbed.** make a close ordinary Rust AGFX port and preserve ShaderToHuman behavior under the [parity contract](../../docs/specs/001-theta-prototype/contracts/source-parity.md). distinguish primary, supporting, and deferred coverage. never describe pending parity as complete.
 4. **small explicit owners.** retain native capabilities, shader ABI, and completion-based retirement. no second RHI, render graph, ECS, mandatory shared ownership, or speculative adapters. pursue fewer lines through simpler ownership and equivalent mappings, with matched-scope measurements.
