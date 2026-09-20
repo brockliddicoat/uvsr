@@ -1,10 +1,10 @@
-//! Classic AGFX f91b108a rendering, with shader-pulled vertices and one sample.
+//! Classic AGFX f91b108a rendering, with shader-pulled vertices.
 //! Copyright (c) 2026 Amélie Heinrich. See legal/licenses/AGFX-MIT.txt.
 //! Native boundary U-021. Dynamic rendering uses the existing synchronous queue.
 use super::{
     bindings::{Descriptors, Interface, Module},
     texture, vk, Buffer, ComparisonFunction, Completion, Device, Error, GraphicsCapabilities,
-    Recording, Sampler, ShaderCode, ShaderStage, Texture, TextureFormat,
+    Recording, SampleCount, Sampler, ShaderCode, ShaderStage, Texture, TextureFormat,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -148,7 +148,7 @@ impl RenderInterface {
 }
 
 /// Native source state, with no vertex layout. Index data selects shader vertex
-/// IDs. The source fixes rasterization to one sample and line width to one.
+/// IDs. The source's one-sample default is retained. Line width stays one.
 #[derive(Clone, Debug, Default)]
 pub struct RenderPipelineInfo {
     pub interface: RenderInterface,
@@ -159,6 +159,7 @@ pub struct RenderPipelineInfo {
     pub depth_clamp: bool,
     pub depth: Option<DepthState>,
     pub colors: Vec<ColorTarget>,
+    pub samples: SampleCount,
 }
 impl RenderPipelineInfo {
     fn validate(
@@ -188,6 +189,24 @@ impl RenderPipelineInfo {
                 "independentBlend is required for distinct blend states".into(),
             ));
         }
+        if (!self.colors.is_empty()
+            && !limits
+                .framebuffer_color_sample_counts
+                .contains(self.samples.native()))
+            || (self.depth.is_some()
+                && !limits
+                    .framebuffer_depth_sample_counts
+                    .contains(self.samples.native()))
+            || (self.colors.is_empty()
+                && self.depth.is_none()
+                && !limits
+                    .framebuffer_no_attachments_sample_counts
+                    .contains(self.samples.native()))
+        {
+            return Err(Error::Unsupported(
+                "framebuffer sample count is unavailable".into(),
+            ));
+        }
         self.interface
             .resources()
             .validate(limits, self.colors.len() as u32)
@@ -208,7 +227,8 @@ impl Device {
     /// # Safety
     /// U-021: both modules must be valid for enabled features and their named
     /// stages. Stage interfaces, attachment outputs and the declared descriptor/
-    /// root layout must match. Shaders only read declared buffer/image resources
+    /// root layout and image sample counts must match. Shaders only read declared
+    /// buffer/image resources
     /// and have no physical, external, atomic or storage-image accesses. A point
     /// vertex shader must write valid PointSize. A nonempty cache must be valid
     /// data previously retrieved from a compatible Vulkan pipeline cache.
@@ -318,7 +338,7 @@ impl Device {
                 FrontFace::CounterClockwise => vk::FrontFace::COUNTER_CLOCKWISE,
             });
         let samples = vk::PipelineMultisampleStateCreateInfo::default()
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+            .rasterization_samples(owner.info.samples.native());
         let mut depth = vk::PipelineDepthStencilStateCreateInfo::default();
         if let Some(state) = owner.info.depth {
             depth = depth
@@ -479,6 +499,9 @@ mod tests {
             max_push_constants_size: 128,
             max_viewport_dimensions: [4096; 2],
             viewport_bounds_range: [-8192.0, 8191.0],
+            framebuffer_color_sample_counts: vk::SampleCountFlags::TYPE_1,
+            framebuffer_depth_sample_counts: vk::SampleCountFlags::TYPE_1,
+            framebuffer_no_attachments_sample_counts: vk::SampleCountFlags::TYPE_1,
             ..Default::default()
         }
     }
@@ -645,6 +668,44 @@ mod tests {
         info.interface.root_bytes = 129;
         assert!(info.validate(&limits(), caps()).is_err());
     }
+
+    #[test]
+    fn msaa_001_checks_color_depth_and_empty_framebuffer_limits() {
+        let mut limits = limits();
+        limits.framebuffer_color_sample_counts |= vk::SampleCountFlags::TYPE_8;
+        let mut info = RenderPipelineInfo {
+            samples: SampleCount::Eight,
+            colors: vec![ColorTarget {
+                format: TextureFormat::Rgba8Srgb,
+                blend: BlendState::default(),
+            }],
+            ..Default::default()
+        };
+        assert!(info.validate(&limits, caps()).is_ok());
+        info.depth = Some(DepthState {
+            format: TextureFormat::D32Float,
+            test: true,
+            write: true,
+            comparison: ComparisonFunction::Greater,
+        });
+        assert!(matches!(
+            info.validate(&limits, caps()),
+            Err(Error::Unsupported(_))
+        ));
+        limits.framebuffer_depth_sample_counts |= vk::SampleCountFlags::TYPE_8;
+        assert!(info.validate(&limits, caps()).is_ok());
+        info.colors.clear();
+        assert!(info.validate(&limits, caps()).is_ok());
+        info.depth = None;
+        assert!(matches!(
+            info.validate(&limits, caps()),
+            Err(Error::Unsupported(_))
+        ));
+        limits.framebuffer_no_attachments_sample_counts |= vk::SampleCountFlags::TYPE_8;
+        assert!(info.validate(&limits, caps()).is_ok());
+        info.samples = SampleCount::One;
+        assert!(info.validate(&limits, caps()).is_ok());
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -768,7 +829,7 @@ impl Device {
     /// may only read bound resources and write their declared raster outputs.
     /// For a DontCare load, do not blend/read/test undefined prior contents.
     /// A stored DontCare attachment must be completely initialized by the draws,
-    /// covering all texels and channels, or safe later readback would be unsound.
+    /// covering all texels, channels and samples, or later reads would be unsound.
     /// These shader/coverage properties cannot be inferred from draw counts.
     #[allow(unsafe_code)]
     pub unsafe fn render<'d>(
@@ -784,10 +845,14 @@ impl Device {
         if colors.len() > 8 || colors.len() > self.limits.max_color_attachments as usize {
             return Err(Error::Invalid("too many color attachments"));
         }
-        let first = colors
+        let (first, samples) = colors
             .first()
-            .map(|c| c.texture.info())
-            .or_else(|| depth.as_ref().map(|d| d.texture.info()))
+            .map(|c| (c.texture.info(), c.texture.samples()))
+            .or_else(|| {
+                depth
+                    .as_ref()
+                    .map(|d| (d.texture.info(), d.texture.samples()))
+            })
             .ok_or(Error::Invalid("render pass needs at least one attachment"))?;
         if first.width > self.limits.max_framebuffer_width
             || first.height > self.limits.max_framebuffer_height
@@ -808,6 +873,7 @@ impl Device {
                 || info.format.is_depth() != is_depth
                 || info.width != first.width
                 || info.height != first.height
+                || texture.samples() != samples
                 || (load == LoadOperation::Load && !texture.initialized)
                 || handles.contains(&texture.raw)
                 || resources
@@ -816,7 +882,7 @@ impl Device {
                     .any(|i| i.raw == texture.raw)
             {
                 return Err(Error::Invalid(
-                    "attachment owner, usage, extent, initialization or alias is invalid",
+                    "attachment owner, usage, extent, samples, initialization or alias is invalid",
                 ));
             }
             handles.push(texture.raw);
@@ -832,6 +898,7 @@ impl Device {
             if !std::ptr::eq(draw.pipeline.device, self)
                 || draw.root.len() != draw.pipeline.info.interface.root_bytes as usize
                 || draw.pipeline.info.colors.len() != colors.len()
+                || draw.pipeline.info.samples != samples
                 || draw
                     .pipeline
                     .info

@@ -3,6 +3,25 @@
 //! Single-layer, single-mip 2D images with explicit storage/sampling usage.
 use super::{vk, Buffer, Completion, Device, Error, Lease, Recording};
 
+/// Samples per texel. Availability depends on the exact format and usage.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u32)]
+pub enum SampleCount {
+    #[default]
+    One = 1,
+    Two = 2,
+    Four = 4,
+    Eight = 8,
+    Sixteen = 16,
+    ThirtyTwo = 32,
+    SixtyFour = 64,
+}
+impl SampleCount {
+    pub(super) fn native(self) -> vk::SampleCountFlags {
+        vk::SampleCountFlags::from_raw(self as u32)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextureFormat {
     Rgba8Unorm,
@@ -49,8 +68,8 @@ pub struct TextureInfo {
     pub format: TextureFormat,
 }
 
-/// Shader uses declared before allocation. Transfer upload/readback is always
-/// available. Support is queried for this exact combination, not assumed.
+/// Shader uses declared before allocation. Buffer upload/readback requires one
+/// sample. Support is queried for this exact combination, not assumed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TextureUsage {
     pub storage: bool,
@@ -134,7 +153,7 @@ impl TextureInfo {
 }
 
 /// One image, allocation and complete storage view borrowing their device.
-/// Native handles never escape. Safe operations initialize every texel and
+/// Native handles never escape. Safe operations initialize every texel/sample and
 /// complete before returning, including all layout transitions.
 pub struct Texture<'d> {
     pub(super) device: &'d Device,
@@ -144,6 +163,7 @@ pub struct Texture<'d> {
     view_formats: TextureViewFormats,
     allocation: vk::DeviceMemory,
     info: TextureInfo,
+    samples: SampleCount,
     pub(super) usage: TextureUsage,
     pub(super) linear_sampling: bool,
     pub(super) initialized: bool,
@@ -267,12 +287,24 @@ impl Device {
         self.texture_with_views(info, usage, TextureViewFormats::same(info.format))
     }
 
-    #[allow(unsafe_code)]
     pub fn texture_with_views(
         &self,
         info: TextureInfo,
         usage: TextureUsage,
         formats: TextureViewFormats,
+    ) -> Result<Texture<'_>, Error> {
+        self.texture_with_samples(info, usage, formats, SampleCount::One)
+    }
+
+    /// Create owned views with an explicit sample count. Multisampled storage
+    /// images require a separate optional feature, not currently enabled.
+    #[allow(unsafe_code)]
+    pub fn texture_with_samples(
+        &self,
+        info: TextureInfo,
+        usage: TextureUsage,
+        formats: TextureViewFormats,
+        samples: SampleCount,
     ) -> Result<Texture<'_>, Error> {
         if !usage.storage && !usage.sampled && !usage.attachment {
             return Err(Error::Invalid(
@@ -282,6 +314,11 @@ impl Device {
         if usage.storage && info.format.is_depth() {
             return Err(Error::Invalid("depth format cannot be a storage image"));
         }
+        if usage.storage && samples != SampleCount::One {
+            return Err(Error::Unsupported(
+                "shaderStorageImageMultisample is not enabled".into(),
+            ));
+        }
         let mutable = formats.validate(info.format, usage)?;
         let flags = if mutable {
             vk::ImageCreateFlags::MUTABLE_FORMAT | vk::ImageCreateFlags::EXTENDED_USAGE
@@ -289,7 +326,10 @@ impl Device {
             vk::ImageCreateFlags::empty()
         };
         let roles = formats.roles(usage);
-        let bytes = info.byte_len()?;
+        let bytes = info
+            .byte_len()?
+            .checked_mul(samples as u64)
+            .ok_or(Error::Invalid("multisampled texture byte size overflow"))?;
         if info.width > self.limits.max_image_dimension2_d
             || info.height > self.limits.max_image_dimension2_d
         {
@@ -393,10 +433,10 @@ impl Device {
             || bytes > support.max_resource_size
             || support.max_mip_levels == 0
             || support.max_array_layers == 0
-            || !support.sample_counts.contains(vk::SampleCountFlags::TYPE_1)
+            || !support.sample_counts.contains(samples.native())
         {
             return Err(Error::Unsupported(
-                "texture extent or allocation exceeds format capabilities".into(),
+                "texture extent, allocation or sample count exceeds format capabilities".into(),
             ));
         }
         let mut owner = Texture {
@@ -406,6 +446,7 @@ impl Device {
             view_formats: formats,
             allocation: vk::DeviceMemory::null(),
             info,
+            samples,
             usage,
             linear_sampling,
             initialized: false,
@@ -419,13 +460,13 @@ impl Device {
             .extent(info.extent())
             .mip_levels(1)
             .array_layers(1)
-            .samples(vk::SampleCountFlags::TYPE_1)
+            .samples(samples.native())
             .tiling(vk::ImageTiling::OPTIMAL)
             .usage(native_usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut format_list);
-        // SAFETY: U-017/U-024. Nonzero extent, exact queried support and format
+        // SAFETY: U-017/U-024/U-026. Nonzero extent, queried sample/format support
         // list, one mip/layer, no sparse/external/alias flags. Mutable/extended
         // usage is enabled only for explicitly checked compatible formats.
         owner.raw = unsafe { self.raw.create_image(&create, None) }?;
@@ -596,6 +637,9 @@ fn validate_owners(
     if !std::ptr::eq(device, buffer.device) || !std::ptr::eq(device, texture.device) {
         return Err(Error::Invalid("texture copy uses another device"));
     }
+    if texture.samples != SampleCount::One {
+        return Err(Error::Invalid("buffer/texture copies require one sample"));
+    }
     Ok(())
 }
 
@@ -617,6 +661,10 @@ impl<'d> Texture<'d> {
     }
     pub fn info(&self) -> TextureInfo {
         self.info
+    }
+
+    pub fn samples(&self) -> SampleCount {
+        self.samples
     }
 
     pub(super) fn layout(&self) -> vk::ImageLayout {
