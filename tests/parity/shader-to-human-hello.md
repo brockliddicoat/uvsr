@@ -46,4 +46,4 @@ python tools/theta/compare_s2h_hello.py --candidate work/theta/evidence/full-por
 
 the comparison requires the independently captured reference and fails if it is missing or stale. ignored hello-source/hello-reference records retain its exact build, transformations, native host and complete captures. use the Release executable and a separate output directory for the second host configuration.
 
-Features, GaussianSplatting and Zoom2D remain required. the previous four strict fixture failures and 13 documentation reference differences remain unresolved. full AGFX API/Ez behavior, actual NGAPI integration, Linux execution and upstream acceptance remain separate work. these four mapped example families do not close the complete port.
+Features and GaussianSplatting remain required. [Zoom2D](shader-to-human-zoom.md) now has its separate source and interaction mapping. the previous four strict fixture failures and 13 documentation reference differences remain unresolved. full AGFX API/Ez behavior, actual NGAPI integration, Linux execution and upstream acceptance remain separate work. these four mapped Hello families do not close the complete port.

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "upstream": "https://github.com/electronicarts/ShaderToHuman",
+  "commit": "d6f98b7d67da802053cd9c702082fa741dec42e7",
+  "license": "legal/licenses/ShaderToHuman-BSD-3-Clause.txt",
+  "sources": [
+    {
+      "path": "examples/Zoom2D/Pre.hlsl",
+      "sha256": "08f313b13959646f53029201fb85f9cccc28de5648c05666f9790a060efa0d61"
+    },
+    {
+      "path": "examples/Zoom2D/Render.hlsl",
+      "sha256": "1d8c47db2cb27c919b6df110bcfc3e2943e7a52f3d9330978b3fbac70f48b560"
+    },
+    {
+      "path": "examples/Zoom2D/s2h_zoom2D.gg",
+      "sha256": "598ed30c663a422852c8e5be768186ee9edd8dcc2467ea72c6fa399582a8052e"
+    },
+    {
+      "path": "examples/Zoom2D/s2h_zoom2D.gguser",
+      "sha256": "772b5e1118123b8c19f54c32df30abcdf194f752690ab7a4dc32512f1dccd70d"
+    },
+    {
+      "path": "include/s2h.hlsl",
+      "sha256": "5efd8404ef597bbff71cc1f9d0dc6d963dea19285bcc0f18ae6364a9d1882686"
+    }
+  ],
+  "inputs": {
+    "path": "tests/parity/fixtures/shader-to-human/zoom-inputs.json",
+    "sha256": "ac334be9c494df4fa407918498359d754bc100ea19f48e2870bad539e8c3a851",
+    "scope": "declared deterministic interaction sequence, not a source golden"
+  }
+}
