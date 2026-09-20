@@ -95,6 +95,8 @@ this is an intermediate float-buffer diagnostic, not the source RGBA8 storage-im
 
 the later [format-view mapping](../../tests/parity/format-views.md) covers `compile_agfx_graphics.py --views` and `run_agfx_views.py`, including the required current review record. it tests UNORM/sRGB storage, sampled and attachment views through one texture owner.
 
+the [multisample gate](../../tests/parity/multisample.md) adds `compile_agfx_graphics.py --multisample` and `run_agfx_multisample.py` for GaussianSplatting's required eight-sample color/depth path. it checks individual samples and retains a one-sample control. the complete Gaussian example remains separate work.
+
 ```text
 cargo build --bin texture_copy --locked
 cargo build --bin texture_copy --release --locked

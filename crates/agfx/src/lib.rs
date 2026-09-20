@@ -10,9 +10,9 @@ pub use vulkan::{
     ColorTarget, ComparisonFunction, Completion, ComputeDispatch, ComputeInterface, ComputeRoot,
     CullMode, DepthAttachment, DepthState, Device, DeviceInfo, DrawVertices, FillMode, FrontFace,
     GraphicsCapabilities, IndexType, LoadOperation, Memory, RenderDraw, RenderInterface,
-    RenderPipeline, RenderPipelineInfo, RenderResources, Sampler, SamplerFilter, SamplerInfo,
-    Scissor, ShaderCode, ShaderStage, StorageCompute, StoreOperation, Texture, TextureCopy,
-    TextureFormat, TextureInfo, TextureUsage, TextureViewFormats, Topology, Viewport,
+    RenderPipeline, RenderPipelineInfo, RenderResources, SampleCount, Sampler, SamplerFilter,
+    SamplerInfo, Scissor, ShaderCode, ShaderStage, StorageCompute, StoreOperation, Texture,
+    TextureCopy, TextureFormat, TextureInfo, TextureUsage, TextureViewFormats, Topology, Viewport,
 };
 
 use std::fmt;

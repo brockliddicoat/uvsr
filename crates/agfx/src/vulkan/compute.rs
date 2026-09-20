@@ -246,7 +246,8 @@ impl<'d> StorageCompute<'d> {
     /// U-016: for every job, the caller must establish that the shader's actual
     /// root values and invocation IDs select only the bound initialized ranges,
     /// with valid types, alignment, synchronization and race-free accesses.
-    /// Every image access must match its bound format, shape and subresources.
+    /// Every image access must match its bound format, shape, sample count and
+    /// subresources. Multisample fetch indices must be within the bound count.
     /// Sampling instructions must use compatible floating-point, normalized
     /// color images and non-comparison samplers. Sampled images are read-only.
     /// No invocation may access outside a bound image or race another access.
