@@ -1,9 +1,7 @@
 //! Ordinary storage buffer/image compute owners. Native boundary U-016, with the
 //! source four-pass safe wrapper retained under U-011.
-use super::{
-    Buffer, ComparisonFunction, Completion, Device, Error, Lease, Memory, Recording, Sampler,
-    SamplerFilter, Texture,
-};
+use super::bindings::{Descriptors, Interface, Module};
+use super::{Buffer, Completion, Device, Error, Memory, Recording, Sampler, Texture};
 use ash::vk;
 use std::ffi::CStr;
 
@@ -71,6 +69,16 @@ pub struct ComputeInterface {
 }
 
 impl ComputeInterface {
+    fn resources(self) -> Interface {
+        Interface {
+            buffers: self.buffers,
+            images: self.images,
+            sampled_images: self.sampled_images,
+            samplers: self.samplers,
+            root_bytes: self.root_bytes,
+        }
+    }
+
     fn validate_job(
         self,
         job: &ComputeDispatch<'_>,
@@ -91,24 +99,10 @@ impl ComputeInterface {
     }
 
     fn validate(self, limits: &vk::PhysicalDeviceLimits) -> Result<(), Error> {
-        if self.buffers > limits.max_per_stage_descriptor_storage_buffers
-            || self.buffers > limits.max_descriptor_set_storage_buffers
-            || self.images > limits.max_per_stage_descriptor_storage_images
-            || self.images > limits.max_descriptor_set_storage_images
-            || self.sampled_images > limits.max_per_stage_descriptor_sampled_images
-            || self.sampled_images > limits.max_descriptor_set_sampled_images
-            || self.samplers > limits.max_per_stage_descriptor_samplers
-            || self.samplers > limits.max_descriptor_set_samplers
-            || self
-                .buffers
-                .checked_add(self.images)
-                .and_then(|count| count.checked_add(self.sampled_images))
-                .is_none_or(|count| count == 0 || count > limits.max_per_stage_resources)
-            || self.root_bytes & 3 != 0
-            || self.root_bytes > limits.max_push_constants_size
-        {
+        self.resources().validate(limits, 0)?;
+        if self.buffers == 0 && self.images == 0 && self.sampled_images == 0 {
             return Err(Error::Invalid(
-                "compute descriptor/root interface exceeds device limits",
+                "compute requires at least one shader resource",
             ));
         }
         let mut invocations = 1_u32;
@@ -139,31 +133,13 @@ pub struct ComputeDispatch<'a> {
 pub struct StorageCompute<'d> {
     device: &'d Device,
     interface: ComputeInterface,
-    set_layout: vk::DescriptorSetLayout,
-    layout: vk::PipelineLayout,
-    pool: vk::DescriptorPool,
-    set: vk::DescriptorSet,
+    bindings: Descriptors<'d>,
     pipeline: vk::Pipeline,
-    _owner_slot: Lease<'d>,
 }
 
 /// Source four-pass fixture wrapper with enforced root and buffer bounds.
 pub struct BufferCompute<'d> {
     inner: StorageCompute<'d>,
-}
-
-struct Module<'d> {
-    device: &'d Device,
-    raw: vk::ShaderModule,
-}
-
-impl Drop for Module<'_> {
-    #[allow(unsafe_code)]
-    fn drop(&mut self) {
-        // SAFETY: U-016. Unique module, retained through pipeline creation and
-        // never used by commands directly. Device remains borrowed and live.
-        unsafe { self.device.raw.destroy_shader_module(self.raw, None) };
-    }
 }
 
 impl Device {
@@ -197,83 +173,19 @@ impl Device {
         let mut owner = StorageCompute {
             device: self,
             interface,
-            set_layout: vk::DescriptorSetLayout::null(),
-            layout: vk::PipelineLayout::null(),
-            pool: vk::DescriptorPool::null(),
-            set: vk::DescriptorSet::null(),
+            bindings: Descriptors::new(self, interface.resources(), vk::ShaderStageFlags::COMPUTE)?,
             pipeline: vk::Pipeline::null(),
-            _owner_slot: self.pipelines.acquire()?,
         };
-        let bindings: Vec<_> = [
-            (0, vk::DescriptorType::STORAGE_BUFFER, interface.buffers),
-            (1, vk::DescriptorType::STORAGE_IMAGE, interface.images),
-            (
-                2,
-                vk::DescriptorType::SAMPLED_IMAGE,
-                interface.sampled_images,
-            ),
-            (3, vk::DescriptorType::SAMPLER, interface.samplers),
-        ]
-        .into_iter()
-        .filter(|&(_, _, count)| count != 0)
-        .map(|(binding, kind, count)| {
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(binding)
-                .descriptor_type(kind)
-                .descriptor_count(count)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-        })
-        .collect();
-        let create = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-        // SAFETY: U-016. Queried supported ordinary storage descriptors, compute
-        // stage only, with live binding data and no variable/update-after-bind use.
-        owner.set_layout = unsafe { self.raw.create_descriptor_set_layout(&create, None) }?;
-        let layouts = [owner.set_layout];
-        let ranges = [vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-            .offset(0)
-            .size(interface.root_bytes)];
-        let create = vk::PipelineLayoutCreateInfo::default()
-            .set_layouts(&layouts)
-            .push_constant_ranges(if interface.root_bytes == 0 {
-                &[]
-            } else {
-                &ranges
-            });
-        // SAFETY: U-016. Same-device live set layout, supported nonoverlapping
-        // aligned root range. Arrays stay live through the creation call.
-        owner.layout = unsafe { self.raw.create_pipeline_layout(&create, None) }?;
-        let sizes: Vec<_> = bindings
-            .iter()
-            .map(|binding| vk::DescriptorPoolSize {
-                ty: binding.descriptor_type,
-                descriptor_count: binding.descriptor_count,
-            })
-            .collect();
-        let create = vk::DescriptorPoolCreateInfo::default()
-            .max_sets(1)
-            .pool_sizes(&sizes);
-        // SAFETY: U-016. Nonzero, exact set/storage capacities. No concurrent use.
-        owner.pool = unsafe { self.raw.create_descriptor_pool(&create, None) }?;
-        let allocate = vk::DescriptorSetAllocateInfo::default()
-            .descriptor_pool(owner.pool)
-            .set_layouts(&layouts);
-        // SAFETY: U-016. Fresh pool has room for this one matching set.
-        owner.set = unsafe { self.raw.allocate_descriptor_sets(&allocate) }?[0];
-        let create = vk::ShaderModuleCreateInfo::default().code(shader.words);
-        // SAFETY: U-016. Caller establishes complete module validity and exact
-        // enabled-feature/profile agreement. The aligned words stay live here.
-        let module = Module {
-            device: self,
-            raw: unsafe { self.raw.create_shader_module(&create, None) }?,
-        };
+        // SAFETY: U-016. Constructor's caller proves complete shader validity
+        // for the declared interface and enabled features.
+        let module = unsafe { Module::new(self, &shader) }?;
         let stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
             .module(module.raw)
             .name(shader.entry_point);
         let create = [vk::ComputePipelineCreateInfo::default()
             .stage(stage)
-            .layout(owner.layout)];
+            .layout(owner.bindings.layout)];
         // SAFETY: U-016. Caller establishes the entry/interface/local-size contract.
         // Module/layout/names remain live, limits were checked, no base/cache used.
         match unsafe {
@@ -350,153 +262,18 @@ impl<'d> StorageCompute<'d> {
         samplers: &[&Sampler<'_>],
         jobs: &[ComputeDispatch<'_>],
     ) -> Result<Completion<'d>, Error> {
-        if buffers.len() != self.interface.buffers as usize
-            || images.len() != self.interface.images as usize
-            || sampled_images.len() != self.interface.sampled_images as usize
-            || samplers.len() != self.interface.samplers as usize
-            || jobs.is_empty()
-        {
-            return Err(Error::Invalid(
-                "compute requires its declared resources and at least one job",
-            ));
+        if jobs.is_empty() {
+            return Err(Error::Invalid("compute requires at least one job"));
         }
         for job in jobs {
             self.interface.validate_job(job, &self.device.limits)?;
         }
-        for (index, buffer) in buffers.iter().enumerate() {
-            if !std::ptr::eq(buffer.device, self.device)
-                || !buffer.initialized
-                || buffer.bytes > self.device.limits.max_storage_buffer_range as u64
-            {
-                return Err(Error::Invalid(
-                    "compute needs initialized same-device buffers within storage range limits",
-                ));
-            }
-            if buffers[..index].iter().any(|other| other.raw == buffer.raw) {
-                return Err(Error::Invalid(
-                    "compute buffers must have distinct allocations",
-                ));
-            }
-        }
-        for (index, image) in images.iter().enumerate() {
-            if !std::ptr::eq(image.device, self.device)
-                || !image.initialized
-                || !image.usage.storage
-            {
-                return Err(Error::Invalid(
-                    "compute needs initialized same-device images",
-                ));
-            }
-            if images[..index].iter().any(|other| other.raw == image.raw) {
-                return Err(Error::Invalid(
-                    "compute images must have distinct allocations",
-                ));
-            }
-        }
-        for sampler in samplers {
-            if !std::ptr::eq(sampler.device, self.device)
-                || sampler.info().comparison != ComparisonFunction::Always
-            {
-                return Err(Error::Invalid(
-                    "compute color sampling requires same-device non-comparison samplers",
-                ));
-            }
-        }
-        for image in sampled_images {
-            if !std::ptr::eq(image.device, self.device)
-                || !image.initialized
-                || !image.usage.sampled
-            {
-                return Err(Error::Invalid(
-                    "compute needs initialized same-device sampled images",
-                ));
-            }
-            if images.iter().any(|other| other.raw == image.raw) {
-                return Err(Error::Invalid(
-                    "sampled and writable images must be distinct",
-                ));
-            }
-            if !image.linear_sampling
-                && samplers
-                    .iter()
-                    .any(|s| s.info().filter == SamplerFilter::Linear)
-            {
-                return Err(Error::Unsupported(
-                    "sampled format does not support linear filtering".into(),
-                ));
-            }
-        }
-        let infos: Vec<_> = buffers
-            .iter()
-            .map(|buffer| {
-                vk::DescriptorBufferInfo::default()
-                    .buffer(buffer.raw)
-                    .offset(0)
-                    .range(buffer.bytes)
-            })
-            .collect();
-        let image_infos: Vec<_> = images
-            .iter()
-            .map(|image| {
-                vk::DescriptorImageInfo::default()
-                    .image_view(image.view)
-                    .image_layout(vk::ImageLayout::GENERAL)
-            })
-            .collect();
-        let sampled_infos: Vec<_> = sampled_images
-            .iter()
-            .map(|image| {
-                vk::DescriptorImageInfo::default()
-                    .image_view(image.view)
-                    .image_layout(vk::ImageLayout::GENERAL)
-            })
-            .collect();
-        let sampler_infos: Vec<_> = samplers
-            .iter()
-            .map(|sampler| vk::DescriptorImageInfo::default().sampler(sampler.raw))
-            .collect();
-        let mut writes = Vec::with_capacity(4);
-        if !infos.is_empty() {
-            writes.push(
-                vk::WriteDescriptorSet::default()
-                    .dst_set(self.set)
-                    .dst_binding(0)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(&infos),
-            );
-        }
-        if !image_infos.is_empty() {
-            writes.push(
-                vk::WriteDescriptorSet::default()
-                    .dst_set(self.set)
-                    .dst_binding(1)
-                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                    .image_info(&image_infos),
-            );
-        }
-        for (binding, kind, infos) in [
-            (2, vk::DescriptorType::SAMPLED_IMAGE, &sampled_infos),
-            (3, vk::DescriptorType::SAMPLER, &sampler_infos),
-        ] {
-            if !infos.is_empty() {
-                writes.push(
-                    vk::WriteDescriptorSet::default()
-                        .dst_set(self.set)
-                        .dst_binding(binding)
-                        .descriptor_type(kind)
-                        .image_info(infos),
-                );
-            }
-        }
-        // SAFETY: U-016. Every same-device descriptor uses its live complete
-        // initialized storage range at aligned offset0. Exclusive mutable
-        // borrows and prior synchronous completion exclude updates in flight.
-        // Images have queried storage support and complete same-format views.
-        // Their initialized state guarantees GENERAL layout after prior use.
-        // Sampled images have queried usage/filter support and disjoint storage
-        // owners. Immutable samplers and sampled owners stay borrowed through
-        // completion. All four descriptor classes have checked exact capacities.
-        unsafe { self.device.raw.update_descriptor_sets(&writes, &[]) };
+        self.bindings.update(
+            &buffers.iter().map(|b| &**b).collect::<Vec<_>>(),
+            &images.iter().map(|i| &**i).collect::<Vec<_>>(),
+            sampled_images,
+            samplers,
+        )?;
         let recording = Recording::new(self.device)?;
         let before = [vk::MemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::MEMORY_WRITE | vk::AccessFlags::HOST_WRITE)
@@ -525,9 +302,9 @@ impl<'d> StorageCompute<'d> {
             self.device.raw.cmd_bind_descriptor_sets(
                 recording.raw,
                 vk::PipelineBindPoint::COMPUTE,
-                self.layout,
+                self.bindings.layout,
                 0,
-                &[self.set],
+                &[self.bindings.set],
                 &[],
             );
         }
@@ -538,7 +315,7 @@ impl<'d> StorageCompute<'d> {
                 unsafe {
                     self.device.raw.cmd_push_constants(
                         recording.raw,
-                        self.layout,
+                        self.bindings.layout,
                         vk::ShaderStageFlags::COMPUTE,
                         0,
                         job.root,
@@ -640,17 +417,10 @@ impl<'d> BufferCompute<'d> {
 impl Drop for StorageCompute<'_> {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
-        // SAFETY: U-016. All dispatches completed synchronously; uncertain waits
-        // abort. Unique live children (or null during partial construction), with
-        // the borrowed Device retained. Free sets with their pool before layouts.
-        unsafe {
-            self.device.raw.destroy_pipeline(self.pipeline, None);
-            self.device.raw.destroy_descriptor_pool(self.pool, None);
-            self.device.raw.destroy_pipeline_layout(self.layout, None);
-            self.device
-                .raw
-                .destroy_descriptor_set_layout(self.set_layout, None);
-        }
+        // SAFETY: U-016. All dispatches completed synchronously; uncertain
+        // waits abort. The pipeline is destroyed before its descriptor fields,
+        // including the lease retaining the borrowed Device.
+        unsafe { self.device.raw.destroy_pipeline(self.pipeline, None) };
     }
 }
 

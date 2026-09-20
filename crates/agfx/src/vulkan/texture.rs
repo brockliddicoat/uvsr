@@ -7,6 +7,7 @@ use super::{vk, Buffer, Completion, Device, Error, Lease, Recording};
 pub enum TextureFormat {
     Rgba8Unorm,
     Rgba32Float,
+    D32Float,
 }
 
 impl TextureFormat {
@@ -14,13 +15,26 @@ impl TextureFormat {
         match self {
             Self::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
             Self::Rgba32Float => vk::Format::R32G32B32A32_SFLOAT,
+            Self::D32Float => vk::Format::D32_SFLOAT,
         }
     }
 
     fn texel_bytes(self) -> u64 {
         match self {
-            Self::Rgba8Unorm => 4,
+            Self::Rgba8Unorm | Self::D32Float => 4,
             Self::Rgba32Float => 16,
+        }
+    }
+
+    pub fn is_depth(self) -> bool {
+        self == Self::D32Float
+    }
+
+    fn aspect(self) -> vk::ImageAspectFlags {
+        if self.is_depth() {
+            vk::ImageAspectFlags::DEPTH
+        } else {
+            vk::ImageAspectFlags::COLOR
         }
     }
 }
@@ -34,10 +48,12 @@ pub struct TextureInfo {
 
 /// Shader uses declared before allocation. Transfer upload/readback is always
 /// available. Support is queried for this exact combination, not assumed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TextureUsage {
     pub storage: bool,
     pub sampled: bool,
+    /// Color or depth attachment, selected by the texture's format.
+    pub attachment: bool,
 }
 
 impl TextureInfo {
@@ -75,9 +91,9 @@ pub struct Texture<'d> {
     _allocation_slot: Lease<'d>,
 }
 
-fn range() -> vk::ImageSubresourceRange {
+fn range(format: TextureFormat) -> vk::ImageSubresourceRange {
     vk::ImageSubresourceRange::default()
-        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .aspect_mask(format.aspect())
         .level_count(1)
         .layer_count(1)
 }
@@ -155,7 +171,7 @@ impl TextureCopy {
             })
             .image_subresource(
                 vk::ImageSubresourceLayers::default()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .aspect_mask(info.format.aspect())
                     .layer_count(1),
             )
             .image_offset(vk::Offset3D {
@@ -179,6 +195,7 @@ impl Device {
             TextureUsage {
                 storage: true,
                 sampled: false,
+                attachment: false,
             },
         )
     }
@@ -189,10 +206,13 @@ impl Device {
         info: TextureInfo,
         usage: TextureUsage,
     ) -> Result<Texture<'_>, Error> {
-        if !usage.storage && !usage.sampled {
+        if !usage.storage && !usage.sampled && !usage.attachment {
             return Err(Error::Invalid(
-                "texture view requires storage or sampled usage",
+                "texture view requires storage, sampled or attachment usage",
             ));
+        }
+        if usage.storage && info.format.is_depth() {
+            return Err(Error::Invalid("depth format cannot be a storage image"));
         }
         let bytes = info.byte_len()?;
         if info.width > self.limits.max_image_dimension2_d
@@ -207,6 +227,13 @@ impl Device {
         }
         if usage.sampled {
             native_usage |= vk::ImageUsageFlags::SAMPLED;
+        }
+        if usage.attachment {
+            native_usage |= if info.format.is_depth() {
+                vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+            } else {
+                vk::ImageUsageFlags::COLOR_ATTACHMENT
+            };
         }
         // SAFETY: U-017. Live retained physical device and a supported enum.
         // Optimal-tiling features describe the actual image's filter support.
@@ -310,9 +337,9 @@ impl Device {
             .image(owner.raw)
             .view_type(vk::ImageViewType::TYPE_2D)
             .format(info.format.native())
-            .subresource_range(range());
+            .subresource_range(range(info.format));
         // SAFETY: U-017. Identical supported format, bound image, identity swizzle,
-        // complete existing single color mip/layer. No format reinterpretation.
+        // complete existing color/depth mip/layer. No format reinterpretation.
         owner.view = unsafe { self.raw.create_image_view(&view, None) }?;
         Ok(owner)
     }
@@ -432,7 +459,7 @@ impl<'d> Texture<'d> {
         self.info
     }
 
-    fn layout(&self) -> vk::ImageLayout {
+    pub(super) fn layout(&self) -> vk::ImageLayout {
         if self.initialized {
             vk::ImageLayout::GENERAL
         } else {
@@ -442,6 +469,9 @@ impl<'d> Texture<'d> {
 
     #[allow(unsafe_code)]
     pub fn clear(&mut self, color: [f32; 4]) -> Result<Completion<'d>, Error> {
+        if self.info.format.is_depth() {
+            return Err(Error::Invalid("color clear requires a color format"));
+        }
         let recording = Recording::new(self.device)?;
         barrier(
             &recording,
@@ -458,7 +488,43 @@ impl<'d> Texture<'d> {
                 self.raw,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &vk::ClearColorValue { float32: color },
-                &[range()],
+                &[range(self.info.format)],
+            )
+        };
+        barrier(
+            &recording,
+            self,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::GENERAL,
+        );
+        let complete = recording.finish()?;
+        self.initialized = true;
+        Ok(complete)
+    }
+
+    #[allow(unsafe_code)]
+    pub fn clear_depth(&mut self, depth: f32) -> Result<Completion<'d>, Error> {
+        if !self.info.format.is_depth() || !depth.is_finite() || !(0.0..=1.0).contains(&depth) {
+            return Err(Error::Invalid(
+                "depth clear requires D32Float and a finite value in 0..1",
+            ));
+        }
+        let recording = Recording::new(self.device)?;
+        barrier(
+            &recording,
+            self,
+            self.layout(),
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        );
+        // SAFETY: U-021. A complete live D32 depth range with transfer usage,
+        // valid depth value and exclusive owner. Layout is established above.
+        unsafe {
+            self.device.raw.cmd_clear_depth_stencil_image(
+                recording.raw,
+                self.raw,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &vk::ClearDepthStencilValue { depth, stencil: 0 },
+                &[range(self.info.format)],
             )
         };
         barrier(
@@ -476,14 +542,17 @@ impl<'d> Texture<'d> {
 // All callers are the complete synchronous operations above. Outside an active
 // operation an initialized image is GENERAL, otherwise it is UNDEFINED.
 #[allow(unsafe_code)]
-fn barrier(
+pub(super) fn barrier(
     recording: &Recording<'_>,
     texture: &Texture<'_>,
     old: vk::ImageLayout,
     new: vk::ImageLayout,
 ) {
     assert!(std::ptr::eq(recording.device, texture.device));
-    let to_transfer = new != vk::ImageLayout::GENERAL;
+    let to_transfer = matches!(
+        new,
+        vk::ImageLayout::TRANSFER_SRC_OPTIMAL | vk::ImageLayout::TRANSFER_DST_OPTIMAL
+    );
     let destination = if to_transfer {
         vk::AccessFlags::TRANSFER_READ | vk::AccessFlags::TRANSFER_WRITE
     } else {
@@ -494,7 +563,7 @@ fn barrier(
         .dst_access_mask(destination)];
     let images = [vk::ImageMemoryBarrier::default()
         .image(texture.raw)
-        .subresource_range(range())
+        .subresource_range(range(texture.info.format))
         .old_layout(old)
         .new_layout(new)
         .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)

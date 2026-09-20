@@ -1,0 +1,649 @@
+{
+  "schema_version": 1,
+  "upstream": "https://github.com/AmelieHeinrich/agfx",
+  "commit": "f91b108a111d2ca3ca4b6586b6cb5dd750064fd7",
+  "license": "legal/licenses/AGFX-MIT.txt",
+  "goldens": [
+    {
+      "path": "tests/parity/fixtures/agfx/depth_write_disabled.png",
+      "source_path": "data/tests/golden/depth_write_disabled.png",
+      "sha256": "3ac839840771e6f75ae5fd9421e5694bbc21c815fa7e416548110e71d6fc4c5e"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/depth_write_enabled.png",
+      "source_path": "data/tests/golden/depth_write_enabled.png",
+      "sha256": "f5e2fbb9ce5379de21beefa6b0abf4417259c0ea930b3bcf40dfd2e0c790f6b9"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_alpha_blend.png",
+      "source_path": "data/tests/golden/draw_alpha_blend.png",
+      "sha256": "c04fdbfe6a620c5be3834b0bbd82174b914145c7166ef9271b6e0c231bde5986"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_factor_dst_alpha.png",
+      "source_path": "data/tests/golden/draw_blend_factor_dst_alpha.png",
+      "sha256": "dd747ebd6ef3a9ad89242cf0c12cd0a8aee645450c6a0cf8b3127544029f38f2"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_factor_dst_color.png",
+      "source_path": "data/tests/golden/draw_blend_factor_dst_color.png",
+      "sha256": "e67b0c910d2e63ab77e8166ab660b97d51ea73e9676b910efda2543f67f2fded"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_factor_one.png",
+      "source_path": "data/tests/golden/draw_blend_factor_one.png",
+      "sha256": "f60ee41b3049734c0bdd0cea439a6744c4af5f0d63f486a339daac3b60d3728b"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_factor_one_minus_dst_alpha.png",
+      "source_path": "data/tests/golden/draw_blend_factor_one_minus_dst_alpha.png",
+      "sha256": "5a9f0840e8367ba2e6da4be4265935387a1f6ed174949cff48c45901771f85b6"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_factor_one_minus_dst_color.png",
+      "source_path": "data/tests/golden/draw_blend_factor_one_minus_dst_color.png",
+      "sha256": "beb0cd23218d9bb82918d843b56a021012a55d4ecd854c0df53a364472563a90"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_factor_one_minus_src_alpha.png",
+      "source_path": "data/tests/golden/draw_blend_factor_one_minus_src_alpha.png",
+      "sha256": "16e54f0d8011ff3266babe5291cb273dabb426d4d6f51cf9181e673aa080e8ff"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_factor_one_minus_src_color.png",
+      "source_path": "data/tests/golden/draw_blend_factor_one_minus_src_color.png",
+      "sha256": "b0cd90596380efc76fcb4e647a6d19a0c570034cf655cdad4b0e0c320e586309"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_factor_src_alpha.png",
+      "source_path": "data/tests/golden/draw_blend_factor_src_alpha.png",
+      "sha256": "07c5e7326a63d2e95ad33c50f59baab0aebdc38829a0eae02ad505b82596d5a8"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_factor_src_color.png",
+      "source_path": "data/tests/golden/draw_blend_factor_src_color.png",
+      "sha256": "d5019699f4b55466ec51e63452ce53445793979825eb6795da11110d9a230f24"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_factor_zero.png",
+      "source_path": "data/tests/golden/draw_blend_factor_zero.png",
+      "sha256": "3d046b1ebf2fd5e64c19b118cb12be0cfbd327315cf143adbb1795bd8a77fffc"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_op_add.png",
+      "source_path": "data/tests/golden/draw_blend_op_add.png",
+      "sha256": "f60ee41b3049734c0bdd0cea439a6744c4af5f0d63f486a339daac3b60d3728b"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_op_max.png",
+      "source_path": "data/tests/golden/draw_blend_op_max.png",
+      "sha256": "7d1993ee9d28d918402a255f603e1ed9056faae2608fa3165fc106ccae774e96"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_op_min.png",
+      "source_path": "data/tests/golden/draw_blend_op_min.png",
+      "sha256": "9335bf9a08d39b6b745c95a204b1e88368c70d8aaeb6a4e866c30b27dee5ec21"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_op_reverse_subtract.png",
+      "source_path": "data/tests/golden/draw_blend_op_reverse_subtract.png",
+      "sha256": "13ddfe2dee7183a502f0dbebce09b5b07c746019691c06b991f62788bacfdcc8"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_blend_op_subtract.png",
+      "source_path": "data/tests/golden/draw_blend_op_subtract.png",
+      "sha256": "7d657212f4f24fec49d9684f23c7c2f9e3aa5812648f1b73947f7b379fb972fd"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_ccw.png",
+      "source_path": "data/tests/golden/draw_ccw.png",
+      "sha256": "ace1a167bf49b999fb3739dcdd39f64a7033c3cf096147b4d07e754878860cba"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_cw.png",
+      "source_path": "data/tests/golden/draw_cw.png",
+      "sha256": "1ed446440ef2b9a4e00842241467851e2cb4264310c539abc1356994a419a0dc"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_depth_clamp_disabled.png",
+      "source_path": "data/tests/golden/draw_depth_clamp_disabled.png",
+      "sha256": "6ed4b983049ddd6a931c7cd32e79cd3490b8619f3d2d49e4416fe48fd2eeb5e3"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_depth_clamp_enabled.png",
+      "source_path": "data/tests/golden/draw_depth_clamp_enabled.png",
+      "sha256": "a8b6efe53e7cc0f235296a86784804d13526e910a3570f4aa2e70accaa6c0b95"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_depth_clear_value.png",
+      "source_path": "data/tests/golden/draw_depth_clear_value.png",
+      "sha256": "28ee01f3606bbc9f60946053bf1a93f066e1030b6fc4ffa6ebae107ff20a10aa"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_depth_test_always.png",
+      "source_path": "data/tests/golden/draw_depth_test_always.png",
+      "sha256": "a8b6efe53e7cc0f235296a86784804d13526e910a3570f4aa2e70accaa6c0b95"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_depth_test_equal.png",
+      "source_path": "data/tests/golden/draw_depth_test_equal.png",
+      "sha256": "6ed4b983049ddd6a931c7cd32e79cd3490b8619f3d2d49e4416fe48fd2eeb5e3"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_depth_test_greater.png",
+      "source_path": "data/tests/golden/draw_depth_test_greater.png",
+      "sha256": "326fedec228a4ede7285ff1f9e930d23cae815a5d00da1653576e599cf738f18"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_depth_test_greater_equal.png",
+      "source_path": "data/tests/golden/draw_depth_test_greater_equal.png",
+      "sha256": "33c38079d4532608d2b5c7a554a1ab9f641c1a61768b5763c2082d6f06d404da"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_depth_test_less.png",
+      "source_path": "data/tests/golden/draw_depth_test_less.png",
+      "sha256": "28ee01f3606bbc9f60946053bf1a93f066e1030b6fc4ffa6ebae107ff20a10aa"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_depth_test_less_equal.png",
+      "source_path": "data/tests/golden/draw_depth_test_less_equal.png",
+      "sha256": "72b7f61073238a6467bc09afc7bedf527fdecbd68d13588a218495d003147d96"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_depth_test_never.png",
+      "source_path": "data/tests/golden/draw_depth_test_never.png",
+      "sha256": "18886ab6a52fd64a058e540909cf6cc5ce2a6e7297f20d3bc182679182db734a"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_depth_test_not_equal.png",
+      "source_path": "data/tests/golden/draw_depth_test_not_equal.png",
+      "sha256": "eaec918012adbc7a4c5d556b6ad1714c627c7585fea924bf274bc5e74e89174b"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_fragment_discard.png",
+      "source_path": "data/tests/golden/draw_fragment_discard.png",
+      "sha256": "4aab3a7a60b414168fe6ecda7437b80163c4c830c195b2e40da30b71b8f1aa37"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_indexed.png",
+      "source_path": "data/tests/golden/draw_indexed.png",
+      "sha256": "f583cc8a123047eae38b747d41fb94507b1c2a6d9aa5611073f01c0c668ea283"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_lines.png",
+      "source_path": "data/tests/golden/draw_lines.png",
+      "sha256": "c0b51584b255e7667c837438d0841dddc42e80bb395fa1387dc4b18515d3d15e"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_lines_indexed.png",
+      "source_path": "data/tests/golden/draw_lines_indexed.png",
+      "sha256": "d0ed8d950b86ca48902235b8df56f31e02bec7ddfa5930ca8e60ed75e39ef339"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_points.png",
+      "source_path": "data/tests/golden/draw_points.png",
+      "sha256": "2a46657ce9266a8e76364e01fc1191dde2424450d7966714c433c693db2cb5ea"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_push_constants.png",
+      "source_path": "data/tests/golden/draw_push_constants.png",
+      "sha256": "e7992c1a5df1aa8dc8319d2a5419f66c7070a48c17da78cd16572585707791ea"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_triangle.png",
+      "source_path": "data/tests/golden/draw_triangle.png",
+      "sha256": "63dabaad9c93482524c41d3d063e1704986c0abeab934bf58dbbe425466f6fad"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/draw_wireframe.png",
+      "source_path": "data/tests/golden/draw_wireframe.png",
+      "sha256": "f5018f05a29398d703729a8c9bab5557292f07009f7b283b5afcd4ee4f6fed85"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/pipeline_cull_mode_back.png",
+      "source_path": "data/tests/golden/pipeline_cull_mode_back.png",
+      "sha256": "ace1a167bf49b999fb3739dcdd39f64a7033c3cf096147b4d07e754878860cba"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/pipeline_cull_mode_front.png",
+      "source_path": "data/tests/golden/pipeline_cull_mode_front.png",
+      "sha256": "1ed446440ef2b9a4e00842241467851e2cb4264310c539abc1356994a419a0dc"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/pipeline_cull_mode_none.png",
+      "source_path": "data/tests/golden/pipeline_cull_mode_none.png",
+      "sha256": "78a6520fa38c5ff7a42ffc744b7c15d0a62cebe9978003147aacc56ef0f915b4"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/render_pass_action_clear.png",
+      "source_path": "data/tests/golden/render_pass_action_clear.png",
+      "sha256": "785a0dbf1c9cbdfaa9f74e40dcc2612e8f5359ad167ec5aa67f9b0991b5525ff"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/render_pass_action_dont_care.png",
+      "source_path": "data/tests/golden/render_pass_action_dont_care.png",
+      "sha256": "6952bf3a6843eb96a17cc0c044b6726b4ee1f5c6e69de3bf32517efe06639d71"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/render_pass_action_load.png",
+      "source_path": "data/tests/golden/render_pass_action_load.png",
+      "sha256": "466f497f202691d7b0ca501286c715c7a2153dd76badb2091191724be311d3db"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/scissor_rect.png",
+      "source_path": "data/tests/golden/scissor_rect.png",
+      "sha256": "56e29c43aad23a0122b52b5ec2619fb7ad716850136456fffebfa59e01c1610f"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/viewport.png",
+      "source_path": "data/tests/golden/viewport.png",
+      "sha256": "80032d75dc12b5c91f55a76d31edfc08d587fc080317b73138c566225e3879b7"
+    }
+  ],
+  "sources": [
+    {
+      "source_path": "data/shaders/tests/raster.hlsl",
+      "sha256": "6621167300f6f130131d9094dfdb2cf14d0cf6553496759e3ca27d5a98d77256"
+    },
+    {
+      "source_path": "data/shaders/tests/triangle.hlsl",
+      "sha256": "92ba2af9a5ea3f3953675a6ba63b9a56bbae7cf14afea96dec384cae977d3eba"
+    },
+    {
+      "source_path": "data/shaders/tests/indexed.hlsl",
+      "sha256": "a8a63a3963b2707b122c70df6e22b661d36c51daf8b79e772fdb050cb04334dc"
+    },
+    {
+      "source_path": "data/shaders/tests/depth.hlsl",
+      "sha256": "e05db3b8803717b849a1937d8aa2d941f65af04047be5ed2e4a33c3ebcfff4a7"
+    },
+    {
+      "source_path": "data/shaders/tests/blend.hlsl",
+      "sha256": "b5dc1e107a21b19c6d6db53f447c63bd4942d4639d2efe128884d738512ad3e0"
+    },
+    {
+      "source_path": "data/shaders/tests/pass_actions.hlsl",
+      "sha256": "630f292db2435cf12dc754c16ba8f87b96335f4d42e0842ce704f96590dbe83a"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/raster_common.h",
+      "sha256": "82b0bac594e5d46a396abf37040587094428075ea0f2ea9dfc60e67fdccef0af"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/raster_common.cpp",
+      "sha256": "7ab8b8caeb17123a654e1384f386f7fd4316cca6febe67314c2aa23f00a3ea4a"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/depth_common.h",
+      "sha256": "858ae06aa321c8c93f1ed4c21fa35a4980e2292bd532fae275194bc1bbad06a5"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/depth_common.cpp",
+      "sha256": "2862ca609210a547ad4707086f4cb1b0c1083097b1e0db02d91437581f1ec6b4"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/blend_common.h",
+      "sha256": "9da3e42a5c754403f1e7e3c83e5cbae71215b07484971a3d5b2dce78a5dec6f3"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/blend_common.cpp",
+      "sha256": "5e0d018c5e3988debe7a0cc8fa77e2499a5f4f9f44f1cd328fee2a3c586a4b01"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/pass_actions_common.h",
+      "sha256": "bbad88701ef0abac282a62676808c98c04f09d133599e7581956dec527ec8172"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/pass_actions_common.cpp",
+      "sha256": "71d36ecf7fedfe1be42e09891d9a6a1e9bac6b85009cc9de78597f009790e5f0"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_pipeline_cull_mode.cpp",
+      "sha256": "07be6175f815588d6a726c5c46b3f9887bcd0feaca5a0f3a8a01bdaf1a8998be"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_winding.cpp",
+      "sha256": "a210c0422ecf76f18a3e43d603e3032897cc6f8920472c406ff828c09db376c8"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_wireframe.cpp",
+      "sha256": "4b70c2f532971317128c420b4d884f45d35936a463330909c1f225f1265c5e35"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_points.cpp",
+      "sha256": "cac0eb41555dea5d9f7bff01ede89a4b15b5850734465a9c6f6f96ef24250d8b"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_lines.cpp",
+      "sha256": "3d9ab78239fa64e168c984246bfebd5112d19d2e348f7930240883908b4bf198"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_fragment_discard.cpp",
+      "sha256": "2ad38349cecb19c2485fcb18fee5f6708ca50ea872e95e2d00dadcde4c16cf41"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_push_constants.cpp",
+      "sha256": "dcd5e8426622addf914809068f3bd69a3f02480f5b420b5bc62179e7e564c059"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_triangle.cpp",
+      "sha256": "dbfee0227bd2d363dce29d36ce366692ae8ea3f7d2c7f1c4667740cf6e653a8a"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_viewport.cpp",
+      "sha256": "12ff542b2cb254e617238f36ab7cee97fd1d53ee6d0725c19df07e5fbf88bb19"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_scissor_rect.cpp",
+      "sha256": "83dbd8fb477c34029575161133d2ed404b586ba7cc7f0de7d531ccd7e240740b"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_indexed.cpp",
+      "sha256": "c9cab5628799d4c9d005e88e61fa744226e1e5067a56d6d0c3c46acf017dcbc7"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_indexed_u16.cpp",
+      "sha256": "ba048cf1d39bebb27a6417ea88791a80adb3195cddb43a215c6824b6c965786d"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_lines_indexed.cpp",
+      "sha256": "e2cb31ccedcb5bf462bfdd0f73e3a5b07cd0441e00f7c057c1e57fa9bdfbb3c2"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_depth_test.cpp",
+      "sha256": "93c54a3126564de3fec340b10ba5b822b825a0dfdea521c1f4e678ca07687f2b"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_depth_clamp.cpp",
+      "sha256": "6b992b435289c56c53da2ed9e956afa1ccd7a390158b77c820c15333884fa08a"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_depth_write.cpp",
+      "sha256": "fc37f5800cff885e4feff8106c6d7db6a6076cccc54f686066a814d544bf0780"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_blend_factor.cpp",
+      "sha256": "3de5787a9f136a3aa44368eb5c7ef7e51c91ec2ced434349a620bf9feabc5f9f"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_draw_blend_op.cpp",
+      "sha256": "2350c8908d9543d78de26feeb3ed415175d7785a7256f5e7267f2ae7e4545171"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_render_pass_action_clear.cpp",
+      "sha256": "2a534898ad80aea3d12ff8b70102933e751a564c444b44eb9c44954aeb544aef"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_render_pass_action_load.cpp",
+      "sha256": "bb33d87156b06c6584e015d06cac5e6da53d7945ff944afab18da67e59d8f592"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_render_pass_action_dont_care.cpp",
+      "sha256": "37202d96d8f3141ba0ab4b9bceddf38c8e17b64448e374e3cb5eec0a86592ec8"
+    },
+    {
+      "source_path": "src/agfx/agfx/agfx.h",
+      "sha256": "c1ceb28cee3962a9127120b8aa0527369d1bcf62af63127a2efa9bd6ba545bd1"
+    },
+    {
+      "source_path": "src/agfx/agfx/agfx.hpp",
+      "sha256": "30ad00df1d25005849da46fa112becd2986c1b7280ebb8dae0d755577c18058b"
+    },
+    {
+      "source_path": "src/agfx/agfx/agfx_vulkan.cpp",
+      "sha256": "533950470e8f6f45a29008b7808d83a70c609e861af047c051902dda8d459402"
+    }
+  ],
+  "cases": [
+    {
+      "name": "pipeline_cull_mode_none",
+      "golden": "pipeline_cull_mode_none.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "pipeline_cull_mode_back",
+      "golden": "pipeline_cull_mode_back.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "pipeline_cull_mode_front",
+      "golden": "pipeline_cull_mode_front.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_ccw",
+      "golden": "draw_ccw.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_cw",
+      "golden": "draw_cw.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_wireframe",
+      "golden": "draw_wireframe.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_points",
+      "golden": "draw_points.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_lines",
+      "golden": "draw_lines.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_fragment_discard",
+      "golden": "draw_fragment_discard.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_push_constants",
+      "golden": "draw_push_constants.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_triangle",
+      "golden": "draw_triangle.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "viewport",
+      "golden": "viewport.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "scissor_rect",
+      "golden": "scissor_rect.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "cache_roundtrip",
+      "golden": "draw_triangle.png",
+      "disposition": "added control"
+    },
+    {
+      "name": "draw_indexed",
+      "golden": "draw_indexed.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_indexed_u16",
+      "golden": "draw_indexed.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_lines_indexed",
+      "golden": "draw_lines_indexed.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "indexed_offset",
+      "golden": "draw_indexed.png",
+      "disposition": "added control"
+    },
+    {
+      "name": "draw_depth_test_never",
+      "golden": "draw_depth_test_never.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_depth_test_less",
+      "golden": "draw_depth_test_less.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_depth_test_equal",
+      "golden": "draw_depth_test_equal.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_depth_test_less_equal",
+      "golden": "draw_depth_test_less_equal.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_depth_test_greater",
+      "golden": "draw_depth_test_greater.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_depth_test_not_equal",
+      "golden": "draw_depth_test_not_equal.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_depth_test_greater_equal",
+      "golden": "draw_depth_test_greater_equal.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_depth_test_always",
+      "golden": "draw_depth_test_always.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_depth_clear_value",
+      "golden": "draw_depth_clear_value.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_depth_clamp_disabled",
+      "golden": "draw_depth_clamp_disabled.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "depth_write_disabled",
+      "golden": "depth_write_disabled.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_depth_clamp_enabled",
+      "golden": "draw_depth_clamp_enabled.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "depth_write_enabled",
+      "golden": "depth_write_enabled.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_factor_zero",
+      "golden": "draw_blend_factor_zero.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_factor_one",
+      "golden": "draw_blend_factor_one.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_factor_src_color",
+      "golden": "draw_blend_factor_src_color.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_factor_one_minus_src_color",
+      "golden": "draw_blend_factor_one_minus_src_color.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_factor_dst_color",
+      "golden": "draw_blend_factor_dst_color.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_factor_one_minus_dst_color",
+      "golden": "draw_blend_factor_one_minus_dst_color.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_factor_src_alpha",
+      "golden": "draw_blend_factor_src_alpha.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_factor_one_minus_src_alpha",
+      "golden": "draw_blend_factor_one_minus_src_alpha.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_factor_dst_alpha",
+      "golden": "draw_blend_factor_dst_alpha.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_factor_one_minus_dst_alpha",
+      "golden": "draw_blend_factor_one_minus_dst_alpha.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_op_add",
+      "golden": "draw_blend_op_add.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_op_subtract",
+      "golden": "draw_blend_op_subtract.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_op_reverse_subtract",
+      "golden": "draw_blend_op_reverse_subtract.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_op_min",
+      "golden": "draw_blend_op_min.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_blend_op_max",
+      "golden": "draw_blend_op_max.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "draw_alpha_blend",
+      "golden": "draw_alpha_blend.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "render_pass_action_clear",
+      "golden": "render_pass_action_clear.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "render_pass_action_load",
+      "golden": "render_pass_action_load.png",
+      "disposition": "source behavior"
+    },
+    {
+      "name": "render_pass_action_dont_care",
+      "golden": "render_pass_action_dont_care.png",
+      "disposition": "source behavior"
+    }
+  ]
+}

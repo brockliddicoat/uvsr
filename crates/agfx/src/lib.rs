@@ -6,10 +6,13 @@
 
 mod vulkan;
 pub use vulkan::{
-    AddressMode, Buffer, BufferCompute, ComparisonFunction, Completion, ComputeDispatch,
-    ComputeInterface, ComputeRoot, Device, DeviceInfo, Memory, Sampler, SamplerFilter, SamplerInfo,
-    ShaderCode, ShaderStage, StorageCompute, Texture, TextureCopy, TextureFormat, TextureInfo,
-    TextureUsage,
+    AddressMode, BlendFactor, BlendOperation, BlendState, Buffer, BufferCompute, ColorAttachment,
+    ColorTarget, ComparisonFunction, Completion, ComputeDispatch, ComputeInterface, ComputeRoot,
+    CullMode, DepthAttachment, DepthState, Device, DeviceInfo, DrawVertices, FillMode, FrontFace,
+    GraphicsCapabilities, IndexType, LoadOperation, Memory, RenderDraw, RenderInterface,
+    RenderPipeline, RenderPipelineInfo, RenderResources, Sampler, SamplerFilter, SamplerInfo,
+    Scissor, ShaderCode, ShaderStage, StorageCompute, StoreOperation, Texture, TextureCopy,
+    TextureFormat, TextureInfo, TextureUsage, Topology, Viewport,
 };
 
 use std::fmt;

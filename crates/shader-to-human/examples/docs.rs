@@ -52,6 +52,8 @@ fn identity() -> Value {
         "crates/agfx/src/lib.rs",
         "crates/agfx/src/vulkan.rs",
         "crates/agfx/src/vulkan/compute.rs",
+        "crates/agfx/src/vulkan/bindings.rs",
+        "crates/agfx/src/vulkan/graphics.rs",
         "crates/agfx/src/vulkan/ownership.rs",
         "crates/agfx/src/vulkan/sampler.rs",
         "crates/agfx/src/vulkan/texture.rs",

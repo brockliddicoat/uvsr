@@ -5,6 +5,13 @@ from run_agfx_copy import CONTROLS, FEATURES, ROOT, check_record, sha256, valida
 
 
 class Records(unittest.TestCase):
+    def test_large_json_line_keeps_every_validation_diagnostic(self):
+        ordinary = '{"records":[' + ','.join(['{"status":"pass"}']*10000) + ']}'
+        warnings = ['prefix Validation Warning: example', 'AGFX validation: VUID-example', 'SYNC-HAZARD example']
+        diagnostics,notices = validation_messages(ordinary+'\r\n'+'\n'.join(warnings)+'\r'+ordinary)
+        self.assertEqual(diagnostics,warnings)
+        self.assertEqual(notices,[])
+
     def setUp(self):
         self.golden = (ROOT / "tests/parity/fixtures/agfx/copy_buffer_to_buffer.bin").read_bytes()
         self.record = {"schema_version": 1, "run_token": "fresh", "status": "pass", "host_source_sha256": {"source": "hash"},

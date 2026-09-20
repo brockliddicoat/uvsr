@@ -14,6 +14,7 @@ import source_flip
 
 SOURCES = ['Cargo.toml', 'Cargo.lock', 'crates/agfx/Cargo.toml', 'crates/agfx/src/lib.rs',
            'crates/agfx/src/vulkan.rs', 'crates/agfx/src/vulkan/compute.rs',
+        'crates/agfx/src/vulkan/bindings.rs', 'crates/agfx/src/vulkan/graphics.rs',
            'crates/agfx/src/vulkan/ownership.rs', 'crates/agfx/src/vulkan/sampler.rs',
            'crates/agfx/src/vulkan/texture.rs', 'crates/agfx/src/bin/texture_sampling.rs',
            'shaders/rust/texture_sampling.rs']

@@ -36,12 +36,12 @@ pub enum ComparisonFunction {
     Greater,
     NotEqual,
     GreaterEqual,
-    /// AGFX's convention: disables comparison, rather than always passing it.
+    /// AGFX samplers disable comparison for this value. Depth tests use ALWAYS.
     Always,
 }
 
 impl ComparisonFunction {
-    fn native(self) -> vk::CompareOp {
+    pub(super) fn native(self) -> vk::CompareOp {
         match self {
             Self::Never => vk::CompareOp::NEVER,
             Self::Less => vk::CompareOp::LESS,

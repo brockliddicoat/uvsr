@@ -5,13 +5,21 @@ use std::{cell::Cell, ffi::CStr, io::Write, marker::PhantomData, mem::ManuallyDr
 
 const API_VERSION: u32 = vk::make_api_version(0, 1, 4, 0);
 
+mod bindings;
 mod compute;
+mod graphics;
 mod ownership;
 mod sampler;
 mod texture;
 pub use compute::{
     BufferCompute, ComputeDispatch, ComputeInterface, ComputeRoot, ShaderCode, ShaderStage,
     StorageCompute,
+};
+pub use graphics::{
+    BlendFactor, BlendOperation, BlendState, ColorAttachment, ColorTarget, CullMode,
+    DepthAttachment, DepthState, DrawVertices, FillMode, FrontFace, IndexType, LoadOperation,
+    RenderDraw, RenderInterface, RenderPipeline, RenderPipelineInfo, RenderResources, Scissor,
+    StoreOperation, Topology, Viewport,
 };
 use ownership::{Lease, LiveObjects};
 pub use sampler::{AddressMode, ComparisonFunction, Sampler, SamplerFilter, SamplerInfo};
@@ -27,6 +35,17 @@ pub struct DeviceInfo {
     pub device_id: u32,
     pub queue_family: u32,
     pub validation: bool,
+    pub graphics: GraphicsCapabilities,
+}
+
+/// Queried and enabled optional classic-raster capabilities. Pipeline creation
+/// must reject a requested capability when its device reports false.
+#[derive(Clone, Copy, Debug)]
+pub struct GraphicsCapabilities {
+    pub dynamic_rendering: bool,
+    pub wireframe: bool,
+    pub depth_clamp: bool,
+    pub independent_blend: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -283,29 +302,36 @@ impl Device {
                     continue;
                 };
                 let mut features12 = vk::PhysicalDeviceVulkan12Features::default();
-                let mut features =
-                    vk::PhysicalDeviceFeatures2::default().push_next(&mut features12);
-                // SAFETY: U-010. Supported core structure with a live mutable pNext.
+                let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
+                let mut features = vk::PhysicalDeviceFeatures2::default()
+                    .push_next(&mut features12)
+                    .push_next(&mut features13);
+                // SAFETY: U-010. Selected API version supports both distinct core
+                // feature structures, whose writable pNext storage remains live.
                 unsafe {
                     instance
                         .raw
                         .get_physical_device_features2(physical, &mut features)
                 };
-                if features
-                    .features
-                    .shader_storage_buffer_array_dynamic_indexing
-                    == 0
+                let core_features = features.features;
+                let graphics = GraphicsCapabilities {
+                    wireframe: core_features.fill_mode_non_solid != 0,
+                    depth_clamp: core_features.depth_clamp != 0,
+                    independent_blend: core_features.independent_blend != 0,
+                    dynamic_rendering: features13.dynamic_rendering != 0,
+                };
+                if core_features.shader_storage_buffer_array_dynamic_indexing == 0
                     || features12.timeline_semaphore == 0
                     || features12.vulkan_memory_model == 0
                     || features12.runtime_descriptor_array == 0
                 {
                     continue;
                 }
-                selected = Some((physical, properties, family as u32));
+                selected = Some((physical, properties, family as u32, graphics));
                 break 'devices;
             }
         }
-        let (physical, properties, family) = selected.ok_or_else(|| Error::Unsupported("Vulkan 1.4 graphics/compute queue, timelineSemaphore, vulkanMemoryModel, runtimeDescriptorArray and shaderStorageBufferArrayDynamicIndexing required".into()))?;
+        let (physical, properties, family, graphics) = selected.ok_or_else(|| Error::Unsupported("Vulkan 1.4 graphics/compute queue, timelineSemaphore, vulkanMemoryModel, runtimeDescriptorArray and shaderStorageBufferArrayDynamicIndexing required".into()))?;
         let name = properties
             .device_name_as_c_str()
             .map_err(|_| Error::Invalid("unterminated adapter name"))?
@@ -328,15 +354,21 @@ impl Device {
             .queue_family_index(family)
             .queue_priorities(&priorities)];
         let core = vk::PhysicalDeviceFeatures::default()
-            .shader_storage_buffer_array_dynamic_indexing(true);
+            .shader_storage_buffer_array_dynamic_indexing(true)
+            .fill_mode_non_solid(graphics.wireframe)
+            .depth_clamp(graphics.depth_clamp)
+            .independent_blend(graphics.independent_blend);
         let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
             .timeline_semaphore(true)
             .vulkan_memory_model(true)
             .runtime_descriptor_array(true);
+        let mut features13 = vk::PhysicalDeviceVulkan13Features::default()
+            .dynamic_rendering(graphics.dynamic_rendering);
         let create = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queues)
             .enabled_features(&core)
-            .push_next(&mut features12);
+            .push_next(&mut features12)
+            .push_next(&mut features13);
         // SAFETY: U-010. Only queried features and the valid selected queue are
         // enabled. The borrowed create-info graph lives through the call.
         let raw = unsafe { instance.raw.create_device(physical, &create, None) }?;
@@ -369,6 +401,7 @@ impl Device {
                 device_id: properties.device_id,
                 queue_family: family,
                 validation,
+                graphics,
             },
             _single_thread: PhantomData,
         };
@@ -416,7 +449,8 @@ impl Device {
             .usage(
                 vk::BufferUsageFlags::TRANSFER_SRC
                     | vk::BufferUsageFlags::TRANSFER_DST
-                    | vk::BufferUsageFlags::STORAGE_BUFFER,
+                    | vk::BufferUsageFlags::STORAGE_BUFFER
+                    | vk::BufferUsageFlags::INDEX_BUFFER,
             )
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
         // SAFETY: U-010. Valid nonzero size/usage; one family owns every operation.
