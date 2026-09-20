@@ -15,21 +15,21 @@ const BYTES: usize = 800 * 600 * 16;
 const REVIEWED: [(u32, &str); 2] = [
     (
         0,
-        "dded0be4a2db3edeff70ce559564438d51919c8ec4f9bd882ce99f4dba25d440",
+        "171157faae42c029a0edaec87d16edcb791eaa513862da6c9ccbc7353719c491",
     ),
     (
         3,
-        "f1f91b19dd83b4697403e0d13843c7f39475d763b21e52067c89eeb751bfe742",
+        "c9ac6b38afbfd024a6810903db6c363659a414053cf94d78f5e3fc3e2321da07",
     ),
 ];
 const REVIEWED_IMAGES: [(u32, &str); 2] = [
     (
         0,
-        "5d1272037274650ed9a550a132a52504ff38bbc6c3260bb21090c29307d9f4a9",
+        "b4157eb58509d3dc3cbb3f25ece71d181b049770b0daa929368b72835f2e50ba",
     ),
     (
         3,
-        "e690bd68b5278b4a9319523a3b43611bb0a8f1f19485381d97edcda597d71b7d",
+        "e20f392a884bc5aec062e0966c6c1c8f2f18b2840236eb9a953b88cec316b026",
     ),
 ];
 

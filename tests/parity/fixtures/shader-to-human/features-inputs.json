@@ -1,0 +1,655 @@
+[
+  {
+    "name": "world-camera0",
+    "program": "world",
+    "camera": 0,
+    "time": 0.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ],
+    "reset": "zero"
+  },
+  {
+    "name": "gather-camera0",
+    "program": "gather",
+    "camera": 0,
+    "time": 0.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "scatter-camera0",
+    "program": "scatter",
+    "camera": 0,
+    "time": 0.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "table-camera0",
+    "program": "table",
+    "camera": 0,
+    "time": 0.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "two_d-camera0",
+    "program": "two_d",
+    "camera": 0,
+    "time": 0.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "arrows-camera0",
+    "program": "arrows",
+    "camera": 0,
+    "time": 0.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "quad-camera0",
+    "program": "quad",
+    "camera": 0,
+    "time": 0.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "font-camera0",
+    "program": "font",
+    "camera": 0,
+    "time": 0.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "coordinates-camera0",
+    "program": "coordinates",
+    "camera": 0,
+    "time": 0.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "world-camera1",
+    "program": "world",
+    "camera": 1,
+    "time": 0.75,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ],
+    "reset": "seed"
+  },
+  {
+    "name": "gather-camera1",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.75,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "scatter-camera1",
+    "program": "scatter",
+    "camera": 1,
+    "time": 0.75,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "table-camera1",
+    "program": "table",
+    "camera": 1,
+    "time": 0.75,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "two_d-camera1",
+    "program": "two_d",
+    "camera": 1,
+    "time": 0.75,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "arrows-camera1",
+    "program": "arrows",
+    "camera": 1,
+    "time": 0.75,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "quad-camera1",
+    "program": "quad",
+    "camera": 1,
+    "time": 0.75,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "font-camera1",
+    "program": "font",
+    "camera": 1,
+    "time": 0.75,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "coordinates-camera1",
+    "program": "coordinates",
+    "camera": 1,
+    "time": 0.75,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "world-camera2",
+    "program": "world",
+    "camera": 2,
+    "time": 1.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ],
+    "reset": "seed"
+  },
+  {
+    "name": "gather-camera2",
+    "program": "gather",
+    "camera": 2,
+    "time": 1.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "scatter-camera2",
+    "program": "scatter",
+    "camera": 2,
+    "time": 1.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "table-camera2",
+    "program": "table",
+    "camera": 2,
+    "time": 1.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "two_d-camera2",
+    "program": "two_d",
+    "camera": 2,
+    "time": 1.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "arrows-camera2",
+    "program": "arrows",
+    "camera": 2,
+    "time": 1.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "quad-camera2",
+    "program": "quad",
+    "camera": 2,
+    "time": 1.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "font-camera2",
+    "program": "font",
+    "camera": 2,
+    "time": 1.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "coordinates-camera2",
+    "program": "coordinates",
+    "camera": 2,
+    "time": 1.25,
+    "mouse": [
+      100,
+      100,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "gather-radio-green",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      129.9,
+      225.9,
+      1,
+      0
+    ],
+    "reset": "zero"
+  },
+  {
+    "name": "gather-radio-hover",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      145,
+      225,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "gather-radio-blue",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      145,
+      225,
+      2,
+      0
+    ]
+  },
+  {
+    "name": "gather-clear",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      125,
+      258,
+      1,
+      0
+    ]
+  },
+  {
+    "name": "gather-clear-release",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      125,
+      258,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "gather-check",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      112,
+      289,
+      1,
+      0
+    ]
+  },
+  {
+    "name": "gather-check-hold",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      112,
+      289,
+      1,
+      0
+    ]
+  },
+  {
+    "name": "gather-check-release",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      112,
+      289,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "gather-check-toggle",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      112,
+      289,
+      1,
+      0
+    ]
+  },
+  {
+    "name": "gather-alpha-start",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      52.75,
+      350.25,
+      1,
+      0
+    ]
+  },
+  {
+    "name": "gather-alpha-drag",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      105,
+      350,
+      1,
+      0
+    ]
+  },
+  {
+    "name": "gather-alpha-outside",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      900,
+      650,
+      1,
+      0
+    ]
+  },
+  {
+    "name": "gather-alpha-sentinel",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      -100.9,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "gather-alpha-release",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      900,
+      650,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "gather-red-start",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      114,
+      382,
+      1,
+      0
+    ]
+  },
+  {
+    "name": "gather-red-left",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      -10,
+      382,
+      1,
+      0
+    ]
+  },
+  {
+    "name": "gather-red-release",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      -10,
+      382,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "two_d-top-red",
+    "program": "two_d",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      266,
+      10,
+      1,
+      0
+    ],
+    "reset": "seed"
+  },
+  {
+    "name": "two_d-top-red-release",
+    "program": "two_d",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      266,
+      10,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "two_d-top-alpha",
+    "program": "two_d",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      310,
+      58,
+      1,
+      0
+    ]
+  },
+  {
+    "name": "two_d-top-alpha-release",
+    "program": "two_d",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      310,
+      58,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "two_d-bottom-green",
+    "program": "two_d",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      250,
+      106,
+      1,
+      0
+    ]
+  },
+  {
+    "name": "two_d-bottom-release",
+    "program": "two_d",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      250,
+      106,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "two_d-top-border",
+    "program": "two_d",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      300,
+      170,
+      1,
+      0
+    ]
+  },
+  {
+    "name": "two_d-border-release",
+    "program": "two_d",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      300,
+      170,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "arrows-center",
+    "program": "arrows",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      400,
+      300,
+      0,
+      0
+    ]
+  },
+  {
+    "name": "gather-mouse-outside",
+    "program": "gather",
+    "camera": 1,
+    "time": 0.25,
+    "mouse": [
+      -200,
+      -200,
+      0,
+      0
+    ]
+  }
+]

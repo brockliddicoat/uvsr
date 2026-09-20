@@ -13,11 +13,11 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const REVIEWED: [(u32, &str); 2] = [
     (
         0,
-        "8a276010649038c3786b74a3544ce4e9344163c3f70d8ddbdc85388aa11420a5",
+        "a0e8dc9af0e2e5eff36687b5e18e927da6c9094a38c436e7ced1eeea04838a76",
     ),
     (
         3,
-        "c48f6aa14d8ea882eb2d4821c6fd2d0a07f8027b151a7813dcd125a198745842",
+        "8fcb5c732fcf1a55a5f808e2b5a3a3a94dd63c2be2d538ee589395b1234d6ac5",
     ),
 ];
 

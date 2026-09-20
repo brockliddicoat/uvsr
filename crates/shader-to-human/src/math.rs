@@ -3,7 +3,13 @@
 use glam::Vec3;
 
 pub(crate) fn saturate(value: f32) -> f32 {
-    value.clamp(0.0, 1.0)
+    // HLSL saturate(NaN) is zero. Rust clamp propagates NaN, which would poison
+    // every pixel when the source Features example draws a zero-area arrowhead.
+    if value.is_nan() {
+        0.0
+    } else {
+        value.clamp(0.0, 1.0)
+    }
 }
 
 pub(crate) fn frac(value: f32) -> f32 {
