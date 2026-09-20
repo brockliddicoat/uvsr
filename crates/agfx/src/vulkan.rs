@@ -6,7 +6,10 @@ use std::{cell::Cell, ffi::CStr, io::Write, marker::PhantomData, rc::Rc};
 const API_VERSION: u32 = vk::make_api_version(0, 1, 4, 0);
 
 mod compute;
-pub use compute::{BufferCompute, ComputeRoot, ShaderCode, ShaderStage};
+pub use compute::{
+    BufferCompute, ComputeDispatch, ComputeInterface, ComputeRoot, ShaderCode, ShaderStage,
+    StorageCompute,
+};
 
 #[derive(Clone, Debug)]
 pub struct DeviceInfo {
