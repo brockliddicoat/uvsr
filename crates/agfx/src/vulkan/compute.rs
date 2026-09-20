@@ -1,6 +1,6 @@
-//! Ordinary storage-buffer compute owners. Native boundary U-016, with the
+//! Ordinary storage buffer/image compute owners. Native boundary U-016, with the
 //! source four-pass safe wrapper retained under U-011.
-use super::{Buffer, Completion, Device, Error, Lease, Memory, Recording};
+use super::{Buffer, Completion, Device, Error, Lease, Memory, Recording, Texture};
 use ash::vk;
 use std::ffi::CStr;
 
@@ -54,11 +54,12 @@ impl ComputeRoot {
     }
 }
 
-/// Ordinary set0/binding0 storage-buffer descriptors and inline root bytes.
-/// This is separate from NGAPI native heaps. Texture descriptors follow later.
+/// Ordinary set0 storage buffers at binding0, storage images at binding1,
+/// and inline root bytes. This is separate from NGAPI native heaps.
 #[derive(Clone, Copy, Debug)]
 pub struct ComputeInterface {
     pub buffers: u32,
+    pub images: u32,
     pub root_bytes: u32,
     pub local_size: [u32; 3],
 }
@@ -84,10 +85,14 @@ impl ComputeInterface {
     }
 
     fn validate(self, limits: &vk::PhysicalDeviceLimits) -> Result<(), Error> {
-        if self.buffers == 0
-            || self.buffers > limits.max_per_stage_descriptor_storage_buffers
+        if self.buffers > limits.max_per_stage_descriptor_storage_buffers
             || self.buffers > limits.max_descriptor_set_storage_buffers
-            || self.buffers > limits.max_per_stage_resources
+            || self.images > limits.max_per_stage_descriptor_storage_images
+            || self.images > limits.max_descriptor_set_storage_images
+            || self
+                .buffers
+                .checked_add(self.images)
+                .is_none_or(|count| count == 0 || count > limits.max_per_stage_resources)
             || self.root_bytes & 3 != 0
             || self.root_bytes > limits.max_push_constants_size
         {
@@ -151,12 +156,13 @@ impl Drop for Module<'_> {
 }
 
 impl Device {
-    /// Create an ordinary storage-buffer pipeline.
+    /// Create an ordinary storage buffer/image pipeline.
     ///
     /// # Safety
     /// U-016: the complete SPIR-V must be valid for the device's enabled
     /// features. Its named compute entry uses exactly the declared local size,
-    /// only set0/binding0 storage buffers and at most the declared root bytes.
+    /// only set0/binding0 storage buffers, set0/binding1 storage images, and at
+    /// most the declared root bytes. Descriptor counts match this interface.
     /// All module instructions, entry interfaces and layouts must be valid.
     /// No physical addresses or undeclared resources are permitted. Header and
     /// device-limit checks do not establish these shader validity obligations.
@@ -186,11 +192,20 @@ impl Device {
             pipeline: vk::Pipeline::null(),
             _owner_slot: self.pipelines.acquire()?,
         };
-        let bindings = [vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(interface.buffers)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE)];
+        let bindings: Vec<_> = [
+            (0, vk::DescriptorType::STORAGE_BUFFER, interface.buffers),
+            (1, vk::DescriptorType::STORAGE_IMAGE, interface.images),
+        ]
+        .into_iter()
+        .filter(|&(_, _, count)| count != 0)
+        .map(|(binding, kind, count)| {
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(binding)
+                .descriptor_type(kind)
+                .descriptor_count(count)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+        })
+        .collect();
         let create = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         // SAFETY: U-016. Queried supported ordinary storage descriptors, compute
         // stage only, with live binding data and no variable/update-after-bind use.
@@ -210,10 +225,13 @@ impl Device {
         // SAFETY: U-016. Same-device live set layout, supported nonoverlapping
         // aligned root range. Arrays stay live through the creation call.
         owner.layout = unsafe { self.raw.create_pipeline_layout(&create, None) }?;
-        let sizes = [vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::STORAGE_BUFFER,
-            descriptor_count: interface.buffers,
-        }];
+        let sizes: Vec<_> = bindings
+            .iter()
+            .map(|binding| vk::DescriptorPoolSize {
+                ty: binding.descriptor_type,
+                descriptor_count: binding.descriptor_count,
+            })
+            .collect();
         let create = vk::DescriptorPoolCreateInfo::default()
             .max_sets(1)
             .pool_sizes(&sizes);
@@ -278,6 +296,7 @@ impl Device {
                 shader,
                 ComputeInterface {
                     buffers: 4,
+                    images: 0,
                     root_bytes: 16,
                     local_size: [64, 1, 1],
                 },
@@ -288,13 +307,15 @@ impl Device {
 }
 
 impl<'d> StorageCompute<'d> {
-    /// Submit ordered dispatches using complete initialized buffer ranges.
+    /// Submit ordered dispatches using complete initialized buffers/images.
     /// A full compute dependency separates each job. Completion precedes return.
     ///
     /// # Safety
     /// U-016: for every job, the caller must establish that the shader's actual
     /// root values and invocation IDs select only the bound initialized ranges,
     /// with valid types, alignment, synchronization and race-free accesses.
+    /// Every image access must match its bound format, shape and subresources.
+    /// No invocation may access outside a bound image or race another access.
     /// Every shader-dependent index, offset and cross-invocation dependency
     /// must be valid. The method checks resource identity, native limits, root
     /// size and host retirement, but cannot prove arbitrary shader semantics.
@@ -302,11 +323,15 @@ impl<'d> StorageCompute<'d> {
     pub unsafe fn dispatch(
         &mut self,
         buffers: &mut [&mut Buffer<'_>],
+        images: &mut [&mut Texture<'_>],
         jobs: &[ComputeDispatch<'_>],
     ) -> Result<Completion<'d>, Error> {
-        if buffers.len() != self.interface.buffers as usize || jobs.is_empty() {
+        if buffers.len() != self.interface.buffers as usize
+            || images.len() != self.interface.images as usize
+            || jobs.is_empty()
+        {
             return Err(Error::Invalid(
-                "compute requires its declared buffers and at least one job",
+                "compute requires its declared resources and at least one job",
             ));
         }
         for job in jobs {
@@ -327,6 +352,18 @@ impl<'d> StorageCompute<'d> {
                 ));
             }
         }
+        for (index, image) in images.iter().enumerate() {
+            if !std::ptr::eq(image.device, self.device) || !image.initialized {
+                return Err(Error::Invalid(
+                    "compute needs initialized same-device images",
+                ));
+            }
+            if images[..index].iter().any(|other| other.raw == image.raw) {
+                return Err(Error::Invalid(
+                    "compute images must have distinct allocations",
+                ));
+            }
+        }
         let infos: Vec<_> = buffers
             .iter()
             .map(|buffer| {
@@ -336,14 +373,38 @@ impl<'d> StorageCompute<'d> {
                     .range(buffer.bytes)
             })
             .collect();
-        let writes = [vk::WriteDescriptorSet::default()
-            .dst_set(self.set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&infos)];
+        let image_infos: Vec<_> = images
+            .iter()
+            .map(|image| {
+                vk::DescriptorImageInfo::default()
+                    .image_view(image.view)
+                    .image_layout(vk::ImageLayout::GENERAL)
+            })
+            .collect();
+        let mut writes = Vec::with_capacity(2);
+        if !infos.is_empty() {
+            writes.push(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(self.set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(&infos),
+            );
+        }
+        if !image_infos.is_empty() {
+            writes.push(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(self.set)
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                    .image_info(&image_infos),
+            );
+        }
         // SAFETY: U-016. Every same-device descriptor uses its live complete
         // initialized storage range at aligned offset0. Exclusive mutable
         // borrows and prior synchronous completion exclude updates in flight.
+        // Images have queried storage support and complete same-format views.
+        // Their initialized state guarantees GENERAL layout after prior use.
         unsafe { self.device.raw.update_descriptor_sets(&writes, &[]) };
         let recording = Recording::new(self.device)?;
         let before = [vk::MemoryBarrier::default()
@@ -481,7 +542,7 @@ impl<'d> BufferCompute<'d> {
         // access for every valid root. Packed roots enforce slot0..3/count64/
         // pass0..3/padding0. Exact256-byte owners and one64-thread group satisfy
         // those conditions. U-016 also checks initialization/device identity.
-        unsafe { self.inner.dispatch(&mut buffers, &jobs) }
+        unsafe { self.inner.dispatch(&mut buffers, &mut [], &jobs) }
     }
 }
 
@@ -562,6 +623,8 @@ mod tests {
         vk::PhysicalDeviceLimits {
             max_per_stage_descriptor_storage_buffers: 4,
             max_descriptor_set_storage_buffers: 4,
+            max_per_stage_descriptor_storage_images: 4,
+            max_descriptor_set_storage_images: 4,
             max_per_stage_resources: 4,
             max_push_constants_size: 128,
             max_compute_work_group_size: [64, 64, 64],
@@ -575,6 +638,7 @@ mod tests {
     fn agfx_compute_interface_rejects_limits_and_overflow() {
         let valid = ComputeInterface {
             buffers: 1,
+            images: 0,
             root_bytes: 80,
             local_size: [8, 8, 1],
         };
@@ -626,9 +690,46 @@ mod tests {
     }
 
     #[test]
+    fn agfx_compute_images_and_buffers_share_stage_limits() {
+        let image_only = ComputeInterface {
+            buffers: 0,
+            images: 4,
+            root_bytes: 0,
+            local_size: [1; 3],
+        };
+        let limits = compute_limits();
+        assert!(image_only.validate(&limits).is_ok());
+        assert!(ComputeInterface {
+            images: 5,
+            ..image_only
+        }
+        .validate(&limits)
+        .is_err());
+        assert!(ComputeInterface {
+            buffers: 1,
+            ..image_only
+        }
+        .validate(&limits)
+        .is_err());
+        assert!(ComputeInterface {
+            buffers: 2,
+            images: 2,
+            ..image_only
+        }
+        .validate(&limits)
+        .is_ok());
+        let lower_set_limit = vk::PhysicalDeviceLimits {
+            max_descriptor_set_storage_images: 3,
+            ..limits
+        };
+        assert!(image_only.validate(&lower_set_limit).is_err());
+    }
+
+    #[test]
     fn agfx_compute_jobs_reject_bad_roots_and_group_counts() {
         let interface = ComputeInterface {
             buffers: 1,
+            images: 0,
             root_bytes: 80,
             local_size: [8, 8, 1],
         };
