@@ -19,11 +19,11 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const REVIEWED: [(u32, &str); 2] = [
     (
         0,
-        "d6405c21290ff652e92c30dafe625bdd79603f78f321fa5485761ddbdb5771d7",
+        "bfc15cd9e6f52a199bb3dcd61c87ef5ad51f38f0e05a54b4316d3cafb547a0fc",
     ),
     (
         3,
-        "c3b865612bad8876e836b085bf9247ab4cf650829bc4788e7dc0b4813468cc20",
+        "8c672179232dc6e158063887040b2c5f240f6a646d15dceacfb3b5d7cb300151",
     ),
 ];
 const IMAGE: TextureInfo = TextureInfo {

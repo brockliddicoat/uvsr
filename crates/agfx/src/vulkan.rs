@@ -38,6 +38,8 @@ pub struct DeviceInfo {
     pub queue_family: u32,
     pub validation: bool,
     pub graphics: GraphicsCapabilities,
+    /// Queried Vulkan float32 execution-mode support, not an enabled feature.
+    pub signed_zero_inf_nan_preserve_f32: bool,
 }
 
 /// Queried and enabled optional classic-raster capabilities. Pipeline creation
@@ -340,11 +342,13 @@ impl Device {
             .to_string_lossy()
             .into_owned();
         let mut properties11 = vk::PhysicalDeviceVulkan11Properties::default();
+        let mut properties12 = vk::PhysicalDeviceVulkan12Properties::default();
         let mut properties13 = vk::PhysicalDeviceVulkan13Properties::default();
         let mut extended = vk::PhysicalDeviceProperties2::default()
             .push_next(&mut properties11)
+            .push_next(&mut properties12)
             .push_next(&mut properties13);
-        // SAFETY: U-010. Selected Vulkan 1.4 device and its live instance. Both
+        // SAFETY: U-010/U-025. Selected Vulkan 1.4 device and live instance. All
         // core property structures are supported, distinct and writable.
         unsafe {
             instance
@@ -404,6 +408,9 @@ impl Device {
                 queue_family: family,
                 validation,
                 graphics,
+                signed_zero_inf_nan_preserve_f32: properties12
+                    .shader_signed_zero_inf_nan_preserve_float32
+                    != 0,
             },
             _single_thread: PhantomData,
         };

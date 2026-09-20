@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "upstream": "https://github.com/electronicarts/ShaderToHuman",
+  "commit": "d6f98b7d67da802053cd9c702082fa741dec42e7",
+  "license": "legal/licenses/ShaderToHuman-BSD-3-Clause.txt",
+  "sources": [
+    {
+      "path": "examples/Features/2D_Arrow.hlsl",
+      "sha256": "9b64e4ae48a8a0bd4ead3f5c9e91a58c2ffec5bb7701b14863f442956113cb1f"
+    },
+    {
+      "path": "examples/Features/2D_CoordinateSystem.hlsl",
+      "sha256": "149c92123d68bfad88a7443d0001e4e415d88e2d5d2d70be2915426bf21606b3"
+    },
+    {
+      "path": "examples/Features/2D_example.hlsl",
+      "sha256": "405b5c7167b6976a5fbcf5877dce2906ded1dd0ec62eaa375be7538779148d83"
+    },
+    {
+      "path": "examples/Features/3D_example.hlsl",
+      "sha256": "b41d868b7e876df2902f2c056f37acd03a5b209cae760bfe7c28593947b5e971"
+    },
+    {
+      "path": "examples/Features/Clear_example.hlsl",
+      "sha256": "1284b22a66bad92113747757d5b9626f1e9c0853c0e88dcd9446452118401eef"
+    },
+    {
+      "path": "examples/Features/DebugZoom_example.hlsl",
+      "sha256": "1cfc29f2bc84f15452ab8e177bc34d03f5cca8dded61c416168390497d27b29d"
+    },
+    {
+      "path": "examples/Features/Gather_example.hlsl",
+      "sha256": "0919d6cad8ae5a8886977d3e856a01162e501ddb4998ba9be4616a46f0eaccfe"
+    },
+    {
+      "path": "examples/Features/GenUserFont_example.hlsl",
+      "sha256": "52d2ddc45fa4ae07ec8a816fd3fb8b33a07e3b1e27915ce935309bd1e17d2633"
+    },
+    {
+      "path": "examples/Features/QuadCommon.hlsl",
+      "sha256": "52cd40598d74722707b28065152bb971a336e7ee3b68f5158345e2420e849924"
+    },
+    {
+      "path": "examples/Features/QuadPost_example.hlsl",
+      "sha256": "25bca0775c7ecedd466fbe354c5f7b4af4972cc012fb5caeab9e9aa4c1c54183"
+    },
+    {
+      "path": "examples/Features/QuadVSPS_example.hlsl",
+      "sha256": "07b521b85752ee5ffa21433c90c04e53b00c9715e45b8f2d081e5f7e9b318729"
+    },
+    {
+      "path": "examples/Features/s2h_features.gg",
+      "sha256": "0dbd830e8fb470977a1730b5f807d54d9fb49b8adaa0af5eb1744c92686b8eeb"
+    },
+    {
+      "path": "examples/Features/s2h_features.gguser",
+      "sha256": "455a204745c5eaf7e479e40bc74beec365ef032ec4fd2312ee474f05dcdd1e32"
+    },
+    {
+      "path": "examples/Features/Scatter_example.hlsl",
+      "sha256": "bc90cab2900c1cc0969d76173df3156b646e7a0f117e82cbe0ddec1da4eed309"
+    },
+    {
+      "path": "examples/Features/Table_example.hlsl",
+      "sha256": "9ecbc7710f0adaf1d2a4ea72881dc3d07bfbb449f4dd98bd126a50ee59ab5972"
+    },
+    {
+      "path": "examples/Features/UseUserFont_example.hlsl",
+      "sha256": "532005d5a26f4874d285f009b67262133e6133ce18038fba2e2105d9b8ac6c60"
+    },
+    {
+      "path": "include/s2h.hlsl",
+      "sha256": "5efd8404ef597bbff71cc1f9d0dc6d963dea19285bcc0f18ae6364a9d1882686"
+    },
+    {
+      "path": "include/s2h_3d.hlsl",
+      "sha256": "0da6e37f0f4798dff19f1dc34f0b9a5325b634da7d8d2dd843572494a70ca55d"
+    },
+    {
+      "path": "include/s2h_glsl.hlsl",
+      "sha256": "8957882960ab62fb94d9c29081b26cfb35bb4821fec32f2101bcdd9ecb77f82b"
+    },
+    {
+      "path": "include/s2h_scatter.hlsl",
+      "sha256": "2f68bce8dc6dcb2f24ad07eef0a1a2dc3f5596b2042b798fe1609dd6517001d7"
+    }
+  ],
+  "inputs": [
+    {
+      "path": "tests/parity/fixtures/shader-to-human/features-cameras.txt",
+      "sha256": "bc08258bd3d76caa3038b1235ca041ebc4cb3952ebc4a774916009817a7b3c8c"
+    },
+    {
+      "path": "tests/parity/fixtures/shader-to-human/features-inputs.json",
+      "sha256": "64e9d79bc6193aad19cd9a0c163eba9801f1b9722d49e0b1b6773584bc205576"
+    }
+  ],
+  "scope": "declared deterministic cameras and interaction sequence, not replacement source goldens"
+}

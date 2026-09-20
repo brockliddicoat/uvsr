@@ -67,6 +67,8 @@ the [library probe](../../shaders/rust/shader_to_human_library.rs) covers input-
 
 ## ShaderToHuman original image comparison
 
+the [Features mapping](../../tests/parity/shader-to-human-features.md) covers `compile_s2h_library.py --features`, `run_s2h_features.py` and `compare_s2h_features.py`. it separates the passing native/state/structural gate from the still-failing strict HLSL image comparison. Features requires queried float32 NaN preservation, current pre-execution review identities and all54 fixed steps at both shader optimization levels.
+
 ```text
 python tools/theta/compile_s2h_library.py --images --rustgpu-source <owned-rust-gpu> --codegen-backend <rustc_codegen_spirv.dll> --output-dir <ignored-build>/s2h-images
 cargo build --bin shader_to_human --locked

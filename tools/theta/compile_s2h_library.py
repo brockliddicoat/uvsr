@@ -17,7 +17,10 @@ def main():
     parser.add_argument('--demos', action='store_true', help='compile all documentation branches and the single-writer UI update')
     parser.add_argument('--hello', action='store_true', help='compile the screen, quad and compute Hello examples')
     parser.add_argument('--zoom', action='store_true', help='compile Zoom2D pre/render/post entries')
+    parser.add_argument('--features', action='store_true', help='compile the full Features image, state and quad entries')
     args = parser.parse_args()
+    if args.features and (args.zoom or args.hello or args.demos or args.images or args.fixtures):
+        parser.error('--features cannot be combined with other selections')
     if args.zoom and (args.hello or args.demos or args.images or args.fixtures):
         parser.error('--zoom cannot be combined with other selections')
     if args.hello and (args.demos or args.images or args.fixtures):
@@ -32,23 +35,28 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parents[2]
     source = root / 'crates/shader-to-human/src/lib.rs'
-    entry = root / ('shaders/rust/shader_to_human_zoom.rs' if args.zoom else
+    entry = root / ('shaders/rust/shader_to_human_features.rs' if args.features else
+                    'shaders/rust/shader_to_human_zoom.rs' if args.zoom else
                     'shaders/rust/shader_to_human_hello.rs' if args.hello else
                     'shaders/rust/shader_to_human_demos.rs' if args.demos else
                     'shaders/rust/shader_to_human_images.rs' if args.images else
                     'shaders/rust/shader_to_human_fixtures.rs' if args.fixtures else
                     'shaders/rust/shader_to_human_library.rs')
-    entries = (['zoom_cs', 'zoom_post_cs', 'zoom_pre_cs'] if args.zoom else
+    entries = (['features_commit_cs', 'features_cs', 'features_debug_cs', 'features_font_cs',
+                'features_quad_fs', 'features_quad_post_cs', 'features_quad_vs', 'features_scatter_cs'] if args.features else
+               ['zoom_cs', 'zoom_post_cs', 'zoom_pre_cs'] if args.zoom else
                ['hello_cs', 'quad_fs', 'quad_vs', 'screen_fs', 'screen_vs'] if args.hello else
                ['demos_cs', 'update_ui_cs'] if args.demos else
                ['gather_cs', 'scatter_cs', 'table_cs', 'two_d_cs', 'world_cs'] if args.fixtures else ['main_cs'])
-    case = 'zoom' if args.zoom else 'hello' if args.hello else 'demos' if args.demos else 'images' if args.images else 'fixtures' if args.fixtures else 'library'
+    case = 'features' if args.features else 'zoom' if args.zoom else 'hello' if args.hello else 'demos' if args.demos else 'images' if args.images else 'fixtures' if args.fixtures else 'library'
     common, identity, validator, disassembler = compiler_inputs(
         upstream, backend, source, 'spirv-unknown-vulkan1.3')
     libm = one((upstream / 'target/compiletest-deps/spirv-unknown-vulkan1.3/debug/build/libm')
                .glob('*/out/liblibm*.rlib'), 'libm')
     common = [arg for arg in common if arg != '-Zcrate-attr=feature(asm_experimental_arch)']
     common += ['--extern', 'libm=' + str(libm)]
+    if args.features:
+        common += ['-Ctarget-feature=+SignedZeroInfNanPreserve']
     for level in (0, 3):
         (output / f'{case}_opt{level}.metadata.json').unlink(missing_ok=True)
     for level in (0, 3):
@@ -75,23 +83,29 @@ def main():
         (output / f'{stem}.spvasm').write_text(assembly, encoding='utf-8')
         capabilities = re.findall(r'^\s*OpCapability (\w+)', assembly, re.MULTILINE)
         expected_caps = {'Shader', 'VulkanMemoryModel'}
+        if args.features:
+            expected_caps.add('SignedZeroInfNanPreserve')
         if set(capabilities) != expected_caps:
             raise RuntimeError(f'library capabilities changed: {capabilities}')
         record = dict(schema_version=1, case_id=f's2h.{case}.compile.opt{level}', status='pass',
                       scope='compilation and validation only, no GPU dispatch',
-                      language='Rust', stage='vertex+fragment+compute' if args.hello else 'compute', entry_points=entries,
+                      language='Rust', stage='vertex+fragment+compute' if args.hello or args.features else 'compute', entry_points=entries,
                       target='spirv-unknown-vulkan1.3',
-                      profile=('ordinary-raster-storage-image' if args.hello else
+                      profile=('ordinary-raster-storage-sampled-image' if args.features else
+                               'ordinary-raster-storage-image' if args.hello else
                                'ordinary-storage-buffer-image' if args.demos or args.zoom else
                                'ordinary-storage-image' if args.images else 'ordinary-storage-buffer'),
                       payload_type='SPIR-V', payload_sha256=sha256(module), identity=identity,
                       library_sources={p.name: sha256(p) for p in source.parent.glob('*.rs')},
                       entry_sha256=sha256(entry), library_sha256=sha256(library),
                       fixture_sources={p.name: sha256(p) for p in
-                                       (root / 'crates/shader-to-human/fixtures').glob('*.rs')} if args.fixtures else {},
+                                       (root / 'crates/shader-to-human/fixtures').glob('*.rs')} if args.fixtures else
+                                      {'scatter.rs': sha256(root / 'crates/shader-to-human/fixtures/scatter.rs')} if args.features else {},
                       demo_sources={p.name: sha256(p) for p in
                                     (root / 'crates/shader-to-human/demos').glob('*.rs')} if args.demos else {},
-                      program_sources={f'{case}.rs': sha256(root / f'crates/shader-to-human/programs/{case}.rs')} if args.hello or args.zoom else {},
+                      program_sources={f'{case}.rs': sha256(root / f'crates/shader-to-human/programs/{case}.rs')} if args.hello or args.zoom else
+                                      {f'features/{p.name}': sha256(p) for p in
+                                       (root / 'crates/shader-to-human/programs/features').glob('*.rs')} if args.features else {},
                       libm_sha256=sha256(libm), capabilities=capabilities,
                       commands=[library_command, command, validation_command, disassembly_command])
         (output / f'{stem}.metadata.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
