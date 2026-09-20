@@ -91,6 +91,8 @@ this is an intermediate float-buffer diagnostic, not the source RGBA8 storage-im
 
 ## AGFX texture transfer goldens
 
+the later [format-view mapping](../../tests/parity/format-views.md) covers `compile_agfx_graphics.py --views` and `run_agfx_views.py`, including the required current review record. it tests UNORM/sRGB storage, sampled and attachment views through one texture owner.
+
 ```text
 cargo build --bin texture_copy --locked
 cargo build --bin texture_copy --release --locked

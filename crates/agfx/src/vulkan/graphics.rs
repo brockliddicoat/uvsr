@@ -838,9 +838,9 @@ impl Device {
                     .colors
                     .iter()
                     .zip(colors.iter())
-                    .any(|(p, a)| p.format != a.texture.info().format)
+                    .any(|(p, a)| p.format != a.texture.view_formats().attachment)
                 || draw.pipeline.info.depth.map(|d| d.format)
-                    != depth.as_ref().map(|d| d.texture.info().format)
+                    != depth.as_ref().map(|d| d.texture.view_formats().attachment)
             {
                 return Err(Error::Invalid(
                     "draw pipeline, root or attachment interface differs from the pass",
@@ -900,7 +900,7 @@ impl Device {
             .iter()
             .map(|c| {
                 vk::RenderingAttachmentInfo::default()
-                    .image_view(c.texture.view)
+                    .image_view(c.texture.attachment_view())
                     .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                     .load_op(c.load.native())
                     .store_op(c.store.native())
@@ -911,7 +911,7 @@ impl Device {
             .collect();
         let native_depth = depth.as_ref().map(|d| {
             vk::RenderingAttachmentInfo::default()
-                .image_view(d.texture.view)
+                .image_view(d.texture.attachment_view())
                 .image_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
                 .load_op(d.load.native())
                 .store_op(d.store.native())
