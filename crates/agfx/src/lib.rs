@@ -12,7 +12,7 @@ pub use vulkan::{
     GraphicsCapabilities, IndexType, LoadOperation, Memory, RenderDraw, RenderInterface,
     RenderPipeline, RenderPipelineInfo, RenderResources, Sampler, SamplerFilter, SamplerInfo,
     Scissor, ShaderCode, ShaderStage, StorageCompute, StoreOperation, Texture, TextureCopy,
-    TextureFormat, TextureInfo, TextureUsage, Topology, Viewport,
+    TextureFormat, TextureInfo, TextureUsage, TextureViewFormats, Topology, Viewport,
 };
 
 use std::fmt;

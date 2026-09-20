@@ -23,7 +23,9 @@ pub use graphics::{
 };
 use ownership::{Lease, LiveObjects};
 pub use sampler::{AddressMode, ComparisonFunction, Sampler, SamplerFilter, SamplerInfo};
-pub use texture::{Texture, TextureCopy, TextureFormat, TextureInfo, TextureUsage};
+pub use texture::{
+    Texture, TextureCopy, TextureFormat, TextureInfo, TextureUsage, TextureViewFormats,
+};
 
 #[derive(Clone, Debug)]
 pub struct DeviceInfo {

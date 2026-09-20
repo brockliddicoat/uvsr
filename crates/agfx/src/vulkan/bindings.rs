@@ -220,7 +220,7 @@ impl<'d> Descriptors<'d> {
             .iter()
             .map(|i| {
                 vk::DescriptorImageInfo::default()
-                    .image_view(i.view)
+                    .image_view(i.storage_view())
                     .image_layout(vk::ImageLayout::GENERAL)
             })
             .collect();
@@ -228,7 +228,7 @@ impl<'d> Descriptors<'d> {
             .iter()
             .map(|i| {
                 vk::DescriptorImageInfo::default()
-                    .image_view(i.view)
+                    .image_view(i.sampled_view())
                     .image_layout(vk::ImageLayout::GENERAL)
             })
             .collect();

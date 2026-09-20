@@ -59,6 +59,60 @@ pub struct TextureUsage {
     pub attachment: bool,
 }
 
+/// Formats of the complete storage, sampled and attachment views owned by a
+/// texture. Disabled usages ignore their format. RGBA8 UNORM/sRGB views share
+/// the same bytes. This does not add subresource views or independent handles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextureViewFormats {
+    pub storage: TextureFormat,
+    pub sampled: TextureFormat,
+    pub attachment: TextureFormat,
+}
+
+impl TextureViewFormats {
+    pub const fn same(format: TextureFormat) -> Self {
+        Self {
+            storage: format,
+            sampled: format,
+            attachment: format,
+        }
+    }
+
+    fn roles(self, usage: TextureUsage) -> [(bool, TextureFormat, vk::ImageUsageFlags); 3] {
+        [
+            (usage.storage, self.storage, vk::ImageUsageFlags::STORAGE),
+            (usage.sampled, self.sampled, vk::ImageUsageFlags::SAMPLED),
+            (
+                usage.attachment,
+                self.attachment,
+                if self.attachment.is_depth() {
+                    vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                } else {
+                    vk::ImageUsageFlags::COLOR_ATTACHMENT
+                },
+            ),
+        ]
+    }
+
+    fn validate(self, base: TextureFormat, usage: TextureUsage) -> Result<bool, Error> {
+        let mut mutable = false;
+        for (enabled, format, _) in self.roles(usage) {
+            if !enabled || format == base {
+                continue;
+            }
+            if !matches!(
+                (base, format),
+                (TextureFormat::Rgba8Unorm, TextureFormat::Rgba8Srgb)
+                    | (TextureFormat::Rgba8Srgb, TextureFormat::Rgba8Unorm)
+            ) {
+                return Err(Error::Invalid("texture view formats are not compatible"));
+            }
+            mutable = true;
+        }
+        Ok(mutable)
+    }
+}
+
 impl TextureInfo {
     pub fn byte_len(self) -> Result<u64, Error> {
         if self.width == 0 || self.height == 0 {
@@ -85,7 +139,9 @@ impl TextureInfo {
 pub struct Texture<'d> {
     pub(super) device: &'d Device,
     pub(super) raw: vk::Image,
-    pub(super) view: vk::ImageView,
+    // Storage, sampled, attachment. Equal formats share one native view.
+    views: [vk::ImageView; 3],
+    view_formats: TextureViewFormats,
     allocation: vk::DeviceMemory,
     info: TextureInfo,
     pub(super) usage: TextureUsage,
@@ -203,11 +259,20 @@ impl Device {
         )
     }
 
-    #[allow(unsafe_code)]
     pub fn texture_with_usage(
         &self,
         info: TextureInfo,
         usage: TextureUsage,
+    ) -> Result<Texture<'_>, Error> {
+        self.texture_with_views(info, usage, TextureViewFormats::same(info.format))
+    }
+
+    #[allow(unsafe_code)]
+    pub fn texture_with_views(
+        &self,
+        info: TextureInfo,
+        usage: TextureUsage,
+        formats: TextureViewFormats,
     ) -> Result<Texture<'_>, Error> {
         if !usage.storage && !usage.sampled && !usage.attachment {
             return Err(Error::Invalid(
@@ -217,6 +282,13 @@ impl Device {
         if usage.storage && info.format.is_depth() {
             return Err(Error::Invalid("depth format cannot be a storage image"));
         }
+        let mutable = formats.validate(info.format, usage)?;
+        let flags = if mutable {
+            vk::ImageCreateFlags::MUTABLE_FORMAT | vk::ImageCreateFlags::EXTENDED_USAGE
+        } else {
+            vk::ImageCreateFlags::empty()
+        };
+        let roles = formats.roles(usage);
         let bytes = info.byte_len()?;
         if info.width > self.limits.max_image_dimension2_d
             || info.height > self.limits.max_image_dimension2_d
@@ -238,30 +310,76 @@ impl Device {
                 vk::ImageUsageFlags::COLOR_ATTACHMENT
             };
         }
-        // SAFETY: U-017. Live retained physical device and a supported enum.
-        // Optimal-tiling features describe the actual image's filter support.
-        let format_features = unsafe {
+        // SAFETY: U-024. Live physical device and supported format enum. Image
+        // transfer operations use its base format, independent of view formats.
+        let base_features = unsafe {
             self.instance
                 .raw
                 .get_physical_device_format_properties(self.physical, info.format.native())
         }
         .optimal_tiling_features;
-        // SAFETY: U-017. The retained physical device belongs to this live
-        // instance. Only the exact format/type/tiling/usage being created is queried.
+        if !base_features
+            .contains(vk::FormatFeatureFlags::TRANSFER_SRC | vk::FormatFeatureFlags::TRANSFER_DST)
+        {
+            return Err(Error::Unsupported(
+                "texture base format lacks transfer support".into(),
+            ));
+        }
+        let mut linear_sampling = false;
+        let mut view_formats = vec![info.format.native()];
+        for (enabled, format, role) in roles {
+            if !enabled {
+                continue;
+            }
+            if !view_formats.contains(&format.native()) {
+                view_formats.push(format.native());
+            }
+            // SAFETY: U-024. Query each actual view format before requesting its
+            // usage. Extended image usage does not waive view-format features.
+            let features = unsafe {
+                self.instance
+                    .raw
+                    .get_physical_device_format_properties(self.physical, format.native())
+            }
+            .optimal_tiling_features;
+            let required = match role {
+                vk::ImageUsageFlags::STORAGE => vk::FormatFeatureFlags::STORAGE_IMAGE,
+                vk::ImageUsageFlags::SAMPLED => vk::FormatFeatureFlags::SAMPLED_IMAGE,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT => vk::FormatFeatureFlags::COLOR_ATTACHMENT,
+                _ => vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
+            };
+            if !features.contains(required) {
+                return Err(Error::Unsupported(format!(
+                    "{format:?} view lacks {role:?} support"
+                )));
+            }
+            if role == vk::ImageUsageFlags::SAMPLED {
+                linear_sampling =
+                    features.contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR);
+            }
+        }
+        let mut format_list = vk::ImageFormatListCreateInfo::default().view_formats(&view_formats);
+        let query = vk::PhysicalDeviceImageFormatInfo2::default()
+            .format(info.format.native())
+            .ty(vk::ImageType::TYPE_2D)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(native_usage)
+            .flags(flags)
+            .push_next(&mut format_list);
+        let mut properties = vk::ImageFormatProperties2::default();
+        // SAFETY: U-024. Query the exact base format, flags, union usage and
+        // complete compatible view-format list used below. All chains are live.
         let support = unsafe {
             self.instance
                 .raw
-                .get_physical_device_image_format_properties(
+                .get_physical_device_image_format_properties2(
                     self.physical,
-                    info.format.native(),
-                    vk::ImageType::TYPE_2D,
-                    vk::ImageTiling::OPTIMAL,
-                    native_usage,
-                    vk::ImageCreateFlags::empty(),
+                    &query,
+                    &mut properties,
                 )
         };
         let support = match support {
-            Ok(value) => value,
+            Ok(()) => properties.image_format_properties,
             Err(vk::Result::ERROR_FORMAT_NOT_SUPPORTED) => {
                 return Err(Error::Unsupported(format!(
                     "{:?} image with usage {:?}",
@@ -284,16 +402,18 @@ impl Device {
         let mut owner = Texture {
             device: self,
             raw: vk::Image::null(),
-            view: vk::ImageView::null(),
+            views: [vk::ImageView::null(); 3],
+            view_formats: formats,
             allocation: vk::DeviceMemory::null(),
             info,
             usage,
-            linear_sampling: usage.sampled
-                && format_features.contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR),
+            linear_sampling,
             initialized: false,
             _allocation_slot: self.allocations.acquire()?,
         };
+        let mut format_list = vk::ImageFormatListCreateInfo::default().view_formats(&view_formats);
         let create = vk::ImageCreateInfo::default()
+            .flags(flags)
             .image_type(vk::ImageType::TYPE_2D)
             .format(info.format.native())
             .extent(info.extent())
@@ -303,9 +423,11 @@ impl Device {
             .tiling(vk::ImageTiling::OPTIMAL)
             .usage(native_usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::UNDEFINED);
-        // SAFETY: U-017. Nonzero extent, exact queried support, one mip/layer,
-        // no sparse/external/alias flags. One queue family owns all operations.
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .push_next(&mut format_list);
+        // SAFETY: U-017/U-024. Nonzero extent, exact queried support and format
+        // list, one mip/layer, no sparse/external/alias flags. Mutable/extended
+        // usage is enabled only for explicitly checked compatible formats.
         owner.raw = unsafe { self.raw.create_image(&create, None) }?;
         // SAFETY: U-017. Live same-device image, not yet bound or submitted.
         let requirements = unsafe { self.raw.get_image_memory_requirements(owner.raw) };
@@ -336,14 +458,34 @@ impl Device {
         owner.allocation = unsafe { self.raw.allocate_memory(&allocate, None) }?;
         // SAFETY: U-017. Unique complete dedicated allocation and matching image.
         unsafe { self.raw.bind_image_memory(owner.raw, owner.allocation, 0) }?;
-        let view = vk::ImageViewCreateInfo::default()
-            .image(owner.raw)
-            .view_type(vk::ImageViewType::TYPE_2D)
-            .format(info.format.native())
-            .subresource_range(range(info.format));
-        // SAFETY: U-017. Identical supported format, bound image, identity swizzle,
-        // complete existing color/depth mip/layer. No format reinterpretation.
-        owner.view = unsafe { self.raw.create_image_view(&view, None) }?;
+        for (index, &(enabled, format, _)) in roles.iter().enumerate() {
+            if !enabled {
+                continue;
+            }
+            if let Some(previous) = roles[..index]
+                .iter()
+                .position(|&(active, old, _)| active && old == format)
+            {
+                owner.views[index] = owner.views[previous];
+                continue;
+            }
+            let usage = roles
+                .iter()
+                .filter(|&&(active, f, _)| active && f == format)
+                .fold(vk::ImageUsageFlags::empty(), |all, &(_, _, u)| all | u);
+            let mut view_usage = vk::ImageViewUsageCreateInfo::default().usage(usage);
+            let view = vk::ImageViewCreateInfo::default()
+                .image(owner.raw)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(format.native())
+                .subresource_range(range(format))
+                .push_next(&mut view_usage);
+            // SAFETY: U-024. Bound same-device image, compatible explicitly
+            // listed format, complete subresource, identity swizzle. View usage
+            // is a subset of image usage and every required feature was queried.
+            // Deduplicated handles are destroyed once by their common owner.
+            owner.views[index] = unsafe { self.raw.create_image_view(&view, None) }?;
+        }
         Ok(owner)
     }
 
@@ -458,6 +600,21 @@ fn validate_owners(
 }
 
 impl<'d> Texture<'d> {
+    /// Formats used for shader storage, sampling and attachment operations.
+    /// `info().format` continues to describe the underlying transfer bytes.
+    pub fn view_formats(&self) -> TextureViewFormats {
+        self.view_formats
+    }
+
+    pub(super) fn storage_view(&self) -> vk::ImageView {
+        self.views[0]
+    }
+    pub(super) fn sampled_view(&self) -> vk::ImageView {
+        self.views[1]
+    }
+    pub(super) fn attachment_view(&self) -> vk::ImageView {
+        self.views[2]
+    }
     pub fn info(&self) -> TextureInfo {
         self.info
     }
@@ -602,11 +759,15 @@ pub(super) fn barrier(
 impl Drop for Texture<'_> {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
-        // SAFETY: U-017. Unique children, possibly null during partial creation.
+        // SAFETY: U-017/U-024. Owned children, possibly null during partial creation.
         // The borrowed device is live. All operations completed, uncertain waits
-        // abort under U-010. Destroy view, then image, then its dedicated memory.
+        // abort under U-010. Destroy each distinct view once, then image and memory.
         unsafe {
-            self.device.raw.destroy_image_view(self.view, None);
+            for (index, &view) in self.views.iter().enumerate() {
+                if view != vk::ImageView::null() && !self.views[..index].contains(&view) {
+                    self.device.raw.destroy_image_view(view, None);
+                }
+            }
             self.device.raw.destroy_image(self.raw, None);
             self.device.raw.free_memory(self.allocation, None);
         }
@@ -616,6 +777,55 @@ impl Drop for Texture<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agfx_view_001_only_compatible_rgba8_reinterpretations() {
+        let usage = TextureUsage {
+            storage: true,
+            sampled: true,
+            attachment: true,
+        };
+        let formats = [
+            TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba8Srgb,
+            TextureFormat::Rgba32Float,
+            TextureFormat::D32Float,
+        ];
+        for base in formats {
+            for view in formats {
+                let expected = base == view
+                    || matches!(
+                        (base, view),
+                        (TextureFormat::Rgba8Unorm, TextureFormat::Rgba8Srgb)
+                            | (TextureFormat::Rgba8Srgb, TextureFormat::Rgba8Unorm)
+                    );
+                let result = TextureViewFormats::same(view).validate(base, usage);
+                assert_eq!(result.is_ok(), expected, "{base:?} -> {view:?}");
+                if expected {
+                    assert_eq!(result.unwrap(), base != view);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn agfx_view_002_disabled_roles_do_not_change_creation_flags() {
+        let formats = TextureViewFormats {
+            storage: TextureFormat::Rgba8Unorm,
+            sampled: TextureFormat::Rgba8Srgb,
+            attachment: TextureFormat::D32Float,
+        };
+        let mut usage = TextureUsage {
+            storage: true,
+            sampled: false,
+            attachment: false,
+        };
+        assert!(!formats.validate(TextureFormat::Rgba8Unorm, usage).unwrap());
+        usage.sampled = true;
+        assert!(formats.validate(TextureFormat::Rgba8Unorm, usage).unwrap());
+        usage.attachment = true;
+        assert!(formats.validate(TextureFormat::Rgba8Unorm, usage).is_err());
+    }
 
     #[test]
     fn agfx_texture_size_rejects_zero_and_overflow() {
