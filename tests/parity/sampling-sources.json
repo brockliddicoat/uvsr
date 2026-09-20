@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "upstream": "https://github.com/AmelieHeinrich/agfx",
+  "commit": "f91b108a111d2ca3ca4b6586b6cb5dd750064fd7",
+  "license": "legal/licenses/AGFX-MIT.txt",
+  "goldens": [
+    {
+      "path": "tests/parity/fixtures/agfx/sampler_filter_nearest.png",
+      "source_path": "data/tests/golden/sampler_filter_nearest.png",
+      "sha256": "1807ad25dfc6ae443e4292dd2d9281fe1233d704e87ad8fb1098b9dab3535850"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/sampler_filter_linear.png",
+      "source_path": "data/tests/golden/sampler_filter_linear.png",
+      "sha256": "f4d8338dca368dd2c628f5494198d24b839a4926899ab6c0b4ce6006e5e3c1fb"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/sampler_address_mode_repeat.png",
+      "source_path": "data/tests/golden/sampler_address_mode_repeat.png",
+      "sha256": "82b5b4e9aa81430ef7734152578c0397436e78ab12ab0271cfcac043a2a80847"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/sampler_address_mode_mirrored_repeat.png",
+      "source_path": "data/tests/golden/sampler_address_mode_mirrored_repeat.png",
+      "sha256": "b7ee008f7f4bce60b5f6d2e1b6657dd63fa948bbbc25918601d1b64369398c7d"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/sampler_address_mode_clamp_to_edge.png",
+      "source_path": "data/tests/golden/sampler_address_mode_clamp_to_edge.png",
+      "sha256": "899897234edbe3a8507c8c2349ea922a0154184164fb6104a7310fdd2fdcb9a9"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/sample_2d.png",
+      "source_path": "data/tests/golden/sample_2d.png",
+      "sha256": "4dca2c7b02c93f4b432ce6c3d78b5d2328900ae758eec9126fb41189fa928f59"
+    }
+  ],
+  "sources": [
+    {
+      "source_path": "data/shaders/tests/texture_ops.hlsl",
+      "sha256": "6892011d77a02922faae1e568d56fe8d91d73170bcedc90ba52748987069304e"
+    },
+    {
+      "source_path": "data/shaders/tests/sampling.hlsl",
+      "sha256": "955cb004a532f0e5f79e83bb3ff8766804455d303e5f542673c24c8092ee8175"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/sampling_common.cpp",
+      "sha256": "d09236335b9e29d3099304d52bb01d654d13021070e601a90e7e484d75ccea2e"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/sampling_common.h",
+      "sha256": "8e549000803b8e3059edde92d9d4764fd05faad9f8d5353029ee514c4699655d"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_sampler.cpp",
+      "sha256": "93475896cb7705b8da48e7de2fd00c4303c9cac9bb089fd1141a9b4a4f1bfd04"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_sampler_filter.cpp",
+      "sha256": "e9ccf81aac212af101131ba73f02399ff04a6ff246ec83fa907fe72f14086848"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_sampler_address_mode.cpp",
+      "sha256": "d9d8fd2bb1853a95ef75d988321b0f2df349d508dd68436a1550030f1f187573"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/tests/test_sample_2d.cpp",
+      "sha256": "ab0eefa795554bfec39f0d434339dc815eddb8c2def25c4f026677fc44352526"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/test_compare.cpp",
+      "sha256": "3c62a2eadb29ad2ae2f72a091c882c7bdc40447cd9480c43f02967dc772c1b55"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/test_framework.h",
+      "sha256": "3444e7c4b44f7c79d311fd3f11120867690a97b750a22dbb1ea1d40239c9fa19"
+    },
+    {
+      "source_path": "src/agfx/agfx_tests/FLIP/FLIP.h",
+      "sha256": "e981618b68f8808f701cb2e8c88bfaadc6868ec4d81db2684cc9a0f874d06961"
+    }
+  ],
+  "source_oracle": {
+    "function": "test_compare.cpp::RunFlip",
+    "threshold": 0.05,
+    "threshold_source": "test_framework.h::kDefaultFlipThreshold",
+    "hdr": false,
+    "parameters": "FLIP defaults",
+    "input": "RGBA8 bytes divided by255, discard alpha, no extra color conversion"
+  }
+}

@@ -30,6 +30,8 @@ the SPIR-T and RustGPU prerequisite patches retain their upstream MIT OR Apache-
 
 the SPIRV-Tools wrapper patch retains MIT OR Apache-2.0 licensing, including copyright 2019 Embark Studios. its full license texts are linked from the patch record. native SPIRV-Tools and SPIRV-Headers are pinned submodule references. their source and generated grammar tables are not vendored here. the new generic heap regression is included under the wrapper's contribution terms.
 
+the optional CPU image oracle builds against AGFX's pinned, unchanged NVIDIA FLIP header. FLIP is copyright (c) 2020-2025 NVIDIA CORPORATION & AFFILIATES under [BSD-3-Clause](legal/licenses/FLIP-BSD-3-Clause.txt). the header and generated executable remain external ignored dependencies, separate from the Rust graphics implementation. [sampling source records](tests/parity/sampling-sources.json) pin the exact header and original comparison contract.
+
 ## Retained Scene Assets
 
 `assets/scenes` retains converted Bistro Interior and San Miguel data. their adjacent licenses, provenance manifests, and generated conversion reports control the exact files:

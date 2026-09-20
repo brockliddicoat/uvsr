@@ -1,6 +1,9 @@
 //! Ordinary storage buffer/image compute owners. Native boundary U-016, with the
 //! source four-pass safe wrapper retained under U-011.
-use super::{Buffer, Completion, Device, Error, Lease, Memory, Recording, Texture};
+use super::{
+    Buffer, ComparisonFunction, Completion, Device, Error, Lease, Memory, Recording, Sampler,
+    SamplerFilter, Texture,
+};
 use ash::vk;
 use std::ffi::CStr;
 
@@ -55,11 +58,14 @@ impl ComputeRoot {
 }
 
 /// Ordinary set0 storage buffers at binding0, storage images at binding1,
-/// and inline root bytes. This is separate from NGAPI native heaps.
+/// sampled images at binding2, samplers at binding3, and inline root bytes.
+/// This is separate from NGAPI native heaps.
 #[derive(Clone, Copy, Debug)]
 pub struct ComputeInterface {
     pub buffers: u32,
     pub images: u32,
+    pub sampled_images: u32,
+    pub samplers: u32,
     pub root_bytes: u32,
     pub local_size: [u32; 3],
 }
@@ -89,9 +95,14 @@ impl ComputeInterface {
             || self.buffers > limits.max_descriptor_set_storage_buffers
             || self.images > limits.max_per_stage_descriptor_storage_images
             || self.images > limits.max_descriptor_set_storage_images
+            || self.sampled_images > limits.max_per_stage_descriptor_sampled_images
+            || self.sampled_images > limits.max_descriptor_set_sampled_images
+            || self.samplers > limits.max_per_stage_descriptor_samplers
+            || self.samplers > limits.max_descriptor_set_samplers
             || self
                 .buffers
                 .checked_add(self.images)
+                .and_then(|count| count.checked_add(self.sampled_images))
                 .is_none_or(|count| count == 0 || count > limits.max_per_stage_resources)
             || self.root_bytes & 3 != 0
             || self.root_bytes > limits.max_push_constants_size
@@ -161,7 +172,8 @@ impl Device {
     /// # Safety
     /// U-016: the complete SPIR-V must be valid for the device's enabled
     /// features. Its named compute entry uses exactly the declared local size,
-    /// only set0/binding0 storage buffers, set0/binding1 storage images, and at
+    /// only set0/binding0 storage buffers, binding1 storage images, binding2
+    /// sampled images, binding3 samplers, and at
     /// most the declared root bytes. Descriptor counts match this interface.
     /// All module instructions, entry interfaces and layouts must be valid.
     /// No physical addresses or undeclared resources are permitted. Header and
@@ -195,6 +207,12 @@ impl Device {
         let bindings: Vec<_> = [
             (0, vk::DescriptorType::STORAGE_BUFFER, interface.buffers),
             (1, vk::DescriptorType::STORAGE_IMAGE, interface.images),
+            (
+                2,
+                vk::DescriptorType::SAMPLED_IMAGE,
+                interface.sampled_images,
+            ),
+            (3, vk::DescriptorType::SAMPLER, interface.samplers),
         ]
         .into_iter()
         .filter(|&(_, _, count)| count != 0)
@@ -297,6 +315,8 @@ impl Device {
                 ComputeInterface {
                     buffers: 4,
                     images: 0,
+                    sampled_images: 0,
+                    samplers: 0,
                     root_bytes: 16,
                     local_size: [64, 1, 1],
                 },
@@ -315,6 +335,8 @@ impl<'d> StorageCompute<'d> {
     /// root values and invocation IDs select only the bound initialized ranges,
     /// with valid types, alignment, synchronization and race-free accesses.
     /// Every image access must match its bound format, shape and subresources.
+    /// Sampling instructions must use compatible floating-point, normalized
+    /// color images and non-comparison samplers. Sampled images are read-only.
     /// No invocation may access outside a bound image or race another access.
     /// Every shader-dependent index, offset and cross-invocation dependency
     /// must be valid. The method checks resource identity, native limits, root
@@ -324,10 +346,14 @@ impl<'d> StorageCompute<'d> {
         &mut self,
         buffers: &mut [&mut Buffer<'_>],
         images: &mut [&mut Texture<'_>],
+        sampled_images: &[&Texture<'_>],
+        samplers: &[&Sampler<'_>],
         jobs: &[ComputeDispatch<'_>],
     ) -> Result<Completion<'d>, Error> {
         if buffers.len() != self.interface.buffers as usize
             || images.len() != self.interface.images as usize
+            || sampled_images.len() != self.interface.sampled_images as usize
+            || samplers.len() != self.interface.samplers as usize
             || jobs.is_empty()
         {
             return Err(Error::Invalid(
@@ -353,7 +379,10 @@ impl<'d> StorageCompute<'d> {
             }
         }
         for (index, image) in images.iter().enumerate() {
-            if !std::ptr::eq(image.device, self.device) || !image.initialized {
+            if !std::ptr::eq(image.device, self.device)
+                || !image.initialized
+                || !image.usage.storage
+            {
                 return Err(Error::Invalid(
                     "compute needs initialized same-device images",
                 ));
@@ -361,6 +390,39 @@ impl<'d> StorageCompute<'d> {
             if images[..index].iter().any(|other| other.raw == image.raw) {
                 return Err(Error::Invalid(
                     "compute images must have distinct allocations",
+                ));
+            }
+        }
+        for sampler in samplers {
+            if !std::ptr::eq(sampler.device, self.device)
+                || sampler.info().comparison != ComparisonFunction::Always
+            {
+                return Err(Error::Invalid(
+                    "compute color sampling requires same-device non-comparison samplers",
+                ));
+            }
+        }
+        for image in sampled_images {
+            if !std::ptr::eq(image.device, self.device)
+                || !image.initialized
+                || !image.usage.sampled
+            {
+                return Err(Error::Invalid(
+                    "compute needs initialized same-device sampled images",
+                ));
+            }
+            if images.iter().any(|other| other.raw == image.raw) {
+                return Err(Error::Invalid(
+                    "sampled and writable images must be distinct",
+                ));
+            }
+            if !image.linear_sampling
+                && samplers
+                    .iter()
+                    .any(|s| s.info().filter == SamplerFilter::Linear)
+            {
+                return Err(Error::Unsupported(
+                    "sampled format does not support linear filtering".into(),
                 ));
             }
         }
@@ -381,7 +443,19 @@ impl<'d> StorageCompute<'d> {
                     .image_layout(vk::ImageLayout::GENERAL)
             })
             .collect();
-        let mut writes = Vec::with_capacity(2);
+        let sampled_infos: Vec<_> = sampled_images
+            .iter()
+            .map(|image| {
+                vk::DescriptorImageInfo::default()
+                    .image_view(image.view)
+                    .image_layout(vk::ImageLayout::GENERAL)
+            })
+            .collect();
+        let sampler_infos: Vec<_> = samplers
+            .iter()
+            .map(|sampler| vk::DescriptorImageInfo::default().sampler(sampler.raw))
+            .collect();
+        let mut writes = Vec::with_capacity(4);
         if !infos.is_empty() {
             writes.push(
                 vk::WriteDescriptorSet::default()
@@ -400,11 +474,28 @@ impl<'d> StorageCompute<'d> {
                     .image_info(&image_infos),
             );
         }
+        for (binding, kind, infos) in [
+            (2, vk::DescriptorType::SAMPLED_IMAGE, &sampled_infos),
+            (3, vk::DescriptorType::SAMPLER, &sampler_infos),
+        ] {
+            if !infos.is_empty() {
+                writes.push(
+                    vk::WriteDescriptorSet::default()
+                        .dst_set(self.set)
+                        .dst_binding(binding)
+                        .descriptor_type(kind)
+                        .image_info(infos),
+                );
+            }
+        }
         // SAFETY: U-016. Every same-device descriptor uses its live complete
         // initialized storage range at aligned offset0. Exclusive mutable
         // borrows and prior synchronous completion exclude updates in flight.
         // Images have queried storage support and complete same-format views.
         // Their initialized state guarantees GENERAL layout after prior use.
+        // Sampled images have queried usage/filter support and disjoint storage
+        // owners. Immutable samplers and sampled owners stay borrowed through
+        // completion. All four descriptor classes have checked exact capacities.
         unsafe { self.device.raw.update_descriptor_sets(&writes, &[]) };
         let recording = Recording::new(self.device)?;
         let before = [vk::MemoryBarrier::default()
@@ -542,7 +633,7 @@ impl<'d> BufferCompute<'d> {
         // access for every valid root. Packed roots enforce slot0..3/count64/
         // pass0..3/padding0. Exact256-byte owners and one64-thread group satisfy
         // those conditions. U-016 also checks initialization/device identity.
-        unsafe { self.inner.dispatch(&mut buffers, &mut [], &jobs) }
+        unsafe { self.inner.dispatch(&mut buffers, &mut [], &[], &[], &jobs) }
     }
 }
 
@@ -625,6 +716,10 @@ mod tests {
             max_descriptor_set_storage_buffers: 4,
             max_per_stage_descriptor_storage_images: 4,
             max_descriptor_set_storage_images: 4,
+            max_per_stage_descriptor_sampled_images: 4,
+            max_descriptor_set_sampled_images: 4,
+            max_per_stage_descriptor_samplers: 4,
+            max_descriptor_set_samplers: 4,
             max_per_stage_resources: 4,
             max_push_constants_size: 128,
             max_compute_work_group_size: [64, 64, 64],
@@ -639,6 +734,8 @@ mod tests {
         let valid = ComputeInterface {
             buffers: 1,
             images: 0,
+            sampled_images: 0,
+            samplers: 0,
             root_bytes: 80,
             local_size: [8, 8, 1],
         };
@@ -694,6 +791,8 @@ mod tests {
         let image_only = ComputeInterface {
             buffers: 0,
             images: 4,
+            sampled_images: 0,
+            samplers: 0,
             root_bytes: 0,
             local_size: [1; 3],
         };
@@ -730,6 +829,8 @@ mod tests {
         let interface = ComputeInterface {
             buffers: 1,
             images: 0,
+            sampled_images: 0,
+            samplers: 0,
             root_bytes: 80,
             local_size: [8, 8, 1],
         };
@@ -768,5 +869,44 @@ mod tests {
                 &limits
             )
             .is_ok());
+    }
+
+    #[test]
+    fn agfx_sampled_counts_and_separate_sampler_limits() {
+        let limits = compute_limits();
+        let valid = ComputeInterface {
+            buffers: 0,
+            images: 1,
+            sampled_images: 3,
+            samplers: 4,
+            root_bytes: 48,
+            local_size: [8, 8, 1],
+        };
+        // Separate samplers do not consume maxPerStageResources.
+        assert!(valid.validate(&limits).is_ok());
+        for invalid in [
+            ComputeInterface {
+                sampled_images: 4,
+                ..valid
+            },
+            ComputeInterface {
+                samplers: 5,
+                ..valid
+            },
+        ] {
+            assert!(invalid.validate(&limits).is_err());
+        }
+        assert!(valid
+            .validate(&vk::PhysicalDeviceLimits {
+                max_descriptor_set_sampled_images: 2,
+                ..limits
+            })
+            .is_err());
+        assert!(valid
+            .validate(&vk::PhysicalDeviceLimits {
+                max_descriptor_set_samplers: 3,
+                ..limits
+            })
+            .is_err());
     }
 }

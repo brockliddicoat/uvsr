@@ -6,9 +6,10 @@
 
 mod vulkan;
 pub use vulkan::{
-    Buffer, BufferCompute, Completion, ComputeDispatch, ComputeInterface, ComputeRoot, Device,
-    DeviceInfo, Memory, ShaderCode, ShaderStage, StorageCompute, Texture, TextureCopy,
-    TextureFormat, TextureInfo,
+    AddressMode, Buffer, BufferCompute, ComparisonFunction, Completion, ComputeDispatch,
+    ComputeInterface, ComputeRoot, Device, DeviceInfo, Memory, Sampler, SamplerFilter, SamplerInfo,
+    ShaderCode, ShaderStage, StorageCompute, Texture, TextureCopy, TextureFormat, TextureInfo,
+    TextureUsage,
 };
 
 use std::fmt;

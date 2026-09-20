@@ -1,6 +1,6 @@
 //! Owned texture/copy behavior from AGFX f91b108a's Vulkan implementation.
 //! Copyright (c) 2026 Amélie Heinrich. See legal/licenses/AGFX-MIT.txt.
-//! This increment supports single-layer, single-mip 2D storage images.
+//! Single-layer, single-mip 2D images with explicit storage/sampling usage.
 use super::{vk, Buffer, Completion, Device, Error, Lease, Recording};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,6 +32,14 @@ pub struct TextureInfo {
     pub format: TextureFormat,
 }
 
+/// Shader uses declared before allocation. Transfer upload/readback is always
+/// available. Support is queried for this exact combination, not assumed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextureUsage {
+    pub storage: bool,
+    pub sampled: bool,
+}
+
 impl TextureInfo {
     pub fn byte_len(self) -> Result<u64, Error> {
         if self.width == 0 || self.height == 0 {
@@ -61,6 +69,8 @@ pub struct Texture<'d> {
     pub(super) view: vk::ImageView,
     allocation: vk::DeviceMemory,
     info: TextureInfo,
+    pub(super) usage: TextureUsage,
+    pub(super) linear_sampling: bool,
     pub(super) initialized: bool,
     _allocation_slot: Lease<'d>,
 }
@@ -163,17 +173,49 @@ impl TextureCopy {
 }
 
 impl Device {
-    #[allow(unsafe_code)]
     pub fn texture(&self, info: TextureInfo) -> Result<Texture<'_>, Error> {
+        self.texture_with_usage(
+            info,
+            TextureUsage {
+                storage: true,
+                sampled: false,
+            },
+        )
+    }
+
+    #[allow(unsafe_code)]
+    pub fn texture_with_usage(
+        &self,
+        info: TextureInfo,
+        usage: TextureUsage,
+    ) -> Result<Texture<'_>, Error> {
+        if !usage.storage && !usage.sampled {
+            return Err(Error::Invalid(
+                "texture view requires storage or sampled usage",
+            ));
+        }
         let bytes = info.byte_len()?;
         if info.width > self.limits.max_image_dimension2_d
             || info.height > self.limits.max_image_dimension2_d
         {
             return Err(Error::Invalid("texture dimensions exceed device limits"));
         }
-        let usage = vk::ImageUsageFlags::STORAGE
-            | vk::ImageUsageFlags::TRANSFER_SRC
-            | vk::ImageUsageFlags::TRANSFER_DST;
+        let mut native_usage =
+            vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST;
+        if usage.storage {
+            native_usage |= vk::ImageUsageFlags::STORAGE;
+        }
+        if usage.sampled {
+            native_usage |= vk::ImageUsageFlags::SAMPLED;
+        }
+        // SAFETY: U-017. Live retained physical device and a supported enum.
+        // Optimal-tiling features describe the actual image's filter support.
+        let format_features = unsafe {
+            self.instance
+                .raw
+                .get_physical_device_format_properties(self.physical, info.format.native())
+        }
+        .optimal_tiling_features;
         // SAFETY: U-017. The retained physical device belongs to this live
         // instance. Only the exact format/type/tiling/usage being created is queried.
         let support = unsafe {
@@ -184,7 +226,7 @@ impl Device {
                     info.format.native(),
                     vk::ImageType::TYPE_2D,
                     vk::ImageTiling::OPTIMAL,
-                    usage,
+                    native_usage,
                     vk::ImageCreateFlags::empty(),
                 )
         };
@@ -192,8 +234,8 @@ impl Device {
             Ok(value) => value,
             Err(vk::Result::ERROR_FORMAT_NOT_SUPPORTED) => {
                 return Err(Error::Unsupported(format!(
-                    "{:?} storage/transfer image",
-                    info.format
+                    "{:?} image with usage {:?}",
+                    info.format, usage
                 )))
             }
             Err(error) => return Err(error.into()),
@@ -215,6 +257,9 @@ impl Device {
             view: vk::ImageView::null(),
             allocation: vk::DeviceMemory::null(),
             info,
+            usage,
+            linear_sampling: usage.sampled
+                && format_features.contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR),
             initialized: false,
             _allocation_slot: self.allocations.acquire()?,
         };
@@ -226,7 +271,7 @@ impl Device {
             .array_layers(1)
             .samples(vk::SampleCountFlags::TYPE_1)
             .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(usage)
+            .usage(native_usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED);
         // SAFETY: U-017. Nonzero extent, exact queried support, one mip/layer,

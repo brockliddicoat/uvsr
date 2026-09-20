@@ -51,6 +51,7 @@ fn identity() -> Value {
         "crates/agfx/src/vulkan.rs",
         "crates/agfx/src/vulkan/compute.rs",
         "crates/agfx/src/vulkan/ownership.rs",
+        "crates/agfx/src/vulkan/sampler.rs",
         "crates/agfx/src/vulkan/texture.rs",
         "crates/agfx/src/bin/shader_to_human.rs",
         "shaders/rust/shader_to_human_fixtures.rs",
@@ -221,6 +222,8 @@ impl ReviewedShader {
                 ComputeInterface {
                     buffers: u32::from(!self.images),
                     images: u32::from(self.images),
+                    sampled_images: 0,
+                    samplers: 0,
                     root_bytes: fixture.root.len() as u32,
                     local_size: fixture.local,
                 },
@@ -249,6 +252,8 @@ impl ReviewedShader {
                         pipeline.dispatch(
                             &mut [],
                             &mut [&mut output],
+                            &[],
+                            &[],
                             &[ComputeDispatch {
                                 root: &fixture.root,
                                 groups: fixture.groups,
@@ -299,6 +304,8 @@ impl ReviewedShader {
             pipeline.dispatch(
                 &mut [&mut output],
                 &mut [],
+                &[],
+                &[],
                 &[ComputeDispatch {
                     root: &fixture.root,
                     groups: fixture.groups,

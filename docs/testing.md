@@ -20,6 +20,8 @@ the [documentation demo mapping](../tests/parity/shader-to-human-demos.md) descr
 
 confirm source oracle defects with focused reproducers and correct them separately. missing goldens must fail, not become candidate-generated references. preserve source thresholds. use alpha, local masks/regions, exact structural buffers, numeric rules, and perceptual scores as appropriate. an LLM's visual opinion is not an oracle.
 
+the [AGFX sampling mapping](../tests/parity/sampling.md) separates exact bytes, the original FLIP threshold, independent sampling arithmetic and alpha. its CPU reference uses the unchanged pinned source header. no added rounding assertion may silently replace the source contract.
+
 ## results and reports
 
 use one canonical result model for minimal primary records and the supporting report/query views. [result contracts](specs/001-theta-prototype/contracts/test-results.md) and [data](specs/001-theta-prototype/data-model.md) own the schema and acceptance. stable IDs and bounded first-failure records matter more than verbose logs.
