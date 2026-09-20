@@ -472,6 +472,22 @@
         "../../legal/licenses/RustGPU-APACHE.txt",
         "../../legal/licenses/NoGraphicsAPI-MIT.txt"
       ]
+    },
+    {
+      "file": "rustgpu-physical-difftest.patch",
+      "sha256": "3824ee643e9c2abfb9223a70526c1ae295a903fb72d15b1673765c86482ae084",
+      "repository": "https://github.com/Rust-GPU/rust-gpu",
+      "base": "f8b6582f944f3fa240b5471e3e1e71f07a2d7035",
+      "local_verified_commit": "a83098321509b3d514aa5315a414f6af4204b163",
+      "license": "MIT OR Apache-2.0",
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ],
+      "license_files": [
+        "../../legal/licenses/RustGPU-MIT.txt",
+        "../../legal/licenses/RustGPU-APACHE.txt"
+      ]
     }
   ]
 }

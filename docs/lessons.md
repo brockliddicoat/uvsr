@@ -72,6 +72,8 @@ application: assert required effect counts, flags and scope identities after opt
 
 [E-030](execution.md#e-030-2026-09-19-tested-aggregate-aliases-and-function-effects) extends the finding to Function storage. RustGPU promotion and several native local-memory passes independently removed explicit volatile operations. scalar/derived-pointer and unused-store regressions now retain those effects through individual passes and the performance pipeline. the actual NGAPI fixture executes with the preserved final instructions under default/qptr and opt0/opt3. numeric output alone cannot establish that an unused volatile access survived, so both structural and runtime checks remain necessary.
 
+[E-034](execution.md#e-034-2026-09-19-added-the-generic-physical-address-difftest) exposed a textual-check limit. dev modules embed Rust source in OpSource, including the inline-assembly instruction strings. counting text without excluding quoted metadata falsely counted extra volatile operations. inspect actual instructions and retain independent binary validation. removing metadata from the inspection view must not silently rewrite the executed module.
+
 ## L-011. follow aggregate accesses through copy lowering
 
 **observed, pinned RustGPU regression.** at [E-022](execution.md#e-022-2026-09-19-tested-the-physical-pointer-library), scalar accesses carried valid alignment but an array read/write failed validation. rustc routed the aggregate through memcpy, whose lowering discarded both alignments. preserving alignment also required transferring it when the linker split a copy into a load/store, then cleaning newly introduced logical accesses.
