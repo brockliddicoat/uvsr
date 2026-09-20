@@ -1,0 +1,707 @@
+diff --git a/docs/src/platform-support.md b/docs/src/platform-support.md
+index 36ec4b5..8fe7784 100644
+--- a/docs/src/platform-support.md
++++ b/docs/src/platform-support.md
+@@ -158,0 +159,8 @@ allocations. No host framework is a dependency of these compiler tests.
++The matching `physical_storage/operations` difftest has an independent CPU
++reference and a private Vulkan host with queried device features. It executes
++the shared body under default/qptr and dev/release profiles on real allocations,
++checks address/source/guard words, and compares all remaining bytes exactly.
++Missing capabilities produce explicit skip metadata. Its README documents the
++host ownership, completion and failure contracts and shader-only inspection.
++This bounded runtime test does not establish general raw-pointer parity.
++
+diff --git a/tests/difftests/tests/Cargo.lock b/tests/difftests/tests/Cargo.lock
+index e44a2af..efa9c20 100644
+--- a/tests/difftests/tests/Cargo.lock
++++ b/tests/difftests/tests/Cargo.lock
+@@ -1409,0 +1410,18 @@ dependencies = [
++[[package]]
++name = "physical-storage-operations-cpu"
++version = "0.0.0"
++dependencies = [
++ "difftest",
++]
++
++[[package]]
++name = "physical-storage-operations-vulkan"
++version = "0.0.0"
++dependencies = [
++ "anyhow",
++ "ash",
++ "bytemuck",
++ "difftest",
++ "spirv-std",
++]
++
+diff --git a/tests/difftests/tests/Cargo.toml b/tests/difftests/tests/Cargo.toml
+index 2fc956e..1da69f0 100644
+--- a/tests/difftests/tests/Cargo.toml
++++ b/tests/difftests/tests/Cargo.toml
+@@ -4,0 +5,2 @@ members = [
++    "physical_storage/operations/cpu",
++    "physical_storage/operations/vulkan",
+diff --git a/tests/difftests/tests/physical_storage/operations/README.md b/tests/difftests/tests/physical_storage/operations/README.md
+new file mode 100644
+index 0000000..f4f06e0
+--- /dev/null
++++ b/tests/difftests/tests/physical_storage/operations/README.md
+@@ -0,0 +1,30 @@
++# Physical address operations
++
++This CPU/Vulkan difftest reuses the compiletests' `operations_body.rs` shader.
++It compares all 768 output bytes for three wrapping-integer seeds under the
++default and qptr pipelines, each with Rust dev and release optimization.
++The shader reads a nested address-containing aggregate, writes and reloads
++through separately loaded aliases, and preserves volatile Function accesses.
++Compiletest snapshots check the unused volatile load, which readback alone
++cannot observe.
++
++The private Vulkan host requires Vulkan 1.3, `shaderInt64`,
++`bufferDeviceAddress`, `vulkanMemoryModel`, and coherent host-visible memory.
++Missing support writes explicit skip metadata. Native errors fail the case.
++The host owns two disjoint 32-byte ranges and supplies a 16-byte push root.
++It checks actual addresses and source/guard bytes before normalizing only
++address fields for CPU comparison. No fabricated address is dispatched.
++Every submission completes before mapping, reuse or retirement. An uncertain
++submission/wait failure aborts before pending objects can be destroyed.
++The native runner is private and accepts only this shader's unsafe contract.
++
++Run from the repository root using `cargo difftest physical_storage`.
++Without nextest, the same harness is available through
++`cargo test --release -p difftests --test difftests -- physical_storage`.
++Both require the tool configuration appropriate to the compiler dependencies.
++The fixture also supports shader-only inspection through
++`cargo run --release --manifest-path tests/difftests/tests/Cargo.toml -p physical-storage-operations-vulkan --features difftest/use-compiled-tools -- --compile-only OUTPUT_DIRECTORY`.
++An optional second argument after a normal harness config path retains the
++exact four executed modules. Use Cargo to supply the codegen library path.
++Native case events mean dispatch completed. The harness's byte comparison
++determines pass/fail. Hardware skips and unexecuted high addresses are not proof.
+diff --git a/tests/difftests/tests/physical_storage/operations/cpu/Cargo.toml b/tests/difftests/tests/physical_storage/operations/cpu/Cargo.toml
+new file mode 100644
+index 0000000..309ceed
+--- /dev/null
++++ b/tests/difftests/tests/physical_storage/operations/cpu/Cargo.toml
+@@ -0,0 +1,11 @@
++[package]
++name = "physical-storage-operations-cpu"
++edition.workspace = true
++license.workspace = true
++publish.workspace = true
++
++[lints]
++workspace = true
++
++[dependencies]
++difftest.workspace = true
+diff --git a/tests/difftests/tests/physical_storage/operations/cpu/src/main.rs b/tests/difftests/tests/physical_storage/operations/cpu/src/main.rs
+new file mode 100644
+index 0000000..6d7bd34
+--- /dev/null
++++ b/tests/difftests/tests/physical_storage/operations/cpu/src/main.rs
+@@ -0,0 +1,41 @@
++#![forbid(unsafe_code)]
++
++fn main() -> Result<(), Box<dyn std::error::Error>> {
++    let config = difftest::config::Config::from_path(std::env::args().nth(1).unwrap())?;
++    config.write_metadata(&difftest::config::TestMetadata::raw())?;
++    let mut output = Vec::new();
++    for _variant in 0..4 {
++        for seed in [0_u32, u32::MAX, 0x8000_0001] {
++            let source = [seed, seed ^ 0x55aa_55aa, seed.wrapping_add(19)];
++            let changed = [
++                source[0].wrapping_add(1),
++                source[1].wrapping_add(2),
++                source[2].wrapping_add(3),
++            ];
++            let sum = changed.into_iter().fold(0_u32, u32::wrapping_add);
++            let tag = seed ^ 0xcede_f00d;
++            // The Vulkan variant verifies actual address words before replacing
++            // those nondeterministic fields with zero for this comparison.
++            output.extend_from_slice(&[
++                changed[0],
++                changed[1],
++                changed[2],
++                sum,
++                0,
++                0,
++                tag,
++                0xa5c3_7e19,
++                0,
++                0,
++                source[0],
++                source[1],
++                source[2],
++                tag,
++                0xa5c3_7e19,
++                0xa5c3_7e19,
++            ]);
++        }
++    }
++    config.write_result(&output)?;
++    Ok(())
++}
+diff --git a/tests/difftests/tests/physical_storage/operations/vulkan/Cargo.toml b/tests/difftests/tests/physical_storage/operations/vulkan/Cargo.toml
+new file mode 100644
+index 0000000..9cf2f8f
+--- /dev/null
++++ b/tests/difftests/tests/physical_storage/operations/vulkan/Cargo.toml
+@@ -0,0 +1,17 @@
++[package]
++name = "physical-storage-operations-vulkan"
++edition.workspace = true
++license.workspace = true
++publish.workspace = true
++
++[lints]
++workspace = true
++
++[dependencies]
++spirv-std.workspace = true
++
++[target.'cfg(not(target_arch = "spirv"))'.dependencies]
++difftest.workspace = true
++bytemuck.workspace = true
++ash = "0.38"
++anyhow = "1.0"
+diff --git a/tests/difftests/tests/physical_storage/operations/vulkan/src/lib.rs b/tests/difftests/tests/physical_storage/operations/vulkan/src/lib.rs
+new file mode 100644
+index 0000000..b6cb3f5
+--- /dev/null
++++ b/tests/difftests/tests/physical_storage/operations/vulkan/src/lib.rs
+@@ -0,0 +1,7 @@
++#![cfg_attr(target_arch = "spirv", no_std)]
++#![cfg_attr(target_arch = "spirv", feature(asm_experimental_arch))]
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++#[cfg(target_arch = "spirv")]
++include!("../../../../../../compiletests/ui/physical_storage/auxiliary/operations_body.rs");
+diff --git a/tests/difftests/tests/physical_storage/operations/vulkan/src/main.rs b/tests/difftests/tests/physical_storage/operations/vulkan/src/main.rs
+new file mode 100644
+index 0000000..57983a0
+--- /dev/null
++++ b/tests/difftests/tests/physical_storage/operations/vulkan/src/main.rs
+@@ -0,0 +1,73 @@
++#![deny(unsafe_code)]
++#![deny(unsafe_op_in_unsafe_fn)]
++
++mod native;
++
++use anyhow::{Result, ensure};
++use difftest::config::Config;
++use difftest::scaffold::shader::{RustComputeShader, SpirvShader};
++
++#[allow(unsafe_code)]
++fn main() -> Result<()> {
++    let argument = std::env::args()
++        .nth(1)
++        .expect("config path or --compile-only");
++    let evidence = std::env::args().nth(2).map(std::path::PathBuf::from);
++    ensure!(
++        argument != "--compile-only" || evidence.is_some(),
++        "compile-only output directory is required"
++    );
++    let mut modules = Vec::new();
++    for qptr in [false, true] {
++        for optimized in [false, true] {
++            let variant = format!(
++                "{}_opt{}",
++                if qptr { "qptr" } else { "default" },
++                if optimized { 3 } else { 0 }
++            );
++            let mut shader = RustComputeShader::with_target(
++                env!("CARGO_MANIFEST_DIR"),
++                "spirv-unknown-vulkan1.3-physical64",
++            );
++            shader.builder = shader.builder.release(optimized);
++            if qptr {
++                shader.builder = shader.builder.extra_arg("--spirt-passes=qptr");
++            }
++            let (bytes, entry) = shader.spirv_bytes()?;
++            ensure!(entry == "computeMain", "unexpected entry point");
++            if let Some(directory) = &evidence {
++                std::fs::create_dir_all(directory)?;
++                std::fs::write(directory.join(format!("{variant}.spv")), &bytes)?;
++            }
++            let words = ash::util::read_spv(&mut std::io::Cursor::new(bytes))?;
++            println!(
++                "{{\"phase\":\"compiled\",\"qptr\":{qptr},\"optimized\":{optimized},\"words\":{}}}",
++                words.len()
++            );
++            modules.push((variant, words));
++        }
++    }
++    if argument == "--compile-only" {
++        return Ok(());
++    }
++    let config = Config::from_path(argument)?;
++    config.write_metadata(&difftest::config::TestMetadata::raw())?;
++    let Some(mut gpu) = native::Device::new()? else {
++        return difftest::scaffold::Skip::new("requires Vulkan 1.3, shaderInt64, bufferDeviceAddress, vulkanMemoryModel and coherent host-visible memory").run_test(&config);
++    };
++    let mut output = Vec::new();
++    for (variant, module) in &modules {
++        // SAFETY: U-012/U-015. This is the validated, known operations_body
++        // entry, built above with the physical64 target. Device::case supplies
++        // its exact initialized root/ranges and waits before reuse or teardown.
++        unsafe { gpu.set_shader(module)? };
++        for (case, seed) in [0_u32, u32::MAX, 0x8000_0001].into_iter().enumerate() {
++            output.extend(gpu.case(seed)?);
++            println!(
++                "{{\"case_id\":\"physical_storage.operations.{variant}.seed{case}\",\"status\":\"completed\",\"shader_cases_executed\":1}}"
++            );
++        }
++    }
++    ensure!(output.len() == 192, "incomplete case matrix");
++    config.write_result(&output)
++}
+diff --git a/tests/difftests/tests/physical_storage/operations/vulkan/src/native.rs b/tests/difftests/tests/physical_storage/operations/vulkan/src/native.rs
+new file mode 100644
+index 0000000..94e6a2a
+--- /dev/null
++++ b/tests/difftests/tests/physical_storage/operations/vulkan/src/native.rs
+@@ -0,0 +1,443 @@
++//! Private fixed Vulkan fixture, not a general safe shader runner. U-015.
++use anyhow::{Result, ensure};
++use ash::vk;
++
++struct Instance {
++    handle: ash::Instance,
++    _entry: ash::Entry,
++}
++
++impl Drop for Instance {
++    #[allow(unsafe_code)]
++    fn drop(&mut self) {
++        // SAFETY: The sole Device owner destroys its child before this field.
++        unsafe { self.handle.destroy_instance(None) };
++    }
++}
++
++#[derive(Default)]
++struct Buffer {
++    handle: vk::Buffer,
++    memory: vk::DeviceMemory,
++    address: u64,
++}
++
++pub(super) struct Device {
++    _instance: Instance,
++    handle: ash::Device,
++    queue: vk::Queue,
++    pool: vk::CommandPool,
++    command: vk::CommandBuffer,
++    fence: vk::Fence,
++    layout: vk::PipelineLayout,
++    pipeline: vk::Pipeline,
++    buffers: [Buffer; 2],
++    pending: bool,
++}
++
++impl Device {
++    #[allow(unsafe_code)]
++    pub(super) fn new() -> Result<Option<Self>> {
++        // SAFETY: Keep the loaded entry alive through instance/device teardown.
++        let Ok(entry) = (unsafe { ash::Entry::load() }) else {
++            return Ok(None);
++        };
++        // SAFETY: Loader query has no object/pointer preconditions.
++        if unsafe { entry.try_enumerate_instance_version()? }.unwrap_or(vk::API_VERSION_1_0)
++            < vk::API_VERSION_1_3
++        {
++            return Ok(None);
++        }
++        let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3);
++        // SAFETY: All create-info pointers borrow the live app, no extensions.
++        let handle = unsafe {
++            entry.create_instance(
++                &vk::InstanceCreateInfo::default().application_info(&app),
++                None,
++            )?
++        };
++        let instance = Instance {
++            handle,
++            _entry: entry,
++        };
++        // SAFETY: The instance remains live throughout enumeration and queries.
++        let devices = unsafe { instance.handle.enumerate_physical_devices()? };
++        for physical in devices {
++            let mut v12 = vk::PhysicalDeviceVulkan12Features::default();
++            let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut v12);
++            // SAFETY: Valid enumerated physical device and writable query chain.
++            let (properties, families, memory) = unsafe {
++                instance
++                    .handle
++                    .get_physical_device_features2(physical, &mut features);
++                (
++                    instance.handle.get_physical_device_properties(physical),
++                    instance
++                        .handle
++                        .get_physical_device_queue_family_properties(physical),
++                    instance
++                        .handle
++                        .get_physical_device_memory_properties(physical),
++                )
++            };
++            if properties.api_version < vk::API_VERSION_1_3
++                || features.features.shader_int64 == 0
++                || v12.buffer_device_address == 0
++                || v12.vulkan_memory_model == 0
++            {
++                continue;
++            }
++            let Some(family) = families.iter().position(|q| {
++                q.queue_count != 0 && q.queue_flags.contains(vk::QueueFlags::COMPUTE)
++            }) else {
++                continue;
++            };
++            let required =
++                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
++            if !memory.memory_types[..memory.memory_type_count as usize]
++                .iter()
++                .any(|m| m.property_flags.contains(required))
++            {
++                continue;
++            }
++            let queues = [vk::DeviceQueueCreateInfo::default()
++                .queue_family_index(family as u32)
++                .queue_priorities(&[1.0])];
++            let core = vk::PhysicalDeviceFeatures::default().shader_int64(true);
++            let mut enabled = vk::PhysicalDeviceVulkan12Features::default()
++                .buffer_device_address(true)
++                .vulkan_memory_model(true);
++            // SAFETY: Exactly the queried core features/queue are enabled, with
++            // create-info arrays and the pNext chain alive for this call.
++            let handle = unsafe {
++                instance.handle.create_device(
++                    physical,
++                    &vk::DeviceCreateInfo::default()
++                        .queue_create_infos(&queues)
++                        .enabled_features(&core)
++                        .push_next(&mut enabled),
++                    None,
++                )?
++            };
++            let mut device = Self {
++                _instance: instance,
++                handle,
++                queue: vk::Queue::null(),
++                pool: vk::CommandPool::null(),
++                command: vk::CommandBuffer::null(),
++                fence: vk::Fence::null(),
++                layout: vk::PipelineLayout::null(),
++                pipeline: vk::Pipeline::null(),
++                buffers: [Buffer::default(), Buffer::default()],
++                pending: false,
++            };
++            // SAFETY: Queue zero was requested from this family at device creation.
++            device.queue = unsafe { device.handle.get_device_queue(family as u32, 0) };
++            // SAFETY: This private pool belongs to that same enabled family.
++            device.pool = unsafe {
++                device.handle.create_command_pool(
++                    &vk::CommandPoolCreateInfo::default()
++                        .queue_family_index(family as u32)
++                        .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
++                    None,
++                )?
++            };
++            // SAFETY: Allocate one primary command buffer from the live pool.
++            device.command = unsafe {
++                device.handle.allocate_command_buffers(
++                    &vk::CommandBufferAllocateInfo::default()
++                        .command_pool(device.pool)
++                        .level(vk::CommandBufferLevel::PRIMARY)
++                        .command_buffer_count(1),
++                )?
++            }[0];
++            // SAFETY: A private unsignaled fence, retained until no work is pending.
++            device.fence = unsafe {
++                device
++                    .handle
++                    .create_fence(&vk::FenceCreateInfo::default(), None)?
++            };
++            let range = [vk::PushConstantRange::default()
++                .stage_flags(vk::ShaderStageFlags::COMPUTE)
++                .size(16)];
++            // SAFETY: The shader uses only this 16-byte root, within Vulkan minima.
++            device.layout = unsafe {
++                device.handle.create_pipeline_layout(
++                    &vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&range),
++                    None,
++                )?
++            };
++            for buffer in &mut device.buffers {
++                // SAFETY: Nonzero bounded size and core usage, no queue-family list.
++                buffer.handle = unsafe {
++                    device.handle.create_buffer(
++                        &vk::BufferCreateInfo::default()
++                            .size(32)
++                            .usage(
++                                vk::BufferUsageFlags::STORAGE_BUFFER
++                                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
++                            )
++                            .sharing_mode(vk::SharingMode::EXCLUSIVE),
++                        None,
++                    )?
++                };
++                // SAFETY: The buffer has been created on this device.
++                let requirements =
++                    unsafe { device.handle.get_buffer_memory_requirements(buffer.handle) };
++                let Some(index) = (0..memory.memory_type_count).find(|i| {
++                    requirements.memory_type_bits & (1 << i) != 0
++                        && memory.memory_types[*i as usize]
++                            .property_flags
++                            .contains(required)
++                }) else {
++                    return Ok(None);
++                };
++                let mut flags = vk::MemoryAllocateFlagsInfo::default()
++                    .flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
++                // SAFETY: Exact queried memory requirements and an enabled BDA flag.
++                buffer.memory = unsafe {
++                    device.handle.allocate_memory(
++                        &vk::MemoryAllocateInfo::default()
++                            .allocation_size(requirements.size)
++                            .memory_type_index(index)
++                            .push_next(&mut flags),
++                        None,
++                    )?
++                };
++                // SAFETY: A new disjoint allocation, sufficient size, aligned offset0.
++                unsafe {
++                    device
++                        .handle
++                        .bind_buffer_memory(buffer.handle, buffer.memory, 0)?;
++                };
++                // SAFETY: Address-enabled buffer backed by address-enabled memory.
++                buffer.address = unsafe {
++                    device.handle.get_buffer_device_address(
++                        &vk::BufferDeviceAddressInfo::default().buffer(buffer.handle),
++                    )
++                };
++                ensure!(
++                    buffer.address != 0
++                        && buffer.address % 8 == 0
++                        && buffer.address <= u64::MAX - 32,
++                    "invalid physical range"
++                );
++            }
++            println!(
++                "{{\"phase\":\"device\",\"vendor_id\":{},\"device_id\":{},\"driver_version\":{},\"api_version\":{},\"source_address\":{},\"destination_address\":{}}}",
++                properties.vendor_id,
++                properties.device_id,
++                properties.driver_version,
++                properties.api_version,
++                device.buffers[0].address,
++                device.buffers[1].address
++            );
++            return Ok(Some(device));
++        }
++        Ok(None)
++    }
++
++    /// # Safety
++    /// The module must be the validated U-012 `operations_body` computeMain with
++    /// only a 16-byte two-address push root and its documented bounded accesses.
++    /// It must require only the features enabled in `new()`. No arbitrary module.
++    #[allow(unsafe_code)]
++    pub(super) unsafe fn set_shader(&mut self, words: &[u32]) -> Result<()> {
++        ensure!(!self.pending, "pending shader replacement");
++        // SAFETY: No command is pending. Null handles are allowed for destruction.
++        unsafe { self.handle.destroy_pipeline(self.pipeline, None) };
++        self.pipeline = vk::Pipeline::null();
++        // SAFETY: Caller establishes valid SPIR-V and the enabled shader profile.
++        let module = unsafe {
++            self.handle
++                .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(words), None)?
++        };
++        let stage = vk::PipelineShaderStageCreateInfo::default()
++            .stage(vk::ShaderStageFlags::COMPUTE)
++            .module(module)
++            .name(c"computeMain");
++        let infos = [vk::ComputePipelineCreateInfo::default()
++            .stage(stage)
++            .layout(self.layout)];
++        // SAFETY: Live shader/layout match the caller's exact root and entry.
++        let result = unsafe {
++            self.handle
++                .create_compute_pipelines(vk::PipelineCache::null(), &infos, None)
++        };
++        // SAFETY: Pipeline creation has returned and retains no shader-module use.
++        unsafe { self.handle.destroy_shader_module(module, None) };
++        match result {
++            Ok(pipelines) => self.pipeline = pipelines[0],
++            Err((pipelines, error)) => {
++                for pipeline in pipelines {
++                    // SAFETY: Partial creation handles have never been submitted.
++                    unsafe { self.handle.destroy_pipeline(pipeline, None) };
++                }
++                return Err(error.into());
++            }
++        }
++        Ok(())
++    }
++
++    #[allow(unsafe_code)]
++    fn write(&mut self, index: usize, words: &[u32; 8]) -> Result<()> {
++        ensure!(!self.pending, "pending host write");
++        let buffer = &self.buffers[index];
++        // SAFETY: A private coherent host-visible allocation of at least32 bytes,
++        // no live map or GPU work. Copy only initialized u32 bytes, then unmap.
++        unsafe {
++            let mapped =
++                self.handle
++                    .map_memory(buffer.memory, 0, 32, vk::MemoryMapFlags::empty())?;
++            std::ptr::copy_nonoverlapping(words.as_ptr().cast::<u8>(), mapped.cast(), 32);
++            self.handle.unmap_memory(buffer.memory);
++        }
++        Ok(())
++    }
++
++    #[allow(unsafe_code)]
++    fn read(&mut self, index: usize) -> Result<[u32; 8]> {
++        ensure!(!self.pending, "pending host read");
++        let mut words = [0; 8];
++        // SAFETY: The initialized coherent32-byte range is visible after fence
++        // completion and the shader-to-host barrier. Only a byte copy escapes.
++        unsafe {
++            let mapped = self.handle.map_memory(
++                self.buffers[index].memory,
++                0,
++                32,
++                vk::MemoryMapFlags::empty(),
++            )?;
++            std::ptr::copy_nonoverlapping(mapped.cast::<u8>(), words.as_mut_ptr().cast(), 32);
++            self.handle.unmap_memory(self.buffers[index].memory);
++        }
++        Ok(words)
++    }
++
++    #[allow(unsafe_code)]
++    pub(super) fn case(&mut self, seed: u32) -> Result<Vec<u32>> {
++        ensure!(
++            !self.pending && self.pipeline != vk::Pipeline::null(),
++            "missing completed pipeline"
++        );
++        let address = self.buffers[1].address;
++        let source = [
++            address as u32,
++            (address >> 32) as u32,
++            seed,
++            seed ^ 0x55aa_55aa,
++            seed.wrapping_add(19),
++            seed ^ 0xcede_f00d,
++            0xa5c3_7e19,
++            0xa5c3_7e19,
++        ];
++        self.write(0, &source)?;
++        self.write(1, &[0xa5c3_7e19; 8])?;
++        let root = [self.buffers[0].address, address];
++        // SAFETY: The previous dispatch completed, and the pool permits reset.
++        unsafe {
++            self.handle
++                .reset_command_buffer(self.command, vk::CommandBufferResetFlags::empty())?;
++        };
++        // SAFETY: The reset primary buffer is not pending; begin one recording.
++        unsafe {
++            self.handle.begin_command_buffer(
++                self.command,
++                &vk::CommandBufferBeginInfo::default()
++                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
++            )?;
++        };
++        let before = [vk::MemoryBarrier::default()
++            .src_access_mask(vk::AccessFlags::HOST_WRITE)
++            .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)];
++        let after = [vk::MemoryBarrier::default()
++            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
++            .dst_access_mask(vk::AccessFlags::HOST_READ)];
++        // SAFETY: Live same-device pipeline/layout/buffers, exact initialized
++        // U-012 root, one invocation, immutable source and exclusive output.
++        // Coherent writes and explicit dependencies bracket all shader accesses.
++        unsafe {
++            self.handle.cmd_pipeline_barrier(
++                self.command,
++                vk::PipelineStageFlags::HOST,
++                vk::PipelineStageFlags::COMPUTE_SHADER,
++                vk::DependencyFlags::empty(),
++                &before,
++                &[],
++                &[],
++            );
++            self.handle.cmd_bind_pipeline(
++                self.command,
++                vk::PipelineBindPoint::COMPUTE,
++                self.pipeline,
++            );
++            self.handle.cmd_push_constants(
++                self.command,
++                self.layout,
++                vk::ShaderStageFlags::COMPUTE,
++                0,
++                bytemuck::cast_slice(&root),
++            );
++            self.handle.cmd_dispatch(self.command, 1, 1, 1);
++            self.handle.cmd_pipeline_barrier(
++                self.command,
++                vk::PipelineStageFlags::COMPUTE_SHADER,
++                vk::PipelineStageFlags::HOST,
++                vk::DependencyFlags::empty(),
++                &after,
++                &[],
++                &[],
++            );
++            self.handle.end_command_buffer(self.command)?;
++            self.handle.reset_fences(&[self.fence])?;
++        }
++        let commands = [self.command];
++        let submit = [vk::SubmitInfo::default().command_buffers(&commands)];
++        self.pending = true;
++        // SAFETY: Ended same-family commands, live arrays/owners and an unsignaled
++        // private fence. On uncertain failure Drop aborts before any retirement.
++        unsafe {
++            self.handle.queue_submit(self.queue, &submit, self.fence)?;
++            self.handle
++                .wait_for_fences(&[self.fence], true, 10_000_000_000)?;
++        }
++        self.pending = false;
++        let mut output = self.read(1)?;
++        let mut unchanged = self.read(0)?;
++        ensure!(unchanged == source, "source or source guard changed");
++        ensure!(
++            output[4] == address as u32 && output[5] == (address >> 32) as u32,
++            "loaded alias address changed"
++        );
++        ensure!(output[7] == 0xa5c3_7e19, "destination guard changed");
++        output[4..6].fill(0);
++        unchanged[..2].fill(0);
++        Ok([output, unchanged].concat())
++    }
++}
++
++impl Drop for Device {
++    #[allow(unsafe_code)]
++    fn drop(&mut self) {
++        if self.pending {
++            eprintln!(
++                "physical-address difftest completion is unknown; refusing pending resource retirement"
++            );
++            std::process::abort();
++        }
++        // SAFETY: Every submission completed, or none occurred. Destroy children
++        // before their memory/device and let the instance owner retire last.
++        // Each creation immediately stored its handle, including partial setup.
++        unsafe {
++            self.handle.destroy_pipeline(self.pipeline, None);
++            self.handle.destroy_pipeline_layout(self.layout, None);
++            self.handle.destroy_fence(self.fence, None);
++            self.handle.destroy_command_pool(self.pool, None);
++            for buffer in &self.buffers {
++                self.handle.destroy_buffer(buffer.handle, None);
++                self.handle.free_memory(buffer.memory, None);
++            }
++            self.handle.destroy_device(None);
++        }
++    }
++}

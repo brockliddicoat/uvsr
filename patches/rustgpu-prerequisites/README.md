@@ -271,3 +271,17 @@ all 47 required pointer/heap source pairs pass, seven logical and 40 physical64.
 [rustgpu-task-mesh.patch](rustgpu-task-mesh.patch) adds one shared shader body, four compile wrappers, three focused entry snapshots and documentation. it copies an 80-byte root through task payload storage, emits six mesh groups and reads four physical vertices per group with full u64 offsets. each group writes fixed output slots for one quad. the fragment stage samples native image/sampler heaps. source attribution and the complete NGAPI MIT notice accompany the ABI adaptation. there is no compiler/library implementation change or NGAPI host dependency.
 
 all 51 required source pairs pass, seven logical and 44 physical64. [E-033](../../docs/execution.md#e-033-2026-09-19-executed-task-and-mesh-stages) records 16 actual image/depth cases per Debug/Release host, native validation and the unchanged indexed-cube regression. [U-014](../../UNSAFE.md#u-014-task-payload-and-mesh-physical-vertices) owns the caller contract and macro-expanded inventory. an earlier dynamic-u64 Output-index fixture validated but crashed the NVIDIA pipeline compiler. the fixed-slot fixture preserves the cube output without changing pointer width or rewriting emitted SPIR-V. it does not establish dynamic mesh output indexing or general task/mesh parity.
+
+## generic physical-address difftest
+
+[rustgpu-physical-difftest.patch](rustgpu-physical-difftest.patch) adds two packages to the existing difftest workspace. an independent CPU reference and a private ash Vulkan host compare the shared operations shader at default/qptr and dev/release optimization, with three wrapping seeds each. the host queries its required features, owns two bounded allocations and waits before readback or retirement. it verifies actual address/source/guard words before normalizing only addresses for a deterministic byte comparison. no NGAPI or AGFX dependency is added. [U-015](../../UNSAFE.md#u-015-generic-upstream-physical-address-difftest-host) owns the complete review.
+
+with the pinned dependency overrides and patched compiled tools, run from the owned RustGPU checkout:
+
+```powershell
+cargo test --release --locked -p difftests --no-default-features --features use-compiled-tools --test difftests -j1 -- physical_storage --test-threads=1 --nocapture
+cargo fmt --manifest-path tests/difftests/tests/Cargo.toml -p physical-storage-operations-vulkan -p physical-storage-operations-cpu -- --check
+cargo clippy --no-deps --manifest-path tests/difftests/tests/Cargo.toml --release --locked -p physical-storage-operations-vulkan -p physical-storage-operations-cpu --features difftest/use-compiled-tools --all-targets -j1 -- -D warnings
+```
+
+[E-034](../../docs/execution.md#e-034-2026-09-19-added-the-generic-physical-address-difftest) records one passing harness comparison, zero ignored, with both 768-byte outputs present. a separately captured run passes all 12 dispatches with explicit Khronos core/synchronization validation and real nonzero upper address bits on Intel Arc. all four executed payloads match independently validated and reviewed modules. fixture-only Clippy and formatting pass. dependency-inclusive Clippy fails seven findings in unchanged difftest helpers. the commands above are focused checks, not a full upstream CI pass. installed tools still require the native optimizer prerequisite.
