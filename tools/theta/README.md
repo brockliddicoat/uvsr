@@ -65,6 +65,17 @@ python tools/theta/compile_s2h_library.py --rustgpu-source <owned-rust-gpu> --co
 
 the [library probe](../../shaders/rust/shader_to_human_library.rs) covers input-dependent gather, widgets, scatter and 3D calls at opt0 and opt3. the tool uses the same pinned logical sysroot and exact glam/libm libraries as the existing compiler gate. it records both compile commands, full library and entry hashes, SPIR-V identity, capabilities and independent validation. it neither dispatches a GPU nor establishes golden parity. the [mapping](../../tests/parity/shader-to-human.md) owns source coverage and remaining fixture/example work.
 
+## ShaderToHuman original image comparison
+
+```text
+python tools/theta/compile_s2h_library.py --images --rustgpu-source <owned-rust-gpu> --codegen-backend <rustc_codegen_spirv.dll> --output-dir <ignored-build>/s2h-images
+cargo build --bin shader_to_human --locked
+python tools/theta/run_s2h_fixtures.py --images --executable <host-target>/debug/shader_to_human.exe --sdk <Vulkan-SDK-root> --shader-dir <ignored-build>/s2h-images --output-dir <ignored-evidence>/s2h-images-debug
+python -m unittest discover -s tools/theta -p test_s2h_images.py
+```
+
+the image runner requires Pillow and repeats for Release with a separate output directory. it checks two completed executions into the same RGBA8_UNORM image, with native conversion and complete alpha-inclusive comparison against the frozen source PNGs. `execution_passed` is separate from exact golden `passed`. all ten executions currently pass while six exact comparisons pass, so the complete image parity gate returns failure. the [mapping](../../tests/parity/shader-to-human.md) records the remaining 2D/3D differences. expected images and thresholds are unchanged. [U-018](../../UNSAFE.md#u-018-shadertohuman-rgba8-image-entries-and-two-executions) registers bounded shader writes, artifact identities and host ownership. original float diagnostics remain available below.
+
 ## ShaderToHuman fixture float readbacks
 
 ```text

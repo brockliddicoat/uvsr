@@ -1,4 +1,4 @@
-"""Execute ten source-fixture float readbacks. Original PNG parity is a separate gate."""
+"""Run ten float diagnostics or original RGBA8 two-execution PNG comparisons."""
 import argparse
 import json
 import math
@@ -19,6 +19,7 @@ SOURCES = ["Cargo.toml", "Cargo.lock", "crates/agfx/Cargo.toml", "crates/agfx/sr
            "crates/agfx/src/vulkan.rs", "crates/agfx/src/vulkan/compute.rs",
            "crates/agfx/src/vulkan/ownership.rs", "crates/agfx/src/vulkan/texture.rs",
            "crates/agfx/src/bin/shader_to_human.rs", "shaders/rust/shader_to_human_fixtures.rs",
+           "shaders/rust/shader_to_human_images.rs",
            "tests/parity/fixtures/shader-to-human/camera.txt"]
 SOURCES += [p.relative_to(ROOT).as_posix() for directory in ("src", "fixtures")
             for p in sorted((ROOT / "crates/shader-to-human" / directory).glob("*.rs"))]
@@ -30,9 +31,11 @@ def camera_root():
     return struct.pack("<20f", *values)
 
 
-def check_record(record, token, identity, artifact, level, name, actual):
+def check_record(record, token, identity, artifact, level, name, actual, images=False, first=None):
+    suffix = "rgba8" if images else "rgba32f"
+    prefix = "s2h.image" if images else "s2h"
     require(record.get("schema_version") == 1 and record.get("run_token") == token, "version or fresh token mismatch")
-    require(record.get("case_id") == f"s2h.{name}.opt{level}" and record.get("status") == "pass", "case ID/status mismatch")
+    require(record.get("case_id") == f"{prefix}.{name}.opt{level}" and record.get("status") == "pass", "case ID/status mismatch")
     require(record.get("host_source_sha256") == identity and record.get("shader") == artifact, "compiled identity mismatch")
     scatter = name == "ScatterTest"
     root = camera_root() if name == "3DTest" else b""
@@ -40,18 +43,52 @@ def check_record(record, token, identity, artifact, level, name, actual):
     require(record.get("dispatch_groups") == ([1, 1, 1] if scatter else [100, 75, 1]) and
             record.get("workgroup_size") == ([1, 1, 1] if scatter else [8, 8, 1]), "dispatch dimensions mismatch")
     require(record.get("root_bytes") == len(root) and record.get("root_sha256") == sha256(root), "root ABI/input mismatch")
-    require(record.get("completion_values") == [1, 2, 3], "missing ordered completion")
-    require(record.get("resolution") == [800, 600] and record.get("format") == "RGBA32_FLOAT", "pixel layout mismatch")
-    require(record.get("output") == f"{name}-opt{level}.rgba32f", "output path mismatch")
-    require(len(actual) == 800 * 600 * 16 and record.get("bytes") == len(actual), "incomplete readback")
+    require(record.get("completion_values") == ([1, 2, 3, 4, 5] if images else [1, 2, 3]), "missing ordered completion")
+    require(record.get("resolution") == [800, 600] and
+            record.get("format") == ("RGBA8_UNORM" if images else "RGBA32_FLOAT"), "pixel layout mismatch")
+    require(record.get("output") == f"{name}-opt{level}.{suffix}", "output path mismatch")
+    require(len(actual) == 800 * 600 * (4 if images else 16) and record.get("bytes") == len(actual), "incomplete readback")
     require(record.get("actual_sha256") == sha256(actual), "readback hash mismatch")
-    require(any(value[0] != 0.0 for value in struct.iter_unpack("<f", actual)) and
-            all(math.isfinite(value[0]) for value in struct.iter_unpack("<f", actual)), "nonfinite/empty output")
+    if images:
+        require(any(actual) and first == actual, "empty or inconsistent two-execution image")
+        require(record.get("source_executions") == 2 and record.get("first_execution") ==
+                dict(output=f"{name}-opt{level}-execution1.rgba8", bytes=len(first), sha256=sha256(first)),
+                "missing first source execution")
+    else:
+        require(any(value[0] != 0.0 for value in struct.iter_unpack("<f", actual)) and
+                all(math.isfinite(value[0]) for value in struct.iter_unpack("<f", actual)), "nonfinite/empty output")
     require(record.get("golden_agreement") == "not checked", "execution must not imply golden agreement")
     device = record.get("device", {})
     require(device.get("validation") is True and device.get("synchronization_validation") is True, "validation disabled")
     require(min(device.get("api_version", 0), device.get("loader_api_version", 0)) >= (1 << 22 | 4 << 12)
             and set(device.get("enabled_features", [])) == FEATURES, "required device features missing")
+
+
+def compare_image(actual, expected):
+    require(len(actual) == len(expected) == 800 * 600 * 4, "incomplete RGBA image comparison")
+    first = next((i for i, (a, e) in enumerate(zip(actual, expected)) if a != e), None)
+    delta = bytes(abs(a - e) for a, e in zip(actual, expected))
+    return dict(status="pass" if first is None else "fail", rule="exact original RGBA bytes",
+                actual_sha256=sha256(actual), expected_sha256=sha256(expected),
+                different_channels=sum(value != 0 for value in delta), maximum_channel_error=max(delta),
+                different_pixels=sum(any(delta[i:i + 4]) for i in range(0, len(delta), 4)),
+                pixels_above_one=sum(max(delta[i:i + 4]) > 1 for i in range(0, len(delta), 4)),
+                first_mismatch=None if first is None else dict(x=(first // 4) % 800, y=(first // 4) // 800,
+                    channel="RGBA"[first % 4], actual=actual[first], expected=expected[first]))
+
+
+def golden_images():
+    from PIL import Image
+    manifest = json.loads((ROOT / "tests/parity/shader-to-human-sources.json").read_text())
+    result = {}
+    for row in manifest["goldens"]:
+        path = ROOT / row["path"]
+        require(sha256(path.read_bytes()) == row["sha256"], "changed frozen source PNG")
+        with Image.open(path) as image:
+            require(image.size == (800, 600) and image.mode == "RGBA", "wrong source image layout")
+            result[path.stem] = image.tobytes()
+    require(set(result) == set(FIXTURES), "incomplete or unexpected source golden set")
+    return result
 
 
 def main():
@@ -60,14 +97,17 @@ def main():
     parser.add_argument("--sdk", required=True, type=Path)
     parser.add_argument("--shader-dir", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--images", action="store_true", help="compare two native RGBA8 executions with original PNGs")
     args = parser.parse_args()
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     (output / "result.json").unlink(missing_ok=True)
     token, start = str(uuid.uuid4()), time.monotonic()
     log = RunLog(output, token)
-    report = dict(schema_version=1, case_id="s2h.fixtures.float_readback", status="fail", run_token=token,
-                  required=len(CASES), executed=0, passed=0, cases=[], golden_agreement="not checked")
+    report = dict(schema_version=1, case_id="s2h.fixtures.image_parity" if args.images else "s2h.fixtures.float_readback",
+                  status="fail", run_token=token, required=len(CASES), executed=0, passed=0,
+                  execution_passed=0, cases=[], golden_agreement="pending" if args.images else "not checked",
+                  runner_sha256=sha256(Path(__file__).read_bytes()))
     try:
         executable, sdk, shaders = args.executable.resolve(strict=True), args.sdk.resolve(strict=True), args.shader_dir.resolve(strict=True)
         identity = {path: sha256((ROOT / path).read_bytes()) for path in SOURCES}
@@ -76,9 +116,11 @@ def main():
         compiled = subprocess.run([str(executable), "--identity"], capture_output=True, check=True, timeout=10)
         require(json.loads(compiled.stdout) == identity, "stale executable rejected before Vulkan")
         log.event("identity_checked")
-        artifacts = {level: json.loads((shaders / f"fixtures_opt{level}.metadata.json").read_text()) for level in (0, 3)}
+        stem = "images" if args.images else "fixtures"
+        goldens = golden_images() if args.images else None
+        artifacts = {level: json.loads((shaders / f"{stem}_opt{level}.metadata.json").read_text()) for level in (0, 3)}
         for level, artifact in artifacts.items():
-            require(artifact["payload_sha256"] == sha256((shaders / f"fixtures_opt{level}.spv").read_bytes()), "stale payload")
+            require(artifact["payload_sha256"] == sha256((shaders / f"{stem}_opt{level}.spv").read_bytes()), "stale payload")
         environment = os.environ.copy()
         for name in ("VK_LAYER_ENABLES", "VK_LAYER_DISABLES", "VK_LAYER_SETTINGS_PATH"):
             environment.pop(name, None)
@@ -89,10 +131,15 @@ def main():
         for level, name in CASES:
             folder = output / f"{name}-opt{level}"
             folder.mkdir(exist_ok=True)
-            raw = folder / f"{name}-opt{level}.rgba32f"
+            raw = folder / f"{name}-opt{level}.{'rgba8' if args.images else 'rgba32f'}"
             raw.unlink(missing_ok=True)
+            first = folder / f"{name}-opt{level}-execution1.rgba8"
+            first.unlink(missing_ok=True)
             command = [str(executable), "--run-token", token, "--shader-dir", str(shaders), "--level", str(level), "--case", name]
-            log.event("native_started", case_id=f"s2h.{name}.opt{level}", command=command)
+            if args.images:
+                command.append("--images")
+            prefix = "s2h.image" if args.images else "s2h"
+            log.event("native_started", case_id=f"{prefix}.{name}.opt{level}", command=command)
             # A process exit or timeout cannot prove whether a dispatch happened.
             # Preserve the already verified cases and leave this total unknown
             # until the complete native record and readback establish execution.
@@ -112,14 +159,29 @@ def main():
             require(result.returncode == 0 and inserted and not diagnostics,
                     f"{name} opt{level}: native exit/validation failed: {diagnostics[:3]}")
             record = json.loads(text)
-            check_record(record, token, identity, artifacts[level], level, name, raw.read_bytes())
-            report["cases"].append(dict(native=record, validation_inserted=inserted, intentional_loader_notices=notices))
-            report["passed"] += 1
-            report["executed"] = report["passed"]
-            log.event("case_verified", case_id=record["case_id"])
+            actual = raw.read_bytes()
+            check_record(record, token, identity, artifacts[level], level, name, actual,
+                         images=args.images, first=first.read_bytes() if args.images else None)
+            case = dict(native=record, validation_inserted=inserted, intentional_loader_notices=notices)
+            if args.images:
+                from PIL import Image
+                case["comparison"] = compare_image(actual, goldens[name])
+                Image.frombytes("RGBA", (800, 600), actual).save(folder / "actual.png")
+            report["cases"].append(case)
+            report["execution_passed"] += 1
+            report["passed"] += int(not args.images or case["comparison"]["status"] == "pass")
+            report["executed"] = report["execution_passed"]
+            log.event("execution_verified", case_id=record["case_id"],
+                      golden_agreement=case["comparison"]["status"] if args.images else "not checked")
             print(json.dumps({key: record[key] for key in ("case_id", "status", "actual_sha256", "golden_agreement")}), flush=True)
-        report["status"] = "pass"
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+            if args.images:
+                print(json.dumps(case["comparison"]), flush=True)
+        report["status"] = "pass" if report["passed"] == report["required"] else "fail"
+        if args.images:
+            report["golden_agreement"] = report["status"]
+            if report["status"] != "pass":
+                report["failure"] = "original RGBA byte agreement failed; execution results are recorded separately"
+    except (ImportError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         report["failure"] = str(error)
     except KeyboardInterrupt:
         report.update(status="incomplete", failure="interrupted")
