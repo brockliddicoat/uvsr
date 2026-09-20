@@ -22,6 +22,8 @@ confirm source oracle defects with focused reproducers and correct them separate
 
 the [AGFX sampling mapping](../tests/parity/sampling.md) separates exact bytes, the original FLIP threshold, independent sampling arithmetic and alpha. its CPU reference uses the unchanged pinned source header. no added rounding assertion may silently replace the source contract.
 
+the [AGFX raster mapping](../tests/parity/raster.md) covers the source classic draw, depth, blend and load/store groups. source FLIP scores remain separate from exact-byte diagnostics and complete depth, alpha, sparse coverage and region checks. discarded attachment contents never become readback evidence.
+
 ## results and reports
 
 use one canonical result model for minimal primary records and the supporting report/query views. [result contracts](specs/001-theta-prototype/contracts/test-results.md) and [data](specs/001-theta-prototype/data-model.md) own the schema and acceptance. stable IDs and bounded first-failure records matter more than verbose logs.

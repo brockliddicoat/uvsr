@@ -13,6 +13,7 @@ from run_log import RunLog
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = ["Cargo.toml", "Cargo.lock", "crates/agfx/Cargo.toml", "crates/agfx/src/lib.rs",
            "crates/agfx/src/vulkan.rs", "crates/agfx/src/vulkan/compute.rs",
+        "crates/agfx/src/vulkan/bindings.rs", "crates/agfx/src/vulkan/graphics.rs",
            "crates/agfx/src/vulkan/ownership.rs", "crates/agfx/src/vulkan/sampler.rs", "crates/agfx/src/vulkan/texture.rs", "crates/agfx/src/bin/buffer_copy.rs",
            "tests/parity/fixtures/agfx/copy_buffer_to_buffer.bin"]
 CONTROLS = {"agfx.control." + name for name in (
@@ -33,7 +34,10 @@ def require(condition, message):
 
 
 def validation_messages(text):
-    messages = re.findall(r"[^\r\n]*(?:Validation (?:Error|Warning)|AGFX validation:|VUID-|SYNC-HAZARD|ERROR \|)[^\r\n]*", text)
+    # Native records can be long single-line JSON. A leading greedy wildcard
+    # retries every suffix on an ordinary line, making this scan quadratic.
+    marker = re.compile(r"Validation (?:Error|Warning)|AGFX validation:|VUID-|SYNC-HAZARD|ERROR \|")
+    messages = [line for line in re.split(r"[\r\n]", text) if marker.search(line)]
     # The loader forwards its intentional implicit-layer filter notices through
     # the instance's GENERAL callback. Retain them separately, matching the full
     # known text. Every other callback warning/error still fails the run.

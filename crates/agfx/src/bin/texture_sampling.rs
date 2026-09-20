@@ -43,6 +43,8 @@ fn identity() -> Value {
         "crates/agfx/src/lib.rs",
         "crates/agfx/src/vulkan.rs",
         "crates/agfx/src/vulkan/compute.rs",
+        "crates/agfx/src/vulkan/bindings.rs",
+        "crates/agfx/src/vulkan/graphics.rs",
         "crates/agfx/src/vulkan/ownership.rs",
         "crates/agfx/src/vulkan/sampler.rs",
         "crates/agfx/src/vulkan/texture.rs",
@@ -178,6 +180,7 @@ fn run(shaders: &[ReviewedShader], token: &str) -> Result<Value> {
             TextureUsage {
                 storage: false,
                 sampled: false,
+                attachment: false,
             },
         ),
         &mut controls,
@@ -230,6 +233,7 @@ fn run(shaders: &[ReviewedShader], token: &str) -> Result<Value> {
             TextureUsage {
                 storage: true,
                 sampled: true,
+                attachment: false,
             },
         )?;
         let mut output = device.texture(IMAGE)?;
@@ -243,6 +247,7 @@ fn run(shaders: &[ReviewedShader], token: &str) -> Result<Value> {
             TextureUsage {
                 storage: false,
                 sampled: true,
+                attachment: false,
             },
         )?;
         foreign_image.clear([0.0; 4])?;
@@ -255,6 +260,7 @@ fn run(shaders: &[ReviewedShader], token: &str) -> Result<Value> {
             TextureUsage {
                 storage: false,
                 sampled: true,
+                attachment: false,
             },
         )?;
         let mut sampled_only = device.texture_with_usage(
@@ -262,6 +268,7 @@ fn run(shaders: &[ReviewedShader], token: &str) -> Result<Value> {
             TextureUsage {
                 storage: false,
                 sampled: true,
+                attachment: false,
             },
         )?;
         sampled_only.clear([0.0; 4])?;
