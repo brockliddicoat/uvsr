@@ -56,3 +56,11 @@ python tools/theta/run_agfx_compute.py --executable <host-target>/release/multi_
 four required cases cover opt0/opt3 and resource slots 1/3. each compares 256 selected bytes with the frozen AGFX golden and all 768 unselected sentinel bytes exactly. ten native controls isolate missing initialization, wrong index, size, memory role and device. eight artifact controls reject missing/corrupt payloads or incompatible metadata before Vulkan. size and foreign-device controls are initialized first, so their rejection cannot be satisfied by an unrelated initialization error.
 
 pipeline/layout/pool/set ownership remains live through completion. every descriptor is rewritten before reuse, including after a prior case's buffers have been destroyed. no test depends on undefined GPU access, invalid descriptor dereferencing or deliberate device loss. these cases do not establish full AGFX C/Cpp/Ez or Linux runtime parity.
+
+## ShaderToHuman library compilation
+
+```text
+python tools/theta/compile_s2h_library.py --rustgpu-source <owned-rust-gpu> --codegen-backend <rustc_codegen_spirv.dll> --output-dir <ignored-build>/s2h-library
+```
+
+the [library probe](../../shaders/rust/shader_to_human_library.rs) covers input-dependent gather, widgets, scatter and 3D calls at opt0 and opt3. the tool uses the same pinned logical sysroot and exact glam/libm libraries as the existing compiler gate. it records both compile commands, full library and entry hashes, SPIR-V identity, capabilities and independent validation. it neither dispatches a GPU nor establishes golden parity. the [mapping](../../tests/parity/shader-to-human.md) owns source coverage and remaining fixture/example work.

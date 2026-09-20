@@ -4,7 +4,7 @@
 
 AGFX and ShaderToHuman are pinned semantic references in [research](../research.md). preserve supported behavior, algorithms, layouts, limits, failure semantics, fixtures, and meaningful assertions. use ordinary Rust modules, types, and explicit ownership. equivalent behavior does not require binary C++ ABI compatibility, duplicate C/C++ wrappers, or unsafe pointer idioms.
 
-the port is a high-quality reusable testbed. full parity is a separate outcome from the RustGPU contribution. **the active backend scope is Vulkan, with Windows first and Linux portability retained.** source platform assumptions may need a faithful Windows Vulkan adaptation. Metal is the next backend direction, and DirectX is lowest priority. those native implementations and additional-language adapters are deferred from this plan.
+the port is a high-quality reusable testbed. full declared-scope parity is now the active outcome after the separately prepared RustGPU contribution. **the active backend scope is Vulkan, with Windows first and Linux portability retained.** source platform assumptions may need a faithful Windows Vulkan adaptation. Metal is the next backend direction, and DirectX is lowest priority. those native implementations and additional-language adapters are deferred from this plan.
 
 AGFX inventory includes public/native APIs, backend behavior, shader helpers, meaningful Ez behavior, registrations, and examples. ShaderToHuman inventory includes all library/header functionality, five regressions, documentation branches, examples, state, and formatting/rendering behavior. Gigi's editor is not a product to rewrite, but hosted behavior needs equivalent fixtures for parity claims.
 
@@ -47,4 +47,4 @@ where source behavior is defective or undefined, record the case, supported cont
 
 combine duplicate wrappers only when meaningful ownership and failure behavior remains covered. measure the port against matched source functionality under [size accounting](../plan.md#size-and-complexity). clarity, tests, and safety documentation take precedence over an arbitrary LOC target. [UNSAFE.md](../../../../UNSAFE.md) governs every necessary low-level exception.
 
-translations remain accurately attributed under [NOTICES.md](../../../../NOTICES.md). “inspirations” wording does not establish independent authorship or waive upstream terms. no translated implementation exists at this planning checkpoint.
+translations remain accurately attributed under [NOTICES.md](../../../../NOTICES.md). “inspirations” wording does not establish independent authorship or waive upstream terms. the task ledger and reviewed mappings identify current translated implementations and remaining scope.

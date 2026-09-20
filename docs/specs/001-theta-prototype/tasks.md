@@ -2,7 +2,7 @@
 
 implementation began on 2026-09-19. checked boxes have observed checkpoint evidence in [execution](../../execution.md). stable IDs are retained for auditability, with retired IDs listed at the end.
 
-select primary M0-M3 work first. supporting work may proceed when it directly helps the contribution or when independent primary work is blocked. eligibility does not authorize launching agents. each task must retain exact source/configuration, decisive evidence, limitations, and the next action.
+current priority after E-035: complete T024-T029, with T025 source inventory before each owner is translated and T018 native-heap integration alongside the relevant owners. T023 retains separate Linux evidence. T030-T032 follow the real port results. the compiler draft is a completed milestone, not the endpoint of this active port request. T034 remains open and may expose prerequisite fixes. eligibility does not authorize launching agents. each task must retain exact source/configuration, decisive evidence, limitations, and the next action.
 
 **at every meaningful checkpoint:** reconcile [UNSAFE.md](../../../UNSAFE.md), append [execution](../../execution.md), consider [lessons](../../lessons.md), and update the ignored work card. do not mark unrun tasks complete.
 
@@ -46,11 +46,11 @@ E-021 through E-034 establish the bounded actual-consumer and independent Vulkan
 - [x] T035 [US6] prepare minimal generic patches and local PR title/body with safety/ABI decisions, docs, test evidence, exact consumer recipe, attribution, and remaining CI status. depends on T033 and the available T034 evidence, not on T034 being complete. do not add AGFX, Gigi, or NGAPI dependencies to generic compiler tests. publication follows actual authority.
 - [x] T036 [US6] audit the primary M0-M3 outcome against SC-001, the primary portions of SC-003/SC-005, and SC-006/SC-007/SC-009-SC-011. depends on T007-T009, T019, and T035. report the local draft, pending CI, supporting parity, Linux portability, unsafe inventory, execution/lessons, and matched-scope size separately. do not wait for supporting T018/T023-T032 to call a proven primary draft complete.
 
-## supporting testbed parity
+## active testbed parity
 
-these tasks retain the source-parity direction without making it the contribution's critical path. full upstream backend parity remains unclaimed while future API variants are deferred.
+the user activated the complete AGFX and ShaderToHuman Vulkan ports after the local compiler draft. continue owner by owner until all required source behaviors have implementations and decisive evidence. full upstream backend parity remains unclaimed while future API variants are deferred.
 
-- [ ] T018 [US1, US2] where useful, exercise the combined NGAPI shader contract through a narrow Rust AGFX Vulkan native-heap profile. depends on T008 and T017. keep ordinary AGFX descriptor behavior separate. record actual artifact differences and avoid a second RHI. do this earlier only for a concrete primary-path diagnostic need.
+- [ ] T018 [US1, US2] exercise the combined NGAPI shader contract through a narrow Rust AGFX Vulkan native-heap profile. depends on T008 and T017. keep ordinary AGFX descriptor behavior separate. record actual artifact differences and avoid a second RHI. use this integration to test the patched RustGPU path as the reusable port grows.
 - [ ] T023 [US2, US3] exercise the Vulkan slice and required source features on Linux, preserving the same API/ABI contracts and separate device evidence. depends on T008 and relevant compiler features. review future payload/backend boundaries without implementing speculative routes or weakening Windows Vulkan.
 - [ ] T024 [US2] expand the AGFX public/native/Ez port owner by owner for the declared Vulkan scope. depends on T008 and the relevant source/oracle mappings. preserve meaningful source assertions and lifecycle behavior. retain optional feature capability rules and Windows/Linux distinctions.
 - [ ] T025 [US2] complete the AGFX API, test, shader-helper, and example inventory and its Rust mappings. depends on T024 for completed port claims. report direct/equivalent mappings, unresolved required behaviors, deferred variants, runtime-discovered counts, and matched-scope code/dependency measurements. zero unresolved scoped behaviors is required for scoped parity.

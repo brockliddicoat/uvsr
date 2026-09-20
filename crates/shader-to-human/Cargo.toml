@@ -1,0 +1,15 @@
+[package]
+name = "shader-to-human"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Source-faithful ShaderToHuman math and drawing for Rust shaders"
+license = "BSD-3-Clause"
+
+[lints]
+workspace = true
+
+[dependencies]
+glam = { version = "=0.33.3", default-features = false, features = ["libm", "scalar-math", "i32", "u32"] }
+libm = "=0.2.16"

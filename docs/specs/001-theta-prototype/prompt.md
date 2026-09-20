@@ -12,9 +12,9 @@ work in the implementation checkout, where the verified specification files were
 
 ## objective
 
-prepare a focused RustGPU PR draft that enables Rust-authored shaders to work in actual NoGraphicsAPI (NGAPI) through Vulkan. use native Windows Vulkan as the primary development and test path on the current Windows machine. give direct Vulkan and Vulkan through NGAPI the most design attention and avoid compromises imposed by future backends.
+finish the close ordinary Rust AGFX and ShaderToHuman ports for the declared Vulkan scope. the local RustGPU contribution draft is already prepared in E-035. complete the reusable testbed so a more advanced scene and renderer can test the modified RustGPU path with actual NoGraphicsAPI (NGAPI). use native Windows Vulkan as the primary development and test path on the current Windows machine. give direct Vulkan and Vulkan through NGAPI the most design attention and avoid compromises imposed by future backends.
 
-use a close, lightweight, ordinary Rust AGFX port as the reusable testbed. preserve AGFX and ShaderToHuman source behavior through explicit mappings and tests. complete testbed parity is a supporting outcome and must not delay the proven RustGPU contribution.
+use a close, lightweight, ordinary Rust AGFX port as the reusable testbed. preserve AGFX and ShaderToHuman source behavior through explicit mappings and tests. complete declared-scope testbed parity is now the active outcome. retain the independent compiler patches and actual NGAPI evidence.
 
 ## constitution
 
@@ -26,7 +26,7 @@ preserve source attribution, licenses, protected inputs, unrelated work, and the
 
 ## specification
 
-use [specification](spec.md) for user stories, requirements, and acceptance. implement the primary US6 and US1 outcomes first.
+use [specification](spec.md) for user stories, requirements, and acceptance. continue the active US2 and US4 port outcomes, retaining US1 actual NGAPI integration and the completed local US6 draft.
 
 the active shader route is RustGPU to SPIR-V to Vulkan. prove physical GPU pointers and real native resource/sampler descriptor heaps in actual NGAPI on Windows. query required device features and tool support. a version string, another host, ordinary descriptor arrays, or another backend cannot replace this proof.
 
@@ -34,21 +34,21 @@ retain Linux Vulkan portability as separately reported coverage. Metal is the se
 
 ## plan
 
-follow [implementation plan](plan.md) and its M0-M3 milestones. use [source pins and research](research.md) for source pins and [RustGPU upstream test crosswalk](upstream-tests.md) for the RustGPU contribution obligations. read only the contracts and source owners needed by the selected task.
+follow [implementation plan](plan.md), its completed local M0-M3 outcome, and active M4-M6 port milestones. use [source pins and research](research.md) for source pins and [RustGPU upstream test crosswalk](upstream-tests.md) for the RustGPU contribution obligations. read only the contracts and source owners needed by the selected task.
 
 compare live main with the recorded baseline at activation, inspect relevant changes, and pin the chosen starting revision. keep RustGPU, the actual NGAPI host, and read-only source references separately owned. keep generic compiler patches independent of testbed dependencies.
 
-build only the small Windows Vulkan AGFX slice needed for decisive experiments. preserve explicit ownership, native capabilities, shader ABI, and completion-based retirement. keep the port as small as equivalent source behavior allows. measure matched scope and retain readable code, meaningful tests, diagnostics, and safety documentation.
+expand the proven Windows Vulkan AGFX slice owner by owner against the complete source inventory, followed by the ShaderToHuman library and portable fixtures. preserve explicit ownership, native capabilities, shader ABI, and completion-based retirement. keep the port as small as equivalent source behavior allows. measure matched scope and retain readable code, meaningful tests, diagnostics, and safety documentation.
 
 ## tasks
 
-use [tasks](tasks.md) as the sole completion ledger. start with T001 or the first eligible unfinished primary task from `work/theta/STATE.md`, using the [work-card instructions](quickstart.md#current-work-card). follow dependencies and record partial or blocked evidence honestly.
+use [tasks](tasks.md) as the sole completion ledger. continue T024-T029 and the next eligible active port task from `work/theta/STATE.md`, using the [work-card instructions](quickstart.md#current-work-card). follow dependencies and record partial or blocked evidence honestly.
 
 before editing, identify the task and requirements, source owners and callers, required tool/device capability, expected result, and smallest decisive check. use ordinary tools for mechanical work. do not start agents, automations, or an automatic goal merely because this prompt exists.
 
 ## implementation
 
-complete authorized work through the primary milestones. run focused checks while editing and the relevant gate at a coherent checkpoint. use upstream compiler regressions, deterministic readback, native validation where applicable, and exact image/state oracles. preserve optimized/unoptimized and ordinary logical-pointer regression coverage.
+complete authorized work through the active port milestones. the old M3 compiler checkpoint is not a stopping condition for this request. run focused checks while editing and the relevant gate at a coherent checkpoint. use upstream compiler regressions, deterministic readback, native validation where applicable, and exact image/state oracles. preserve optimized/unoptimized and ordinary logical-pointer regression coverage.
 
 keep current position in `work/theta/STATE.md` and detailed experiments in `work/theta/NOTES.md`, following the [work-card and note instructions](quickstart.md#current-work-card). append meaningful checkpoints, failed approaches, evidence, limits, and next actions to [execution record](../../execution.md). promote reusable findings to [reusable lessons](../../lessons.md), labeled observed, inferred, or proposed. reconcile the unsafe registry at every affected checkpoint.
 
@@ -58,4 +58,4 @@ after two materially identical failures without new evidence, change the investi
 
 prepare the minimal generic RustGPU diff, upstream tests, safety/ABI documentation, exact Windows NGAPI consumer recipe, and local PR title/body. account for every promised feature and all current CI obligations. keep unavailable checks explicitly pending. distinguish a prepared draft, fully passing CI, publication, and maintainer acceptance.
 
-close primary tasks only with their required evidence. report the contribution result, unresolved blockers, supporting parity status, unsafe-review status, and next action. do not wait for full testbed parity, report polish, or future backends to deliver a proven primary PR draft.
+close port tasks only with their required source mappings, implementations and evidence. the declared Windows Vulkan scope must account for every required AGFX behavior and ShaderToHuman library, regression, documentation and example behavior. report Linux and future backends separately. preserve compiler CI and upstream acceptance as distinct outcomes. do not call a reduced fixture or documentation inventory a completed port.
