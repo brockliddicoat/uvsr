@@ -1,6 +1,6 @@
 # theta specification audit
 
-status: revision 2.0 prepared on 2026-09-19. implementation has not started.
+status: the bounded Windows Vulkan prototype and [local RustGPU draft](../../rustgpu-contribution.md) are prepared. full upstream CI, maintainer acceptance and supporting parity remain pending. the [task ledger](tasks.md) owns completion.
 
 **agent handoff: [prompt.md](prompt.md).** copy that file when handing work to an implementing agent. this page contains human review context, not the handoff prompt.
 
@@ -37,8 +37,8 @@ complete testbed parity, report polish, future APIs, and future shader languages
 
 ## baseline and evidence
 
-the starting main is [`6f8b5084`](https://github.com/brockliddicoat/uvsr/commit/6f8b5084aa51962f4d5d6b09081fb991b4a13c8f), a documentation/asset tree with 326 blobs, zero Rust files, and zero Cargo manifests. [research](research.md) owns the full pins and source observations. no device support, build, GPU result, parity, usability gain, or upstream acceptance is claimed.
+the starting main is [`6f8b5084`](https://github.com/brockliddicoat/uvsr/commit/6f8b5084aa51962f4d5d6b09081fb991b4a13c8f), a documentation/asset tree with 326 blobs, zero Rust files, and zero Cargo manifests. [research](research.md) owns the full pins and source observations. that starting snapshot was preparation only. current bounded compiler and GPU evidence is in [execution](../../execution.md). full parity, usability gains and upstream acceptance remain unclaimed.
 
 the user restored close AGFX and ShaderToHuman source parity over main's inspiration-only wording, then prioritized the RustGPU contribution and Windows Vulkan. accurate source attribution remains required. the prior broad plan is preserved locally under ignored `work/theta/archive/spec-v1.1-before-vulkan-focus/`.
 
-this follows [GitHub Spec Kit's document structure](https://github.com/github/spec-kit/tree/d4229c071c7ea3885b43e8a7739847300f618f13), adapted under `docs/specs`. it does not install a CLI or imply slash commands are available. all active implementation tasks remain open.
+this follows [GitHub Spec Kit's document structure](https://github.com/github/spec-kit/tree/d4229c071c7ea3885b43e8a7739847300f618f13), adapted under `docs/specs`. it does not install a CLI or imply slash commands are available. current implementation and pending outcomes are recorded in the task ledger.
