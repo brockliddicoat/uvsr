@@ -39,7 +39,7 @@ the [UVSR Delta postmortems](docs/postmortems/README.md) contain prior lessons. 
 
 ## current status
 
-implementation is active. the [execution record](docs/execution.md) includes actual NGAPI scalar, uniform/divergent native heap and textured-cube Rust shader results on Windows Vulkan. the [direct Rust slice](tools/theta/README.md) also passes the frozen AGFX buffer-copy and four-pass Rust compute cases. wider compiler coverage, full testbed parity and the upstream PR remain open.
+the [local RustGPU contribution draft](docs/rustgpu-contribution.md) is prepared, with actual Windows NGAPI pointer/heap, cube, storage-image and task/mesh evidence. its independent CPU/Vulkan difftest also passes on real high addresses. the [direct Rust slice](tools/theta/README.md) passes the two frozen AGFX behaviors. full upstream CI, acceptance, broader pointer/resource coverage and complete testbed parity remain open.
 
 `.github/workflows` validates the baseline and runs Rust formatting and CPU workspace tests. it does not replace RustGPU's upstream CI or actual NGAPI execution.
 
