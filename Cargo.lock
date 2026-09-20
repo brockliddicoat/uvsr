@@ -192,8 +192,11 @@ dependencies = [
 name = "shader-to-human"
 version = "0.1.0"
 dependencies = [
+ "agfx",
  "glam",
  "libm",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

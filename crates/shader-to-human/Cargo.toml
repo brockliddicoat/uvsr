@@ -13,3 +13,8 @@ workspace = true
 [dependencies]
 glam = { version = "=0.33.3", default-features = false, features = ["libm", "scalar-math", "i32", "u32"] }
 libm = "=0.2.16"
+
+[dev-dependencies]
+agfx = { path = "../agfx" }
+serde_json.workspace = true
+sha2.workspace = true

@@ -16,6 +16,8 @@ unsupported local extension hardware blocks that device proof. another backend, 
 
 the supporting ShaderToHuman work includes its library, five golden groups, documentation branches, and distinct examples. replace Gigi hosting without silently deleting its behavior. exact source inventories and candidate comparisons are required for parity claims, not for starting a useful compiler experiment.
 
+the [documentation demo mapping](../tests/parity/shader-to-human-demos.md) describes the implemented source branches and deterministic UI frames. its native runner checks image structure and independent state words. exact source-image comparison remains a separate gate, with failed cases retained explicitly.
+
 confirm source oracle defects with focused reproducers and correct them separately. missing goldens must fail, not become candidate-generated references. preserve source thresholds. use alpha, local masks/regions, exact structural buffers, numeric rules, and perceptual scores as appropriate. an LLM's visual opinion is not an oracle.
 
 ## results and reports
