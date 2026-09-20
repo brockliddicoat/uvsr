@@ -1,0 +1,6 @@
+diff --git a/src/NoGraphicsAPI.cpp b/src/NoGraphicsAPI.cpp
+index 526ec22..ea08738 100644
+--- a/src/NoGraphicsAPI.cpp
++++ b/src/NoGraphicsAPI.cpp
+@@ -1679,0 +1680 @@ Error inspect_candidate(VkPhysicalDevice physical_device, VkSurfaceKHR surface,
++        features.mesh_shader.taskShader == VK_TRUE &&

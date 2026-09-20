@@ -1,7 +1,17 @@
 // Cube geometry adapted from NoGraphicsAPI examples/cube/cube.cpp at d60b10bd.
 // Copyright (c) 2026 Sebastian Aaltonen. See ../../../legal/licenses/NoGraphicsAPI-MIT.txt.
 #include "native_heap_cube.hpp"
+#ifdef THETA_CUBE_TASK_MESH
+#include "native_heap_mesh_modules.hpp"
+constexpr const char* fixture_id = "theta.m2.ngapi.native_heap_mesh";
+constexpr const char* image_prefix = "mesh";
+constexpr const char* source_hash = native_heap_mesh_source_sha256;
+#else
 #include "native_heap_cube_modules.hpp"
+constexpr const char* fixture_id = "theta.m2.ngapi.native_heap_cube";
+constexpr const char* image_prefix = "cube";
+constexpr const char* source_hash = native_heap_cube_source_sha256;
+#endif
 #include <stdio.h>
 #include <string.h>
 
@@ -55,8 +65,8 @@ static bool self_test() noexcept
         invalid24, !valid_indices(bad,36)};
     bool valid = true;
     for (bool result : tests) valid &= result;
-    printf("{\"case_id\":\"theta.m2.ngapi.native_heap_cube.controls\",\"status\":\"%s\",\"checks\":10,\"shader_cases_executed\":0}\n",
-        valid ? "pass" : "fail");
+    printf("{\"case_id\":\"%s.controls\",\"status\":\"%s\",\"checks\":10,\"shader_cases_executed\":0}\n",
+        fixture_id, valid ? "pass" : "fail");
     return valid;
 }
 
@@ -68,7 +78,7 @@ static bool write_image(const char* name, const void* bytes, size_t count) noexc
     return fclose(file) == 0 && written;
 }
 
-static bool run_variant(gpu::Device* device, gpu::Span<const uint32> shader, const char* hash, uint32 opt) noexcept
+static bool run_variant(gpu::Device* device, gpu::Span<const uint32> shader, const char* hash, const char* variant) noexcept
 {
     const gpu::DeviceCaps& caps = gpu::get_device_caps(device);
     const gpu::TextureDesc descs[]{
@@ -90,7 +100,7 @@ static bool run_variant(gpu::Device* device, gpu::Span<const uint32> shader, con
         supported &= sizes[index].size && sizes[index].align && !(sizes[index].align & (sizes[index].align - 1));
     }
     if (!supported) {
-        printf("{\"case_id\":\"theta.m2.ngapi.native_heap_cube.requirements.opt%u\",\"status\":\"blocked\"}\n", opt);
+        printf("{\"case_id\":\"%s.requirements.%s\",\"status\":\"blocked\"}\n", fixture_id, variant);
         return false;
     }
     gpu::TextureHeap storage[4]{};
@@ -106,11 +116,21 @@ static bool run_variant(gpu::Device* device, gpu::Span<const uint32> shader, con
     const gpu::GpuHeap upload = gpu::create_gpu_heap(device, input_bytes);
     const gpu::GpuHeap data = gpu::create_gpu_heap(device, input_bytes, gpu::MemoryType::gpu_only);
     const gpu::GpuHeap readback = gpu::create_gpu_heap(device, readback_bytes, gpu::MemoryType::readback);
+#ifdef THETA_CUBE_TASK_MESH
+    gpu::PSO* pso = gpu::create_mesh_pso(device, {
+        .task_spirv=shader, .mesh_spirv=shader, .fragment_spirv=shader,
+        .color_targets={{.format=gpu::Format::rgba8_unorm}}, .depth_format=gpu::Format::d32_float,
+        .rasterization={.cull=gpu::CullMode::none},
+    });
+    constexpr gpu::Stage input_stages = gpu::Stage::task | gpu::Stage::mesh | gpu::Stage::fragment;
+#else
     gpu::PSO* pso = gpu::create_graphics_pso(device, {
         .vertex_spirv=shader, .fragment_spirv=shader,
         .color_targets={{.format=gpu::Format::rgba8_unorm}}, .depth_format=gpu::Format::d32_float,
         .rasterization={.cull=gpu::CullMode::none},
     });
+    constexpr gpu::Stage input_stages = gpu::Stage::vertex | gpu::Stage::index_input | gpu::Stage::fragment;
+#endif
     gpu::TimelinePoint completion{.semaphore=gpu::create_timeline_semaphore(device)};
     const uint64 address = reinterpret_cast<uint64>(data.range.gpu);
     bool valid = color && depth && pso && completion.semaphore
@@ -139,14 +159,18 @@ static bool run_variant(gpu::Device* device, gpu::Span<const uint32> shader, con
         CubeRoot root{.vertices=address, .resource=case_index < 2 ? 1u : 3u, .sampler=2 + case_index % 2};
         memcpy(root.transform, transforms[case_index / 2], sizeof(root.transform));
         memset(readback.range.cpu, 0xcd, readback_bytes);
-        // U-008: complete upload ranges and all pending GENERAL transitions are
+        // U-008/U-014: complete upload ranges and pending GENERAL transitions are
         // recorded before use. Every begun buffer is submitted and awaited once.
         gpu::CommandBuffer* commands = gpu::begin_commands(device);
         gpu::copy_memory(commands, gpu::gpu_range(upload), gpu::gpu_range(data));
         gpu::copy_memory_to_texture(commands, {.gpu=upload.range.gpu + texture_offset,.size=16}, textures[0]);
         gpu::copy_memory_to_texture(commands, {.gpu=upload.range.gpu + texture_offset + 16,.size=16}, textures[1]);
         gpu::barrier(commands, gpu::Stage::transfer, gpu::Access::transfer_write,
-            gpu::Stage::vertex | gpu::Stage::index_input | gpu::Stage::fragment, gpu::Access::shader_read | gpu::Access::index_read);
+            input_stages, gpu::Access::shader_read
+#ifndef THETA_CUBE_TASK_MESH
+            | gpu::Access::index_read
+#endif
+        );
         gpu::barrier(commands, gpu::Stage::transfer, gpu::Access::transfer_read,
             gpu::Stage::color_output | gpu::Stage::depth_stencil_tests,
             gpu::Access::color_write | gpu::Access::depth_stencil_read | gpu::Access::depth_stencil_write);
@@ -158,7 +182,13 @@ static bool run_variant(gpu::Device* device, gpu::Span<const uint32> shader, con
         });
         gpu::set_depth_stencil(commands, {.depth_test=true,.depth_write=true,.depth_compare=gpu::CompareOp::less});
         gpu::bind_pso(commands, pso);
+#ifdef THETA_CUBE_TASK_MESH
+        // One task invocation emits six mesh groups, each with four vertices/two triangles.
+        // Its 80-byte payload and output are below VK_EXT_mesh_shader minima.
+        gpu::draw_meshlets(commands, root, {.x=1,.y=1,.z=1});
+#else
         gpu::draw_indexed(commands, root, {.gpu=data.range.gpu + index_offset,.size=sizeof(indices)}, gpu::IndexType::uint16, 36);
+#endif
         gpu::end_render_pass(commands);
         gpu::barrier(commands, gpu::Stage::color_output | gpu::Stage::depth_stencil_tests | gpu::Stage::transfer,
             gpu::Access::color_write | gpu::Access::depth_stencil_write | gpu::Access::transfer_write,
@@ -185,22 +215,26 @@ static bool run_variant(gpu::Device* device, gpu::Span<const uint32> shader, con
         bool guard = true;
         for (uint32 index = image_bytes * 2; index < input_readback_offset; ++index) guard &= readback.range.cpu[index] == 0xcd;
         char color_file[80], depth_file[80];
-        snprintf(color_file, sizeof(color_file), "cube.opt%u.case%u.rgba", opt, case_index);
-        snprintf(depth_file, sizeof(depth_file), "cube.opt%u.case%u.depth", opt, case_index);
+        snprintf(color_file, sizeof(color_file), "%s.%s.case%u.rgba", image_prefix, variant, case_index);
+        snprintf(depth_file, sizeof(depth_file), "%s.%s.case%u.depth", image_prefix, variant, case_index);
         valid = mismatch == -1 && guard && write_image(color_file, readback.range.cpu, image_bytes)
             && write_image(depth_file, readback.range.cpu + image_bytes, image_bytes);
-        printf("{\"case_id\":\"theta.m2.ngapi.native_heap_cube.opt%u.case%u\",\"status\":\"%s\","
+        printf("{\"case_id\":\"%s.%s.case%u\",\"status\":\"%s\","
             "\"source_sha256\":\"%s\",\"payload_sha256\":\"%s\",\"view\":%u,\"resource_index\":%u,\"sampler_index\":%u,"
             "\"vertex_address\":\"0x%016llx\",\"nonzero_high_address_bits\":%s,\"vertex_count\":24,\"vertex_stride\":24,\"index_count\":36,"
             "\"root_bytes\":80,\"width\":128,\"height\":128,\"image_descriptor_bytes\":%llu,\"sampler_descriptor_bytes\":%llu,"
             "\"heap_slots\":4,\"first_input_mismatch_byte\":%d,\"guard_intact\":%s,\"shader_cases_executed\":1,"
-            "\"color_file\":\"%s\",\"depth_file\":\"%s\"}\n",
-            opt,case_index,valid ? "pass" : "fail",native_heap_cube_source_sha256,hash,case_index/2,root.resource,root.sampler,
+            "\"completion_value\":%llu,\"color_file\":\"%s\",\"depth_file\":\"%s\""
+#ifdef THETA_CUBE_TASK_MESH
+            ",\"task_group_count\":[1,1,1],\"mesh_group_count\":[6,1,1],\"mesh_output_vertices\":4,\"mesh_output_primitives\":2"
+#endif
+            "}\n",
+            fixture_id,variant,case_index,valid ? "pass" : "fail",source_hash,hash,case_index/2,root.resource,root.sampler,
             static_cast<unsigned long long>(address),(address>>32) ? "true" : "false",
             static_cast<unsigned long long>(caps.texture_descriptor_size),static_cast<unsigned long long>(caps.sampler_descriptor_size),
-            mismatch,guard ? "true" : "false",color_file,depth_file);
+            mismatch,guard ? "true" : "false",static_cast<unsigned long long>(completion.value),color_file,depth_file);
     }
-    // U-008: all submissions completed. Drain again before immediate teardown,
+    // U-008/U-014: all submissions completed. Drain before immediate teardown,
     // including failures of the byte checks or output writes.
     gpu::wait_idle(device);
     gpu::destroy_timeline_semaphore(completion.semaphore);
@@ -221,18 +255,44 @@ static bool run_variant(gpu::Device* device, gpu::Span<const uint32> shader, con
 
 int main(int argc, char** argv)
 {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+#ifdef THETA_CUBE_TASK_MESH
+    if (argc == 2 && !strcmp(argv[1], "--identity")) {
+        printf("{\"profile\":\"ngapi-native-heap-mesh\",\"source_sha256\":\"%s\",\"host_sha256\":\"%s\",\"abi_sha256\":\"%s\","
+            "\"payload_sha256\":[\"%s\",\"%s\",\"%s\",\"%s\"]}\n", source_hash,native_heap_mesh_host_sha256,native_heap_mesh_abi_sha256,
+            native_heap_mesh_default_opt0_sha256,native_heap_mesh_default_opt3_sha256,
+            native_heap_mesh_qptr_opt0_sha256,native_heap_mesh_qptr_opt3_sha256);
+        return 0;
+    }
+#endif
     if (argc > 2 || (argc == 2 && strcmp(argv[1], "--self-test"))) return 2;
     if (!self_test()) return 1;
     if (argc == 2) return 0;
     const gpu::DeviceInit init = gpu::create_device({.timestamp_query_count=0});
     if (init.error != gpu::Error::none || !init.device) {
-        printf("{\"case_id\":\"theta.m2.ngapi.native_heap_cube.device\",\"status\":\"blocked\",\"error\":%u}\n",
-            static_cast<unsigned>(init.error));
+        printf("{\"case_id\":\"%s.device\",\"status\":\"blocked\",\"error\":%u}\n",
+            fixture_id,static_cast<unsigned>(init.error));
         return init.error == gpu::Error::unsupported ? 77 : 1;
     }
-    const bool first = run_variant(init.device, native_heap_cube_opt0, native_heap_cube_opt0_sha256, 0);
-    const bool second = first && run_variant(init.device, native_heap_cube_opt3, native_heap_cube_opt3_sha256, 3);
+    struct Variant { gpu::Span<const uint32> shader; const char* hash; const char* name; };
+#ifdef THETA_CUBE_TASK_MESH
+    const Variant variants[]{
+        {native_heap_mesh_default_opt0,native_heap_mesh_default_opt0_sha256,"default_opt0"},
+        {native_heap_mesh_default_opt3,native_heap_mesh_default_opt3_sha256,"default_opt3"},
+        {native_heap_mesh_qptr_opt0,native_heap_mesh_qptr_opt0_sha256,"qptr_opt0"},
+        {native_heap_mesh_qptr_opt3,native_heap_mesh_qptr_opt3_sha256,"qptr_opt3"},
+    };
+#else
+    const Variant variants[]{
+        {native_heap_cube_opt0,native_heap_cube_opt0_sha256,"opt0"},
+        {native_heap_cube_opt3,native_heap_cube_opt3_sha256,"opt3"},
+    };
+#endif
+    bool valid = true;
+    for (const Variant& variant : variants) {
+        if (!run_variant(init.device, variant.shader, variant.hash, variant.name)) { valid = false; break; }
+    }
     gpu::wait_idle(init.device);
     gpu::destroy_device(init.device);
-    return first && second ? 0 : 1;
+    return valid ? 0 : 1;
 }

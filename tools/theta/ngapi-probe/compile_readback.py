@@ -41,10 +41,15 @@ def check_heap_profile(assembly, divergent=False):
         raise RuntimeError("heap sample root no longer has the reviewed u64/u32/u32 layout")
 
 
-def check_cube_profile(assembly):
-    for pattern in [r'OpEntryPoint Vertex %\S+ "vertexMain"', r'OpEntryPoint Fragment %\S+ "fragmentMain"',
-                    r"BuiltIn VertexIndex", r"BuiltIn Position", r"OpImageSampleImplicitLod", r"OpLoad .* Aligned 4",
-                    r"BuiltIn ResourceHeapEXT", r"BuiltIn SamplerHeapEXT", r"OpUntypedAccessChainKHR"]:
+def check_cube_profile(assembly, mesh=False):
+    stages = ([r'OpEntryPoint TaskEXT %\S+ "taskMain"', r'OpEntryPoint MeshEXT %\S+ "meshMain"',
+               r"OpEmitMeshTasksEXT", r"OpSetMeshOutputsEXT", r"OutputVertices 4\b", r"OutputPrimitivesEXT 2\b",
+               r"OutputTrianglesEXT", r"BuiltIn WorkgroupId", r"BuiltIn PrimitiveTriangleIndicesEXT",
+               r"OpVariable %\S+ TaskPayloadWorkgroupEXT"]
+              if mesh else [r'OpEntryPoint Vertex %\S+ "vertexMain"', r"BuiltIn VertexIndex"])
+    for pattern in stages + [r'OpEntryPoint Fragment %\S+ "fragmentMain"', r"BuiltIn Position",
+                             r"OpImageSampleImplicitLod", r"OpLoad .* Aligned 4",
+                             r"BuiltIn ResourceHeapEXT", r"BuiltIn SamplerHeapEXT", r"OpUntypedAccessChainKHR"]:
         if not re.search(pattern, assembly):
             raise RuntimeError(f"cube profile lacks {pattern}")
     root = re.search(r"(%\S+) = OpTypeStruct (%\S+) (%\S+) (%\S+) \4", assembly)

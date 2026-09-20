@@ -455,6 +455,23 @@
         "../../legal/licenses/RustGPU-MIT.txt",
         "../../legal/licenses/RustGPU-APACHE.txt"
       ]
+    },
+    {
+      "file": "rustgpu-task-mesh.patch",
+      "sha256": "99f00c1be222ff38f7790a17fe81e5460196b705fe4a334d0d26eca89ecb077d",
+      "repository": "https://github.com/Rust-GPU/rust-gpu",
+      "base": "2cf7d9a82cec15f8108b2490117010ac34e26458",
+      "local_verified_commit": "f8b6582f944f3fa240b5471e3e1e71f07a2d7035",
+      "license": "MIT OR Apache-2.0; NoGraphicsAPI ABI adaptation under MIT",
+      "apply_flags": [
+        "--unidiff-zero",
+        "--index"
+      ],
+      "license_files": [
+        "../../legal/licenses/RustGPU-MIT.txt",
+        "../../legal/licenses/RustGPU-APACHE.txt",
+        "../../legal/licenses/NoGraphicsAPI-MIT.txt"
+      ]
     }
   ]
 }
