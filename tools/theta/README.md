@@ -64,3 +64,16 @@ python tools/theta/compile_s2h_library.py --rustgpu-source <owned-rust-gpu> --co
 ```
 
 the [library probe](../../shaders/rust/shader_to_human_library.rs) covers input-dependent gather, widgets, scatter and 3D calls at opt0 and opt3. the tool uses the same pinned logical sysroot and exact glam/libm libraries as the existing compiler gate. it records both compile commands, full library and entry hashes, SPIR-V identity, capabilities and independent validation. it neither dispatches a GPU nor establishes golden parity. the [mapping](../../tests/parity/shader-to-human.md) owns source coverage and remaining fixture/example work.
+
+## ShaderToHuman fixture float readbacks
+
+```text
+python tools/theta/compile_s2h_library.py --fixtures --rustgpu-source <owned-rust-gpu> --codegen-backend <rustc_codegen_spirv.dll> --output-dir <ignored-build>/s2h-fixtures
+cargo build --bin shader_to_human --locked
+python tools/theta/run_s2h_fixtures.py --executable <host-target>/debug/shader_to_human.exe --sdk <Vulkan-SDK-root> --shader-dir <ignored-build>/s2h-fixtures --output-dir <ignored-evidence>/s2h-fixtures
+python -m unittest discover -s tools/theta -p test_s2h_fixtures.py
+```
+
+the ten required cases cover all five original fixtures at opt0/opt3. each uses the [U-016](../../UNSAFE.md#u-016-ordinary-storage-compute-interface-and-ordered-dispatch) ordinary storage owner, a zeroed 800x600 float4 buffer and synchronous readback. exact reviewed payloads, embedded/live source identities, root bytes, dispatch dimensions, finite output, output hashes and core/synchronization validation are required. each native case has its own process, timeout and preserved logs. the eight CPU controls reject stale/missing/skipped evidence, changed ABI, invalid floats, signed-zero empty output and unsupported parity claims. a failed native process leaves execution unknown until a complete record proves it.
+
+this is an intermediate float-buffer diagnostic, not the source RGBA8 storage-image path or a golden pass. all source PNGs remain unchanged. original image conversion, two-run capture behavior, interactions, documentation/examples and actual NGAPI integration remain required. the shared CPU fixture bodies can also be run with `cargo run -p shader-to-human --example render_fixtures -- <case> <output.rgba32f> [camera.txt]`.

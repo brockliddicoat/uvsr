@@ -6,8 +6,8 @@
 
 mod vulkan;
 pub use vulkan::{
-    Buffer, BufferCompute, Completion, ComputeRoot, Device, DeviceInfo, Memory, ShaderCode,
-    ShaderStage,
+    Buffer, BufferCompute, Completion, ComputeDispatch, ComputeInterface, ComputeRoot, Device,
+    DeviceInfo, Memory, ShaderCode, ShaderStage, StorageCompute,
 };
 
 use std::fmt;

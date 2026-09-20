@@ -12,6 +12,7 @@ def main():
     parser.add_argument('--rustgpu-source', type=Path, required=True)
     parser.add_argument('--codegen-backend', type=Path, required=True)
     parser.add_argument('--output-dir', type=Path, required=True)
+    parser.add_argument('--fixtures', action='store_true', help='compile all five shared source fixture entries')
     args = parser.parse_args()
     upstream = args.rustgpu_source.resolve(strict=True)
     backend = args.codegen_backend.resolve(strict=True)
@@ -19,7 +20,10 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parents[2]
     source = root / 'crates/shader-to-human/src/lib.rs'
-    entry = root / 'shaders/rust/shader_to_human_library.rs'
+    entry = root / ('shaders/rust/shader_to_human_fixtures.rs' if args.fixtures else
+                    'shaders/rust/shader_to_human_library.rs')
+    entries = ['gather_cs', 'scatter_cs', 'table_cs', 'two_d_cs', 'world_cs'] if args.fixtures else ['main_cs']
+    case = 'fixtures' if args.fixtures else 'library'
     common, identity, validator, disassembler = compiler_inputs(
         upstream, backend, source, 'spirv-unknown-vulkan1.3')
     libm = one((upstream / 'target/compiletest-deps/spirv-unknown-vulkan1.3/debug/build/libm')
@@ -27,9 +31,9 @@ def main():
     common = [arg for arg in common if arg != '-Zcrate-attr=feature(asm_experimental_arch)']
     common += ['--extern', 'libm=' + str(libm)]
     for level in (0, 3):
-        (output / f'library_opt{level}.metadata.json').unlink(missing_ok=True)
+        (output / f'{case}_opt{level}.metadata.json').unlink(missing_ok=True)
     for level in (0, 3):
-        stem = f'library_opt{level}'
+        stem = f'{case}_opt{level}'
         library = output / f'libshader_to_human_opt{level}.rlib'
         library_command = [arg.replace('--crate-type=dylib', '--crate-type=rlib')
                            .replace('--crate-name=lib', '--crate-name=shader_to_human')
@@ -43,7 +47,7 @@ def main():
                     f'-Copt-level={level}', '-o', str(module) + '.json']
         run(command, upstream, output / f'{stem}_rustc')
         manifest = json.loads(Path(str(module) + '.json').read_text(encoding='utf-8'))
-        if manifest['entry_points'] != ['main_cs']:
+        if sorted(manifest['entry_points']) != entries:
             raise RuntimeError('unexpected ShaderToHuman entry point')
         validation_command = [validator, '--target-env', 'vulkan1.3', str(module)]
         run(validation_command, upstream, output / f'{stem}_validate')
@@ -53,13 +57,15 @@ def main():
         capabilities = re.findall(r'^\s*OpCapability (\w+)', assembly, re.MULTILINE)
         if set(capabilities) != {'Shader', 'VulkanMemoryModel'}:
             raise RuntimeError(f'library capabilities changed: {capabilities}')
-        record = dict(schema_version=1, case_id=f's2h.library.compile.opt{level}', status='pass',
+        record = dict(schema_version=1, case_id=f's2h.{case}.compile.opt{level}', status='pass',
                       scope='compilation and validation only, no GPU dispatch',
-                      language='Rust', stage='compute', entry_point='main_cs',
+                      language='Rust', stage='compute', entry_points=entries,
                       target='spirv-unknown-vulkan1.3', profile='ordinary-storage-buffer',
                       payload_type='SPIR-V', payload_sha256=sha256(module), identity=identity,
                       library_sources={p.name: sha256(p) for p in source.parent.glob('*.rs')},
                       entry_sha256=sha256(entry), library_sha256=sha256(library),
+                      fixture_sources={p.name: sha256(p) for p in
+                                       (root / 'crates/shader-to-human/fixtures').glob('*.rs')} if args.fixtures else {},
                       libm_sha256=sha256(libm), capabilities=capabilities,
                       commands=[library_command, command, validation_command, disassembly_command])
         (output / f'{stem}.metadata.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
