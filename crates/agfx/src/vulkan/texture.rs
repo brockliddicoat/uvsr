@@ -6,6 +6,8 @@ use super::{vk, Buffer, Completion, Device, Error, Lease, Recording};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextureFormat {
     Rgba8Unorm,
+    /// Native attachment/sample conversion. Transfer bytes remain encoded.
+    Rgba8Srgb,
     Rgba32Float,
     D32Float,
 }
@@ -14,6 +16,7 @@ impl TextureFormat {
     pub(super) fn native(self) -> vk::Format {
         match self {
             Self::Rgba8Unorm => vk::Format::R8G8B8A8_UNORM,
+            Self::Rgba8Srgb => vk::Format::R8G8B8A8_SRGB,
             Self::Rgba32Float => vk::Format::R32G32B32A32_SFLOAT,
             Self::D32Float => vk::Format::D32_SFLOAT,
         }
@@ -21,7 +24,7 @@ impl TextureFormat {
 
     fn texel_bytes(self) -> u64 {
         match self {
-            Self::Rgba8Unorm | Self::D32Float => 4,
+            Self::Rgba8Unorm | Self::Rgba8Srgb | Self::D32Float => 4,
             Self::Rgba32Float => 16,
         }
     }

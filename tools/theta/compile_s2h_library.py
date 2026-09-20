@@ -15,7 +15,10 @@ def main():
     parser.add_argument('--fixtures', action='store_true', help='compile all five shared source fixture entries')
     parser.add_argument('--images', action='store_true', help='compile fixtures with original RGBA8 storage-image output')
     parser.add_argument('--demos', action='store_true', help='compile all documentation branches and the single-writer UI update')
+    parser.add_argument('--hello', action='store_true', help='compile the screen, quad and compute Hello examples')
     args = parser.parse_args()
+    if args.hello and (args.demos or args.images or args.fixtures):
+        parser.error('--hello cannot be combined with other selections')
     if args.demos and (args.images or args.fixtures):
         parser.error('--demos cannot be combined with --images or --fixtures')
     if args.images:
@@ -26,13 +29,15 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parents[2]
     source = root / 'crates/shader-to-human/src/lib.rs'
-    entry = root / ('shaders/rust/shader_to_human_demos.rs' if args.demos else
+    entry = root / ('shaders/rust/shader_to_human_hello.rs' if args.hello else
+                    'shaders/rust/shader_to_human_demos.rs' if args.demos else
                     'shaders/rust/shader_to_human_images.rs' if args.images else
                     'shaders/rust/shader_to_human_fixtures.rs' if args.fixtures else
                     'shaders/rust/shader_to_human_library.rs')
-    entries = (['demos_cs', 'update_ui_cs'] if args.demos else
+    entries = (['hello_cs', 'quad_fs', 'quad_vs', 'screen_fs', 'screen_vs'] if args.hello else
+               ['demos_cs', 'update_ui_cs'] if args.demos else
                ['gather_cs', 'scatter_cs', 'table_cs', 'two_d_cs', 'world_cs'] if args.fixtures else ['main_cs'])
-    case = 'demos' if args.demos else 'images' if args.images else 'fixtures' if args.fixtures else 'library'
+    case = 'hello' if args.hello else 'demos' if args.demos else 'images' if args.images else 'fixtures' if args.fixtures else 'library'
     common, identity, validator, disassembler = compiler_inputs(
         upstream, backend, source, 'spirv-unknown-vulkan1.3')
     libm = one((upstream / 'target/compiletest-deps/spirv-unknown-vulkan1.3/debug/build/libm')
@@ -69,9 +74,10 @@ def main():
             raise RuntimeError(f'library capabilities changed: {capabilities}')
         record = dict(schema_version=1, case_id=f's2h.{case}.compile.opt{level}', status='pass',
                       scope='compilation and validation only, no GPU dispatch',
-                      language='Rust', stage='compute', entry_points=entries,
+                      language='Rust', stage='vertex+fragment+compute' if args.hello else 'compute', entry_points=entries,
                       target='spirv-unknown-vulkan1.3',
-                      profile=('ordinary-storage-buffer-image' if args.demos else
+                      profile=('ordinary-raster-storage-image' if args.hello else
+                               'ordinary-storage-buffer-image' if args.demos else
                                'ordinary-storage-image' if args.images else 'ordinary-storage-buffer'),
                       payload_type='SPIR-V', payload_sha256=sha256(module), identity=identity,
                       library_sources={p.name: sha256(p) for p in source.parent.glob('*.rs')},
@@ -80,6 +86,7 @@ def main():
                                        (root / 'crates/shader-to-human/fixtures').glob('*.rs')} if args.fixtures else {},
                       demo_sources={p.name: sha256(p) for p in
                                     (root / 'crates/shader-to-human/demos').glob('*.rs')} if args.demos else {},
+                      program_sources={'hello.rs': sha256(root / 'crates/shader-to-human/programs/hello.rs')} if args.hello else {},
                       libm_sha256=sha256(libm), capabilities=capabilities,
                       commands=[library_command, command, validation_command, disassembly_command])
         (output / f'{stem}.metadata.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')

@@ -26,6 +26,8 @@ the [AGFX raster mapping](../tests/parity/raster.md) covers the source classic d
 
 ## results and reports
 
+the [Hello example mapping](../tests/parity/shader-to-human-hello.md) covers screen, compute and quad rendering, including the equivalent Slang source flavor. its runner checks color space, projected coverage, numeric depth/W displays and retained frame contents. a separate exact comparison consumes independently executed original HLSL captures.
+
 use one canonical result model for minimal primary records and the supporting report/query views. [result contracts](specs/001-theta-prototype/contracts/test-results.md) and [data](specs/001-theta-prototype/data-model.md) own the schema and acceptance. stable IDs and bounded first-failure records matter more than verbose logs.
 
 required empty/all-skipped selections, missing output, stale identity, interruption, and missing cases cannot pass. keep the acceptance denominator separate from diagnostic selection and report deferred variants honestly.

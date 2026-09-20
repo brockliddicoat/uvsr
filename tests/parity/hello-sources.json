@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "upstream": "https://github.com/electronicarts/ShaderToHuman",
+  "commit": "d6f98b7d67da802053cd9c702082fa741dec42e7",
+  "license": "legal/licenses/ShaderToHuman-BSD-3-Clause.txt",
+  "sources": [
+    {
+      "path": "examples/HelloScreenVSPS/HelloWorldPS.hlsl",
+      "sha256": "95b009a1728e909baba9d39c319c8495e5d60f699c076221e438d4255b1e22b9"
+    },
+    {
+      "path": "examples/HelloScreenVSPS/HelloWorldVS.hlsl",
+      "sha256": "81e2d0a8c7d8a3221c9e88ce48a0d1d705dc3399b91a8e770753fc55737dce2a"
+    },
+    {
+      "path": "examples/HelloScreenVSPS/s2h_HelloScreenVSPS.gg",
+      "sha256": "f834053c2800ce8b25f84d7d47f6223a3e0049db1d492ae00c1ccd197a017b01"
+    },
+    {
+      "path": "examples/HelloScreenVSPS/s2h_HelloScreenVSPS.gguser",
+      "sha256": "e7d16fdce73634aadf38c7b85a3654bad9b5a0c06faa8907526d32b3c498ac23"
+    },
+    {
+      "path": "examples/HelloQuadVSPS/HelloWorldPS.hlsl",
+      "sha256": "457269aaef285d294d7f4b491208cbc0d8ea1be591ee3a6bdfca9ea341638653"
+    },
+    {
+      "path": "examples/HelloQuadVSPS/HelloWorldVS.hlsl",
+      "sha256": "40fc6b15a4ef43c37662b9815a27e8319587783f7baa956aad59bcd337165c8c"
+    },
+    {
+      "path": "examples/HelloQuadVSPS/s2h_HelloQuadVSPS.gg",
+      "sha256": "f834053c2800ce8b25f84d7d47f6223a3e0049db1d492ae00c1ccd197a017b01"
+    },
+    {
+      "path": "examples/HelloQuadVSPS/s2h_HelloQuadVSPS.gguser",
+      "sha256": "b9da14f04b9a30e0bc8b99557223ac8f5c7a343a511e4574525e110e24517b17"
+    },
+    {
+      "path": "examples/HelloQuadVSPS_Slang/HelloWorldPS_slang.hlsl",
+      "sha256": "4d0cc8546ce38ee2fd7e10e336acc0bf9b48297b10cf2d8eddd4a9bf08c47e0b"
+    },
+    {
+      "path": "examples/HelloQuadVSPS_Slang/HelloWorldVS_slang.hlsl",
+      "sha256": "40fc6b15a4ef43c37662b9815a27e8319587783f7baa956aad59bcd337165c8c"
+    },
+    {
+      "path": "examples/HelloQuadVSPS_Slang/s2h_HelloQuadVSPS.gguser",
+      "sha256": "b9da14f04b9a30e0bc8b99557223ac8f5c7a343a511e4574525e110e24517b17"
+    },
+    {
+      "path": "examples/HelloQuadVSPS_Slang/s2h_HelloQuadVSPS_slang.gg",
+      "sha256": "fedc548c67b4bc74542e4ce9aa92184de7396740a3260c8fc8eb28dec9f9aa69"
+    },
+    {
+      "path": "examples/HelloWorldCS/HelloWorldCS.hlsl",
+      "sha256": "6c3522b41df59cfe730dbf24ebc2d5b7bdaa7a175873bc499f8f3283b6244f84"
+    },
+    {
+      "path": "examples/HelloWorldCS/s2h_HelloWorldCS.gg",
+      "sha256": "b34deeba49a6325e9162eda1da1d355fb423cf1743a33961fa95b15f147fb219"
+    }
+  ],
+  "owners": [
+    "crates/shader-to-human/programs/hello.rs",
+    "shaders/rust/shader_to_human_hello.rs",
+    "crates/shader-to-human/examples/hello.rs"
+  ],
+  "families": {
+    "HelloScreenVSPS": "screen",
+    "HelloWorldCS": "compute",
+    "HelloQuadVSPS": "quad_source",
+    "HelloQuadVSPS_Slang": "equivalent quad_source"
+  },
+  "added_controls": [
+    "quad_frontal",
+    "quad_moved",
+    "quad_motion"
+  ],
+  "equivalence": {
+    "normalization": "comments/whitespace, if(1) versus if(true), bool-to-uint zero/one, optional local struct keyword",
+    "sha256": {
+      "VS": "844e33d8805b65545cff3e4901fd1cfbf4dae2e6b3154bc349b62f96377f7baa",
+      "PS": "e35814840ceda6db20528f558cf77c3a4681fb224ba58e51945576c635d26db4"
+    }
+  },
+  "camera": {
+    "path": "tests/parity/fixtures/shader-to-human/hello-cameras.txt",
+    "sha256": "2d46a46d358a9335ecf22acefa178b066db0c2a05f4b5c7c86a26a9844b555bf",
+    "source_frame": 0,
+    "control_frames": [
+      1,
+      2
+    ],
+    "gigi_pin": "401386cfd7c6e39e549d939e44d99bd5b49cd14d",
+    "resolution": [
+      800,
+      600
+    ],
+    "left_handed": true,
+    "reverse_z": true,
+    "near": 0.1,
+    "far": 1000,
+    "fov": 45
+  }
+}
