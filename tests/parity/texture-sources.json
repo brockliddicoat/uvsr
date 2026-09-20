@@ -1,0 +1,39 @@
+{
+  "source": "https://github.com/AmelieHeinrich/agfx",
+  "revision": "f91b108a111d2ca3ca4b6586b6cb5dd750064fd7",
+  "license": "legal/licenses/AGFX-MIT.txt",
+  "source_files": [
+    {
+      "path": "src/agfx/agfx_tests/tests/test_copy_buffer_to_texture.cpp",
+      "sha256": "51bfa60ef33bfa56951c7682e64786e3d232dab82a7f174a500fff656c7a8c0c",
+      "bytes": 11222
+    },
+    {
+      "path": "src/agfx/agfx_tests/tests/test_copy_texture_to_buffer.cpp",
+      "sha256": "4e153ffaa5bd0883431bc2f8065fb56b126fa29af44dd583ce3cb0f29d8add54",
+      "bytes": 9544
+    },
+    {
+      "path": "data/tests/golden/copy_buffer_to_texture.png",
+      "sha256": "c153162ebdf50afd94fd2b0b88c74605d4021e9ef574bc0db146f6c7a11d9818",
+      "bytes": 998
+    },
+    {
+      "path": "data/tests/golden/copy_texture_to_buffer.bin",
+      "sha256": "5a9ddd3384e11e8f367281bb734faf1aa47eeae055c89d46b79ec4c6668296c2",
+      "bytes": 16640
+    }
+  ],
+  "goldens": [
+    {
+      "path": "tests/parity/fixtures/agfx/copy_buffer_to_texture.png",
+      "source": "data/tests/golden/copy_buffer_to_texture.png",
+      "sha256": "c153162ebdf50afd94fd2b0b88c74605d4021e9ef574bc0db146f6c7a11d9818"
+    },
+    {
+      "path": "tests/parity/fixtures/agfx/copy_texture_to_buffer.bin",
+      "source": "data/tests/golden/copy_texture_to_buffer.bin",
+      "sha256": "5a9ddd3384e11e8f367281bb734faf1aa47eeae055c89d46b79ec4c6668296c2"
+    }
+  ]
+}

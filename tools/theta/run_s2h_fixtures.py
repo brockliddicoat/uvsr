@@ -17,6 +17,7 @@ FIXTURES = {"GatherTest": "gather_cs", "ScatterTest": "scatter_cs", "TableTest":
 CASES = [(level, name) for level in (0, 3) for name in FIXTURES]
 SOURCES = ["Cargo.toml", "Cargo.lock", "crates/agfx/Cargo.toml", "crates/agfx/src/lib.rs",
            "crates/agfx/src/vulkan.rs", "crates/agfx/src/vulkan/compute.rs",
+           "crates/agfx/src/vulkan/ownership.rs", "crates/agfx/src/vulkan/texture.rs",
            "crates/agfx/src/bin/shader_to_human.rs", "shaders/rust/shader_to_human_fixtures.rs",
            "tests/parity/fixtures/shader-to-human/camera.txt"]
 SOURCES += [p.relative_to(ROOT).as_posix() for directory in ("src", "fixtures")

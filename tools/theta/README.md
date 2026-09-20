@@ -77,3 +77,15 @@ python -m unittest discover -s tools/theta -p test_s2h_fixtures.py
 the ten required cases cover all five original fixtures at opt0/opt3. each uses the [U-016](../../UNSAFE.md#u-016-ordinary-storage-compute-interface-and-ordered-dispatch) ordinary storage owner, a zeroed 800x600 float4 buffer and synchronous readback. exact reviewed payloads, embedded/live source identities, root bytes, dispatch dimensions, finite output, output hashes and core/synchronization validation are required. each native case has its own process, timeout and preserved logs. the eight CPU controls reject stale/missing/skipped evidence, changed ABI, invalid floats, signed-zero empty output and unsupported parity claims. a failed native process leaves execution unknown until a complete record proves it.
 
 this is an intermediate float-buffer diagnostic, not the source RGBA8 storage-image path or a golden pass. all source PNGs remain unchanged. original image conversion, two-run capture behavior, interactions, documentation/examples and actual NGAPI integration remain required. the shared CPU fixture bodies can also be run with `cargo run -p shader-to-human --example render_fixtures -- <case> <output.rgba32f> [camera.txt]`.
+
+## AGFX texture transfer goldens
+
+```text
+cargo build --bin texture_copy --locked
+cargo build --bin texture_copy --release --locked
+python tools/theta/run_agfx_textures.py --executable <host-target>/debug/texture_copy.exe --sdk <Vulkan-SDK-root> --output-dir <ignored-evidence>/textures-debug
+python tools/theta/run_agfx_textures.py --executable <host-target>/release/texture_copy.exe --sdk <Vulkan-SDK-root> --output-dir <ignored-evidence>/textures-release
+python -m unittest discover -s tools/theta -p test_agfx_textures.py
+```
+
+use a Python environment with Pillow for these two commands. the [texture mapping](../../tests/parity/textures.md) owns the source cases and remaining scope. the runner checks all original pixels/bytes, four additional exact outputs, twelve native rejections, fresh source/executable identity and explicit core/synchronization validation. timeout or abnormal exit retains unknown execution. this runner does not execute shaders, infer full texture API parity or waive ShaderToHuman's original image comparison.

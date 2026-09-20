@@ -1,5 +1,5 @@
-//! Small, synchronous Vulkan owners for the primary AGFX buffer slice.
-//! Source behavior is mapped in tests/parity/primary-slice.md. No GPU runs in
+//! Small, synchronous Vulkan owners for AGFX buffers and 2D textures.
+//! Source behavior is mapped in tests/parity. No GPU runs in
 //! ordinary unit tests. Native boundaries are registered in UNSAFE.md.
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -7,7 +7,8 @@
 mod vulkan;
 pub use vulkan::{
     Buffer, BufferCompute, Completion, ComputeDispatch, ComputeInterface, ComputeRoot, Device,
-    DeviceInfo, Memory, ShaderCode, ShaderStage, StorageCompute,
+    DeviceInfo, Memory, ShaderCode, ShaderStage, StorageCompute, Texture, TextureCopy,
+    TextureFormat, TextureInfo,
 };
 
 use std::fmt;
