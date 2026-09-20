@@ -7,13 +7,15 @@ const API_VERSION: u32 = vk::make_api_version(0, 1, 4, 0);
 
 mod compute;
 mod ownership;
+mod sampler;
 mod texture;
 pub use compute::{
     BufferCompute, ComputeDispatch, ComputeInterface, ComputeRoot, ShaderCode, ShaderStage,
     StorageCompute,
 };
 use ownership::{Lease, LiveObjects};
-pub use texture::{Texture, TextureCopy, TextureFormat, TextureInfo};
+pub use sampler::{AddressMode, ComparisonFunction, Sampler, SamplerFilter, SamplerInfo};
+pub use texture::{Texture, TextureCopy, TextureFormat, TextureInfo, TextureUsage};
 
 #[derive(Clone, Debug)]
 pub struct DeviceInfo {
@@ -70,6 +72,7 @@ pub struct Device {
     max_allocation_size: u64,
     allocations: LiveObjects,
     pipelines: LiveObjects,
+    samplers: LiveObjects,
     info: DeviceInfo,
     // Marker only. No allocation or shared ownership. Native host calls cannot
     // race through either Device or the owners borrowing it.
@@ -356,6 +359,7 @@ impl Device {
             max_allocation_size: properties11.max_memory_allocation_size,
             allocations: LiveObjects::new(properties.limits.max_memory_allocation_count),
             pipelines: LiveObjects::new(u32::MAX),
+            samplers: LiveObjects::new(properties.limits.max_sampler_allocation_count),
             info: DeviceInfo {
                 name,
                 loader_api_version,
@@ -556,7 +560,7 @@ impl Drop for Device {
         // Safe Rust permits mem::forget on a borrowed child. Its token then
         // stays counted. Preserve the device, instance, callback and loader
         // rather than destroy a parent with undestroyed native children.
-        if !self.allocations.is_empty() || !self.pipelines.is_empty() {
+        if !self.allocations.is_empty() || !self.pipelines.is_empty() || !self.samplers.is_empty() {
             return;
         }
         // SAFETY: U-010. All operations completed synchronously; uncertain

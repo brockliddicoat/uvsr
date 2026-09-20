@@ -12,7 +12,7 @@ from run_log import RunLog
 
 SOURCES = ["Cargo.toml", "Cargo.lock", "crates/agfx/Cargo.toml", "crates/agfx/src/lib.rs",
            "crates/agfx/src/vulkan.rs", "crates/agfx/src/vulkan/compute.rs",
-           "crates/agfx/src/vulkan/ownership.rs", "crates/agfx/src/vulkan/texture.rs", "crates/agfx/src/bin/multi_dispatch.rs",
+           "crates/agfx/src/vulkan/ownership.rs", "crates/agfx/src/vulkan/sampler.rs", "crates/agfx/src/vulkan/texture.rs", "crates/agfx/src/bin/multi_dispatch.rs",
            "shaders/rust/compute_multi_dispatch.rs", "tests/parity/fixtures/agfx/compute_multi_dispatch_buffer.bin"]
 CASES = [(level, slot) for level in (0, 3) for slot in (1, 3)]
 CONTROLS = {f"agfx.compute.control.{name}.opt{level}" for name in ("uninitialized", "slot", "size", "role", "device") for level in (0, 3)}

@@ -53,6 +53,7 @@ fn identity() -> Value {
         "crates/agfx/src/vulkan.rs",
         "crates/agfx/src/vulkan/compute.rs",
         "crates/agfx/src/vulkan/ownership.rs",
+        "crates/agfx/src/vulkan/sampler.rs",
         "crates/agfx/src/vulkan/texture.rs",
         "crates/shader-to-human/Cargo.toml",
         "crates/shader-to-human/examples/docs.rs",
@@ -222,6 +223,8 @@ impl<'d> Runner<'d> {
                     ComputeInterface {
                         buffers: 1,
                         images,
+                        sampled_images: 0,
+                        samplers: 0,
                         root_bytes: 128,
                         local_size,
                     },
@@ -269,6 +272,8 @@ impl<'d> Runner<'d> {
             self.render.dispatch(
                 &mut [&mut self.state],
                 &mut [&mut self.image],
+                &[],
+                &[],
                 &[ComputeDispatch {
                     root: &root,
                     groups: [100, 75, 1],
@@ -297,6 +302,8 @@ impl<'d> Runner<'d> {
             self.update.dispatch(
                 &mut [&mut self.state],
                 &mut [],
+                &[],
+                &[],
                 &[ComputeDispatch {
                     root: &root,
                     groups: [1, 1, 1],

@@ -15,7 +15,7 @@ COUNTS = dict(gather=7, scatter=6, **{'2d': 11, '3d': 6}, ui=6, intro=1)
 DOCS = [(category, branch) for category, count in COUNTS.items() for branch in range(count)]
 SOURCES = ["Cargo.toml", "Cargo.lock", "crates/agfx/Cargo.toml", "crates/agfx/src/lib.rs",
            "crates/agfx/src/vulkan.rs", "crates/agfx/src/vulkan/compute.rs",
-           "crates/agfx/src/vulkan/ownership.rs", "crates/agfx/src/vulkan/texture.rs",
+           "crates/agfx/src/vulkan/ownership.rs", "crates/agfx/src/vulkan/sampler.rs", "crates/agfx/src/vulkan/texture.rs",
            "crates/shader-to-human/Cargo.toml", "crates/shader-to-human/examples/docs.rs",
            "shaders/rust/shader_to_human_demos.rs", "tests/parity/fixtures/shader-to-human/camera.txt"]
 SOURCES += ['crates/shader-to-human/src/' + name + '.rs'

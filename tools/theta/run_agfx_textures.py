@@ -14,7 +14,7 @@ from run_log import RunLog
 
 SOURCES = ["Cargo.toml", "Cargo.lock", "crates/agfx/Cargo.toml", "crates/agfx/src/lib.rs",
            "crates/agfx/src/vulkan.rs", "crates/agfx/src/vulkan/compute.rs",
-           "crates/agfx/src/vulkan/ownership.rs", "crates/agfx/src/vulkan/texture.rs",
+           "crates/agfx/src/vulkan/ownership.rs", "crates/agfx/src/vulkan/sampler.rs", "crates/agfx/src/vulkan/texture.rs",
            "crates/agfx/src/bin/texture_copy.rs", "tests/parity/fixtures/agfx/copy_buffer_to_texture.png",
            "tests/parity/fixtures/agfx/copy_texture_to_buffer.bin"]
 COMPLETIONS = [[1, 2, 3], [4, 5, 6, 7], [8, 9], [10, 11], [12, 13], [14, 15, 16]]

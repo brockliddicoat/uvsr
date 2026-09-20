@@ -20,6 +20,7 @@ fn identity() -> Value {
         "crates/agfx/src/vulkan.rs": hash(include_bytes!("../vulkan.rs")),
         "crates/agfx/src/vulkan/compute.rs": hash(include_bytes!("../vulkan/compute.rs")),
         "crates/agfx/src/vulkan/ownership.rs": hash(include_bytes!("../vulkan/ownership.rs")),
+        "crates/agfx/src/vulkan/sampler.rs": hash(include_bytes!("../vulkan/sampler.rs")),
         "crates/agfx/src/vulkan/texture.rs": hash(include_bytes!("../vulkan/texture.rs")),
         "crates/agfx/src/bin/buffer_copy.rs": hash(include_bytes!("buffer_copy.rs")),
         "tests/parity/fixtures/agfx/copy_buffer_to_buffer.bin": hash(include_bytes!("../../../../tests/parity/fixtures/agfx/copy_buffer_to_buffer.bin")),

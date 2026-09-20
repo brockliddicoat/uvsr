@@ -22,6 +22,7 @@ fn identity() -> Value {
         "crates/agfx/src/vulkan.rs",
         "crates/agfx/src/vulkan/compute.rs",
         "crates/agfx/src/vulkan/ownership.rs",
+        "crates/agfx/src/vulkan/sampler.rs",
         "crates/agfx/src/vulkan/texture.rs",
         "crates/agfx/src/bin/texture_copy.rs",
         "tests/parity/fixtures/agfx/copy_buffer_to_texture.png",
