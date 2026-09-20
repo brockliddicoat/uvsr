@@ -17,7 +17,7 @@ mod world;
 
 pub use font::{Font, MiniFont};
 pub use gather::{distance_to_box, half_space_plane, ContextGather, Triangle};
-pub use glam::{IVec2, IVec4, Mat4, UVec2, UVec3, Vec2, Vec3, Vec4};
+pub use glam::{IVec2, IVec4, Mat4, UVec2, UVec3, UVec4, Vec2, Vec3, Vec4};
 pub use math::{color_ramp_rgb, index_to_color, linear_to_srgb, srgb_to_linear};
 pub use scatter::ContextScatter;
 pub use widgets::distance_to_aabb;

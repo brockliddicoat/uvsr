@@ -14,7 +14,10 @@ def main():
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--fixtures', action='store_true', help='compile all five shared source fixture entries')
     parser.add_argument('--images', action='store_true', help='compile fixtures with original RGBA8 storage-image output')
+    parser.add_argument('--demos', action='store_true', help='compile all documentation branches and the single-writer UI update')
     args = parser.parse_args()
+    if args.demos and (args.images or args.fixtures):
+        parser.error('--demos cannot be combined with --images or --fixtures')
     if args.images:
         args.fixtures = True
     upstream = args.rustgpu_source.resolve(strict=True)
@@ -23,11 +26,13 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parents[2]
     source = root / 'crates/shader-to-human/src/lib.rs'
-    entry = root / ('shaders/rust/shader_to_human_images.rs' if args.images else
+    entry = root / ('shaders/rust/shader_to_human_demos.rs' if args.demos else
+                    'shaders/rust/shader_to_human_images.rs' if args.images else
                     'shaders/rust/shader_to_human_fixtures.rs' if args.fixtures else
                     'shaders/rust/shader_to_human_library.rs')
-    entries = ['gather_cs', 'scatter_cs', 'table_cs', 'two_d_cs', 'world_cs'] if args.fixtures else ['main_cs']
-    case = 'images' if args.images else 'fixtures' if args.fixtures else 'library'
+    entries = (['demos_cs', 'update_ui_cs'] if args.demos else
+               ['gather_cs', 'scatter_cs', 'table_cs', 'two_d_cs', 'world_cs'] if args.fixtures else ['main_cs'])
+    case = 'demos' if args.demos else 'images' if args.images else 'fixtures' if args.fixtures else 'library'
     common, identity, validator, disassembler = compiler_inputs(
         upstream, backend, source, 'spirv-unknown-vulkan1.3')
     libm = one((upstream / 'target/compiletest-deps/spirv-unknown-vulkan1.3/debug/build/libm')
@@ -66,12 +71,15 @@ def main():
                       scope='compilation and validation only, no GPU dispatch',
                       language='Rust', stage='compute', entry_points=entries,
                       target='spirv-unknown-vulkan1.3',
-                      profile='ordinary-storage-image' if args.images else 'ordinary-storage-buffer',
+                      profile=('ordinary-storage-buffer-image' if args.demos else
+                               'ordinary-storage-image' if args.images else 'ordinary-storage-buffer'),
                       payload_type='SPIR-V', payload_sha256=sha256(module), identity=identity,
                       library_sources={p.name: sha256(p) for p in source.parent.glob('*.rs')},
                       entry_sha256=sha256(entry), library_sha256=sha256(library),
                       fixture_sources={p.name: sha256(p) for p in
                                        (root / 'crates/shader-to-human/fixtures').glob('*.rs')} if args.fixtures else {},
+                      demo_sources={p.name: sha256(p) for p in
+                                    (root / 'crates/shader-to-human/demos').glob('*.rs')} if args.demos else {},
                       libm_sha256=sha256(libm), capabilities=capabilities,
                       commands=[library_command, command, validation_command, disassembly_command])
         (output / f'{stem}.metadata.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
