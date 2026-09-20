@@ -12,7 +12,8 @@ from run_log import RunLog
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = ["Cargo.toml", "Cargo.lock", "crates/agfx/Cargo.toml", "crates/agfx/src/lib.rs",
-           "crates/agfx/src/vulkan.rs", "crates/agfx/src/vulkan/compute.rs", "crates/agfx/src/bin/buffer_copy.rs",
+           "crates/agfx/src/vulkan.rs", "crates/agfx/src/vulkan/compute.rs",
+           "crates/agfx/src/vulkan/ownership.rs", "crates/agfx/src/vulkan/texture.rs", "crates/agfx/src/bin/buffer_copy.rs",
            "tests/parity/fixtures/agfx/copy_buffer_to_buffer.bin"]
 CONTROLS = {"agfx.control." + name for name in (
     "zero_size", "unaligned_size", "unrepresentable_size", "uninitialized_read", "partial_write",

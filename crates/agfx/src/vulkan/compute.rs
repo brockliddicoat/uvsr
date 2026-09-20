@@ -1,6 +1,6 @@
 //! Ordinary storage-buffer compute owners. Native boundary U-016, with the
 //! source four-pass safe wrapper retained under U-011.
-use super::{Buffer, Completion, Device, Error, Memory, Recording};
+use super::{Buffer, Completion, Device, Error, Lease, Memory, Recording};
 use ash::vk;
 use std::ffi::CStr;
 
@@ -128,6 +128,7 @@ pub struct StorageCompute<'d> {
     pool: vk::DescriptorPool,
     set: vk::DescriptorSet,
     pipeline: vk::Pipeline,
+    _owner_slot: Lease<'d>,
 }
 
 /// Source four-pass fixture wrapper with enforced root and buffer bounds.
@@ -183,6 +184,7 @@ impl Device {
             pool: vk::DescriptorPool::null(),
             set: vk::DescriptorSet::null(),
             pipeline: vk::Pipeline::null(),
+            _owner_slot: self.pipelines.acquire()?,
         };
         let bindings = [vk::DescriptorSetLayoutBinding::default()
             .binding(0)

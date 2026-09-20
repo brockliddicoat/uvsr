@@ -1,15 +1,19 @@
 //! Native ownership boundary U-010. One queue, one thread, completed operations.
 use crate::{validate_copy, CopyRegion, Error};
 use ash::vk;
-use std::{cell::Cell, ffi::CStr, io::Write, marker::PhantomData, rc::Rc};
+use std::{cell::Cell, ffi::CStr, io::Write, marker::PhantomData, mem::ManuallyDrop, rc::Rc};
 
 const API_VERSION: u32 = vk::make_api_version(0, 1, 4, 0);
 
 mod compute;
+mod ownership;
+mod texture;
 pub use compute::{
     BufferCompute, ComputeDispatch, ComputeInterface, ComputeRoot, ShaderCode, ShaderStage,
     StorageCompute,
 };
+use ownership::{Lease, LiveObjects};
+pub use texture::{Texture, TextureCopy, TextureFormat, TextureInfo};
 
 #[derive(Clone, Debug)]
 pub struct DeviceInfo {
@@ -40,6 +44,7 @@ struct Instance {
 
 /// A single-threaded Vulkan 1.4 device with a graphics/compute queue.
 /// All submissions finish before returning. Native handles never escape.
+/// Intentionally forgotten children retain the native device and loader too.
 ///
 /// ```compile_fail
 /// fn move_to_worker(device: agfx::Device) {
@@ -53,13 +58,18 @@ struct Instance {
 /// ```
 pub struct Device {
     raw: ash::Device,
-    instance: Instance,
+    physical: vk::PhysicalDevice,
+    instance: ManuallyDrop<Instance>,
     queue: vk::Queue,
     pool: vk::CommandPool,
     timeline: vk::Semaphore,
     value: Cell<u64>,
     memory: vk::PhysicalDeviceMemoryProperties,
     limits: vk::PhysicalDeviceLimits,
+    max_buffer_size: u64,
+    max_allocation_size: u64,
+    allocations: LiveObjects,
+    pipelines: LiveObjects,
     info: DeviceInfo,
     // Marker only. No allocation or shared ownership. Native host calls cannot
     // race through either Device or the owners borrowing it.
@@ -83,6 +93,7 @@ pub struct Buffer<'d> {
     memory: Memory,
     memory_flags: vk::MemoryPropertyFlags,
     initialized: bool,
+    _allocation_slot: Lease<'d>,
 }
 
 /// Proof that one synchronous operation finished on this exact device.
@@ -297,6 +308,18 @@ impl Device {
             .map_err(|_| Error::Invalid("unterminated adapter name"))?
             .to_string_lossy()
             .into_owned();
+        let mut properties11 = vk::PhysicalDeviceVulkan11Properties::default();
+        let mut properties13 = vk::PhysicalDeviceVulkan13Properties::default();
+        let mut extended = vk::PhysicalDeviceProperties2::default()
+            .push_next(&mut properties11)
+            .push_next(&mut properties13);
+        // SAFETY: U-010. Selected Vulkan 1.4 device and its live instance. Both
+        // core property structures are supported, distinct and writable.
+        unsafe {
+            instance
+                .raw
+                .get_physical_device_properties2(physical, &mut extended)
+        };
         let priorities = [1.0];
         let queues = [vk::DeviceQueueCreateInfo::default()
             .queue_family_index(family)
@@ -321,13 +344,18 @@ impl Device {
         let loader_api_version = instance.api_version;
         let mut owner = Self {
             raw,
-            instance,
+            physical,
+            instance: ManuallyDrop::new(instance),
             queue,
             pool: vk::CommandPool::null(),
             timeline: vk::Semaphore::null(),
             value: Cell::new(0),
             memory,
             limits: properties.limits,
+            max_buffer_size: properties13.max_buffer_size,
+            max_allocation_size: properties11.max_memory_allocation_size,
+            allocations: LiveObjects::new(properties.limits.max_memory_allocation_count),
+            pipelines: LiveObjects::new(u32::MAX),
             info: DeviceInfo {
                 name,
                 loader_api_version,
@@ -366,6 +394,9 @@ impl Device {
                 "buffer size must be nonzero, four-byte aligned and host-representable",
             ));
         }
+        if bytes > self.max_buffer_size {
+            return Err(Error::Invalid("buffer size exceeds device limit"));
+        }
         let mut owner = Buffer {
             device: self,
             raw: vk::Buffer::null(),
@@ -374,6 +405,7 @@ impl Device {
             memory,
             memory_flags: vk::MemoryPropertyFlags::empty(),
             initialized: false,
+            _allocation_slot: self.allocations.acquire()?,
         };
         let create = vk::BufferCreateInfo::default()
             .size(bytes)
@@ -399,6 +431,9 @@ impl Device {
         let compatible = |flags| {
             (0..self.memory.memory_type_count).find(|&i| {
                 requirements.memory_type_bits & (1 << i) != 0
+                    && !self.memory.memory_types[i as usize]
+                        .property_flags
+                        .contains(vk::MemoryPropertyFlags::PROTECTED)
                     && self.memory.memory_types[i as usize]
                         .property_flags
                         .contains(flags)
@@ -408,15 +443,28 @@ impl Device {
             .or_else(|| compatible(required))
             .ok_or_else(|| Error::Unsupported(format!("no compatible {memory:?} memory type")))?;
         owner.memory_flags = self.memory.memory_types[index as usize].property_flags;
+        self.validate_allocation(requirements.size, index)?;
+        let mut dedicated = vk::MemoryDedicatedAllocateInfo::default().buffer(owner.raw);
         let allocate = vk::MemoryAllocateInfo::default()
             .allocation_size(requirements.size)
-            .memory_type_index(index);
-        // SAFETY: U-010. Queried type bits, full required size and separate
-        // allocation. Offset zero satisfies the required binding alignment.
+            .memory_type_index(index)
+            .push_next(&mut dedicated);
+        // SAFETY: U-010. Queried non-protected type and full required size,
+        // checked allocation/heap limits and reserved device allocation slot.
+        // Dedicated live buffer, offset zero satisfies binding alignment.
         owner.allocation = unsafe { self.raw.allocate_memory(&allocate, None) }?;
         // SAFETY: U-010. Unique unbound buffer, compatible complete allocation.
         unsafe { self.raw.bind_buffer_memory(owner.raw, owner.allocation, 0) }?;
         Ok(owner)
+    }
+
+    fn validate_allocation(&self, bytes: u64, memory_type: u32) -> Result<(), Error> {
+        let heap = self.memory.memory_types[memory_type as usize].heap_index;
+        ownership::allocation_size(
+            bytes,
+            self.max_allocation_size,
+            self.memory.memory_heaps[heap as usize].size,
+        )
     }
 
     #[allow(unsafe_code)]
@@ -505,16 +553,22 @@ impl Device {
 impl Drop for Device {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
+        // Safe Rust permits mem::forget on a borrowed child. Its token then
+        // stays counted. Preserve the device, instance, callback and loader
+        // rather than destroy a parent with undestroyed native children.
+        if !self.allocations.is_empty() || !self.pipelines.is_empty() {
+            return;
+        }
         // SAFETY: U-010. All operations completed synchronously; uncertain
-        // submissions abort. Borrows prevent live Buffer/Recording owners here.
-        // Null children are permitted for partial initialization cleanup.
+        // submissions abort. Borrows and zero live counts exclude live or
+        // forgotten children. Null handles permit partial initialization cleanup.
+        // The instance is dropped exactly once, after its only device.
         unsafe {
             self.raw.destroy_semaphore(self.timeline, None);
             self.raw.destroy_command_pool(self.pool, None);
             self.raw.destroy_device(None);
+            ManuallyDrop::drop(&mut self.instance);
         }
-        // Keep the instance visibly owned until after the device calls above.
-        let _ = &self.instance;
     }
 }
 
