@@ -59,6 +59,8 @@ T018 is supporting work below. M2 does not depend on adding a second full native
 
 [E-032](../../execution.md#e-032-2026-09-19-executed-native-storage-image-operations) adds partial T014-T016/T019 storage-image evidence. existing constructors support rgba32ui native ImageRead/ImageWrite and a physical output through default/qptr at opt0/opt3. all 47 required source pairs and 16 actual cases per Debug/Release host pass, with exact readback and zero validation diagnostics. NGAPI queries/enables the declared storage-indexing feature through a separate two-line prerequisite. additional stages, broader operations and generic upstream difftests remain open.
 
+[E-033](../../execution.md#e-033-2026-09-19-executed-task-and-mesh-stages) adds T014-T016/T019 and H06 evidence for task payload, physical mesh vertices and native fragment heaps. four shader variants each pass four actual image/depth cases in both host configurations, with 51 source pairs and unchanged indexed-cube regressions passing. no compiler implementation change was needed. dynamic 64-bit mesh output indices exposed a native pipeline compiler fault, so that behavior remains unproved. broader pointer operations, generic upstream difftests and the complete CI crosswalk remain open.
+
 ## M3. RustGPU contribution draft
 
 - [ ] T033 [US6] reconcile all P, R, H, A, and C rows in [upstream tests](upstream-tests.md) against the proposed diff, tests, results, and limitations. depends on the promised T013/T015 features and T019 for actual-consumer claims. refresh relevant upstream comments and CI once before final draft preparation.

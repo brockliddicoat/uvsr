@@ -139,10 +139,12 @@ def write_png(path, rgba):
                      + chunk(b"IDAT", zlib.compress(scanlines)) + chunk(b"IEND", b""))
 
 
-def check_cube_records(records, metadata, output):
-    prefix = "theta.m2.ngapi.native_heap_cube."
-    ids = {prefix + "controls"} | {f"{prefix}opt{opt}.case{case}" for opt in (0, 3) for case in range(4)}
-    if len(records) != 9 or {row["case_id"] for row in records} != ids:
+def check_cube_records(records, metadata, output, mesh=False):
+    prefix = "theta.m2.ngapi." + ("native_heap_mesh." if mesh else "native_heap_cube.")
+    variants = [f"{pipeline}_opt{opt}" for pipeline in ("default", "qptr") for opt in (0, 3)] if mesh else ["opt0", "opt3"]
+    stem = "mesh" if mesh else "cube"
+    ids = {prefix + "controls"} | {f"{prefix}{variant}.case{case}" for variant in variants for case in range(4)}
+    if len(records) != len(ids) or {row["case_id"] for row in records} != ids:
         raise ValueError("missing, duplicate or unexpected cube case IDs")
     strides = set()
     images = []
@@ -153,14 +155,18 @@ def check_cube_records(records, metadata, output):
             if row["checks"] != 10 or row["shader_cases_executed"] != 0:
                 raise ValueError("cube CPU controls have an incorrect denominator")
             continue
-        opt, case = map(int, re.search(r"\.opt(0|3)\.case([0-3])$", row["case_id"]).groups())
+        variant, case = row["case_id"][len(prefix):].split(".case")
+        case = int(case)
         address = int(row["vertex_address"], 16)
-        expected = metadata[opt]
+        expected = metadata[variant if mesh else int(variant[-1])]
         fields = {"view": case//2, "resource_index": 1 if case < 2 else 3, "sampler_index": 2+case%2,
                   "vertex_count": 24, "vertex_stride": 24, "index_count": 36, "root_bytes": 80,
                   "width": WIDTH, "height": HEIGHT, "heap_slots": 4, "first_input_mismatch_byte": -1,
                   "guard_intact": True, "shader_cases_executed": 1,
-                  "color_file": f"cube.opt{opt}.case{case}.rgba", "depth_file": f"cube.opt{opt}.case{case}.depth"}
+                  "color_file": f"{stem}.{variant}.case{case}.rgba", "depth_file": f"{stem}.{variant}.case{case}.depth"}
+        if mesh:
+            fields.update(completion_value=case + 1, task_group_count=[1, 1, 1], mesh_group_count=[6, 1, 1],
+                          mesh_output_vertices=4, mesh_output_primitives=2)
         if (any(row[key] != value for key, value in fields.items())
                 or row["source_sha256"] != expected["identity"]["source_sha256"]
                 or row["payload_sha256"] != expected["payload_sha256"]
@@ -172,12 +178,12 @@ def check_cube_records(records, metadata, output):
         color = (output / fields["color_file"]).read_bytes()
         depth = (output / fields["depth_file"]).read_bytes()
         result = compare_images(case, color, depth)
-        actual_png = output / f"cube.opt{opt}.case{case}.actual.png"
+        actual_png = output / f"{stem}.{variant}.case{case}.actual.png"
         expected_png = output / f"cube.case{case}.expected.png"
         write_png(actual_png, color)
         write_png(expected_png, reference(case)[0])
         row["image_oracle"] = dict(result, color_sha256=hashlib.sha256(color).hexdigest(), depth_sha256=hashlib.sha256(depth).hexdigest(),
                                    actual_png=str(actual_png), expected_png=str(expected_png))
         images.append(result["status"])
-    if len(strides) != 1 or images != ["pass"]*8:
+    if len(strides) != 1 or images != ["pass"]*(len(variants)*4):
         raise ValueError("cube image oracle or consistent descriptor stride check failed")

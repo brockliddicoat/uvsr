@@ -30,6 +30,8 @@ three different authorities are recorded: the draft author's checklist, a mainta
 
 [E-032](../../execution.md#e-032-2026-09-19-executed-native-storage-image-operations) adds bounded H05/H07/H08 and A01-A04 evidence. four shader variants use native rgba32ui storage images plus physical output, with 47 source pairs and 16 actual cases per host configuration passing. complete image/output bytes, descriptor selection, guards and completion are checked. no compiler or library implementation changed. this does not establish every exposed image parameter, storage atomic/divergent access or additional-stage support.
 
+[E-033](../../execution.md#e-033-2026-09-19-executed-task-and-mesh-stages) adds bounded H06/H08 and A01-A04 evidence. task payload carries the complete root to six mesh groups, each reading four physical vertices and emitting two triangles through fixed output slots. native fragment sampling retains the existing independent color/depth oracle. all 51 source pairs and 16 actual cases per Debug/Release host pass, with zero validation diagnostics. the dynamic-u64 Output-index variant remains a preserved NVIDIA pipeline-compiler reproducer, not supported execution evidence. generic upstream difftests and full applicable CI remain pending.
+
 ## PR #237 checklist
 
 the [draft, refreshed on 2026-09-19](https://github.com/Rust-GPU/rust-gpu/pull/237) was open at `e14a70d9260c7df7fab1542810f2ca0276233331`. its checked boxes refer to that draft, not proof in current main or the new implementation. all checklist items are mapped below.

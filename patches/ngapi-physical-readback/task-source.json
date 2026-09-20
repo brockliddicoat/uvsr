@@ -1,0 +1,20 @@
+{
+  "repository": "https://github.com/sebbbi/NoGraphicsAPI",
+  "base_commit": "b52ffa02ecbe9b9ed2a74b3e5032deb305caa801",
+  "prerequisite_manifest": "storage-source.json",
+  "verified_local_commit": "289864d773ae83f8ae14ab8f30982928ce628864",
+  "tree": "482bd6c7b63acfe732caaed50a39fc567248a5ce",
+  "patch": "ngapi-task-feature.patch",
+  "patch_sha256": "a339ed7e2f4731301e9ceec7d8190f9fb1bb48c9baf9545756b9ac289d60a5c6",
+  "apply_flags": [
+    "--unidiff-zero",
+    "--index"
+  ],
+  "scope": "require the taskShader feature already enabled by the fixed NGAPI profile",
+  "additional_required_features": [
+    "taskShader"
+  ],
+  "additional_enabled_features": [],
+  "license": "../../legal/licenses/NoGraphicsAPI-MIT.txt",
+  "upstream_publication": false
+}

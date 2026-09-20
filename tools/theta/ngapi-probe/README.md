@@ -252,3 +252,40 @@ foreach ($configuration in @('Debug', 'Release')) {
 ```
 
 [E-032](../../../docs/execution.md#e-032-2026-09-19-executed-native-storage-image-operations) records 16/16 cases and 169 native controls in each Debug/Release host with zero validation diagnostics. actual image descriptors are 32 bytes and physical addresses remain below 4 GiB. other storage formats, atomics, divergent storage indices and additional stages remain separate evidence obligations.
+
+## task payload and mesh stages
+
+[compile_native_heap_mesh.py](compile_native_heap_mesh.py) compiles the single upstream task/mesh fixture in default/qptr and opt0/opt3 configurations. one task invocation copies the 80-byte root into payload storage and emits six mesh groups. each group reads four of the original cube's physical vertices with u64 address arithmetic, writes four fixed output slots and emits two triangles. native fragment heap sampling and the independently calculated color/depth oracle are shared with the indexed cube. the total remains 24 vertices and twelve triangles.
+
+apply the compiler prerequisites through rustgpu-task-mesh.patch and the separate NGAPI task-feature patch. [U-014](../../../UNSAFE.md#u-014-task-payload-and-mesh-physical-vertices) owns the complete caller and macro-expanded contract. after preparing the compiler/sysroot and owned SDK environment above:
+
+```powershell
+python tools/theta/ngapi-probe/compile_native_heap_mesh.py `
+  --upstream work/theta/upstream/rust-gpu `
+  --backend work/theta/build/rust-gpu/release/rustc_codegen_spirv.dll `
+  --output-dir work/theta/build/ngapi-mesh-shaders
+if ($LASTEXITCODE -ne 0) { throw 'mesh shader compilation failed' }
+cmake -S tools/theta/ngapi-probe -B work/theta/build/ngapi-owned `
+  -G "Visual Studio 17 2022" -A x64 `
+  "-DNGAPI_SOURCE_DIR=$thetaRoot/work/theta/upstream/NoGraphicsAPI" `
+  "-DTHETA_MESH_SHADER_DIR=$thetaRoot/work/theta/build/ngapi-mesh-shaders" `
+  "-DVulkan_INCLUDE_DIR=$sdk/Include" "-DVulkan_LIBRARY=$sdk/Lib/vulkan-1.lib"
+if ($LASTEXITCODE -ne 0) { throw 'native configure failed' }
+python -m unittest discover -s tools/theta/ngapi-probe -p 'test_*.py'
+if ($LASTEXITCODE -ne 0) { throw 'record/image controls failed' }
+foreach ($configuration in @('Debug', 'Release')) {
+  cmake --build work/theta/build/ngapi-owned --config $configuration `
+    --target theta_ngapi_native_heap_mesh --parallel 1
+  if ($LASTEXITCODE -ne 0) { throw 'native build failed' }
+  python tools/theta/ngapi-probe/run_native_heap_mesh.py `
+    --executable "work/theta/build/ngapi-owned/$configuration/theta_ngapi_native_heap_mesh.exe" `
+    --sdk $sdk --shader-dir work/theta/build/ngapi-mesh-shaders `
+    --upstream work/theta/upstream/rust-gpu `
+    --output-dir "work/theta/evidence/native-heap-mesh-$configuration"
+  if ($LASTEXITCODE -ne 0) { throw 'task/mesh consumer failed' }
+}
+```
+
+[run_native_heap_mesh.py](run_native_heap_mesh.py) verifies embedded source/host/ABI/payload identities before dispatch, all sixteen unique draws, exact color away from bounded geometric/texel ties, depth within 3e-6, all source bytes, guards and completion. native --self-test performs ten CPU controls without Vulkan. [E-033](../../../docs/execution.md#e-033-2026-09-19-executed-task-and-mesh-stages) records both host configurations passing with zero validation diagnostics. timeout and abnormal exit retain both streams, any reported cases and an unknown execution count.
+
+an earlier one-group shader with dynamic u64 mesh Output-array indices validated but crashed NVIDIA's pipeline compiler on this machine. stage isolation and a diagnostic-only conversion of four bounded output indices isolated the trigger. the delivered source uses fixed output slots, retains full-width physical arithmetic and is compiled without post-emission edits. dynamic mesh output indexing and other drivers remain unproved. this is bounded stage evidence, separate from full AGFX parity or upstream acceptance.
