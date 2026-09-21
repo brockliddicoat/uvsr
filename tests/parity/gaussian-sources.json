@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "upstream": "https://github.com/electronicarts/ShaderToHuman",
+  "commit": "d6f98b7d67da802053cd9c702082fa741dec42e7",
+  "license": "legal/licenses/ShaderToHuman-BSD-3-Clause.txt",
+  "sources": [
+    {
+      "path": "examples/GaussianSplatting/Clear.hlsl",
+      "sha256": "af1bd52e7000d30231132f6e5e492acccbf4fbca00697b96fdc036b157197eb4"
+    },
+    {
+      "path": "examples/GaussianSplatting/ClearColorPS.hlsl",
+      "sha256": "3e78b62735401722832bda9688f0a4b15e352b0c8d047741e246feb3d60f4c41"
+    },
+    {
+      "path": "examples/GaussianSplatting/CustomResolveMSAA.hlsl",
+      "sha256": "c7f475607a166616d554d96cc71497de1a153f9dd40e50d9994bc2456838681f"
+    },
+    {
+      "path": "examples/GaussianSplatting/Debug.ply.bin",
+      "sha256": "d4309642c238abed54ecfc7426404735457b08a0aec9b40302def929fa4ee28f"
+    },
+    {
+      "path": "examples/GaussianSplatting/FullScreenQuadVS.hlsl",
+      "sha256": "a997ea8de6d34f8f8e10c972ef79f50690f94e4c818f01efa5cb5cf0eaca7253"
+    },
+    {
+      "path": "examples/GaussianSplatting/InitPlyCS.hlsl",
+      "sha256": "00aba219329fcd726449b873fda30ee1b6377ce0c6a884ab6112a0cd1fec2635"
+    },
+    {
+      "path": "examples/GaussianSplatting/s2h_splat.gg",
+      "sha256": "794a85e1b40fb30bc9f8ccbd78c5b0aba98e790ec142f9122ca277c620191770"
+    },
+    {
+      "path": "examples/GaussianSplatting/s2h_splat.gguser",
+      "sha256": "12cb3a3c1db856d1ffb2c61034e8f9ec5905d187676d6f0b30a618fde4487238"
+    },
+    {
+      "path": "examples/GaussianSplatting/Splat_example.hlsl",
+      "sha256": "58fba394a106772117c49763d030fc6e905af2335477ca1eb1c518637aff8319"
+    },
+    {
+      "path": "examples/GaussianSplatting/SplatBaseCS.hlsl",
+      "sha256": "fdb0bafe2edfd46d0555907d2bd328299688a9824337573a3cd4efbf781b76e0"
+    },
+    {
+      "path": "examples/GaussianSplatting/SplatCommon.hlsl",
+      "sha256": "8f35816a777c091edc43be1060942f0377b2ab03033ad89f68d56573a2db8607"
+    },
+    {
+      "path": "examples/GaussianSplatting/SplatCS_example.hlsl",
+      "sha256": "c5eddd8cb794ae2506395b5b60384cb4a78b4bd559aeb68c825cf2507fda285f"
+    },
+    {
+      "path": "examples/GaussianSplatting/SplatPS_example.hlsl",
+      "sha256": "05d82fbe5a437d0a02ffb1285fde53d616a1258a4c5f7f345a6dab41e498feba"
+    },
+    {
+      "path": "examples/GaussianSplatting/SplatVS_example.hlsl",
+      "sha256": "b8183c82e0a57a827ca27343bcc3822b038cf894f68cd669ee05a5716ff8d46b"
+    },
+    {
+      "path": "include/s2h.hlsl",
+      "sha256": "5efd8404ef597bbff71cc1f9d0dc6d963dea19285bcc0f18ae6364a9d1882686"
+    },
+    {
+      "path": "include/s2h_3d.hlsl",
+      "sha256": "0da6e37f0f4798dff19f1dc34f0b9a5325b634da7d8d2dd843572494a70ca55d"
+    },
+    {
+      "path": "include/s2h_glsl.hlsl",
+      "sha256": "8957882960ab62fb94d9c29081b26cfb35bb4821fec32f2101bcdd9ecb77f82b"
+    },
+    {
+      "path": "include/s2h_scatter.hlsl",
+      "sha256": "2f68bce8dc6dcb2f24ad07eef0a1a2dc3f5596b2042b798fe1609dd6517001d7"
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "tests/parity/fixtures/shader-to-human/gaussian-debug.ply.bin",
+      "source": "examples/GaussianSplatting/Debug.ply.bin",
+      "bytes": 51128,
+      "sha256": "d4309642c238abed54ecfc7426404735457b08a0aec9b40302def929fa4ee28f"
+    }
+  ],
+  "inputs": [
+    {
+      "path": "tests/parity/fixtures/shader-to-human/gaussian-cameras.txt",
+      "sha256": "d52a81a053f63a510984e416d2f6f1c8259761685fbf5d766d2c3fe6e42f4942"
+    },
+    {
+      "path": "tests/parity/fixtures/shader-to-human/gaussian-inputs.json",
+      "sha256": "9305372857675b6d78475ff10b709134096c792914fbfc2bee8c75ea288be892"
+    }
+  ],
+  "camera_source": {
+    "upstream": "https://github.com/electronicarts/gigi",
+    "commit": "401386cfd7c6e39e549d939e44d99bd5b49cd14d",
+    "files": [
+      "GigiViewerDX12/DX12Utils/Camera.cpp",
+      "GigiViewerDX12/DX12Utils/Camera.h"
+    ]
+  },
+  "scope": "exact original PLY plus declared deterministic cameras and temporal controls, not replacement image goldens"
+}

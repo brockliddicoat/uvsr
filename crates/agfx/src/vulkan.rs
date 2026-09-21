@@ -40,6 +40,8 @@ pub struct DeviceInfo {
     pub graphics: GraphicsCapabilities,
     /// Queried Vulkan float32 execution-mode support, not an enabled feature.
     pub signed_zero_inf_nan_preserve_f32: bool,
+    /// Queried and enabled when supported, for shaders declaring Int64.
+    pub shader_int64: bool,
 }
 
 /// Queried and enabled optional classic-raster capabilities. Pipeline creation
@@ -331,11 +333,17 @@ impl Device {
                 {
                     continue;
                 }
-                selected = Some((physical, properties, family as u32, graphics));
+                selected = Some((
+                    physical,
+                    properties,
+                    family as u32,
+                    graphics,
+                    core_features.shader_int64 != 0,
+                ));
                 break 'devices;
             }
         }
-        let (physical, properties, family, graphics) = selected.ok_or_else(|| Error::Unsupported("Vulkan 1.4 graphics/compute queue, timelineSemaphore, vulkanMemoryModel, runtimeDescriptorArray and shaderStorageBufferArrayDynamicIndexing required".into()))?;
+        let (physical, properties, family, graphics, shader_int64) = selected.ok_or_else(|| Error::Unsupported("Vulkan 1.4 graphics/compute queue, timelineSemaphore, vulkanMemoryModel, runtimeDescriptorArray and shaderStorageBufferArrayDynamicIndexing required".into()))?;
         let name = properties
             .device_name_as_c_str()
             .map_err(|_| Error::Invalid("unterminated adapter name"))?
@@ -361,6 +369,7 @@ impl Device {
             .queue_priorities(&priorities)];
         let core = vk::PhysicalDeviceFeatures::default()
             .shader_storage_buffer_array_dynamic_indexing(true)
+            .shader_int64(shader_int64)
             .fill_mode_non_solid(graphics.wireframe)
             .depth_clamp(graphics.depth_clamp)
             .independent_blend(graphics.independent_blend);
@@ -408,6 +417,7 @@ impl Device {
                 queue_family: family,
                 validation,
                 graphics,
+                shader_int64,
                 signed_zero_inf_nan_preserve_f32: properties12
                     .shader_signed_zero_inf_nan_preserve_float32
                     != 0,

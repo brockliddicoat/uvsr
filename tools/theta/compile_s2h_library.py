@@ -18,7 +18,10 @@ def main():
     parser.add_argument('--hello', action='store_true', help='compile the screen, quad and compute Hello examples')
     parser.add_argument('--zoom', action='store_true', help='compile Zoom2D pre/render/post entries')
     parser.add_argument('--features', action='store_true', help='compile the full Features image, state and quad entries')
+    parser.add_argument('--gaussian', action='store_true', help='compile GaussianSplatting PLY, compute, raster and MSAA resolve entries')
     args = parser.parse_args()
+    if args.gaussian and (args.features or args.zoom or args.hello or args.demos or args.images or args.fixtures):
+        parser.error('--gaussian cannot be combined with other selections')
     if args.features and (args.zoom or args.hello or args.demos or args.images or args.fixtures):
         parser.error('--features cannot be combined with other selections')
     if args.zoom and (args.hello or args.demos or args.images or args.fixtures):
@@ -35,28 +38,33 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     root = Path(__file__).resolve().parents[2]
     source = root / 'crates/shader-to-human/src/lib.rs'
-    entry = root / ('shaders/rust/shader_to_human_features.rs' if args.features else
+    entry = root / ('shaders/rust/shader_to_human_gaussian.rs' if args.gaussian else
+                    'shaders/rust/shader_to_human_features.rs' if args.features else
                     'shaders/rust/shader_to_human_zoom.rs' if args.zoom else
                     'shaders/rust/shader_to_human_hello.rs' if args.hello else
                     'shaders/rust/shader_to_human_demos.rs' if args.demos else
                     'shaders/rust/shader_to_human_images.rs' if args.images else
                     'shaders/rust/shader_to_human_fixtures.rs' if args.fixtures else
                     'shaders/rust/shader_to_human_library.rs')
-    entries = (['features_commit_cs', 'features_cs', 'features_debug_cs', 'features_font_cs',
+    entries = (['gaussian_base_cs', 'gaussian_clear_fs', 'gaussian_clear_vs', 'gaussian_init_cs',
+                'gaussian_main_cs', 'gaussian_resolve_cs', 'gaussian_samples_cs', 'gaussian_splat_fs', 'gaussian_splat_vs'] if args.gaussian else
+               ['features_commit_cs', 'features_cs', 'features_debug_cs', 'features_font_cs',
                 'features_quad_fs', 'features_quad_post_cs', 'features_quad_vs', 'features_scatter_cs'] if args.features else
                ['zoom_cs', 'zoom_post_cs', 'zoom_pre_cs'] if args.zoom else
                ['hello_cs', 'quad_fs', 'quad_vs', 'screen_fs', 'screen_vs'] if args.hello else
                ['demos_cs', 'update_ui_cs'] if args.demos else
                ['gather_cs', 'scatter_cs', 'table_cs', 'two_d_cs', 'world_cs'] if args.fixtures else ['main_cs'])
-    case = 'features' if args.features else 'zoom' if args.zoom else 'hello' if args.hello else 'demos' if args.demos else 'images' if args.images else 'fixtures' if args.fixtures else 'library'
+    case = 'gaussian' if args.gaussian else 'features' if args.features else 'zoom' if args.zoom else 'hello' if args.hello else 'demos' if args.demos else 'images' if args.images else 'fixtures' if args.fixtures else 'library'
     common, identity, validator, disassembler = compiler_inputs(
         upstream, backend, source, 'spirv-unknown-vulkan1.3')
     libm = one((upstream / 'target/compiletest-deps/spirv-unknown-vulkan1.3/debug/build/libm')
                .glob('*/out/liblibm*.rlib'), 'libm')
     common = [arg for arg in common if arg != '-Zcrate-attr=feature(asm_experimental_arch)']
     common += ['--extern', 'libm=' + str(libm)]
-    if args.features:
+    if args.features or args.gaussian:
         common += ['-Ctarget-feature=+SignedZeroInfNanPreserve']
+    if args.gaussian:
+        common += ['-Ctarget-feature=+Int64']
     for level in (0, 3):
         (output / f'{case}_opt{level}.metadata.json').unlink(missing_ok=True)
     for level in (0, 3):
@@ -83,15 +91,18 @@ def main():
         (output / f'{stem}.spvasm').write_text(assembly, encoding='utf-8')
         capabilities = re.findall(r'^\s*OpCapability (\w+)', assembly, re.MULTILINE)
         expected_caps = {'Shader', 'VulkanMemoryModel'}
-        if args.features:
+        if args.features or args.gaussian:
             expected_caps.add('SignedZeroInfNanPreserve')
+        if args.gaussian:
+            expected_caps.add('Int64')
         if set(capabilities) != expected_caps:
             raise RuntimeError(f'library capabilities changed: {capabilities}')
         record = dict(schema_version=1, case_id=f's2h.{case}.compile.opt{level}', status='pass',
                       scope='compilation and validation only, no GPU dispatch',
-                      language='Rust', stage='vertex+fragment+compute' if args.hello or args.features else 'compute', entry_points=entries,
+                      language='Rust', stage='vertex+fragment+compute' if args.hello or args.features or args.gaussian else 'compute', entry_points=entries,
                       target='spirv-unknown-vulkan1.3',
-                      profile=('ordinary-raster-storage-sampled-image' if args.features else
+                      profile=('ordinary-raster-storage-msaa-image-int64' if args.gaussian else
+                               'ordinary-raster-storage-sampled-image' if args.features else
                                'ordinary-raster-storage-image' if args.hello else
                                'ordinary-storage-buffer-image' if args.demos or args.zoom else
                                'ordinary-storage-image' if args.images else 'ordinary-storage-buffer'),
@@ -104,8 +115,8 @@ def main():
                       demo_sources={p.name: sha256(p) for p in
                                     (root / 'crates/shader-to-human/demos').glob('*.rs')} if args.demos else {},
                       program_sources={f'{case}.rs': sha256(root / f'crates/shader-to-human/programs/{case}.rs')} if args.hello or args.zoom else
-                                      {f'features/{p.name}': sha256(p) for p in
-                                       (root / 'crates/shader-to-human/programs/features').glob('*.rs')} if args.features else {},
+                                      {f'{case}/{p.name}': sha256(p) for p in
+                                       (root / f'crates/shader-to-human/programs/{case}').glob('*.rs')} if args.features or args.gaussian else {},
                       libm_sha256=sha256(libm), capabilities=capabilities,
                       commands=[library_command, command, validation_command, disassembly_command])
         (output / f'{stem}.metadata.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')

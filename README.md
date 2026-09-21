@@ -8,7 +8,7 @@ the main goal is a focused, reviewable **RustGPU PR that lets Rust-authored shad
 
 > **unsafe Rust:** read [UNSAFE.md](UNSAFE.md) for the policy, current inventory, necessary exceptions, safety contracts, and review evidence. every implemented exception must be visible there and documented beside its code.
 >
-> **audit and progress:** [specification and prompt](docs/specs/001-theta-prototype/README.md), [execution record](docs/execution.md), [lessons for future agents](docs/lessons.md).
+> **audit and progress:** [specification and prompt](docs/specs/001-theta-prototype/README.md), [current resume guide](docs/theta-resume.md), [execution record](docs/execution.md), [lessons for future agents](docs/lessons.md).
 
 [AGFX](https://github.com/AmelieHeinrich/agfx) provides the base for a close, ordinary Rust port used as a high-quality reusable testbed. [ShaderToHuman](https://github.com/electronicarts/ShaderToHuman) supplies shader-library, regression, and example behavior to preserve. both are inspirations and source-parity references. translation retains exact attribution and license notices. the compiler draft milestone is complete. the active task is now the complete declared Vulkan AGFX and ShaderToHuman Rust ports, to support more advanced scenes and renderer experiments.
 
@@ -42,6 +42,8 @@ the [UVSR Delta postmortems](docs/postmortems/README.md) contain prior lessons. 
 the [local RustGPU contribution draft](docs/rustgpu-contribution.md) is prepared, with actual Windows NGAPI pointer/heap, cube, storage-image and task/mesh evidence. its independent CPU/Vulkan difftest also passes on real high addresses. the [direct Rust slice](tools/theta/README.md) passes the two frozen AGFX behaviors. the safe [ShaderToHuman library translation](tests/parity/shader-to-human.md) is under verification. full AGFX and ShaderToHuman parity is the current work, with full upstream CI, acceptance and broader compiler pointer/resource coverage tracked separately.
 
 `.github/workflows` validates the baseline and runs Rust formatting and CPU workspace tests. it does not replace RustGPU's upstream CI or actual NGAPI execution.
+
+the [GaussianSplatting checkpoint](tests/parity/shader-to-human-gaussian.md) executes the active PLY, compute, raster and eight-sample resolve paths. both native host configurations pass 80 numeric cases. strict source comparison has 14 exact images and 66 failures per host, so full source parity remains open.
 
 ## contributing
 

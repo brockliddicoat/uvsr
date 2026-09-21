@@ -2,6 +2,8 @@
 
 use [prompt.md](prompt.md) as the clean agent handoff. it follows the Spec Kit constitution, specification, plan, tasks, and implementation sequence. the prompt contains execution instructions, while the audit index and research retain review history. these documents do not install Spec Kit CLI commands.
 
+for the current E-049 stopping point, start with the [resume guide](../../theta-resume.md), then return to this workflow and the active task ledger. the guide points to completed evidence and unresolved work without closing the full-port tasks.
+
 ## activation and bounded reading
 
 read current AGENTS.md, the constitution, prompt, and the active work card. T001 is the initial task. compare live main with the pinned baseline, inspect relevant instruction/contract changes, then pin the chosen revision. preserve unrelated work and follow actual authority for branches, commits, and publication.

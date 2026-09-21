@@ -67,6 +67,8 @@ the [library probe](../../shaders/rust/shader_to_human_library.rs) covers input-
 
 ## ShaderToHuman original image comparison
 
+the [Gaussian mapping](../../tests/parity/shader-to-human-gaussian.md) covers `compile_s2h_library.py --gaussian` and `run_s2h_gaussian.py`, including bounded original PLY parsing, compute/raster outputs, eight-sample color/depth and custom resolve. queried Int64 and float32 preservation, current pre-execution identities and all eight input steps at both optimization levels are required. the numeric gate passes while 66 of 80 original-HLSL image comparisons per host remain strict failures.
+
 the [Features mapping](../../tests/parity/shader-to-human-features.md) covers `compile_s2h_library.py --features`, `run_s2h_features.py` and `compare_s2h_features.py`. it separates the passing native/state/structural gate from the still-failing strict HLSL image comparison. Features requires queried float32 NaN preservation, current pre-execution review identities and all54 fixed steps at both shader optimization levels.
 
 ```text
@@ -95,7 +97,7 @@ this is an intermediate float-buffer diagnostic, not the source RGBA8 storage-im
 
 the later [format-view mapping](../../tests/parity/format-views.md) covers `compile_agfx_graphics.py --views` and `run_agfx_views.py`, including the required current review record. it tests UNORM/sRGB storage, sampled and attachment views through one texture owner.
 
-the [multisample gate](../../tests/parity/multisample.md) adds `compile_agfx_graphics.py --multisample` and `run_agfx_multisample.py` for GaussianSplatting's required eight-sample color/depth path. it checks individual samples and retains a one-sample control. the complete Gaussian example remains separate work.
+the [multisample gate](../../tests/parity/multisample.md) adds `compile_agfx_graphics.py --multisample` and `run_agfx_multisample.py` for GaussianSplatting's required eight-sample color/depth path. it checks individual samples and retains a one-sample control. the Gaussian source mapping above separately records active example execution and remaining parity failures.
 
 ```text
 cargo build --bin texture_copy --locked
