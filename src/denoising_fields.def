@@ -1,0 +1,7 @@
+UVSR_DENOISING_ENUM(Method, method, DenoisingMethodChoice, DenoisingMethodChoice::Svgf, "method", "raw|svgf", "svgf", DenoisingMethodValues, "Method", "Raw preserves the producer output. SVGF filters current illumination using surface guides and previous observations.")
+UVSR_DENOISING_UINT(Iterations, iterations, 4u, 2u, 7u, "svgf.iterations", "Iterations", "Set the number of 5 by 5 wavelet passes. Four is the Falcor default.")
+UVSR_DENOISING_UINT(FeedbackTap, feedbackTap, 1u, 0u, 6u, "svgf.feedback-tap", "Feedback Tap", "Select the zero-based wavelet iteration kept for the next frame. One retains the second pass. Values above the final pass use that pass.")
+UVSR_DENOISING_FLOAT(ColorPhi, colorPhi, 10.f, 0.01f, 32.f, "svgf.color-phi", "Luminance Sigma", "Scale the illumination standard deviation used by the edge filter.")
+UVSR_DENOISING_FLOAT(NormalPhi, normalPhi, 128.f, 1.f, 256.f, "svgf.normal-phi", "Normal Power", "Set the normal similarity exponent. Higher values preserve sharper normal edges.")
+UVSR_DENOISING_FLOAT(Alpha, alpha, 0.05f, 0.001f, 1.f, "svgf.alpha", "Radiance Alpha", "Set the minimum current-frame illumination weight. Larger values respond faster and retain more noise.")
+UVSR_DENOISING_FLOAT(MomentsAlpha, momentsAlpha, 0.2f, 0.001f, 1.f, "svgf.moments-alpha", "Moments Alpha", "Set the minimum current-frame weight of the luminance moments.")
