@@ -1,0 +1,105 @@
+diff --git a/stb_image.h b/stb_image.h
+--- a/stb_image.h
++++ b/stb_image.h
+@@ -6567,6 +6567,7 @@
+    stbi_uc  pal[256][4];
+    stbi_uc lpal[256][4];
+    stbi__gif_lzw codes[8192];
++   stbi_uc prefix_sequence[8192];
+    stbi_uc *color_table;
+    int parse, step;
+    int lflags;
+@@ -6651,41 +6652,49 @@
+    return 1;
+ }
+ 
+-static void stbi__out_gif_code(stbi__gif *g, stbi__uint16 code)
+-{
+-   stbi_uc *p, *c;
+-   int idx;
+-
+-   // recurse to decode the prefixes, since the linked-list is backwards,
+-   // and working backwards through an interleaved image would be nasty
+-   if (g->codes[code].prefix >= 0)
+-      stbi__out_gif_code(g, g->codes[code].prefix);
+-
+-   if (g->cur_y >= g->max_y) return;
+-
+-   idx = g->cur_x + g->cur_y;
+-   p = &g->out[idx];
+-   g->history[idx / 4] = 1;
+-
+-   c = &g->color_table[g->codes[code].suffix * 4];
+-   if (c[3] > 128) { // don't render transparent pixels;
+-      p[0] = c[2];
+-      p[1] = c[1];
+-      p[2] = c[0];
+-      p[3] = c[3];
+-   }
+-   g->cur_x += 4;
+-
+-   if (g->cur_x >= g->max_x) {
+-      g->cur_x = g->start_x;
+-      g->cur_y += g->step;
+-
+-      while (g->cur_y >= g->max_y && g->parse > 0) {
+-         g->step = (1 << g->parse) * g->line_size;
+-         g->cur_y = g->start_y + (g->step >> 1);
+-         --g->parse;
+-      }
+-   }
++static int stbi__out_gif_code(stbi__gif *g, stbi__uint16 code)
++{
++   int count = 0;
++   int cursor = code;
++
++   // the dictionary bounds this reverse sequence. collect it before writing
++   // pixels so a malformed link cannot publish a partial code expansion.
++   do {
++      if (cursor >= 8192 || count == 8192)
++         return stbi__err("invalid GIF dictionary", "Corrupt GIF");
++      g->prefix_sequence[count++] = g->codes[cursor].suffix;
++      cursor = g->codes[cursor].prefix;
++   } while (cursor >= 0);
++
++   while (count > 0) {
++      stbi_uc *p, *c;
++      int idx;
++      if (g->cur_y >= g->max_y) return 1;
++      idx = g->cur_x + g->cur_y;
++      p = &g->out[idx];
++      g->history[idx / 4] = 1;
++
++      c = &g->color_table[g->prefix_sequence[--count] * 4];
++      if (c[3] > 128) { // don't render transparent pixels;
++         p[0] = c[2];
++         p[1] = c[1];
++         p[2] = c[0];
++         p[3] = c[3];
++      }
++      g->cur_x += 4;
++
++      if (g->cur_x >= g->max_x) {
++         g->cur_x = g->start_x;
++         g->cur_y += g->step;
++
++         while (g->cur_y >= g->max_y && g->parse > 0) {
++            g->step = (1 << g->parse) * g->line_size;
++            g->cur_y = g->start_y + (g->step >> 1);
++            --g->parse;
++         }
++      }
++   }
++   return 1;
+ }
+ 
+ static stbi_uc *stbi__process_gif_raster(stbi__context *s, stbi__gif *g)
+@@ -6758,7 +6767,7 @@
+             } else if (code == avail)
+                return stbi__errpuc("illegal code in raster", "Corrupt GIF");
+ 
+-            stbi__out_gif_code(g, (stbi__uint16) code);
++            if (!stbi__out_gif_code(g, (stbi__uint16) code)) return NULL;
+ 
+             if ((avail & codemask) == 0 && avail <= 0x0FFF) {
+                codesize++;

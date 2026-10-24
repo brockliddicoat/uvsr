@@ -1,0 +1,11 @@
+Files left out of this snapshot (build output, binaries, large or secret-looking):
+tests/import_composition_fixture.bin  (0.4 MB)
+tests/import_geometry_fixture.bin  (0.0 MB)
+tests/import_image_fixture.bin  (0.1 MB)
+tests/import_material_fixture.bin  (0.0 MB)
+tests/import_scene_fixture.bin  (0.0 MB)
+tests/renderer_scene_encoding_fixture.bin  (0.9 MB)
+tests/renderer_skin_gpu_fixture.bin  (0.0 MB)
+tests/renderer_ui_gpu_fixture.bin  (1.2 MB)
+tests/renderer_upload_gpu_fixture.bin  (0.0 MB)
+tests/renderer_view_fixture.bin  (1.1 MB)

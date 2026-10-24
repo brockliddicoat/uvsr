@@ -1,0 +1,9 @@
+# description control data
+
+`import_description_fixture.h` preserves 13 transforms, six light records, four camera records and eight animation keys from the original `RichFixture` JSON. values were captured independently through Donut/jsoncpp, using Donut `bc1ea24b0486f1c00d89327fe16c0b4dd11c5937` and the retained source patches. no candidate importer or scene library supplies expected values.
+
+[the capture receipt](C:/Users/brock/OneDrive/Documents/uvsr/work/donut-factor-out-v4/runs/20260909-01/09-description-fixture-v1/reference-01/receipt.json) preserves the generator, compiler inputs and two identical outputs. [the linked control inputs](C:/Users/brock/OneDrive/Documents/uvsr/work/donut-factor-out-v4/runs/20260909-01/09-description-fixture-v1/reference-01/linked-control.json) preserve the actual baseline libraries and their consumed Donut, override and jsoncpp source bytes. the compiler configuration is MSVC x64 Release, static CRT, C++17, `/O2 /fp:precise /EHs-c-`.
+
+the header differs from the capture only in line endings. hexadecimal scalar literals preserve the exact float/double values. unused light/camera fields in the fixture are zero and are not compared; the test checks the same type-specific fields as the original control. changing these fixed inputs requires independently establishing their expected results.
+
+the test retains 31 field comparisons, exact transform/color/key bytes, rotation-over-Euler precedence, defaults, authored flags, path and ordering checks, all 47 explicit rejections, 11 allocation failures with retry, exact storage/workspace budgets, input ownership, move/reset and the 64 KiB deep/wide thread harness. the unknown leaf assertion now directly reaches the unknown-type node. these are finite CPU checks and do not establish animation playback.
