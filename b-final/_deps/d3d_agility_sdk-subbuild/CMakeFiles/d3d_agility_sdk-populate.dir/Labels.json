@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d3d_agility_sdk-populate"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/d3d_agility_sdk-subbuild/CMakeFiles/6794e0ae9e3e5e6172c14d4a78ee8c4d/d3d_agility_sdk-populate.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/d3d_agility_sdk-subbuild/CMakeFiles/61a72ebd02e0b706a3fb2c794a13a8a6/d3d_agility_sdk-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/d3d_agility_sdk-subbuild/CMakeFiles/bcae6373d5f3344836a4375ec47fa038/d3d_agility_sdk-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/d3d_agility_sdk-subbuild/CMakeFiles/bcae6373d5f3344836a4375ec47fa038/d3d_agility_sdk-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/d3d_agility_sdk-subbuild/CMakeFiles/bcae6373d5f3344836a4375ec47fa038/d3d_agility_sdk-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/d3d_agility_sdk-subbuild/CMakeFiles/bcae6373d5f3344836a4375ec47fa038/d3d_agility_sdk-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/d3d_agility_sdk-subbuild/CMakeFiles/bcae6373d5f3344836a4375ec47fa038/d3d_agility_sdk-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/d3d_agility_sdk-subbuild/CMakeFiles/bcae6373d5f3344836a4375ec47fa038/d3d_agility_sdk-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/d3d_agility_sdk-subbuild/CMakeFiles/bcae6373d5f3344836a4375ec47fa038/d3d_agility_sdk-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/d3d_agility_sdk-subbuild/CMakeFiles/bcae6373d5f3344836a4375ec47fa038/d3d_agility_sdk-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"d3d_agility_sdk-populate"
+		],
+		"name" : "d3d_agility_sdk-populate"
+	}
+}

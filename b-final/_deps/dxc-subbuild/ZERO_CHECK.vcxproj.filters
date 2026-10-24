@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\dxc-subbuild\CMakeFiles\1534c31da62d4c2cb2bf75e403127505\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{1BBFB80A-61B9-356A-8CDA-084D46D6F5E1}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

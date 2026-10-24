@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\d3d_agility_sdk-subbuild\CMakeFiles\bcae6373d5f3344836a4375ec47fa038\d3d_agility_sdk-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\d3d_agility_sdk-subbuild\CMakeFiles\bcae6373d5f3344836a4375ec47fa038\d3d_agility_sdk-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\d3d_agility_sdk-subbuild\CMakeFiles\bcae6373d5f3344836a4375ec47fa038\d3d_agility_sdk-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\d3d_agility_sdk-subbuild\CMakeFiles\bcae6373d5f3344836a4375ec47fa038\d3d_agility_sdk-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\d3d_agility_sdk-subbuild\CMakeFiles\bcae6373d5f3344836a4375ec47fa038\d3d_agility_sdk-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\d3d_agility_sdk-subbuild\CMakeFiles\bcae6373d5f3344836a4375ec47fa038\d3d_agility_sdk-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\d3d_agility_sdk-subbuild\CMakeFiles\bcae6373d5f3344836a4375ec47fa038\d3d_agility_sdk-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\d3d_agility_sdk-subbuild\CMakeFiles\bcae6373d5f3344836a4375ec47fa038\d3d_agility_sdk-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\d3d_agility_sdk-subbuild\CMakeFiles\61a72ebd02e0b706a3fb2c794a13a8a6\d3d_agility_sdk-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\d3d_agility_sdk-subbuild\CMakeFiles\6794e0ae9e3e5e6172c14d4a78ee8c4d\d3d_agility_sdk-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\d3d_agility_sdk-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\d3d_agility_sdk-subbuild\CMakeFiles\d3d_agility_sdk-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{4DD85A4C-39C2-3366-8389-F61D9A46FA67}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

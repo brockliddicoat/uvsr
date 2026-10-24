@@ -1,0 +1,393 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ResolveNugetPackages>false</ResolveNugetPackages>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{39EC8D79-AC2A-360B-93D9-3D5CAFDFA563}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>ALL_BUILD</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair -BC:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final --check-stamp-file C:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\heitz-ratio-estimator-repair;C:\Users\brock\Documents\uvsr\.git\worktrees\heitz-ratio-estimator-repair\HEAD;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython\Support.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython3.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair -BC:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final --check-stamp-file C:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\heitz-ratio-estimator-repair;C:\Users\brock\Documents\uvsr\.git\worktrees\heitz-ratio-estimator-repair\HEAD;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython\Support.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython3.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair -BC:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final --check-stamp-file C:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\heitz-ratio-estimator-repair;C:\Users\brock\Documents\uvsr\.git\worktrees\heitz-ratio-estimator-repair\HEAD;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython\Support.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython3.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair -BC:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final --check-stamp-file C:/Users/brock/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\heitz-ratio-estimator-repair;C:\Users\brock\Documents\uvsr\.git\worktrees\heitz-ratio-estimator-repair\HEAD;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython\Support.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython3.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\ZERO_CHECK.vcxproj">
+      <Project>{97784769-9800-36F7-AD2B-C745F9F997C1}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\directx_headers-build\DirectX-Guids.vcxproj">
+      <Project>{E8CA3B84-6A0C-36D9-856E-42076068D94A}</Project>
+      <Name>DirectX-Guids</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\_deps\directx_headers-build\DirectX-Headers.vcxproj">
+      <Project>{F6C15C40-E3C1-363A-8F29-F3B94EE51C57}</Project>
+      <Name>DirectX-Headers</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\donut\ShaderMake\ShaderMake\ShaderMake.vcxproj">
+      <Project>{935FB76D-0629-3949-94BB-1BD46F570C58}</Project>
+      <Name>ShaderMake</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\donut\ShaderMake\ShaderMakeBlob.vcxproj">
+      <Project>{029AFB7E-BAC1-3689-9B5C-D534CAA1680A}</Project>
+      <Name>ShaderMakeBlob</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\donut\thirdparty\glfw\src\glfw.vcxproj">
+      <Project>{9F935601-C62D-3FE4-9D50-B3B3FAB8F65D}</Project>
+      <Name>glfw</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\donut\thirdparty\imgui.vcxproj">
+      <Project>{B9EFCA96-BD7C-3D64-9C77-D26A7B851D07}</Project>
+      <Name>imgui</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\donut\thirdparty\jsoncpp_static.vcxproj">
+      <Project>{849EEF20-173E-3607-8127-93159775EC2A}</Project>
+      <Name>jsoncpp_static</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\donut\nvrhi\nvrhi.vcxproj">
+      <Project>{7E73E112-3442-3C2A-80B7-93E1D6DEB769}</Project>
+      <Name>nvrhi</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\donut\nvrhi\nvrhi_d3d12.vcxproj">
+      <Project>{B015C7EB-BD58-3336-9C18-DDDF5B595D2A}</Project>
+      <Name>nvrhi_d3d12</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr.vcxproj">
+      <Project>{AF37D413-C615-3AC4-829B-CC5682E7D72C}</Project>
+      <Name>uvsr</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_adaptive_sync_tests.vcxproj">
+      <Project>{613EA6FD-434A-303F-9236-32D36D98B08D}</Project>
+      <Name>uvsr_adaptive_sync_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_auto_exposure_tests.vcxproj">
+      <Project>{C3C19A21-7ECF-359B-8F4E-64561298A10B}</Project>
+      <Name>uvsr_auto_exposure_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_camera_collision_tests.vcxproj">
+      <Project>{72E6C49A-CAAC-3A78-A114-49E1870F030F}</Project>
+      <Name>uvsr_camera_collision_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_camera_controls_tests.vcxproj">
+      <Project>{020DB9BE-58E1-3740-A426-2A733D87482E}</Project>
+      <Name>uvsr_camera_controls_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_command_line_options_tests.vcxproj">
+      <Project>{EA99732C-DF9D-3B1E-92EC-2A5EB2B70DF7}</Project>
+      <Name>uvsr_command_line_options_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_denoiser.vcxproj">
+      <Project>{F88DEA12-026E-3A48-BBB5-07FC37AC75B2}</Project>
+      <Name>uvsr_denoiser</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_denoiser_tests.vcxproj">
+      <Project>{CDE8E094-C90B-3472-B63D-C366E1359F4E}</Project>
+      <Name>uvsr_denoiser_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_diffuse_environment_asset_tests.vcxproj">
+      <Project>{6BE579E0-85CF-3520-A4C4-68F3F7BD1309}</Project>
+      <Name>uvsr_diffuse_environment_asset_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_flashlight_tests.vcxproj">
+      <Project>{C29025A2-7B38-34A5-868B-AED302EB14B6}</Project>
+      <Name>uvsr_flashlight_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_heitz_ratio_estimator_source_contract_tests.vcxproj">
+      <Project>{E8232F93-140F-3549-B0E6-C17522FE49AF}</Project>
+      <Name>uvsr_heitz_ratio_estimator_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_heitz_ratio_estimator_tests.vcxproj">
+      <Project>{24A9BA20-717D-3FD4-AB41-DB2F1C038CA4}</Project>
+      <Name>uvsr_heitz_ratio_estimator_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_imgui_dropdown_roll_tests.vcxproj">
+      <Project>{4F5BBF76-E4D1-34FB-9A5A-8E499AFE8288}</Project>
+      <Name>uvsr_imgui_dropdown_roll_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_path_tracing_settings_tests.vcxproj">
+      <Project>{59CABD4F-D39A-3798-8B55-BD9C2E38B08F}</Project>
+      <Name>uvsr_path_tracing_settings_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_path_tracing_source_contract_tests.vcxproj">
+      <Project>{C57B95F0-7AFF-36DD-8DB6-B7D7653E1EF8}</Project>
+      <Name>uvsr_path_tracing_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_pbr_lighting_source_contract_tests.vcxproj">
+      <Project>{DC0933A1-9329-3386-9768-3F4CC7F6F6A5}</Project>
+      <Name>uvsr_pbr_lighting_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_pbr_tests.vcxproj">
+      <Project>{6B68266D-6BAC-3662-937C-6AE6387C1CC3}</Project>
+      <Name>uvsr_pbr_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_pixel_zoom_tests.vcxproj">
+      <Project>{6D0A89E8-5AC5-3278-8FAB-537E3F71DD0E}</Project>
+      <Name>uvsr_pixel_zoom_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_production_shader_bundle_tests.vcxproj">
+      <Project>{6F877C04-EB07-32CA-8A10-74FF570D2F6D}</Project>
+      <Name>uvsr_production_shader_bundle_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_radial_visibility_tests.vcxproj">
+      <Project>{B086842D-FDC3-3472-9997-5DB9C3713FC0}</Project>
+      <Name>uvsr_radial_visibility_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_ray_traced_flashlight_shadow_tests.vcxproj">
+      <Project>{F5392AA1-A5E3-3906-BF08-640D8BBA7087}</Project>
+      <Name>uvsr_ray_traced_flashlight_shadow_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_ray_traced_sky_visibility_source_contract_tests.vcxproj">
+      <Project>{E132156F-77EC-30B2-9065-01FA9EF36974}</Project>
+      <Name>uvsr_ray_traced_sky_visibility_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_ray_traced_sky_visibility_tests.vcxproj">
+      <Project>{CECAFD53-DDD5-3629-8203-45DC83F7A0AC}</Project>
+      <Name>uvsr_ray_traced_sky_visibility_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_renderer_source_contract_tests.vcxproj">
+      <Project>{42A5A355-342F-3122-85FA-A960C4EA820C}</Project>
+      <Name>uvsr_renderer_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_runtime_shader_bundle_tests.vcxproj">
+      <Project>{F2174BC5-FC3E-3943-ADFD-1F29467A0C4B}</Project>
+      <Name>uvsr_runtime_shader_bundle_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_sample_accumulation_settings_tests.vcxproj">
+      <Project>{B6822AD2-37E2-36A6-9193-D8F33B6754EA}</Project>
+      <Name>uvsr_sample_accumulation_settings_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_scene_asset_contract_tests.vcxproj">
+      <Project>{A55DD756-4FFA-336A-9FE1-A674568DFBEA}</Project>
+      <Name>uvsr_scene_asset_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_scene_catalog_tests.vcxproj">
+      <Project>{50183C7E-DBF8-3935-BA19-52ABE3D51057}</Project>
+      <Name>uvsr_scene_catalog_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_scene_light_names_tests.vcxproj">
+      <Project>{9F2F8783-E52C-3904-A79C-F135C6C340FB}</Project>
+      <Name>uvsr_scene_light_names_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_scene_loading_tests.vcxproj">
+      <Project>{94D87669-E1A6-341F-BB96-7355A8815E06}</Project>
+      <Name>uvsr_scene_loading_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_settings_snapshot_schema_probe.vcxproj">
+      <Project>{AE1556EC-D71B-3CFB-AA6D-0DF5E2D06BCC}</Project>
+      <Name>uvsr_settings_snapshot_schema_probe</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_settings_snapshot_tests.vcxproj">
+      <Project>{857304A3-7737-3660-8B75-3DE41625878D}</Project>
+      <Name>uvsr_settings_snapshot_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_sponza_camera_tests.vcxproj">
+      <Project>{4623ECCC-7262-3345-B20E-79BF88141221}</Project>
+      <Name>uvsr_sponza_camera_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_temporal_aa_tests.vcxproj">
+      <Project>{66096B4C-91A2-3286-9733-F7AF0B9D06A3}</Project>
+      <Name>uvsr_temporal_aa_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_ui_animation_tests.vcxproj">
+      <Project>{A9090250-C1AF-3A00-9096-443DA0376C2D}</Project>
+      <Name>uvsr_ui_animation_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_ui_command_layout_tests.vcxproj">
+      <Project>{5BC1D745-F2EE-317A-BA75-EC7AD07F1262}</Project>
+      <Name>uvsr_ui_command_layout_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_ui_commands_tests.vcxproj">
+      <Project>{F3FCD41E-0ED1-32DF-B2D5-CB1F253CC8B9}</Project>
+      <Name>uvsr_ui_commands_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_ui_settings_command_catalog_tests.vcxproj">
+      <Project>{41918F8B-2956-3EC3-8D6F-1656C65404F5}</Project>
+      <Name>uvsr_ui_settings_command_catalog_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_ui_skin_tests.vcxproj">
+      <Project>{F767A610-C127-3AC1-A39D-E0DA702C470B}</Project>
+      <Name>uvsr_ui_skin_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_ui_source_contract_tests.vcxproj">
+      <Project>{197CF50F-8DCA-316D-A187-E9DD0892F4D1}</Project>
+      <Name>uvsr_ui_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_visibility_estimator_tests.vcxproj">
+      <Project>{C06B8229-B913-300A-AB6D-520902AF2D7B}</Project>
+      <Name>uvsr_visibility_estimator_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_visibility_projection_tests.vcxproj">
+      <Project>{7248B07C-61FB-32FE-8DB8-1C697A81969E}</Project>
+      <Name>uvsr_visibility_projection_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_visibility_sampling_tests.vcxproj">
+      <Project>{65553668-7619-3F3A-8A78-8D942906DADF}</Project>
+      <Name>uvsr_visibility_sampling_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\heitz-ratio-estimator-repair\b-final\uvsr_world_space_representation_settings_tests.vcxproj">
+      <Project>{532BFD53-EC11-3B44-9AA7-7D579B3760BE}</Project>
+      <Name>uvsr_world_space_representation_settings_tests</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

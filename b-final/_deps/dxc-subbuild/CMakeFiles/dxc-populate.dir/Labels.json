@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/dxc-subbuild/CMakeFiles/dxc-populate"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/dxc-subbuild/CMakeFiles/1534c31da62d4c2cb2bf75e403127505/dxc-populate.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/dxc-subbuild/CMakeFiles/3958bb41daab5487d446bdf7335baeef/dxc-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/dxc-subbuild/CMakeFiles/fe269b4801b451f42fb9f5c21a9d4923/dxc-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/dxc-subbuild/CMakeFiles/fe269b4801b451f42fb9f5c21a9d4923/dxc-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/dxc-subbuild/CMakeFiles/fe269b4801b451f42fb9f5c21a9d4923/dxc-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/dxc-subbuild/CMakeFiles/fe269b4801b451f42fb9f5c21a9d4923/dxc-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/dxc-subbuild/CMakeFiles/fe269b4801b451f42fb9f5c21a9d4923/dxc-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/dxc-subbuild/CMakeFiles/fe269b4801b451f42fb9f5c21a9d4923/dxc-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/dxc-subbuild/CMakeFiles/fe269b4801b451f42fb9f5c21a9d4923/dxc-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/heitz-ratio-estimator-repair/b-final/_deps/dxc-subbuild/CMakeFiles/fe269b4801b451f42fb9f5c21a9d4923/dxc-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"dxc-populate"
+		],
+		"name" : "dxc-populate"
+	}
+}
