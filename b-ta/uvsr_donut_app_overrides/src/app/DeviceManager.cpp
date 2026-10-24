@@ -1,0 +1,1199 @@
+/*
+* Copyright (c) 2014-2021, NVIDIA CORPORATION. All rights reserved.
+*
+* Permission is hereby granted, free of charge, to any person obtaining a
+* copy of this software and associated documentation files (the "Software"),
+* to deal in the Software without restriction, including without limitation
+* the rights to use, copy, modify, merge, publish, distribute, sublicense,
+* and/or sell copies of the Software, and to permit persons to whom the
+* Software is furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+* DEALINGS IN THE SOFTWARE.
+*/
+
+/*
+License for glfw
+
+Copyright (c) 2002-2006 Marcus Geelnard
+
+Copyright (c) 2006-2019 Camilla Lowy
+
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would
+   be appreciated but is not required.
+
+2. Altered source versions must be plainly marked as such, and must not
+   be misrepresented as being the original software.
+
+3. This notice may not be removed or altered from any source
+   distribution.
+*/
+
+#include <donut/app/DeviceManager.h>
+#include <donut/core/math/math.h>
+#include <donut/core/log.h>
+#include <nvrhi/utils.h>
+
+#include <cstdio>
+#include <iomanip>
+#include <thread>
+#include <sstream>
+
+#if DONUT_WITH_DX11
+#include <d3d11.h>
+#endif
+
+#if DONUT_WITH_DX12
+#include <d3d12.h>
+#endif
+
+#if DONUT_WITH_STREAMLINE
+#include <StreamlineIntegration.h>
+#endif
+
+#ifdef _WINDOWS
+#include <ShellScalingApi.h>
+#pragma comment(lib, "shcore.lib")
+#endif
+
+#if defined(_WINDOWS) && DONUT_FORCE_DISCRETE_GPU
+extern "C"
+{
+    // Declaring this symbol makes the OS run the app on the discrete GPU on NVIDIA Optimus laptops by default
+    __declspec(dllexport) DWORD NvOptimusEnablement = 1;
+    // Same as above, for laptops with AMD GPUs
+    __declspec(dllexport) DWORD AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
+using namespace donut::app;
+
+// The joystick interface in glfw is not per-window like the keys, mouse, etc. The joystick callbacks
+// don't take a window arg. So glfw's model is a global joystick shared by all windows. Hence, the equivalent 
+// is a singleton class that all DeviceManager instances can use.
+class JoyStickManager
+{
+public:
+	static JoyStickManager& Singleton()
+	{
+		static JoyStickManager singleton;
+		return singleton;
+	}
+
+	void UpdateAllJoysticks(const std::list<IRenderPass*>& passes);
+	
+	void EraseDisconnectedJoysticks();
+	void EnumerateJoysticks();
+
+	void ConnectJoystick(int id);
+	void DisconnectJoystick(int id);
+
+private:
+	JoyStickManager() {}
+	void UpdateJoystick(int j, const std::list<IRenderPass*>& passes);
+
+	std::list<int> m_JoystickIDs, m_RemovedJoysticks;
+};
+
+static void ErrorCallback_GLFW(int error, const char *description)
+{
+    fprintf(stderr, "GLFW error: %s\n", description);
+    exit(1);
+}
+
+static void WindowIconifyCallback_GLFW(GLFWwindow *window, int iconified)
+{
+    DeviceManager *manager = reinterpret_cast<DeviceManager *>(glfwGetWindowUserPointer(window));
+    manager->WindowIconifyCallback(iconified);
+}
+
+static void WindowFocusCallback_GLFW(GLFWwindow *window, int focused)
+{
+    DeviceManager *manager = reinterpret_cast<DeviceManager *>(glfwGetWindowUserPointer(window));
+    manager->WindowFocusCallback(focused);
+}
+
+static void WindowRefreshCallback_GLFW(GLFWwindow *window)
+{
+    DeviceManager *manager = reinterpret_cast<DeviceManager *>(glfwGetWindowUserPointer(window));
+    manager->WindowRefreshCallback();
+}
+
+static void WindowCloseCallback_GLFW(GLFWwindow *window)
+{
+    DeviceManager *manager = reinterpret_cast<DeviceManager *>(glfwGetWindowUserPointer(window));
+    manager->WindowCloseCallback();
+}
+
+static void WindowPosCallback_GLFW(GLFWwindow *window, int xpos, int ypos)
+{
+    DeviceManager *manager = reinterpret_cast<DeviceManager *>(glfwGetWindowUserPointer(window));
+    manager->WindowPosCallback(xpos, ypos);
+}
+
+static void WindowContentScaleCallback_GLFW(GLFWwindow *window, float scaleX, float scaleY)
+{
+    DeviceManager *manager = reinterpret_cast<DeviceManager *>(glfwGetWindowUserPointer(window));
+    manager->WindowContentScaleCallback(scaleX, scaleY);
+}
+
+static void KeyCallback_GLFW(GLFWwindow *window, int key, int scancode, int action, int mods)
+{
+    DeviceManager *manager = reinterpret_cast<DeviceManager *>(glfwGetWindowUserPointer(window));
+    manager->KeyboardUpdate(key, scancode, action, mods);
+}
+
+static void CharModsCallback_GLFW(GLFWwindow *window, unsigned int unicode, int mods)
+{
+    DeviceManager *manager = reinterpret_cast<DeviceManager *>(glfwGetWindowUserPointer(window));
+    manager->KeyboardCharInput(unicode, mods);
+}
+
+static void MousePosCallback_GLFW(GLFWwindow *window, double xpos, double ypos)
+{
+    DeviceManager *manager = reinterpret_cast<DeviceManager *>(glfwGetWindowUserPointer(window));
+    manager->MousePosUpdate(xpos, ypos);
+}
+
+static void MouseButtonCallback_GLFW(GLFWwindow *window, int button, int action, int mods)
+{
+    DeviceManager *manager = reinterpret_cast<DeviceManager *>(glfwGetWindowUserPointer(window));
+    manager->MouseButtonUpdate(button, action, mods);
+}
+
+static void MouseScrollCallback_GLFW(GLFWwindow *window, double xoffset, double yoffset)
+{
+    DeviceManager *manager = reinterpret_cast<DeviceManager *>(glfwGetWindowUserPointer(window));
+    manager->MouseScrollUpdate(xoffset, yoffset);
+}
+
+static void JoystickConnectionCallback_GLFW(int joyId, int connectDisconnect)
+{
+	if (connectDisconnect == GLFW_CONNECTED)
+		JoyStickManager::Singleton().ConnectJoystick(joyId);
+	if (connectDisconnect == GLFW_DISCONNECTED)
+		JoyStickManager::Singleton().DisconnectJoystick(joyId);
+}
+
+static const struct
+{
+    nvrhi::Format format;
+    uint32_t redBits;
+    uint32_t greenBits;
+    uint32_t blueBits;
+    uint32_t alphaBits;
+    uint32_t depthBits;
+    uint32_t stencilBits;
+} formatInfo[] = {
+    { nvrhi::Format::UNKNOWN,            0,  0,  0,  0,  0,  0, },
+    { nvrhi::Format::R8_UINT,            8,  0,  0,  0,  0,  0, },
+    { nvrhi::Format::RG8_UINT,           8,  8,  0,  0,  0,  0, },
+    { nvrhi::Format::RG8_UNORM,          8,  8,  0,  0,  0,  0, },
+    { nvrhi::Format::R16_UINT,          16,  0,  0,  0,  0,  0, },
+    { nvrhi::Format::R16_UNORM,         16,  0,  0,  0,  0,  0, },
+    { nvrhi::Format::R16_FLOAT,         16,  0,  0,  0,  0,  0, },
+    { nvrhi::Format::RGBA8_UNORM,        8,  8,  8,  8,  0,  0, },
+    { nvrhi::Format::RGBA8_SNORM,        8,  8,  8,  8,  0,  0, },
+    { nvrhi::Format::BGRA8_UNORM,        8,  8,  8,  8,  0,  0, },
+    { nvrhi::Format::SRGBA8_UNORM,       8,  8,  8,  8,  0,  0, },
+    { nvrhi::Format::SBGRA8_UNORM,       8,  8,  8,  8,  0,  0, },
+    { nvrhi::Format::R10G10B10A2_UNORM, 10, 10, 10,  2,  0,  0, },
+    { nvrhi::Format::R11G11B10_FLOAT,   11, 11, 10,  0,  0,  0, },
+    { nvrhi::Format::RG16_UINT,         16, 16,  0,  0,  0,  0, },
+    { nvrhi::Format::RG16_FLOAT,        16, 16,  0,  0,  0,  0, },
+    { nvrhi::Format::R32_UINT,          32,  0,  0,  0,  0,  0, },
+    { nvrhi::Format::R32_FLOAT,         32,  0,  0,  0,  0,  0, },
+    { nvrhi::Format::RGBA16_FLOAT,      16, 16, 16, 16,  0,  0, },
+    { nvrhi::Format::RGBA16_UNORM,      16, 16, 16, 16,  0,  0, },
+    { nvrhi::Format::RGBA16_SNORM,      16, 16, 16, 16,  0,  0, },
+    { nvrhi::Format::RG32_UINT,         32, 32,  0,  0,  0,  0, },
+    { nvrhi::Format::RG32_FLOAT,        32, 32,  0,  0,  0,  0, },
+    { nvrhi::Format::RGB32_UINT,        32, 32, 32,  0,  0,  0, },
+    { nvrhi::Format::RGB32_FLOAT,       32, 32, 32,  0,  0,  0, },
+    { nvrhi::Format::RGBA32_UINT,       32, 32, 32, 32,  0,  0, },
+    { nvrhi::Format::RGBA32_FLOAT,      32, 32, 32, 32,  0,  0, },
+};
+
+bool DeviceManager::CreateInstance(const InstanceParameters& params)
+{
+    if (m_InstanceCreated)
+        return true;
+
+
+    static_cast<InstanceParameters&>(m_DeviceParams) = params;
+
+    if (!params.headlessDevice)
+    {
+#ifdef _WINDOWS
+        if (!params.enablePerMonitorDPI)
+        {
+            // glfwInit enables the maximum supported level of DPI awareness unconditionally.
+            // If the app doesn't need it, we have to call this function before glfwInit to override that behavior.
+            SetProcessDpiAwareness(PROCESS_DPI_UNAWARE);
+        }
+#endif
+
+        if (!glfwInit())
+            return false;
+    }
+
+#if DONUT_WITH_AFTERMATH
+    if (params.enableAftermath)
+    {
+        m_AftermathCrashDumper.EnableCrashDumpTracking();
+    }
+#endif
+
+    m_InstanceCreated = CreateInstanceInternal();
+    return m_InstanceCreated;
+}
+
+bool DeviceManager::CreateHeadlessDevice(const DeviceCreationParameters& params)
+{
+    m_DeviceParams = params;
+    m_DeviceParams.headlessDevice = true;
+
+    if (!CreateInstance(m_DeviceParams))
+        return false;
+
+    return CreateDevice();
+}
+
+// Clear HWND_TOPMOST that GLFW applies to fullscreen windows on Win32. Called
+// after every glfwSetWindowMonitor() that puts the window into fullscreen.
+// See DeviceCreationParameters::fullscreenAlwaysOnTop.
+static void ClearFullscreenTopmost(GLFWwindow* window)
+{
+#if _WIN32
+    if (HWND hwnd = glfwGetWin32Window(window))
+    {
+        SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+#else
+    (void)window;
+#endif
+}
+
+bool DeviceManager::CreateWindowDeviceAndSwapChain(const DeviceCreationParameters& params, const char *windowTitle)
+{
+    m_DeviceParams = params;
+    m_DeviceParams.headlessDevice = false;
+    m_RequestedVSync = m_DeviceParams.vsyncEnabled;
+
+#ifndef _WINDOWS
+    // This is necessary to get correct window decorations on Wayland
+    glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+#endif
+
+    if (!CreateInstance(m_DeviceParams))
+        return false;
+
+    m_PrevWindowWidth  = static_cast<int>(m_DeviceParams.backBufferWidth);
+    m_PrevWindowHeight = static_cast<int>(m_DeviceParams.backBufferHeight);
+
+    // Target monitor for fullscreen startup (resolved below, used again for glfwSetWindowMonitor).
+    GLFWmonitor* startMonitor = nullptr;
+
+    if (m_DeviceParams.startFullscreen)
+    {
+        // Determine which monitor to use. If windowPosX/Y are set, pick the monitor
+        // that contains that point; otherwise fall back to the primary monitor.
+        startMonitor = glfwGetPrimaryMonitor();
+        if (m_DeviceParams.windowPosX != -1 && m_DeviceParams.windowPosY != -1)
+        {
+            int monitorCount = 0;
+            GLFWmonitor** monitors = glfwGetMonitors(&monitorCount);
+            for (int i = 0; i < monitorCount; ++i)
+            {
+                int mx, my;
+                glfwGetMonitorPos(monitors[i], &mx, &my);
+                const GLFWvidmode* vm = glfwGetVideoMode(monitors[i]);
+                if (m_DeviceParams.windowPosX >= mx && m_DeviceParams.windowPosX < mx + vm->width &&
+                    m_DeviceParams.windowPosY >= my && m_DeviceParams.windowPosY < my + vm->height)
+                {
+                    startMonitor = monitors[i];
+                    break;
+                }
+            }
+        }
+
+        const GLFWvidmode* mode = glfwGetVideoMode(startMonitor);
+        int monX = 0, monY = 0;
+        glfwGetMonitorPos(startMonitor, &monX, &monY);
+
+        // Must make sure all these match otherwise GLFW will trigger a mode change.
+        m_DeviceParams.backBufferWidth  = static_cast<uint32_t>(mode->width);
+        m_DeviceParams.backBufferHeight = static_cast<uint32_t>(mode->height);
+        m_DeviceParams.refreshRate      = mode->refreshRate;
+
+        // Initialize previous window position for Alt+Enter restore.
+        // Use the explicit position if provided, otherwise center on the monitor.
+        if (m_DeviceParams.windowPosX != -1 && m_DeviceParams.windowPosY != -1)
+        {
+            m_PrevWindowX = m_DeviceParams.windowPosX;
+            m_PrevWindowY = m_DeviceParams.windowPosY;
+        }
+        else
+        {
+            m_PrevWindowX = monX + (mode->width  - m_PrevWindowWidth)  / 2;
+            m_PrevWindowY = monY + (mode->height - m_PrevWindowHeight) / 2;
+        }
+    }
+
+    glfwSetErrorCallback(ErrorCallback_GLFW);
+
+    glfwDefaultWindowHints();
+
+    bool foundFormat = false;
+    for (const auto& info : formatInfo)
+    {
+        if (info.format == m_DeviceParams.swapChainFormat)
+        {
+            glfwWindowHint(GLFW_RED_BITS, info.redBits);
+            glfwWindowHint(GLFW_GREEN_BITS, info.greenBits);
+            glfwWindowHint(GLFW_BLUE_BITS, info.blueBits);
+            glfwWindowHint(GLFW_ALPHA_BITS, info.alphaBits);
+            glfwWindowHint(GLFW_DEPTH_BITS, info.depthBits);
+            glfwWindowHint(GLFW_STENCIL_BITS, info.stencilBits);
+            foundFormat = true;
+            break;
+        }
+    }
+
+    if (!foundFormat)
+    {
+        log::error("Unknown format %s (%d) used for the swap chain",
+            nvrhi::getFormatInfo(params.swapChainFormat).name,
+            int(params.swapChainFormat));
+    }
+
+    glfwWindowHint(GLFW_SAMPLES, m_DeviceParams.swapChainSampleCount);
+    glfwWindowHint(GLFW_REFRESH_RATE, m_DeviceParams.refreshRate);
+    glfwWindowHint(GLFW_SCALE_TO_MONITOR, m_DeviceParams.resizeWindowWithDisplayScale);
+
+    glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);   // Ignored for fullscreen
+
+    if (m_DeviceParams.startBorderless)
+    {
+        glfwWindowHint(GLFW_DECORATED, GLFW_FALSE); // Borderless window
+    }
+
+    m_Window = glfwCreateWindow(m_DeviceParams.backBufferWidth, m_DeviceParams.backBufferHeight,
+                                windowTitle ? windowTitle : "",
+                                nullptr,
+                                nullptr);
+
+    if (m_Window == nullptr)
+    {
+        return false;
+    }
+
+    if (m_DeviceParams.startFullscreen)
+    {
+        glfwSetWindowMonitor(m_Window, startMonitor, 0, 0,
+            m_DeviceParams.backBufferWidth, m_DeviceParams.backBufferHeight, m_DeviceParams.refreshRate);
+
+        if (!m_DeviceParams.fullscreenAlwaysOnTop)
+            ClearFullscreenTopmost(m_Window);
+    }
+    else
+    {
+        int fbWidth = 0, fbHeight = 0;
+        glfwGetFramebufferSize(m_Window, &fbWidth, &fbHeight);
+        m_DeviceParams.backBufferWidth = fbWidth;
+        m_DeviceParams.backBufferHeight = fbHeight;
+
+        if (m_DeviceParams.windowPosX != -1 && m_DeviceParams.windowPosY != -1)
+            glfwSetWindowPos(m_Window, m_DeviceParams.windowPosX, m_DeviceParams.windowPosY);
+    }
+
+    if (windowTitle)
+        m_WindowTitle = windowTitle;
+
+    glfwSetWindowUserPointer(m_Window, this);
+
+    glfwSetWindowPosCallback(m_Window, WindowPosCallback_GLFW);
+    glfwSetWindowCloseCallback(m_Window, WindowCloseCallback_GLFW);
+    glfwSetWindowRefreshCallback(m_Window, WindowRefreshCallback_GLFW);
+    glfwSetWindowFocusCallback(m_Window, WindowFocusCallback_GLFW);
+    glfwSetWindowIconifyCallback(m_Window, WindowIconifyCallback_GLFW);
+    glfwSetWindowContentScaleCallback(m_Window, WindowContentScaleCallback_GLFW);
+    glfwSetKeyCallback(m_Window, KeyCallback_GLFW);
+    glfwSetCharModsCallback(m_Window, CharModsCallback_GLFW);
+    glfwSetCursorPosCallback(m_Window, MousePosCallback_GLFW);
+    glfwSetMouseButtonCallback(m_Window, MouseButtonCallback_GLFW);
+    glfwSetScrollCallback(m_Window, MouseScrollCallback_GLFW);
+    glfwSetJoystickCallback(JoystickConnectionCallback_GLFW);
+
+    // Explicitly initialize the per-monitor DPI scale factor for the window's current
+    // position. The content scale callback may not fire on startup if the scale hasn't
+    // changed, so we query it directly here.
+    {
+        float scaleX, scaleY;
+        glfwGetWindowContentScale(m_Window, &scaleX, &scaleY);
+        WindowContentScaleCallback(scaleX, scaleY);
+    }
+
+    // If there are multiple device managers, then this would be called by each one which isn't necessary
+    // but should not hurt.
+    JoyStickManager::Singleton().EnumerateJoysticks();
+
+    if (!CreateDevice())
+        return false;
+
+    if (!CreateSwapChain())
+        return false;
+
+    glfwShowWindow(m_Window);
+    glfwFocusWindow(m_Window);
+
+    if (m_DeviceParams.startMaximized)
+    {
+        glfwMaximizeWindow(m_Window);
+    }
+
+    // reset the back buffer size state to enforce a resize event
+    m_DeviceParams.backBufferWidth = 0;
+    m_DeviceParams.backBufferHeight = 0;
+
+    UpdateWindowSize();
+
+    return true;
+}
+
+void DeviceManager::AddRenderPassToFront(IRenderPass *pRenderPass)
+{
+    m_vRenderPasses.remove(pRenderPass);
+    m_vRenderPasses.push_front(pRenderPass);
+
+    pRenderPass->BackBufferResizing();
+    pRenderPass->BackBufferResized(
+        m_DeviceParams.backBufferWidth,
+        m_DeviceParams.backBufferHeight,
+        m_DeviceParams.swapChainSampleCount);
+}
+
+void DeviceManager::AddRenderPassToBack(IRenderPass *pRenderPass)
+{
+    m_vRenderPasses.remove(pRenderPass);
+    m_vRenderPasses.push_back(pRenderPass);
+
+    pRenderPass->BackBufferResizing();
+    pRenderPass->BackBufferResized(
+        m_DeviceParams.backBufferWidth,
+        m_DeviceParams.backBufferHeight,
+        m_DeviceParams.swapChainSampleCount);
+}
+
+void DeviceManager::RemoveRenderPass(IRenderPass *pRenderPass)
+{
+    m_vRenderPasses.remove(pRenderPass);
+}
+
+void DeviceManager::BackBufferResizing()
+{
+    m_SwapChainFramebuffers.clear();
+    m_SwapChainWithDepthFramebuffers.clear();
+
+    for (auto it : m_vRenderPasses)
+    {
+        it->BackBufferResizing();
+    }
+}
+
+void DeviceManager::BackBufferResized()
+{
+    CreateDepthBuffer();
+
+    for(auto it : m_vRenderPasses)
+    {
+        it->BackBufferResized(m_DeviceParams.backBufferWidth,
+                              m_DeviceParams.backBufferHeight,
+                              m_DeviceParams.swapChainSampleCount);
+    }
+
+    uint32_t backBufferCount = GetBackBufferCount();
+    m_SwapChainFramebuffers.resize(backBufferCount);
+    m_SwapChainWithDepthFramebuffers.resize(backBufferCount);
+    for (uint32_t index = 0; index < backBufferCount; index++)
+    {
+        nvrhi::FramebufferDesc framebufferDesc = nvrhi::FramebufferDesc()
+            .addColorAttachment(GetBackBuffer(index));
+        
+        m_SwapChainFramebuffers[index] = GetDevice()->createFramebuffer(framebufferDesc);
+
+        if (m_DepthBuffer)
+        {
+            framebufferDesc.setDepthAttachment(m_DepthBuffer);
+            m_SwapChainWithDepthFramebuffers[index] = GetDevice()->createFramebuffer(framebufferDesc);
+        }
+        else
+        {
+            m_SwapChainWithDepthFramebuffers[index] = m_SwapChainFramebuffers[index];
+        }
+    }
+}
+
+void DeviceManager::DisplayScaleChanged()
+{
+    for(auto it : m_vRenderPasses)
+    {
+        it->DisplayScaleChanged(m_DPIScaleFactorX, m_DPIScaleFactorY);
+    }
+}
+
+void DeviceManager::CreateDepthBuffer()
+{
+    m_DepthBuffer = nullptr;
+
+    if (m_DeviceParams.depthBufferFormat == nvrhi::Format::UNKNOWN)
+        return;
+
+    nvrhi::TextureDesc textureDesc = nvrhi::TextureDesc()
+        .setDebugName("Depth Buffer")
+        .setWidth(m_DeviceParams.backBufferWidth)
+        .setHeight(m_DeviceParams.backBufferHeight)
+        .setFormat(m_DeviceParams.depthBufferFormat)
+        .setDimension(m_DeviceParams.swapChainSampleCount > 1
+            ? nvrhi::TextureDimension::Texture2DMS
+            : nvrhi::TextureDimension::Texture2D)
+        .setSampleCount(m_DeviceParams.swapChainSampleCount)
+        .setSampleQuality(m_DeviceParams.swapChainSampleQuality)
+        .setIsTypeless(true)
+        .setIsRenderTarget(true)
+        .enableAutomaticStateTracking(nvrhi::ResourceStates::DepthWrite);
+
+    m_DepthBuffer = GetDevice()->createTexture(textureDesc);
+}
+
+void DeviceManager::Animate(double elapsedTime, bool windowIsFocused)
+{
+    for(auto it : m_vRenderPasses)
+    {
+        if (windowIsFocused || it->ShouldAnimateUnfocused())
+        {
+            it->Animate(float(elapsedTime));
+            it->SetLatewarpOptions();
+        }
+    }
+}
+
+void DeviceManager::Render()
+{
+    for (auto it : m_vRenderPasses)
+    {
+        it->Render(GetCurrentFramebuffer(it->SupportsDepthBuffer()));
+    }
+}
+
+void DeviceManager::UpdateAverageFrameTime(double elapsedTime)
+{
+    m_FrameTimeSum += elapsedTime;
+    m_NumberOfAccumulatedFrames += 1;
+    
+    if (m_FrameTimeSum > m_AverageTimeUpdateInterval && m_NumberOfAccumulatedFrames > 0)
+    {
+        m_AverageFrameTime = m_FrameTimeSum / double(m_NumberOfAccumulatedFrames);
+        m_NumberOfAccumulatedFrames = 0;
+        m_FrameTimeSum = 0.0;
+    }
+}
+
+bool DeviceManager::ShouldRenderUnfocused() const
+{
+    for (auto it = m_vRenderPasses.crbegin(); it != m_vRenderPasses.crend(); it++)
+    {
+        bool ret = (*it)->ShouldRenderUnfocused();
+        if (ret)
+            return true;
+    }
+
+    return false;
+}
+
+void DeviceManager::RunMessageLoop()
+{
+    m_PreviousFrameTimestamp = glfwGetTime();
+
+#if DONUT_WITH_AFTERMATH
+    bool dumpingCrash = false;
+#endif
+    while(!glfwWindowShouldClose(m_Window))
+    {
+#if DONUT_WITH_STREAMLINE
+        StreamlineIntegration::Get().SimStart(*this);
+#endif
+        if (m_callbacks.beforeFrame) m_callbacks.beforeFrame(*this, m_FrameIndex);
+        glfwPollEvents();
+        UpdateWindowSize();
+        bool presentSuccess = AnimateRenderPresent();
+        if (!presentSuccess)
+        {
+#if DONUT_WITH_AFTERMATH
+            dumpingCrash = true;
+#endif
+            break;
+        }
+    }
+
+    bool waitSuccess = GetDevice()->waitForIdle();
+#if DONUT_WITH_AFTERMATH
+    dumpingCrash |= !waitSuccess;
+    // wait for Aftermath dump to complete before exiting application
+    if (dumpingCrash && m_DeviceParams.enableAftermath)
+        AftermathCrashDump::WaitForCrashDump();
+#else
+    assert(waitSuccess);
+    (void)waitSuccess;
+#endif
+}
+
+bool DeviceManager::AnimateRenderPresent()
+{
+    double curTime = glfwGetTime();
+    double elapsedTime = curTime - m_PreviousFrameTimestamp;
+
+	JoyStickManager::Singleton().EraseDisconnectedJoysticks();
+	JoyStickManager::Singleton().UpdateAllJoysticks(m_vRenderPasses);
+
+    if (m_windowVisible && (m_windowIsInFocus || ShouldRenderUnfocused() || m_RequestedRenderUnfocused))
+    {
+        if (m_PrevDPIScaleFactorX != m_DPIScaleFactorX || m_PrevDPIScaleFactorY != m_DPIScaleFactorY)
+        {
+            DisplayScaleChanged();
+            m_PrevDPIScaleFactorX = m_DPIScaleFactorX;
+            m_PrevDPIScaleFactorY = m_DPIScaleFactorY;
+        }
+
+        m_RequestedRenderUnfocused = false;
+
+        if (m_callbacks.beforeAnimate) m_callbacks.beforeAnimate(*this, m_FrameIndex);
+        Animate(elapsedTime, true);
+#if DONUT_WITH_STREAMLINE
+        StreamlineIntegration::Get().SimEnd(*this);
+#endif
+        if (m_callbacks.afterAnimate) m_callbacks.afterAnimate(*this, m_FrameIndex);
+
+        // normal rendering           : A0    R0 P0 A1 R1 P1
+        // m_SkipRenderOnFirstFrame on: A0 A1 R0 P0 A2 R1 P1
+        // m_SkipRenderOnFirstFrame simulates multi-threaded rendering frame indices, m_FrameIndex becomes the simulation index
+        // while the local variable below becomes the render/present index, which will be different only if m_SkipRenderOnFirstFrame is set
+        if (m_FrameIndex > 0 || !m_SkipRenderOnFirstFrame)
+        {
+            if (BeginFrame())
+            {
+                // first time entering this loop, m_FrameIndex is 1 for m_SkipRenderOnFirstFrame, 0 otherwise;
+                uint32_t frameIndex = m_FrameIndex;
+
+#if DONUT_WITH_STREAMLINE
+                StreamlineIntegration::Get().RenderStart(*this);
+#endif
+                if (m_SkipRenderOnFirstFrame)
+                {
+                    frameIndex--;
+                }
+
+                if (m_callbacks.beforeRender) m_callbacks.beforeRender(*this, frameIndex);
+                Render();
+                if (m_callbacks.afterRender) m_callbacks.afterRender(*this, frameIndex);
+#if DONUT_WITH_STREAMLINE
+                StreamlineIntegration::Get().RenderEnd(*this);
+                StreamlineIntegration::Get().PresentStart(*this);
+#endif
+                if (m_callbacks.beforePresent) m_callbacks.beforePresent(*this, frameIndex);
+                bool presentSuccess = Present();
+                if (m_callbacks.afterPresent) m_callbacks.afterPresent(*this, frameIndex);
+#if DONUT_WITH_STREAMLINE
+                StreamlineIntegration::Get().PresentEnd(*this);
+#endif
+                if (!presentSuccess)
+                {
+                    return false;
+                }
+            }
+        }
+    }
+    else if (m_windowVisible)
+    {
+        // Call Animate() even when not rendering, some render passes (e.g. ImGui) need it to process input.
+        // Whether the before/afterAnimate callbacks are necessary in this case is unclear...
+        if (m_callbacks.beforeAnimate) m_callbacks.beforeAnimate(*this, m_FrameIndex);
+        Animate(elapsedTime, false);
+        if (m_callbacks.afterAnimate) m_callbacks.afterAnimate(*this, m_FrameIndex);
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(0));
+
+    GetDevice()->runGarbageCollection();
+
+    UpdateAverageFrameTime(elapsedTime);
+    m_PreviousFrameTimestamp = curTime;
+
+    ++m_FrameIndex;
+    return true;
+}
+
+void DeviceManager::GetWindowDimensions(int& width, int& height)
+{
+    width = m_DeviceParams.backBufferWidth;
+    height = m_DeviceParams.backBufferHeight;
+}
+
+const DeviceCreationParameters& DeviceManager::GetDeviceParams()
+{
+    return m_DeviceParams;
+}
+
+donut::app::DeviceManager::DeviceManager()
+#if DONUT_WITH_AFTERMATH
+    : m_AftermathCrashDumper(*this)
+#endif
+{
+}
+
+void DeviceManager::UpdateWindowSize()
+{
+    int width;
+    int height;
+    glfwGetWindowSize(m_Window, &width, &height);
+
+    if (width == 0 || height == 0)
+    {
+        // window is minimized
+        m_windowVisible = false;
+        return;
+    }
+
+    m_windowVisible = true;
+
+    m_windowIsInFocus = glfwGetWindowAttrib(m_Window, GLFW_FOCUSED) == 1;
+
+    if (int(m_DeviceParams.backBufferWidth) != width || 
+        int(m_DeviceParams.backBufferHeight) != height ||
+        (m_DeviceParams.vsyncEnabled != m_RequestedVSync && GetGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN))
+    {
+        // window is not minimized, and the size has changed
+
+        BackBufferResizing();
+
+        m_DeviceParams.backBufferWidth = width;
+        m_DeviceParams.backBufferHeight = height;
+        m_DeviceParams.vsyncEnabled = m_RequestedVSync;
+
+        ResizeSwapChain();
+        BackBufferResized();
+    }
+
+    m_DeviceParams.vsyncEnabled = m_RequestedVSync;
+}
+
+void DeviceManager::WindowContentScaleCallback(float scaleX, float scaleY)
+{
+    if (m_DeviceParams.enablePerMonitorDPI)
+    {
+        m_DPIScaleFactorX = scaleX;
+        m_DPIScaleFactorY = scaleY;
+    }
+}
+
+void DeviceManager::WindowPosCallback(int x, int y)
+{
+    if (m_EnableRenderDuringWindowMovement && m_SwapChainFramebuffers.size() > 0)
+    {
+        if (m_callbacks.beforeFrame) m_callbacks.beforeFrame(*this, m_FrameIndex);
+        AnimateRenderPresent();
+    }
+}
+
+GLFWmonitor* DeviceManager::GetCurrentMonitor() const
+{
+    int winX, winY, winW, winH;
+    glfwGetWindowPos(m_Window, &winX, &winY);
+    glfwGetWindowSize(m_Window, &winW, &winH);
+    int winCenterX = winX + winW / 2;
+    int winCenterY = winY + winH / 2;
+
+    int monitorCount = 0;
+    GLFWmonitor** monitors = glfwGetMonitors(&monitorCount);
+    for (int i = 0; i < monitorCount; ++i)
+    {
+        int monX, monY;
+        glfwGetMonitorPos(monitors[i], &monX, &monY);
+        const GLFWvidmode* mode = glfwGetVideoMode(monitors[i]);
+        if (winCenterX >= monX && winCenterX < monX + mode->width &&
+            winCenterY >= monY && winCenterY < monY + mode->height)
+        {
+            return monitors[i];
+        }
+    }
+    return glfwGetPrimaryMonitor();
+}
+
+void DeviceManager::ToggleFullscreen()
+{
+    if (glfwGetWindowMonitor(m_Window) != nullptr)
+    {
+        // Fullscreen → windowed: restore previous windowed state.
+        glfwSetWindowMonitor(m_Window, nullptr, m_PrevWindowX, m_PrevWindowY, m_PrevWindowWidth, m_PrevWindowHeight, 0);
+    }
+    else
+    {
+        // Windowed → fullscreen. Save current windowed state for restore.
+        glfwGetWindowPos(m_Window, &m_PrevWindowX, &m_PrevWindowY);
+        glfwGetWindowSize(m_Window, &m_PrevWindowWidth, &m_PrevWindowHeight);
+
+        GLFWmonitor* monitor = GetCurrentMonitor();
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        int monX, monY;
+        glfwGetMonitorPos(monitor, &monX, &monY);
+
+        // glfwSetWindowMonitor fires the framebuffer size callback so UpdateWindowSize
+        // picks up the monitor-native resolution and calls ResizeSwapChain.
+        glfwSetWindowMonitor(m_Window, monitor, monX, monY, mode->width, mode->height, mode->refreshRate);
+
+        if (!m_DeviceParams.fullscreenAlwaysOnTop)
+            ClearFullscreenTopmost(m_Window);
+    }
+}
+
+void DeviceManager::KeyboardUpdate(int key, int scancode, int action, int mods)
+{
+    if (key == -1)
+    {
+        // filter unknown keys
+        return;
+    }
+
+    if (key == GLFW_KEY_ENTER && action == GLFW_PRESS && (mods & GLFW_MOD_ALT))
+    {
+        // Give topmost product UI a chance to reserve the system shortcut
+        // without changing ordinary render-pass keyboard dispatch.
+        for (auto it = m_vRenderPasses.crbegin(); it != m_vRenderPasses.crend(); it++)
+        {
+            if ((*it)->ShouldSuppressFullscreenShortcut())
+                return;
+        }
+        ToggleFullscreen();
+        return;
+    }
+
+    for (auto it = m_vRenderPasses.crbegin(); it != m_vRenderPasses.crend(); it++)
+    {
+        bool ret = (*it)->KeyboardUpdate(key, scancode, action, mods);
+        if (ret)
+            break;
+    }
+}
+
+void DeviceManager::KeyboardCharInput(unsigned int unicode, int mods)
+{
+    for (auto it = m_vRenderPasses.crbegin(); it != m_vRenderPasses.crend(); it++)
+    {
+        bool ret = (*it)->KeyboardCharInput(unicode, mods);
+        if (ret)
+            break;
+    }
+}
+
+void DeviceManager::MousePosUpdate(double xpos, double ypos)
+{
+    if (!m_DeviceParams.supportExplicitDisplayScaling)
+    {
+        xpos /= m_DPIScaleFactorX;
+        ypos /= m_DPIScaleFactorY;
+    }
+    
+    for (auto it = m_vRenderPasses.crbegin(); it != m_vRenderPasses.crend(); it++)
+    {
+        bool ret = (*it)->MousePosUpdate(xpos, ypos);
+        if (ret)
+            break;
+    }
+}
+
+void DeviceManager::MouseButtonUpdate(int button, int action, int mods)
+{
+    for (auto it = m_vRenderPasses.crbegin(); it != m_vRenderPasses.crend(); it++)
+    {
+        bool ret = (*it)->MouseButtonUpdate(button, action, mods);
+        if (ret)
+            break;
+    }
+}
+
+void DeviceManager::MouseScrollUpdate(double xoffset, double yoffset)
+{
+    for (auto it = m_vRenderPasses.crbegin(); it != m_vRenderPasses.crend(); it++)
+    {
+        bool ret = (*it)->MouseScrollUpdate(xoffset, yoffset);
+        if (ret)
+            break;
+    }
+}
+
+void JoyStickManager::EnumerateJoysticks()
+{
+	// The glfw header says nothing about what values to expect for joystick IDs. Empirically, having connected two
+	// simultaneously, glfw just seems to number them starting at 0.
+	for (int i = 0; i != 10; ++i)
+		if (glfwJoystickPresent(i))
+			m_JoystickIDs.push_back(i);
+}
+
+void JoyStickManager::EraseDisconnectedJoysticks()
+{
+	while (!m_RemovedJoysticks.empty())
+	{
+		auto id = m_RemovedJoysticks.back();
+		m_RemovedJoysticks.pop_back();
+
+		auto it = std::find(m_JoystickIDs.begin(), m_JoystickIDs.end(), id);
+		if (it != m_JoystickIDs.end())
+			m_JoystickIDs.erase(it);
+	}
+}
+
+void JoyStickManager::ConnectJoystick(int id)
+{
+	m_JoystickIDs.push_back(id);
+}
+
+void JoyStickManager::DisconnectJoystick(int id)
+{
+	// This fn can be called from inside glfwGetJoystickAxes below (similarly for buttons, I guess).
+	// We can't call m_JoystickIDs.erase() here and now. Save them for later. Forunately, glfw docs
+	// say that you can query a joystick ID that isn't present.
+	m_RemovedJoysticks.push_back(id);
+}
+
+void JoyStickManager::UpdateAllJoysticks(const std::list<IRenderPass*>& passes)
+{
+	for (auto j = m_JoystickIDs.begin(); j != m_JoystickIDs.end(); ++j)
+		UpdateJoystick(*j, passes);
+}
+
+static void ApplyDeadZone(dm::float2& v, const float deadZone = 0.1f)
+{
+    v *= std::max(dm::length(v) - deadZone, 0.f) / (1.f - deadZone);
+}
+
+void JoyStickManager::UpdateJoystick(int j, const std::list<IRenderPass*>& passes)
+{
+    GLFWgamepadstate gamepadState;
+    glfwGetGamepadState(j, &gamepadState);
+
+	float* axisValues = gamepadState.axes;
+
+    auto updateAxis = [&] (int axis, float axisVal)
+    {
+		for (auto it = passes.crbegin(); it != passes.crend(); it++)
+		{
+			bool ret = (*it)->JoystickAxisUpdate(axis, axisVal);
+			if (ret)
+				break;
+		}
+    };
+
+    {
+        dm::float2 v(axisValues[GLFW_GAMEPAD_AXIS_LEFT_X], axisValues[GLFW_GAMEPAD_AXIS_LEFT_Y]);
+        ApplyDeadZone(v);
+        updateAxis(GLFW_GAMEPAD_AXIS_LEFT_X, v.x);
+        updateAxis(GLFW_GAMEPAD_AXIS_LEFT_Y, v.y);
+    }
+
+    {
+        dm::float2 v(axisValues[GLFW_GAMEPAD_AXIS_RIGHT_X], axisValues[GLFW_GAMEPAD_AXIS_RIGHT_Y]);
+        ApplyDeadZone(v);
+        updateAxis(GLFW_GAMEPAD_AXIS_RIGHT_X, v.x);
+        updateAxis(GLFW_GAMEPAD_AXIS_RIGHT_Y, v.y);
+    }
+
+    updateAxis(GLFW_GAMEPAD_AXIS_LEFT_TRIGGER, axisValues[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER]);
+    updateAxis(GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER, axisValues[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER]);
+
+	for (int b = 0; b != GLFW_GAMEPAD_BUTTON_LAST; ++b)
+	{
+		auto buttonVal = gamepadState.buttons[b];
+		for (auto it = passes.crbegin(); it != passes.crend(); it++)
+		{
+			bool ret = (*it)->JoystickButtonUpdate(b, buttonVal == GLFW_PRESS);
+			if (ret)
+				break;
+		}
+	}
+}
+
+void DeviceManager::Shutdown()
+{
+#if DONUT_WITH_STREAMLINE
+    // Shut down Streamline before destroying swap chain and device.
+    StreamlineIntegration::Get().Shutdown();
+#endif
+
+    m_SwapChainFramebuffers.clear();
+    m_SwapChainWithDepthFramebuffers.clear();
+    m_DepthBuffer = nullptr;
+
+    DestroyDeviceAndSwapChain();
+
+    if (m_Window)
+    {
+        glfwDestroyWindow(m_Window);
+        m_Window = nullptr;
+    }
+
+    glfwTerminate();
+
+    m_InstanceCreated = false;
+}
+
+nvrhi::IFramebuffer* donut::app::DeviceManager::GetCurrentFramebuffer(bool withDepth)
+{
+    return GetFramebuffer(GetCurrentBackBufferIndex(), withDepth);
+}
+
+nvrhi::IFramebuffer* donut::app::DeviceManager::GetFramebuffer(uint32_t index, bool withDepth)
+{
+    if (withDepth)
+    {
+        if (index < m_SwapChainWithDepthFramebuffers.size())
+            return m_SwapChainWithDepthFramebuffers[index];
+    }
+    else
+    {
+        if (index < m_SwapChainFramebuffers.size())
+            return m_SwapChainFramebuffers[index];
+    }
+
+    return nullptr;
+}
+
+void DeviceManager::SetWindowTitle(const char* title)
+{
+    assert(title);
+    if (m_WindowTitle == title)
+        return;
+
+    glfwSetWindowTitle(m_Window, title);
+
+    m_WindowTitle = title;
+}
+
+void DeviceManager::SetInformativeWindowTitle(const char* applicationName, bool includeFramerate, const char* extraInfo)
+{
+    std::stringstream ss;
+    ss << applicationName;
+    ss << " (" << nvrhi::utils::GraphicsAPIToString(GetDevice()->getGraphicsAPI());
+
+    if (m_DeviceParams.enableDebugRuntime)
+    {
+        if (GetGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN)
+            ss << ", VulkanValidationLayer";
+        else
+            ss << ", DebugRuntime";
+    }
+
+    if (m_DeviceParams.enableNvrhiValidationLayer)
+    {
+        ss << ", NvrhiValidationLayer";
+    }
+
+    ss << ")";
+
+    double frameTime = GetAverageFrameTimeSeconds();
+    if (includeFramerate && frameTime > 0)
+    {
+        double const fps = 1.0 / frameTime;
+        int const precision = (fps <= 20.0) ? 1 : 0;
+        ss << " - " << std::fixed << std::setprecision(precision) << fps << " FPS ";
+    }
+
+    if (extraInfo)
+        ss << extraInfo;
+
+    SetWindowTitle(ss.str().c_str());
+}
+
+const char* donut::app::DeviceManager::GetWindowTitle()
+{
+    return m_WindowTitle.c_str();
+}
+
+donut::app::DeviceManager* donut::app::DeviceManager::Create(nvrhi::GraphicsAPI api)
+{
+    switch (api)
+    {
+#if DONUT_WITH_DX11
+    case nvrhi::GraphicsAPI::D3D11:
+        return CreateD3D11();
+#endif
+#if DONUT_WITH_DX12
+    case nvrhi::GraphicsAPI::D3D12:
+        return CreateD3D12();
+#endif
+#if DONUT_WITH_VULKAN
+    case nvrhi::GraphicsAPI::VULKAN:
+        return CreateVK();
+#endif
+    default:
+        log::error("DeviceManager::Create: Unsupported Graphics API (%d)", api);
+        return nullptr;
+    }
+}
+
+DefaultMessageCallback& DefaultMessageCallback::GetInstance()
+{
+    static DefaultMessageCallback Instance;
+    return Instance;
+}
+
+void DefaultMessageCallback::message(nvrhi::MessageSeverity severity, const char* messageText)
+{
+    donut::log::Severity donutSeverity = donut::log::Severity::Info;
+    switch (severity)
+    {
+    case nvrhi::MessageSeverity::Info:
+        donutSeverity = donut::log::Severity::Info;
+        break;
+    case nvrhi::MessageSeverity::Warning:
+        donutSeverity = donut::log::Severity::Warning;
+        break;
+    case nvrhi::MessageSeverity::Error:
+        donutSeverity = donut::log::Severity::Error;
+        break;
+    case nvrhi::MessageSeverity::Fatal:
+        donutSeverity = donut::log::Severity::Fatal;
+        break;
+    }
+    
+    donut::log::message(donutSeverity, "%s", messageText);
+}
+
+#if DONUT_WITH_STREAMLINE
+StreamlineInterface& DeviceManager::GetStreamline()
+{
+    // StreamlineIntegration doesn't support instances
+    return StreamlineIntegration::Get();
+}
+#endif

@@ -1,0 +1,90 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\auto_exposure.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\camera_collision.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\cmaa2.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\denoising_pass.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\fast_approximate_aa.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\heitz_ratio_estimator_shadows.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\image_based_lighting_background_pass.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\image_based_lighting_environment.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\lighting_accumulation_pass.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\msaa_visibility_resolve.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\noise_texture_library.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\path_tracing_pass.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\path_tracing_stable_plane_resolve_pass.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\pbr_deferred_lighting_pass.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\ray_traced_flashlight_shadows.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\ray_traced_sky_visibility.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\scene_catalog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\screen_space_visibility.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\sponza_camera_preset.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\temporal_aa.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\temporal_aa_core.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\uvsr.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\world_space_representation.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\src\scene_loading.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{7C793C76-708A-34C7-AAB9-C1B07A2903D2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{6A3528FA-BCDD-3EC9-AA0C-9A4F8AD3831B}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

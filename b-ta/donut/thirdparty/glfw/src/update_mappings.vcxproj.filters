@@ -1,0 +1,24 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\07032413e977e541fd3fcbebc6de8c44\update_mappings.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\src\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\src\mappings.h.in">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\CMake\GenerateMappings.cmake" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\donut\thirdparty\glfw\src\CMakeFiles\update_mappings" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{30ADCBCB-2795-31CF-93E2-5A650C520237}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{7C793C76-708A-34C7-AAB9-C1B07A2903D2}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

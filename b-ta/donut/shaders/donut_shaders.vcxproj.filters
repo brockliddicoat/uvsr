@@ -1,0 +1,125 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\e53d86f5f0b2a7efa3155b06a9346af0\donut_shaders.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\binding_helpers.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\bindless.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\blit_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\bloom_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\brdf.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\deferred_lighting_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\depth_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\forward_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\forward_vertex.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\gbuffer.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\gbuffer_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\hash_based_rng.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\light_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\light_probe_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\light_types.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\lighting.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\material_bindings.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\material_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\mipmapgen_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\motion_vectors.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\packing.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\pixel_readback_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\scene_material.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\shadows.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\skinning_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\sky.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\sky_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\ssao_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\surface.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\taa_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\tonemapping_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\utils.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\view_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\shaders\vulkan.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\blit_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\fullscreen_vs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\ies_profile_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\imgui_pixel.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\imgui_vertex.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\bloom_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\cubemap_gs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\deferred_lighting_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\depth_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\depth_vs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\dlss_exposure_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\environment_map_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\exposure_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\forward_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\forward_vs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\gbuffer_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\gbuffer_vs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\histogram_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\joints.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\light_probe.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\material_id_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\mipmapgen_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\motion_vectors_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\pixel_readback_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\sky_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\ssao_blur_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\ssao_compute_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\ssao_deinterleave_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\taa_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\passes\tonemapping_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\rect_vs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\sharpen_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\shaders\skinning_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\donut\shaders\CMakeFiles\donut_shaders" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{30ADCBCB-2795-31CF-93E2-5A650C520237}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{7C793C76-708A-34C7-AAB9-C1B07A2903D2}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

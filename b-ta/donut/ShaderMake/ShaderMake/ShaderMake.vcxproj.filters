@@ -1,0 +1,33 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake\ShaderMake\argparse.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake\ShaderMake\ShaderBlob.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake\ShaderMake\ShaderMake.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake\ShaderMake\argparse.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake\ShaderMake\ShaderBlob.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake\ShaderMake\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{7C793C76-708A-34C7-AAB9-C1B07A2903D2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{6A3528FA-BCDD-3EC9-AA0C-9A4F8AD3831B}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

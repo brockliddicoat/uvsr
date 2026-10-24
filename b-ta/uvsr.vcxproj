@@ -1,0 +1,862 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{C1C39B57-CBC4-33F3-A380-F623B2F16E03}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>uvsr</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\bin\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">uvsr.dir\Debug\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">uvsr</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\bin\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">uvsr.dir\Release\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">uvsr</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\bin\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">uvsr.dir\MinSizeRel\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">uvsr</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\bin\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">uvsr.dir\RelWithDebInfo\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">uvsr</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</GenerateManifest>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_imgui_overrides;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_app_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\tinyexr;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/directx_headers-src/include"</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>Disabled</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;UVSR_GIT_COMMIT="ae7112f";UVSR_WITH_NRD=0;DONUT_WITH_DLSS=0;NOMINMAX;_CRT_SECURE_NO_WARNINGS;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;DONUT_WITH_STREAMLINE=0;CMAKE_INTDIR="Debug"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;UVSR_GIT_COMMIT=\"ae7112f\";UVSR_WITH_NRD=0;DONUT_WITH_DLSS=0;NOMINMAX;_CRT_SECURE_NO_WARNINGS;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;DONUT_WITH_STREAMLINE=0;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_imgui_overrides;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_app_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\tinyexr;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\directx_headers-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_imgui_overrides;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_app_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\tinyexr;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\directx_headers-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <PostBuildEvent>
+      <Message>		</Message>
+      <Command>setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/glTF-Sample-Assets/Models/a_beautiful_game
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/glTF-Sample-Assets/Models/cornell_box
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/glTF-Sample-Assets/Models/nvidia_bistro
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/luts/kodak
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/noise
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/Inter
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/Geist
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E make_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E make_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/WINDOWS/Fonts/SegUIVar.ttf C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System/CodexUI.ttf
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/WINDOWS/Fonts/seguisb.ttf C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System/CodexUI-Semibold.ttf
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/WINDOWS/Fonts/segoeuib.ttf C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System/CodexUI-Bold.ttf
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/LICENSE.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/UVSR-Polyform-Noncommercial-1.0.0.md
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/Microsoft-DirectX-Graphics-Samples-MIT.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-DirectX-Graphics-Samples.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/Apache-2.0.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Apache-2.0.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/BSD-2-Clause.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/BSD-2-Clause.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/Intel-CMAA2-Apache-2.0.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Intel-CMAA2-Apache-2.0.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/IOLITE-AgX-MIT.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/IOLITE-AgX-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/documentation/google-filament-fxaa.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Google-Filament-FXAA-Attribution.md
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/NVIDIA-Donut-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/ThirdPartyLicenses.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Donut-Third-Party-Licenses.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/nvrhi/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/NVIDIA-NVRHI-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/ShaderMake/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/NVIDIA-ShaderMake-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/thirdparty/imgui/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Dear-ImGui-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/fonts/geist/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Geist-OFL-1.1.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/intel_sponza/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Intel-PBR-Sponza.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/bistro_interior_retextured/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Amazon-Lumberyard-Bistro.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/san_miguel_retextured/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/San-Miguel-2.1.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/blender_classroom/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Blender-Classroom-CC0-1.0.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/environments/README.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Poly-Haven-Environments.md
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/documentation/third-party-notices.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/third-party-notices.md
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/directx_headers-src/LICENSE C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-DirectX-Headers-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-src//LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-D3D12-Agility-SDK-Terms.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-src//LICENSE-CODE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-D3D12-Agility-SDK-Code-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PostBuildEvent>
+    <Link>
+      <AdditionalDependencies>Debug\uvsr_denoiser.lib;donut\Debug\donut_render.lib;donut\Debug\donut_app.lib;donut\Debug\donut_engine.lib;dwmapi.lib;donut\ShaderMake\Debug\ShaderMakeBlob.lib;donut\nvrhi\Debug\nvrhi.lib;donut\Debug\donut_core.lib;donut\thirdparty\Debug\jsoncpp_static.lib;donut\thirdparty\glfw\src\Debug\glfw3.lib;donut\thirdparty\Debug\imgui.lib;donut\nvrhi\Debug\nvrhi_d3d12.lib;_deps\directx_headers-build\Debug\DirectX-Guids.lib;_deps\directx_headers-build\Debug\DirectX-Headers.lib;d3d12.lib;dxgi.lib;dxguid.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/Debug/uvsr.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/uvsr.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_imgui_overrides;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_app_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\tinyexr;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/directx_headers-src/include"</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;UVSR_GIT_COMMIT="ae7112f";UVSR_WITH_NRD=0;DONUT_WITH_DLSS=0;NOMINMAX;_CRT_SECURE_NO_WARNINGS;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;DONUT_WITH_STREAMLINE=0;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;UVSR_GIT_COMMIT=\"ae7112f\";UVSR_WITH_NRD=0;DONUT_WITH_DLSS=0;NOMINMAX;_CRT_SECURE_NO_WARNINGS;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;DONUT_WITH_STREAMLINE=0;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_imgui_overrides;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_app_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\tinyexr;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\directx_headers-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_imgui_overrides;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_app_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\tinyexr;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\directx_headers-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <PostBuildEvent>
+      <Message>		</Message>
+      <Command>setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/glTF-Sample-Assets/Models/a_beautiful_game
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/glTF-Sample-Assets/Models/cornell_box
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/glTF-Sample-Assets/Models/nvidia_bistro
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/luts/kodak
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/noise
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/Inter
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/Geist
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E make_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E make_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/WINDOWS/Fonts/SegUIVar.ttf C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System/CodexUI.ttf
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/WINDOWS/Fonts/seguisb.ttf C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System/CodexUI-Semibold.ttf
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/WINDOWS/Fonts/segoeuib.ttf C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System/CodexUI-Bold.ttf
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/LICENSE.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/UVSR-Polyform-Noncommercial-1.0.0.md
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/Microsoft-DirectX-Graphics-Samples-MIT.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-DirectX-Graphics-Samples.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/Apache-2.0.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Apache-2.0.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/BSD-2-Clause.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/BSD-2-Clause.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/Intel-CMAA2-Apache-2.0.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Intel-CMAA2-Apache-2.0.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/IOLITE-AgX-MIT.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/IOLITE-AgX-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/documentation/google-filament-fxaa.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Google-Filament-FXAA-Attribution.md
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/NVIDIA-Donut-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/ThirdPartyLicenses.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Donut-Third-Party-Licenses.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/nvrhi/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/NVIDIA-NVRHI-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/ShaderMake/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/NVIDIA-ShaderMake-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/thirdparty/imgui/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Dear-ImGui-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/fonts/geist/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Geist-OFL-1.1.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/intel_sponza/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Intel-PBR-Sponza.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/bistro_interior_retextured/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Amazon-Lumberyard-Bistro.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/san_miguel_retextured/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/San-Miguel-2.1.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/blender_classroom/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Blender-Classroom-CC0-1.0.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/environments/README.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Poly-Haven-Environments.md
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/documentation/third-party-notices.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/third-party-notices.md
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/directx_headers-src/LICENSE C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-DirectX-Headers-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-src//LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-D3D12-Agility-SDK-Terms.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-src//LICENSE-CODE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-D3D12-Agility-SDK-Code-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PostBuildEvent>
+    <Link>
+      <AdditionalDependencies>Release\uvsr_denoiser.lib;donut\Release\donut_render.lib;donut\Release\donut_app.lib;donut\Release\donut_engine.lib;dwmapi.lib;donut\ShaderMake\Release\ShaderMakeBlob.lib;donut\nvrhi\Release\nvrhi.lib;donut\Release\donut_core.lib;donut\thirdparty\Release\jsoncpp_static.lib;donut\thirdparty\glfw\src\Release\glfw3.lib;donut\thirdparty\Release\imgui.lib;donut\nvrhi\Release\nvrhi_d3d12.lib;_deps\directx_headers-build\Release\DirectX-Guids.lib;_deps\directx_headers-build\Release\DirectX-Headers.lib;d3d12.lib;dxgi.lib;dxguid.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/Release/uvsr.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/uvsr.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_imgui_overrides;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_app_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\tinyexr;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/directx_headers-src/include"</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MinSpace</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;UVSR_GIT_COMMIT="ae7112f";UVSR_WITH_NRD=0;DONUT_WITH_DLSS=0;NOMINMAX;_CRT_SECURE_NO_WARNINGS;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;DONUT_WITH_STREAMLINE=0;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;UVSR_GIT_COMMIT=\"ae7112f\";UVSR_WITH_NRD=0;DONUT_WITH_DLSS=0;NOMINMAX;_CRT_SECURE_NO_WARNINGS;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;DONUT_WITH_STREAMLINE=0;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_imgui_overrides;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_app_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\tinyexr;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\directx_headers-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_imgui_overrides;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_app_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\tinyexr;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\directx_headers-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <PostBuildEvent>
+      <Message>		</Message>
+      <Command>setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/glTF-Sample-Assets/Models/a_beautiful_game
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/glTF-Sample-Assets/Models/cornell_box
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/glTF-Sample-Assets/Models/nvidia_bistro
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/luts/kodak
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/noise
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/Inter
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/Geist
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E make_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E make_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/WINDOWS/Fonts/SegUIVar.ttf C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System/CodexUI.ttf
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/WINDOWS/Fonts/seguisb.ttf C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System/CodexUI-Semibold.ttf
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/WINDOWS/Fonts/segoeuib.ttf C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System/CodexUI-Bold.ttf
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/LICENSE.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/UVSR-Polyform-Noncommercial-1.0.0.md
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/Microsoft-DirectX-Graphics-Samples-MIT.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-DirectX-Graphics-Samples.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/Apache-2.0.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Apache-2.0.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/BSD-2-Clause.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/BSD-2-Clause.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/Intel-CMAA2-Apache-2.0.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Intel-CMAA2-Apache-2.0.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/IOLITE-AgX-MIT.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/IOLITE-AgX-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/documentation/google-filament-fxaa.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Google-Filament-FXAA-Attribution.md
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/NVIDIA-Donut-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/ThirdPartyLicenses.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Donut-Third-Party-Licenses.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/nvrhi/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/NVIDIA-NVRHI-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/ShaderMake/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/NVIDIA-ShaderMake-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/thirdparty/imgui/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Dear-ImGui-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/fonts/geist/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Geist-OFL-1.1.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/intel_sponza/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Intel-PBR-Sponza.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/bistro_interior_retextured/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Amazon-Lumberyard-Bistro.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/san_miguel_retextured/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/San-Miguel-2.1.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/blender_classroom/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Blender-Classroom-CC0-1.0.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/environments/README.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Poly-Haven-Environments.md
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/documentation/third-party-notices.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/third-party-notices.md
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/directx_headers-src/LICENSE C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-DirectX-Headers-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-src//LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-D3D12-Agility-SDK-Terms.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-src//LICENSE-CODE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-D3D12-Agility-SDK-Code-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PostBuildEvent>
+    <Link>
+      <AdditionalDependencies>MinSizeRel\uvsr_denoiser.lib;donut\MinSizeRel\donut_render.lib;donut\MinSizeRel\donut_app.lib;donut\MinSizeRel\donut_engine.lib;dwmapi.lib;donut\ShaderMake\MinSizeRel\ShaderMakeBlob.lib;donut\nvrhi\MinSizeRel\nvrhi.lib;donut\MinSizeRel\donut_core.lib;donut\thirdparty\MinSizeRel\jsoncpp_static.lib;donut\thirdparty\glfw\src\MinSizeRel\glfw3.lib;donut\thirdparty\MinSizeRel\imgui.lib;donut\nvrhi\MinSizeRel\nvrhi_d3d12.lib;_deps\directx_headers-build\MinSizeRel\DirectX-Guids.lib;_deps\directx_headers-build\MinSizeRel\DirectX-Headers.lib;d3d12.lib;dxgi.lib;dxguid.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/MinSizeRel/uvsr.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/uvsr.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_imgui_overrides;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_app_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\tinyexr;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /external:I "C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/directx_headers-src/include"</AdditionalOptions>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;UVSR_GIT_COMMIT="ae7112f";UVSR_WITH_NRD=0;DONUT_WITH_DLSS=0;NOMINMAX;_CRT_SECURE_NO_WARNINGS;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;DONUT_WITH_STREAMLINE=0;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;UVSR_GIT_COMMIT=\"ae7112f\";UVSR_WITH_NRD=0;DONUT_WITH_DLSS=0;NOMINMAX;_CRT_SECURE_NO_WARNINGS;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;DONUT_WITH_STREAMLINE=0;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_imgui_overrides;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_app_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\tinyexr;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\directx_headers-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_imgui_overrides;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_app_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\tinyexr;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\glfw\include;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\directx_headers-src\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <PostBuildEvent>
+      <Message>		</Message>
+      <Command>setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/glTF-Sample-Assets/Models/a_beautiful_game
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/glTF-Sample-Assets/Models/cornell_box
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/glTF-Sample-Assets/Models/nvidia_bistro
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/luts/kodak
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/noise
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/Inter
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E remove_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/Geist
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E make_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E make_directory C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/WINDOWS/Fonts/SegUIVar.ttf C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System/CodexUI.ttf
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/WINDOWS/Fonts/seguisb.ttf C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System/CodexUI-Semibold.ttf
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/WINDOWS/Fonts/segoeuib.ttf C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/media/fonts/System/CodexUI-Bold.ttf
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/LICENSE.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/UVSR-Polyform-Noncommercial-1.0.0.md
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/Microsoft-DirectX-Graphics-Samples-MIT.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-DirectX-Graphics-Samples.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/Apache-2.0.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Apache-2.0.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/BSD-2-Clause.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/BSD-2-Clause.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/Intel-CMAA2-Apache-2.0.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Intel-CMAA2-Apache-2.0.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/licenses/IOLITE-AgX-MIT.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/IOLITE-AgX-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/documentation/google-filament-fxaa.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Google-Filament-FXAA-Attribution.md
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/NVIDIA-Donut-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/ThirdPartyLicenses.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Donut-Third-Party-Licenses.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/nvrhi/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/NVIDIA-NVRHI-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/ShaderMake/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/NVIDIA-ShaderMake-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/donut/thirdparty/imgui/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Dear-ImGui-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/fonts/geist/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Geist-OFL-1.1.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/intel_sponza/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Intel-PBR-Sponza.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/bistro_interior_retextured/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Amazon-Lumberyard-Bistro.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/san_miguel_retextured/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/San-Miguel-2.1.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/scenes/blender_classroom/LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Blender-Classroom-CC0-1.0.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/assets/environments/README.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Poly-Haven-Environments.md
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/legal/documentation/third-party-notices.md C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/third-party-notices.md
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/directx_headers-src/LICENSE C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-DirectX-Headers-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
+setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-src//LICENSE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-D3D12-Agility-SDK-Terms.txt
+if %errorlevel% neq 0 goto :cmEnd
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -E copy_if_different C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-src//LICENSE-CODE.txt C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/licenses/Microsoft-D3D12-Agility-SDK-Code-MIT.txt
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PostBuildEvent>
+    <Link>
+      <AdditionalDependencies>RelWithDebInfo\uvsr_denoiser.lib;donut\RelWithDebInfo\donut_render.lib;donut\RelWithDebInfo\donut_app.lib;donut\RelWithDebInfo\donut_engine.lib;dwmapi.lib;donut\ShaderMake\RelWithDebInfo\ShaderMakeBlob.lib;donut\nvrhi\RelWithDebInfo\nvrhi.lib;donut\RelWithDebInfo\donut_core.lib;donut\thirdparty\RelWithDebInfo\jsoncpp_static.lib;donut\thirdparty\glfw\src\RelWithDebInfo\glfw3.lib;donut\thirdparty\RelWithDebInfo\imgui.lib;donut\nvrhi\RelWithDebInfo\nvrhi_d3d12.lib;_deps\directx_headers-build\RelWithDebInfo\DirectX-Guids.lib;_deps\directx_headers-build\RelWithDebInfo\DirectX-Headers.lib;d3d12.lib;dxgi.lib;dxguid.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <DataExecutionPrevention></DataExecutionPrevention>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers></ImageHasSafeExceptionHandlers>
+      <ImportLibrary>C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/RelWithDebInfo/uvsr.lib</ImportLibrary>
+      <LinkErrorReporting></LinkErrorReporting>
+      <ProgramDataBaseFile>C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/bin/uvsr.pdb</ProgramDataBaseFile>
+      <RandomizedBaseAddress></RandomizedBaseAddress>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair -BC:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta --check-stamp-file C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\temporal-accumulation-ui-repair;C:\Users\brock\Documents\uvsr\.git\worktrees\temporal-accumulation-ui-repair\HEAD;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXCompiler.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXCompilerABI.cpp;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCompilerIdDetection.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCXXCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompilerABI.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompilerId.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompilerSupport.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineRCCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeFindBinUtils.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeParseImplicitLinkInfo.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeParseLibraryArchitecture.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCCompiler.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystem.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeTestCXXCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeTestCompilerCommon.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeTestRCCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CrayClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Diab-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\OrangeC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\PellesC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Renesas-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\TI-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\TIClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Tasking-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CompilerId\VS-10.vcxproj.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeDetermineLinkerId.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeInspectCXXLinker.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\FeatureTesting.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Determine-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair -BC:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta --check-stamp-file C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\temporal-accumulation-ui-repair;C:\Users\brock\Documents\uvsr\.git\worktrees\temporal-accumulation-ui-repair\HEAD;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXCompiler.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXCompilerABI.cpp;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCompilerIdDetection.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCXXCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompilerABI.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompilerId.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompilerSupport.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineRCCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeFindBinUtils.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeParseImplicitLinkInfo.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeParseLibraryArchitecture.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCCompiler.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystem.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeTestCXXCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeTestCompilerCommon.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeTestRCCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CrayClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Diab-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\OrangeC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\PellesC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Renesas-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\TI-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\TIClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Tasking-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CompilerId\VS-10.vcxproj.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeDetermineLinkerId.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeInspectCXXLinker.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\FeatureTesting.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Determine-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair -BC:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta --check-stamp-file C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\temporal-accumulation-ui-repair;C:\Users\brock\Documents\uvsr\.git\worktrees\temporal-accumulation-ui-repair\HEAD;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXCompiler.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXCompilerABI.cpp;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCompilerIdDetection.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCXXCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompilerABI.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompilerId.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompilerSupport.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineRCCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeFindBinUtils.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeParseImplicitLinkInfo.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeParseLibraryArchitecture.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCCompiler.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystem.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeTestCXXCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeTestCompilerCommon.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeTestRCCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CrayClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Diab-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\OrangeC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\PellesC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Renesas-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\TI-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\TIClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Tasking-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CompilerId\VS-10.vcxproj.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeDetermineLinkerId.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeInspectCXXLinker.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\FeatureTesting.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Determine-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair -BC:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta --check-stamp-file C:/Users/brock/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\temporal-accumulation-ui-repair;C:\Users\brock\Documents\uvsr\.git\worktrees\temporal-accumulation-ui-repair\HEAD;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXCompiler.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXCompilerABI.cpp;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCompilerIdDetection.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCXXCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompilerABI.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompilerId.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineCompilerSupport.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineRCCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDetermineSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeFindBinUtils.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeParseImplicitIncludeInfo.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeParseImplicitLinkInfo.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeParseLibraryArchitecture.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCCompiler.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystem.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeTestCXXCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeTestCompilerCommon.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeTestRCCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\ADSP-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\ARMCC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\ARMClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\AppleClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Borland-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Clang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Clang-DetermineCompilerInternal.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Compaq-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Cray-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CrayClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Diab-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Embarcadero-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Fujitsu-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\FujitsuClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\GHS-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\GNU-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\HP-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IAR-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IBMCPP-CXX-DetermineVersionInternal.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IBMClang-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Intel-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\IntelLLVM-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\LCC-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\NVHPC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\NVIDIA-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\OpenWatcom-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\OrangeC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\PGI-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\PathScale-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\PellesC-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Renesas-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\SCO-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\SunPro-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\TI-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\TIClang-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Tasking-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\VisualAge-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\Watcom-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\XL-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\XLClang-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\zOS-CXX-DetermineCompiler.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CompilerId\VS-10.vcxproj.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeDetermineLinkerId.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeInspectCXXLinker.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\FeatureTesting.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Determine-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\auto_exposure.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\camera_collision.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\cmaa2.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\denoising_pass.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\fast_approximate_aa.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\heitz_ratio_estimator_shadows.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\image_based_lighting_background_pass.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\image_based_lighting_environment.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\lighting_accumulation_pass.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\msaa_visibility_resolve.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\noise_texture_library.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\path_tracing_pass.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\path_tracing_stable_plane_resolve_pass.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\pbr_deferred_lighting_pass.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\ray_traced_flashlight_shadows.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\ray_traced_sky_visibility.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\scene_catalog.cpp" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\scene_loading.h" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\screen_space_visibility.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\sponza_camera_preset.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\temporal_aa.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\temporal_aa_core.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\uvsr.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\src\world_space_representation.cpp" />
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\ZERO_CHECK.vcxproj">
+      <Project>{A96C919C-C7E0-38E1-A687-A23BD172F5A9}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\directx_headers-build\DirectX-Guids.vcxproj">
+      <Project>{5CE9FF0B-5448-3724-9961-5E2FBA41D832}</Project>
+      <Name>DirectX-Guids</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\directx_headers-build\DirectX-Headers.vcxproj">
+      <Project>{CF170E37-3EFB-310F-9926-7F4D88F02CBC}</Project>
+      <Name>DirectX-Headers</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\donut\ShaderMake\ShaderMakeBlob.vcxproj">
+      <Project>{617C3ED2-E533-3A44-BE62-9119F287608F}</Project>
+      <Name>ShaderMakeBlob</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\donut\donut_app.vcxproj">
+      <Project>{99D3F4D8-7875-36D2-A079-28067604CCB9}</Project>
+      <Name>donut_app</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\donut\donut_core.vcxproj">
+      <Project>{C96726AD-B73B-335A-90D8-4622E3286FAE}</Project>
+      <Name>donut_core</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\donut\donut_engine.vcxproj">
+      <Project>{2DCCC974-912F-3C23-BDC0-66B22051FCF5}</Project>
+      <Name>donut_engine</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\donut\donut_render.vcxproj">
+      <Project>{AEDD8A27-D4D1-3C46-92F0-D606577EB452}</Project>
+      <Name>donut_render</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\donut\thirdparty\glfw\src\glfw.vcxproj">
+      <Project>{8945150A-A7E3-370E-B2FC-A826214505DE}</Project>
+      <Name>glfw</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\donut\thirdparty\imgui.vcxproj">
+      <Project>{BF553A9B-D099-3165-9B44-621C7E331272}</Project>
+      <Name>imgui</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\donut\thirdparty\jsoncpp_static.vcxproj">
+      <Project>{E9A615C4-E59B-35AF-99EF-94B5BD8C3B07}</Project>
+      <Name>jsoncpp_static</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\donut\nvrhi\nvrhi.vcxproj">
+      <Project>{A302F5C5-A182-37BD-BE51-D1BC163FEAC1}</Project>
+      <Name>nvrhi</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\donut\nvrhi\nvrhi_d3d12.vcxproj">
+      <Project>{A0287AA7-551E-31AD-85AF-A5B923338529}</Project>
+      <Name>nvrhi_d3d12</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_denoiser.vcxproj">
+      <Project>{12C563B8-5F28-3FE4-B97C-001782DE8D56}</Project>
+      <Name>uvsr_denoiser</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_shaders.vcxproj">
+      <Project>{ADDD89DE-FD0C-3814-8FA2-B672781E1D46}</Project>
+      <Name>uvsr_shaders</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_stage_environments.vcxproj">
+      <Project>{EF977516-00D5-3318-9174-7526D2D52F23}</Project>
+      <Name>uvsr_stage_environments</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_stage_noise.vcxproj">
+      <Project>{3CE49DB6-B1DD-38FD-8042-12A91E1E2936}</Project>
+      <Name>uvsr_stage_noise</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_stage_runtime_shaders.vcxproj">
+      <Project>{9109B2EE-5F7D-3CE8-A6C7-07A7A0132B69}</Project>
+      <Name>uvsr_stage_runtime_shaders</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\uvsr_stage_scenes.vcxproj">
+      <Project>{25A85AEC-0502-36DB-8B04-4F2466278653}</Project>
+      <Name>uvsr_stage_scenes</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\55862debed2b3f0263b81f4f69d0bf5e\.uvsr_shaders.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\9344e831747f7b88b1d6cc9e2f1b2a47\uvsr_shaders.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\CMakeFiles\uvsr_shaders" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{30ADCBCB-2795-31CF-93E2-5A650C520237}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

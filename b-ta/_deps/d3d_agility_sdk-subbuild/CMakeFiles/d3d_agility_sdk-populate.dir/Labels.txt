@@ -1,0 +1,14 @@
+# Target labels
+ d3d_agility_sdk-populate
+# Source files and their labels
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d3d_agility_sdk-populate
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-subbuild/CMakeFiles/a5080ab45b95a6f63769474197f38f9a/d3d_agility_sdk-populate.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-subbuild/CMakeFiles/766b73e8fd0024881a04ad4813559501/d3d_agility_sdk-populate-complete.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-subbuild/CMakeFiles/837766fec31290bde93df21e4f19ac0e/d3d_agility_sdk-populate-build.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-subbuild/CMakeFiles/837766fec31290bde93df21e4f19ac0e/d3d_agility_sdk-populate-configure.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-subbuild/CMakeFiles/837766fec31290bde93df21e4f19ac0e/d3d_agility_sdk-populate-download.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-subbuild/CMakeFiles/837766fec31290bde93df21e4f19ac0e/d3d_agility_sdk-populate-install.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-subbuild/CMakeFiles/837766fec31290bde93df21e4f19ac0e/d3d_agility_sdk-populate-mkdir.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-subbuild/CMakeFiles/837766fec31290bde93df21e4f19ac0e/d3d_agility_sdk-populate-patch.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-subbuild/CMakeFiles/837766fec31290bde93df21e4f19ac0e/d3d_agility_sdk-populate-test.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/d3d_agility_sdk-subbuild/CMakeFiles/837766fec31290bde93df21e4f19ac0e/d3d_agility_sdk-populate-update.rule

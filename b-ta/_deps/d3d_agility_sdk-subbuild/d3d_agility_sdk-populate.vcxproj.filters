@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\d3d_agility_sdk-subbuild\CMakeFiles\837766fec31290bde93df21e4f19ac0e\d3d_agility_sdk-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\d3d_agility_sdk-subbuild\CMakeFiles\837766fec31290bde93df21e4f19ac0e\d3d_agility_sdk-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\d3d_agility_sdk-subbuild\CMakeFiles\837766fec31290bde93df21e4f19ac0e\d3d_agility_sdk-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\d3d_agility_sdk-subbuild\CMakeFiles\837766fec31290bde93df21e4f19ac0e\d3d_agility_sdk-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\d3d_agility_sdk-subbuild\CMakeFiles\837766fec31290bde93df21e4f19ac0e\d3d_agility_sdk-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\d3d_agility_sdk-subbuild\CMakeFiles\837766fec31290bde93df21e4f19ac0e\d3d_agility_sdk-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\d3d_agility_sdk-subbuild\CMakeFiles\837766fec31290bde93df21e4f19ac0e\d3d_agility_sdk-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\d3d_agility_sdk-subbuild\CMakeFiles\837766fec31290bde93df21e4f19ac0e\d3d_agility_sdk-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\d3d_agility_sdk-subbuild\CMakeFiles\766b73e8fd0024881a04ad4813559501\d3d_agility_sdk-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\d3d_agility_sdk-subbuild\CMakeFiles\a5080ab45b95a6f63769474197f38f9a\d3d_agility_sdk-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\d3d_agility_sdk-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\temporal-accumulation-ui-repair\b-ta\_deps\d3d_agility_sdk-subbuild\CMakeFiles\d3d_agility_sdk-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{F87F3E75-D8D3-3A9C-9640-1C9EE96A345B}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

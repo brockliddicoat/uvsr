@@ -1,0 +1,14 @@
+# Target labels
+ dxc-populate
+# Source files and their labels
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/dxc-subbuild/CMakeFiles/dxc-populate
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/dxc-subbuild/CMakeFiles/71c0f17311d308e803d5285162d5b017/dxc-populate.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/dxc-subbuild/CMakeFiles/cda51bec75a172bdaa7773c3781d07cc/dxc-populate-complete.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/dxc-subbuild/CMakeFiles/34ef636ab78cb6884178d7246ebb5874/dxc-populate-build.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/dxc-subbuild/CMakeFiles/34ef636ab78cb6884178d7246ebb5874/dxc-populate-configure.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/dxc-subbuild/CMakeFiles/34ef636ab78cb6884178d7246ebb5874/dxc-populate-download.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/dxc-subbuild/CMakeFiles/34ef636ab78cb6884178d7246ebb5874/dxc-populate-install.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/dxc-subbuild/CMakeFiles/34ef636ab78cb6884178d7246ebb5874/dxc-populate-mkdir.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/dxc-subbuild/CMakeFiles/34ef636ab78cb6884178d7246ebb5874/dxc-populate-patch.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/dxc-subbuild/CMakeFiles/34ef636ab78cb6884178d7246ebb5874/dxc-populate-test.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/dxc-subbuild/CMakeFiles/34ef636ab78cb6884178d7246ebb5874/dxc-populate-update.rule

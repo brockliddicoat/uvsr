@@ -1,0 +1,16 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/donut/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/donut/thirdparty/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/donut/thirdparty/glfw/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/donut/thirdparty/glfw/src/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/donut/ShaderMake/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/donut/ShaderMake/ShaderMake/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/donut/nvrhi/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/_deps/directx_headers-build/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/temporal-accumulation-ui-repair/b-ta/donut/shaders/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
