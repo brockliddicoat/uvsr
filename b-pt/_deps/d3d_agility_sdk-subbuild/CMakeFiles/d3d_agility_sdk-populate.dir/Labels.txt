@@ -1,0 +1,14 @@
+# Target labels
+ d3d_agility_sdk-populate
+# Source files and their labels
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d3d_agility_sdk-populate
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/91d06227beb37315ff23e68135954db1/d3d_agility_sdk-populate.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/93cfb2b434bf030a71a0470133cdcfdb/d3d_agility_sdk-populate-complete.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-build.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-configure.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-download.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-install.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-mkdir.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-patch.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-test.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-update.rule

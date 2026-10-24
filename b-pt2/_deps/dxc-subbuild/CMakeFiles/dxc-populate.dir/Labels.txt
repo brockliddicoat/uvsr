@@ -1,0 +1,14 @@
+# Target labels
+ dxc-populate
+# Source files and their labels
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/dxc-populate
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/7dfb03867d9ac9fd0a0f54b89b39fa51/dxc-populate.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/dbefb94b054c16bf357f68ac91bc870f/dxc-populate-complete.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-build.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-configure.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-download.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-install.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-mkdir.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-patch.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-test.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-update.rule

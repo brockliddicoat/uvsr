@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d3d_agility_sdk-populate"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/91d06227beb37315ff23e68135954db1/d3d_agility_sdk-populate.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/93cfb2b434bf030a71a0470133cdcfdb/d3d_agility_sdk-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/_deps/d3d_agility_sdk-subbuild/CMakeFiles/7f955c576626d53436c51a2fa4ed6233/d3d_agility_sdk-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"d3d_agility_sdk-populate"
+		],
+		"name" : "d3d_agility_sdk-populate"
+	}
+}

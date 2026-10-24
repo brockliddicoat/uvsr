@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\b-pt2\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f71b0b50865bd3d9b0b2c2d4668048c4\d3d_agility_sdk-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\b-pt2\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f71b0b50865bd3d9b0b2c2d4668048c4\d3d_agility_sdk-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\b-pt2\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f71b0b50865bd3d9b0b2c2d4668048c4\d3d_agility_sdk-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\b-pt2\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f71b0b50865bd3d9b0b2c2d4668048c4\d3d_agility_sdk-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\b-pt2\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f71b0b50865bd3d9b0b2c2d4668048c4\d3d_agility_sdk-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\b-pt2\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f71b0b50865bd3d9b0b2c2d4668048c4\d3d_agility_sdk-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\b-pt2\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f71b0b50865bd3d9b0b2c2d4668048c4\d3d_agility_sdk-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\b-pt2\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f71b0b50865bd3d9b0b2c2d4668048c4\d3d_agility_sdk-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\b-pt2\_deps\d3d_agility_sdk-subbuild\CMakeFiles\6d55b5c36d9e04e10c166c7b8c5477c3\d3d_agility_sdk-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\b-pt2\_deps\d3d_agility_sdk-subbuild\CMakeFiles\dd8bc235af7973b2c2b4be73090f6b6b\d3d_agility_sdk-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\b-pt2\_deps\d3d_agility_sdk-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\b-pt2\_deps\d3d_agility_sdk-subbuild\CMakeFiles\d3d_agility_sdk-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{AFE62AA2-0054-38AB-BF2E-37D4E72EB314}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

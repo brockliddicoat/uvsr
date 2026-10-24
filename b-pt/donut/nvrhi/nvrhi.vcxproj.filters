@@ -1,0 +1,72 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\src\common\format-info.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\src\common\misc.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\src\common\state-tracking.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\src\common\utils.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\src\common\aftermath.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\src\validation\validation-commandlist.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\src\validation\validation-device.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include\nvrhi\nvrhi.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include\nvrhi\nvrhiHLSL.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include\nvrhi\utils.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include\nvrhi\common\containers.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include\nvrhi\common\misc.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include\nvrhi\common\resource.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include\nvrhi\common\aftermath.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\src\common\state-tracking.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include\nvrhi\validation.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\src\validation\validation-backend.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Natvis Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\tools\nvrhi.natvis" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{7B1CCD9D-7F8D-3F48-B8D4-A1B63DB5FF14}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{6C0B85D3-7DA7-3B29-B3A3-6384BD0E2102}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

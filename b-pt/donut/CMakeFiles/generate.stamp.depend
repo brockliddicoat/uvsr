@@ -1,0 +1,25 @@
+# CMake generation dependency list for this directory.
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/CMakeFiles/4.4.0/CMakeCCompiler.cmake
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/CMakeFiles/cmake.verify_globs
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/donut/CMakeLists.txt
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/donut/donut-app.cmake
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/donut/donut-core.cmake
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/donut/donut-engine.cmake
+C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/donut/donut-render.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/CMakeCInformation.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/CMakeCommonLanguageInclude.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/CMakeDependentOption.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/CMakeLanguageInformation.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/Compiler/CMakeCommonCompilerMacros.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/Compiler/MSVC-C.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/Compiler/MSVC.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/ExternalProject/shared_internal_commands.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/FetchContent.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/Internal/CMakeCLinkerInformation.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/Internal/CMakeCommonLinkerInformation.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/Linker/MSVC-C.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/Linker/MSVC.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/Platform/Linker/Windows-MSVC-C.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/Platform/Linker/Windows-MSVC.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/Platform/Windows-MSVC-C.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/Platform/Windows-MSVC.cmake

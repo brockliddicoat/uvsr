@@ -1,0 +1,392 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{D76D9FDB-F377-31A3-B644-A9BBC854A58B}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>donut_engine</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\Debug\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">donut_engine.dir\Debug\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">donut_engine</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.lib</TargetExt>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\Release\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">donut_engine.dir\Release\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">donut_engine</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.lib</TargetExt>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\MinSizeRel\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">donut_engine.dir\MinSizeRel\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">donut_engine</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.lib</TargetExt>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\RelWithDebInfo\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">donut_engine.dir\RelWithDebInfo\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">donut_engine</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.lib</TargetExt>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\tinyexr;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <Optimization>Disabled</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;_DEBUG;NOMINMAX;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;_CRT_SECURE_NO_WARNINGS;CMAKE_INTDIR="Debug"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;NOMINMAX;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;_CRT_SECURE_NO_WARNINGS;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\tinyexr;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\tinyexr;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Lib>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\tinyexr;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NOMINMAX;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;_CRT_SECURE_NO_WARNINGS;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NOMINMAX;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;_CRT_SECURE_NO_WARNINGS;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\tinyexr;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\tinyexr;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Lib>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\tinyexr;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <Optimization>MinSpace</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NOMINMAX;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;_CRT_SECURE_NO_WARNINGS;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NOMINMAX;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;_CRT_SECURE_NO_WARNINGS;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\tinyexr;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\tinyexr;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Lib>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\tinyexr;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <BufferSecurityCheck></BufferSecurityCheck>
+      <CallingConvention></CallingConvention>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel></FloatingPointModel>
+      <ForceConformanceInForLoopScope></ForceConformanceInForLoopScope>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RemoveUnreferencedCodeData></RemoveUnreferencedCodeData>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <SupportJustMyCode></SupportJustMyCode>
+      <TreatWChar_tAsBuiltInType></TreatWChar_tAsBuiltInType>
+      <UseFullPaths>false</UseFullPaths>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NOMINMAX;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;_CRT_SECURE_NO_WARNINGS;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;NOMINMAX;DONUT_WITH_TINYEXR;DONUT_WITH_DX11=0;DONUT_WITH_DX12=1;DONUT_WITH_VULKAN=0;DONUT_WITH_STATIC_SHADERS=0;DONUT_WITH_AFTERMATH=0;_CRT_SECURE_NO_WARNINGS;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\tinyexr;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\jsoncpp-amalgam;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\nvrhi\include;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\stb;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\cgltf;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\ShaderMake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\tinyexr;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Lib>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+    </Lib>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/donut/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls -BC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt --check-stamp-file C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/donut/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-app.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-core.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-engine.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-render.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDependentOption.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/donut/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls -BC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt --check-stamp-file C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/donut/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-app.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-core.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-engine.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-render.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDependentOption.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/donut/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls -BC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt --check-stamp-file C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/donut/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-app.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-core.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-engine.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-render.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDependentOption.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/donut/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls -BC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt --check-stamp-file C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/donut/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-app.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-core.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-engine.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut-render.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeDependentOption.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-C.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\AudioCache.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\AudioEngine.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\BindingCache.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\CommonRenderPasses.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\ConsoleInterpreter.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\ConsoleObjects.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\DDSFile.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\DescriptorTableManager.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\FramebufferFactory.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\GltfImporter.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\IesProfile.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\KeyframeAnimation.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\MaterialBindingCache.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\SceneGraph.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\ShaderFactory.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\ShadowMap.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\TextureCache.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\View.h" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\AudioCache.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\AudioEngine.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\BindingCache.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\CommonRenderPasses.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\ConsoleInterpreter.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\ConsoleObjects.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\DDSFile.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\DescriptorTableManager.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\FramebufferFactory.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\IesProfile.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\KeyframeAnimation.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\Material.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\MaterialBindingCache.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\SceneGraph.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\SceneTypes.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\ShaderFactory.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\View.cpp" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\dds.h" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\stb_impl.c" />
+    <Natvis Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\donut.natvis">
+    </Natvis>
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include\donut\engine\Scene.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include\donut\engine\SceneTypes.h" />
+    <ClInclude Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\include\donut\engine\ThreadPool.h" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\src\engine\GltfImporter.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\src\engine\Scene.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\src\engine\TextureCache.cpp" />
+    <ClCompile Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_donut_engine_overrides\src\engine\ThreadPool.cpp" />
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\ZERO_CHECK.vcxproj">
+      <Project>{EACE4DF9-AC0A-396E-80E8-F20709817124}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\ShaderMake\ShaderMakeBlob.vcxproj">
+      <Project>{09BABA53-A088-3059-A5A4-2589FC35371D}</Project>
+      <Name>ShaderMakeBlob</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\donut_core.vcxproj">
+      <Project>{879BFF4F-BA7A-352F-9B7A-3DADB7EFE5C8}</Project>
+      <Name>donut_core</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\shaders\donut_shaders.vcxproj">
+      <Project>{DBFE15E1-2FAD-33EF-A7A1-A1A4CA94140D}</Project>
+      <Name>donut_shaders</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\thirdparty\jsoncpp_static.vcxproj">
+      <Project>{B5557E84-3267-39CA-84D7-02FD6204C77F}</Project>
+      <Name>jsoncpp_static</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\nvrhi\nvrhi.vcxproj">
+      <Project>{F33BF3DE-33FF-3731-85ED-28BF44EF4E77}</Project>
+      <Name>nvrhi</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/dxc-populate"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/7dfb03867d9ac9fd0a0f54b89b39fa51/dxc-populate.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/dbefb94b054c16bf357f68ac91bc870f/dxc-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/dxc-subbuild/CMakeFiles/9ca9b5e9e29134f0536f19cf941abf50/dxc-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"dxc-populate"
+		],
+		"name" : "dxc-populate"
+	}
+}

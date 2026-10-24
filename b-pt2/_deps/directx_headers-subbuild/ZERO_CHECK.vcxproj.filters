@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\path-tracing-resampling-controls\b-pt2\_deps\directx_headers-subbuild\CMakeFiles\dd45b21b738a0db43ae2ddce67daec04\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{CA5A07C4-A3FD-3136-98A5-F55E038F726C}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

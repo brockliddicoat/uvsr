@@ -1,0 +1,385 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ResolveNugetPackages>false</ResolveNugetPackages>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{AB45FEC8-9910-3EEE-AC2B-A7F626FB0327}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>ALL_BUILD</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls -BC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt --check-stamp-file C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\path-tracing-resampling-controls;C:\Users\brock\Documents\uvsr\.git\worktrees\path-tracing-resampling-controls\HEAD;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls -BC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt --check-stamp-file C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\path-tracing-resampling-controls;C:\Users\brock\Documents\uvsr\.git\worktrees\path-tracing-resampling-controls\HEAD;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls -BC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt --check-stamp-file C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\path-tracing-resampling-controls;C:\Users\brock\Documents\uvsr\.git\worktrees\path-tracing-resampling-controls\HEAD;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls -BC:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt --check-stamp-file C:/Users/brock/Documents/uvsr/work/path-tracing-resampling-controls/b-pt/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\path-tracing-resampling-controls;C:\Users\brock\Documents\uvsr\.git\worktrees\path-tracing-resampling-controls\HEAD;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\ZERO_CHECK.vcxproj">
+      <Project>{EACE4DF9-AC0A-396E-80E8-F20709817124}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\_deps\directx_headers-build\DirectX-Guids.vcxproj">
+      <Project>{0EA6AE4C-1DA9-38D9-9F38-F1553A259E07}</Project>
+      <Name>DirectX-Guids</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\_deps\directx_headers-build\DirectX-Headers.vcxproj">
+      <Project>{9FDD3CDC-1905-350D-9716-276B4A70258A}</Project>
+      <Name>DirectX-Headers</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\ShaderMake\ShaderMake\ShaderMake.vcxproj">
+      <Project>{CEEACC79-C3A9-35BE-A7E1-6F55F3001B19}</Project>
+      <Name>ShaderMake</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\ShaderMake\ShaderMakeBlob.vcxproj">
+      <Project>{09BABA53-A088-3059-A5A4-2589FC35371D}</Project>
+      <Name>ShaderMakeBlob</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\thirdparty\glfw\src\glfw.vcxproj">
+      <Project>{BB03B209-0FFC-30E5-A0B9-1F0F5028FBED}</Project>
+      <Name>glfw</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\thirdparty\imgui.vcxproj">
+      <Project>{D3E57AFE-D4D1-31DA-B0FE-35A66C466B08}</Project>
+      <Name>imgui</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\thirdparty\jsoncpp_static.vcxproj">
+      <Project>{B5557E84-3267-39CA-84D7-02FD6204C77F}</Project>
+      <Name>jsoncpp_static</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\nvrhi\nvrhi.vcxproj">
+      <Project>{F33BF3DE-33FF-3731-85ED-28BF44EF4E77}</Project>
+      <Name>nvrhi</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\donut\nvrhi\nvrhi_d3d12.vcxproj">
+      <Project>{7DBC9449-43EB-3138-B628-F8D66D87E6EC}</Project>
+      <Name>nvrhi_d3d12</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr.vcxproj">
+      <Project>{2BA04586-F94F-34AC-A894-A19186E5B599}</Project>
+      <Name>uvsr</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_adaptive_sync_tests.vcxproj">
+      <Project>{626C6FB7-7996-3097-9D4D-7812B29695F1}</Project>
+      <Name>uvsr_adaptive_sync_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_auto_exposure_tests.vcxproj">
+      <Project>{AB8A13F6-F057-3EA7-8949-F4160435D91A}</Project>
+      <Name>uvsr_auto_exposure_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_camera_collision_tests.vcxproj">
+      <Project>{0799F3D4-B135-3FFE-8D0E-092F0256F4E5}</Project>
+      <Name>uvsr_camera_collision_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_camera_controls_tests.vcxproj">
+      <Project>{012A2F74-2710-3FB5-9D36-4B9C477DDE52}</Project>
+      <Name>uvsr_camera_controls_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_command_line_options_tests.vcxproj">
+      <Project>{CB8C9DD1-87F4-3850-9E14-5247CE07197F}</Project>
+      <Name>uvsr_command_line_options_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_denoiser.vcxproj">
+      <Project>{4418DE44-1759-3F88-931C-DAB4B79D9753}</Project>
+      <Name>uvsr_denoiser</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_denoiser_tests.vcxproj">
+      <Project>{A1BBE5DA-2E01-3787-B385-DB56439415E5}</Project>
+      <Name>uvsr_denoiser_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_diffuse_environment_asset_tests.vcxproj">
+      <Project>{AF004C09-4000-3348-8C95-8B51D66B525E}</Project>
+      <Name>uvsr_diffuse_environment_asset_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_flashlight_tests.vcxproj">
+      <Project>{F66109A0-B689-3CDA-906B-5440EA46E6AA}</Project>
+      <Name>uvsr_flashlight_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_heitz_ratio_estimator_source_contract_tests.vcxproj">
+      <Project>{DB0C1224-B829-31CF-9C6E-8DF236202A5E}</Project>
+      <Name>uvsr_heitz_ratio_estimator_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_heitz_ratio_estimator_tests.vcxproj">
+      <Project>{AAED8475-7CD3-3105-937A-EFAD5558D287}</Project>
+      <Name>uvsr_heitz_ratio_estimator_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_imgui_dropdown_roll_tests.vcxproj">
+      <Project>{34F20556-0F41-3A4D-BEFA-87506A3CE72F}</Project>
+      <Name>uvsr_imgui_dropdown_roll_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_path_tracing_settings_tests.vcxproj">
+      <Project>{7747A0E6-28A6-3A55-A9FF-D4D60343994D}</Project>
+      <Name>uvsr_path_tracing_settings_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_path_tracing_source_contract_tests.vcxproj">
+      <Project>{DC9BD89E-726A-33AD-9D2C-9BC6264C9FDC}</Project>
+      <Name>uvsr_path_tracing_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_pbr_lighting_source_contract_tests.vcxproj">
+      <Project>{A29D864C-88FB-3356-B87E-227AE1934007}</Project>
+      <Name>uvsr_pbr_lighting_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_pbr_tests.vcxproj">
+      <Project>{A8E33D61-2BCC-303B-A2EC-CD2FCE20F57A}</Project>
+      <Name>uvsr_pbr_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_pixel_zoom_tests.vcxproj">
+      <Project>{7B8913F9-82CE-3686-9264-3401A94A61F9}</Project>
+      <Name>uvsr_pixel_zoom_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_production_shader_bundle_tests.vcxproj">
+      <Project>{569592CB-D110-378A-9CC9-9BFD66C9F873}</Project>
+      <Name>uvsr_production_shader_bundle_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_radial_visibility_tests.vcxproj">
+      <Project>{7D4C582E-8420-3647-98FF-7996552AFAD9}</Project>
+      <Name>uvsr_radial_visibility_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_ray_traced_flashlight_shadow_tests.vcxproj">
+      <Project>{8E2D7EF2-8F81-3F61-8003-81A5FFC9FA91}</Project>
+      <Name>uvsr_ray_traced_flashlight_shadow_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_ray_traced_sky_visibility_source_contract_tests.vcxproj">
+      <Project>{F05A354B-8A83-334D-B37A-3ABD88E85FF9}</Project>
+      <Name>uvsr_ray_traced_sky_visibility_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_ray_traced_sky_visibility_tests.vcxproj">
+      <Project>{1B401662-F6F2-3FAF-B387-2A9C17A9EBF1}</Project>
+      <Name>uvsr_ray_traced_sky_visibility_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_renderer_source_contract_tests.vcxproj">
+      <Project>{FC3C8879-31FC-32BD-BD6C-41369F72C1DB}</Project>
+      <Name>uvsr_renderer_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_runtime_shader_bundle_tests.vcxproj">
+      <Project>{FE97EC11-933F-3FB8-8C9D-8569EE6E6510}</Project>
+      <Name>uvsr_runtime_shader_bundle_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_sample_accumulation_settings_tests.vcxproj">
+      <Project>{2046B6B7-97F9-33CC-B600-58CE50272F2C}</Project>
+      <Name>uvsr_sample_accumulation_settings_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_scene_asset_contract_tests.vcxproj">
+      <Project>{0C60A005-D32C-3408-8677-86B4755E95B3}</Project>
+      <Name>uvsr_scene_asset_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_scene_catalog_tests.vcxproj">
+      <Project>{38C7F831-A92E-360C-8310-D18D53997999}</Project>
+      <Name>uvsr_scene_catalog_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_scene_light_names_tests.vcxproj">
+      <Project>{C37F0967-3637-351E-8C9E-3C0FBA42D1A5}</Project>
+      <Name>uvsr_scene_light_names_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_scene_loading_tests.vcxproj">
+      <Project>{C93DBC9B-C8AD-3CD0-AB62-8A5CFC98037C}</Project>
+      <Name>uvsr_scene_loading_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_sponza_camera_tests.vcxproj">
+      <Project>{75315846-617F-30F9-8750-7FAFB5981D63}</Project>
+      <Name>uvsr_sponza_camera_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_temporal_aa_tests.vcxproj">
+      <Project>{30BAFCF0-9BF1-32DC-B890-4E57BCD4A95C}</Project>
+      <Name>uvsr_temporal_aa_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_ui_animation_tests.vcxproj">
+      <Project>{B2B07126-6F50-311B-8AA1-183C2A02C122}</Project>
+      <Name>uvsr_ui_animation_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_ui_command_layout_tests.vcxproj">
+      <Project>{C3FCC19C-24E5-37CE-A7BC-01EA557D9DE7}</Project>
+      <Name>uvsr_ui_command_layout_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_ui_commands_tests.vcxproj">
+      <Project>{4B657ECE-4244-3EE2-880B-8E37B501890C}</Project>
+      <Name>uvsr_ui_commands_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_ui_settings_command_catalog_tests.vcxproj">
+      <Project>{9578EC0E-9BC3-3EF5-A7AF-9E038883627D}</Project>
+      <Name>uvsr_ui_settings_command_catalog_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_ui_skin_tests.vcxproj">
+      <Project>{0B35263E-3363-3AFB-A7B9-7612B428A02E}</Project>
+      <Name>uvsr_ui_skin_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_ui_source_contract_tests.vcxproj">
+      <Project>{B02FB4AC-266C-3128-8B11-7D1EFEE5122A}</Project>
+      <Name>uvsr_ui_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_visibility_estimator_tests.vcxproj">
+      <Project>{D76E73B9-A111-3808-8F7D-AE450BEBDAD5}</Project>
+      <Name>uvsr_visibility_estimator_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_visibility_projection_tests.vcxproj">
+      <Project>{D0673D00-5198-3BC6-921F-D72E87B47126}</Project>
+      <Name>uvsr_visibility_projection_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_visibility_sampling_tests.vcxproj">
+      <Project>{1E53EE4B-A034-3068-913A-81E9213E42B3}</Project>
+      <Name>uvsr_visibility_sampling_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\path-tracing-resampling-controls\b-pt\uvsr_world_space_representation_settings_tests.vcxproj">
+      <Project>{1456722A-2056-390B-94CF-A19B00CE3EE5}</Project>
+      <Name>uvsr_world_space_representation_settings_tests</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

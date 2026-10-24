@@ -1,0 +1,521 @@
+/*
+* Copyright (c) 2014-2021, NVIDIA CORPORATION. All rights reserved.
+*
+* Permission is hereby granted, free of charge, to any person obtaining a
+* copy of this software and associated documentation files (the "Software"),
+* to deal in the Software without restriction, including without limitation
+* the rights to use, copy, modify, merge, publish, distribute, sublicense,
+* and/or sell copies of the Software, and to permit persons to whom the
+* Software is furnished to do so, subject to the following conditions:
+*
+* The above copyright notice and this permission notice shall be included in
+* all copies or substantial portions of the Software.
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
+* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+* DEALINGS IN THE SOFTWARE.
+*/
+
+#include <donut/app/UserInterfaceUtils.h>
+#include <donut/engine/SceneGraph.h>
+#include <donut/core/log.h>
+#include <donut/core/string_utils.h>
+
+#include <filesystem>
+#include <imgui.h>
+
+#ifndef _WIN32
+#include <unistd.h>
+#include <cstdio>
+#include <climits>
+#else
+#include <Windows.h>
+#include <ShlObj.h>
+#define PATH_MAX MAX_PATH
+#endif // _WIN32
+
+using namespace donut::engine;
+using namespace donut::app;
+using namespace donut::math;
+
+namespace fs = std::filesystem;
+
+bool donut::app::FileDialog(bool bOpen, const char* pFilters, std::string& fileName)
+{
+#ifdef _WIN32
+    OPENFILENAMEA ofn;
+    CHAR chars[PATH_MAX] = "";
+    ZeroMemory(&ofn, sizeof(ofn));
+
+    ofn.lStructSize = sizeof(OPENFILENAME);
+    ofn.hwndOwner = GetForegroundWindow();
+    ofn.lpstrFilter = pFilters;
+    ofn.lpstrFile = chars;
+    ofn.nMaxFile = ARRAYSIZE(chars);
+    ofn.Flags = OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+    if (bOpen)
+    {
+        ofn.Flags |= OFN_FILEMUSTEXIST;
+    }
+    ofn.lpstrDefExt = "";
+
+    BOOL b = bOpen ? GetOpenFileNameA(&ofn) : GetSaveFileNameA(&ofn);
+    if (b)
+    {
+        fileName = chars;
+        return true;
+    }
+
+    return false;
+#else // _WIN32
+    // minimal implementation avoiding a GUI library, ignores filters for now,
+    // and relies on external 'zenity' program commonly available on linuxoids
+    char chars[PATH_MAX] = { 0 };
+    std::string app = "zenity --file-selection";
+    if (!bOpen)
+    {
+        app += " --save --confirm-overwrite";
+    }
+
+    FILE* f = popen(app.c_str(), "r");
+    if (!f)
+    {
+        donut::log::error("Error executing zenity.");
+        return false;
+    }
+    bool gotname = (nullptr != fgets(chars, PATH_MAX, f));
+    pclose(f);
+
+    if (gotname && chars[0] != '\0')
+    {
+        fileName = chars;
+        donut::string_utils::trim(fileName);
+        return true;
+    }
+    return false;
+#endif // _WIN32
+}
+
+#ifdef _WIN32
+static INT CALLBACK BrowseCallbackProc(HWND hwnd, UINT uMsg, LPARAM lp, LPARAM pData)
+{
+    // When the dialog opens, set the selected folder
+    if (uMsg == BFFM_INITIALIZED && pData)
+        SendMessage(hwnd, BFFM_SETSELECTION, TRUE, pData);
+    return 0;
+}
+
+bool donut::app::FolderDialog(const char* pTitle, const char* pDefaultFolder, std::string& outFolderName)
+{
+    BROWSEINFO browseInfo{};
+    browseInfo.hwndOwner = GetForegroundWindow();
+    browseInfo.lpszTitle = pTitle;
+    browseInfo.ulFlags = BIF_USENEWUI | BIF_NONEWFOLDERBUTTON;
+    if (pDefaultFolder)
+    {
+        browseInfo.lpfn = BrowseCallbackProc;
+        browseInfo.lParam = reinterpret_cast<LPARAM>(pDefaultFolder);
+    }
+    if (PIDLIST_ABSOLUTE pIdList = SHBrowseForFolder(&browseInfo))
+    {
+        char path[MAX_PATH];
+        if (SHGetPathFromIDList(pIdList, path))
+        {
+            if (fs::is_directory(path))
+            {
+                outFolderName = path;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+#else
+bool donut::app::FolderDialog(const char* pTitle, const char* pDefaultFolder, std::string& outFolderName)
+{
+    char chars[PATH_MAX] = { 0 };
+
+    std::stringstream ss;
+    ss << "zenity --file-selection --directory";
+    if (pTitle)
+        ss << " --title \"" << pTitle << "\"";
+    if (pDefaultFolder)
+        ss << " --filename=\"" << pDefaultFolder << "\"";
+
+    FILE* f = popen(ss.str().c_str(), "r");
+    if (!f)
+    {
+        donut::log::error("Error executing zenity.");
+        return false;
+    }
+    bool gotname = (nullptr != fgets(chars, PATH_MAX, f));
+    pclose(f);
+
+    if (gotname && chars[0] != '\0')
+    {
+        std::string path = chars;
+        donut::string_utils::trim(path);
+        if (fs::is_directory(path))
+        {
+            outFolderName = path;
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
+bool donut::app::MaterialEditor(
+    engine::Material* material,
+    bool allowMaterialDomainChanges,
+    bool showMaterialDomain,
+    const math::float4& positiveAccent,
+    const MaterialEditorCallbacks* callbacks)
+{
+    bool update = false;
+
+    if (showMaterialDomain && allowMaterialDomainChanges)
+    {
+        int domainIndex = int(material->domain);
+        if (ImGui::Combo(
+                "Material Domain",
+                &domainIndex,
+                "Opaque\0Alpha-tested\0Alpha-blended\0Transmissive\0"
+                "Transmissive alpha-tested\0Transmissive alpha-blended\0"))
+        {
+            material->domain = engine::MaterialDomain(domainIndex);
+            update = true;
+        }
+    }
+    else if (showMaterialDomain)
+    {
+        ImGui::Text("Material Domain: %s", MaterialDomainToString(material->domain));
+    }
+
+    auto getShortTexturePath = [](const std::string& fullPath)
+    {
+        return std::filesystem::path(fullPath).filename().generic_string();
+    };
+
+    const ImVec4 filenameColor(
+        positiveAccent.x,
+        positiveAccent.y,
+        positiveAccent.z,
+        positiveAccent.w);
+    const bool useConditionalRegions =
+        callbacks != nullptr &&
+        callbacks->beginConditionalRegion != nullptr &&
+        callbacks->endConditionalRegion != nullptr;
+    const auto beginConditionalRegion =
+        [&](const char* id, bool visible)
+        {
+            return useConditionalRegions
+                ? callbacks->beginConditionalRegion(id, visible)
+                : visible;
+        };
+    const auto endConditionalRegion =
+        [&]()
+        {
+            if (useConditionalRegions)
+                callbacks->endConditionalRegion();
+        };
+    const auto drawTextureFilename =
+        [&](const std::string& fullPath)
+        {
+            const std::string filename = getShortTexturePath(fullPath);
+            if (callbacks != nullptr &&
+                callbacks->drawTextureFilename != nullptr)
+            {
+                callbacks->drawTextureFilename(
+                    filename.c_str(),
+                    positiveAccent);
+            }
+            else
+            {
+                ImGui::TextColored(
+                    filenameColor,
+                    "%s",
+                    filename.c_str());
+            }
+        };
+    const auto drawColorEdit3 =
+        [&](const char* label, float* color)
+        {
+            if (callbacks != nullptr &&
+                callbacks->drawColorEdit3 != nullptr)
+            {
+                return callbacks->drawColorEdit3(label, color);
+            }
+
+            return ImGui::ColorEdit3(
+                label,
+                color,
+                ImGuiColorEditFlags_Float |
+                    ImGuiColorEditFlags_NoTooltip);
+        };
+
+    update |= ImGui::Checkbox("Double-Sided", &material->doubleSided);
+    
+    if (beginConditionalRegion(
+            "##MaterialSpecularGlossRegion",
+            material->useSpecularGlossModel))
+    {
+        if (material->baseOrDiffuseTexture)
+        {
+            update |= ImGui::Checkbox("Use Diffuse Texture", &material->enableBaseOrDiffuseTexture);
+            ImGui::SameLine();
+            drawTextureFilename(material->baseOrDiffuseTexture->path);
+        }
+
+        update |= drawColorEdit3(
+            material->enableBaseOrDiffuseTexture
+                ? "Diffuse Factor"
+                : "Diffuse Color",
+            material->baseOrDiffuseColor.data());
+
+        if (material->metalRoughOrSpecularTexture)
+        {
+            update |= ImGui::Checkbox("Use Specular Texture", &material->enableMetalRoughOrSpecularTexture);
+            ImGui::SameLine();
+            drawTextureFilename(material->metalRoughOrSpecularTexture->path);
+        }
+
+        update |= drawColorEdit3(
+            material->enableMetalRoughOrSpecularTexture
+                ? "Specular Factor"
+                : "Specular Color",
+            material->specularColor.data());
+
+        float glossiness = 1.0f - material->roughness;
+        update |= ImGui::SliderFloat(material->enableMetalRoughOrSpecularTexture ? "Glossiness Factor" : "Glossiness", &glossiness, 0.f, 1.f);
+        material->roughness = 1.0f - glossiness;
+        endConditionalRegion();
+    }
+
+    if (beginConditionalRegion(
+            "##MaterialMetalRoughRegion",
+            !material->useSpecularGlossModel))
+    {
+        if (material->baseOrDiffuseTexture)
+        {
+            update |= ImGui::Checkbox("Use Base Color Texture", &material->enableBaseOrDiffuseTexture);
+            ImGui::SameLine();
+            drawTextureFilename(material->baseOrDiffuseTexture->path);
+        }
+
+        update |= drawColorEdit3(
+            material->enableBaseOrDiffuseTexture
+                ? "Base Color Factor"
+                : "Base Color",
+            material->baseOrDiffuseColor.data());
+
+        if (material->metalRoughOrSpecularTexture)
+        {
+            update |= ImGui::Checkbox("Use Metal-Rough Texture", &material->enableMetalRoughOrSpecularTexture);
+            ImGui::SameLine();
+            drawTextureFilename(material->metalRoughOrSpecularTexture->path);
+        }
+
+        update |= ImGui::SliderFloat(material->enableMetalRoughOrSpecularTexture ? "Metalness Factor" : "Metalness", &material->metalness, 0.f, 1.f);
+        update |= ImGui::SliderFloat(material->enableMetalRoughOrSpecularTexture ? "Roughness Factor" : "Roughness", &material->roughness, 0.f, 1.f);
+        endConditionalRegion();
+    }
+
+    const bool alphaBlended =
+        material->domain == MaterialDomain::AlphaBlended ||
+        material->domain == MaterialDomain::TransmissiveAlphaBlended;
+    if (beginConditionalRegion("##MaterialOpacityRegion", alphaBlended))
+    {
+        if (material->baseOrDiffuseTexture)
+            update |= ImGui::SliderFloat("Opacity Factor", &material->opacity, 0.f, 2.f);
+        else
+            update |= ImGui::SliderFloat("Opacity", &material->opacity, 0.f, 1.f);
+        endConditionalRegion();
+    }
+
+    const bool alphaTestedWithTexture =
+        (material->domain == MaterialDomain::AlphaTested ||
+            material->domain == MaterialDomain::TransmissiveAlphaTested) &&
+        material->baseOrDiffuseTexture != nullptr;
+    if (beginConditionalRegion(
+            "##MaterialAlphaCutoffRegion",
+            alphaTestedWithTexture))
+    {
+        update |= ImGui::SliderFloat("Alpha Cutoff", &material->alphaCutoff, 0.f, 1.f);
+        endConditionalRegion();
+    }
+
+    if (material->normalTexture)
+    {
+        update |= ImGui::Checkbox("Use Normal Texture", &material->enableNormalTexture);
+        ImGui::SameLine();
+        drawTextureFilename(material->normalTexture->path);
+    }
+
+    if (beginConditionalRegion(
+            "##MaterialNormalScaleRegion",
+            material->enableNormalTexture))
+    {
+        const char* normalScaleLabel = "Normal Scale";
+        const float normalScaleLabelWidth =
+            ImGui::CalcTextSize(normalScaleLabel).x +
+            ImGui::GetStyle().ItemInnerSpacing.x;
+        const float normalScaleSliderWidth =
+            ImGui::GetContentRegionAvail().x - normalScaleLabelWidth;
+        ImGui::SetNextItemWidth(
+            normalScaleSliderWidth > 1.f ? normalScaleSliderWidth : 1.f);
+        update |= ImGui::SliderFloat(
+            normalScaleLabel,
+            &material->normalTextureScale,
+            -2.f,
+            2.f);
+        endConditionalRegion();
+    }
+
+    if (material->occlusionTexture)
+    {
+        update |= ImGui::Checkbox("Use Occlusion Texture", &material->enableOcclusionTexture);
+        ImGui::SameLine();
+        drawTextureFilename(material->occlusionTexture->path);
+    }
+    
+    if (beginConditionalRegion(
+            "##MaterialOcclusionStrengthRegion",
+            material->enableOcclusionTexture))
+    {
+        update |= ImGui::SliderFloat("Occlusion Strength", &material->occlusionStrength, 0.f, 1.f);
+        endConditionalRegion();
+    }
+
+    if (material->emissiveTexture)
+    {
+        update |= ImGui::Checkbox("Use Emissive Texture", &material->enableEmissiveTexture);
+        ImGui::SameLine();
+        drawTextureFilename(material->emissiveTexture->path);
+    }
+    
+    update |= drawColorEdit3(
+        "Emissive Color",
+        material->emissiveColor.data());
+    update |= ImGui::SliderFloat("Emissive Intensity", &material->emissiveIntensity, 0.f, 1000.f, "%.3f", ImGuiSliderFlags_Logarithmic);
+
+    const bool transmissive =
+        material->domain == MaterialDomain::Transmissive ||
+        material->domain == MaterialDomain::TransmissiveAlphaTested ||
+        material->domain == MaterialDomain::TransmissiveAlphaBlended;
+    if (beginConditionalRegion(
+            "##MaterialTransmissionRegion",
+            transmissive))
+    {
+        if (material->transmissionTexture)
+        {
+            update |= ImGui::Checkbox("Use Transmission Texture", &material->enableTransmissionTexture);
+            ImGui::SameLine();
+            drawTextureFilename(material->transmissionTexture->path);
+        }
+
+        update |= ImGui::SliderFloat("Transmission Factor", &material->transmissionFactor, 0.f, 1.f);
+        endConditionalRegion();
+    }
+
+    if (material->opacityTexture)
+    {
+        update |= ImGui::Checkbox("Use Alpha Mask Texture", &material->enableOpacityTexture);
+        ImGui::SameLine();
+        drawTextureFilename(material->opacityTexture->path);
+    }
+    
+    return update;
+}
+
+bool donut::app::LightEditor_Directional(engine::DirectionalLight& light)
+{
+    bool changed = false;
+    double3 direction = light.GetDirection();
+    if (AzimuthElevationSliders(direction, true))
+    {
+        light.SetDirection(direction);
+        changed = true;
+    }
+    changed |= ImGui::ColorEdit3("Color", &light.color.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoTooltip);
+    changed |= ImGui::SliderFloat("Irradiance", &light.irradiance, 0.f, 100.f, "%.2f", ImGuiSliderFlags_Logarithmic);
+    changed |= ImGui::SliderFloat("Angular Size", &light.angularSize, 0.1f, 20.f);
+    return changed;
+}
+
+bool donut::app::LightEditor_Point(engine::PointLight& light)
+{
+    bool changed = false;
+    changed |= ImGui::SliderFloat("Radius", &light.radius, 0.01f, 1.f, "%.3f", ImGuiSliderFlags_Logarithmic);
+    changed |= ImGui::ColorEdit3("Color", &light.color.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoTooltip);
+    changed |= ImGui::SliderFloat("Intensity", &light.intensity, 0.f, 100.f, "%.2f", ImGuiSliderFlags_Logarithmic);
+    return changed;
+}
+
+bool donut::app::LightEditor_Spot(engine::SpotLight& light)
+{
+    bool changed = false;
+    double3 direction = light.GetDirection();
+    if (AzimuthElevationSliders(direction, false))
+    {
+        light.SetDirection(direction);
+        changed = true;
+    }
+    changed |= ImGui::SliderFloat("Radius", &light.radius, 0.01f, 1.f, "%.3f", ImGuiSliderFlags_Logarithmic);
+    changed |= ImGui::ColorEdit3("Color", &light.color.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoTooltip);
+    changed |= ImGui::SliderFloat("Intensity", &light.intensity, 0.f, 100.f, "%.2f", ImGuiSliderFlags_Logarithmic);
+    changed |= ImGui::SliderFloat("Inner Angle", &light.innerAngle, 0.f, 180.f);
+    changed |= ImGui::SliderFloat("Outer Angle", &light.outerAngle, 0.f, 180.f);
+    return changed;
+}
+
+bool donut::app::LightEditor(engine::Light& light)
+{
+    switch (light.GetLightType())
+    {
+    case LightType_Directional:
+        return LightEditor_Directional(static_cast<DirectionalLight&>(light));
+    case LightType_Point:
+        return LightEditor_Point(static_cast<PointLight&>(light));
+    case LightType_Spot:
+        return LightEditor_Spot(static_cast<SpotLight&>(light));
+    default:
+        return false;
+    }
+}
+
+bool donut::app::AzimuthElevationSliders(math::double3& direction, bool negative)
+{
+    double3 normalizedDir = normalize(direction);
+    if (negative) normalizedDir = -normalizedDir;
+
+    double azimuth = degrees(atan2(normalizedDir.z, normalizedDir.x));
+    double elevation = degrees(asin(normalizedDir.y));
+    const double minAzimuth = -180.0;
+    const double maxAzimuth = 180.0;
+    const double minElevation = -90.0;
+    const double maxElevation = 90.0;
+
+    bool changed = false;
+    changed |= ImGui::SliderScalar("Azimuth", ImGuiDataType_Double, &azimuth, &minAzimuth, &maxAzimuth, "%.1f deg", ImGuiSliderFlags_NoRoundToFormat);
+    changed |= ImGui::SliderScalar("Elevation", ImGuiDataType_Double, &elevation, &minElevation, &maxElevation, "%.1f deg", ImGuiSliderFlags_NoRoundToFormat);
+
+    if (changed)
+    {
+        azimuth = radians(azimuth);
+        elevation = radians(elevation);
+
+        direction.y = sin(elevation);
+        direction.x = cos(azimuth) * cos(elevation);
+        direction.z = sin(azimuth) * cos(elevation);
+
+        if (negative)
+            direction = -direction;
+    }
+
+    return changed;
+}

@@ -1,0 +1,16 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/donut/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/donut/thirdparty/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/donut/thirdparty/glfw/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/donut/thirdparty/glfw/src/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/donut/ShaderMake/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/donut/ShaderMake/ShaderMake/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/donut/nvrhi/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/_deps/directx_headers-build/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/path-tracing-resampling-controls/b-pt2/donut/shaders/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
