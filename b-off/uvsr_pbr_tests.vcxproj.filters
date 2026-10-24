@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\tests\pbr_reference_tests.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{D9CBBA3F-22D9-3196-AEDD-141CB244E393}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

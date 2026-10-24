@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\CMakeFiles\28b7d4c96ccf48dba5a87d6d6bf7dc44\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{7647F276-04C1-3B38-BFAD-58C03435DA7A}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,2 @@
+uvsr_renderer_source_contract 1 0.0575985
+---

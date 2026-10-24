@@ -1,0 +1,14 @@
+# Target labels
+ dxc-populate
+# Source files and their labels
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-subbuild/CMakeFiles/dxc-populate
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-subbuild/CMakeFiles/d9f88acbcc92b77d920625a5ccc71e22/dxc-populate.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-subbuild/CMakeFiles/d4c6a626afac6dc81f2cdb98485b630c/dxc-populate-complete.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-subbuild/CMakeFiles/a5ddaad3d05621d5504c18c29fdcef71/dxc-populate-build.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-subbuild/CMakeFiles/a5ddaad3d05621d5504c18c29fdcef71/dxc-populate-configure.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-subbuild/CMakeFiles/a5ddaad3d05621d5504c18c29fdcef71/dxc-populate-download.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-subbuild/CMakeFiles/a5ddaad3d05621d5504c18c29fdcef71/dxc-populate-install.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-subbuild/CMakeFiles/a5ddaad3d05621d5504c18c29fdcef71/dxc-populate-mkdir.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-subbuild/CMakeFiles/a5ddaad3d05621d5504c18c29fdcef71/dxc-populate-patch.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-subbuild/CMakeFiles/a5ddaad3d05621d5504c18c29fdcef71/dxc-populate-test.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-subbuild/CMakeFiles/a5ddaad3d05621d5504c18c29fdcef71/dxc-populate-update.rule

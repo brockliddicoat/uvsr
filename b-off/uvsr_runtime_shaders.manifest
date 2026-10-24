@@ -1,0 +1,52 @@
+AA config: C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/src/shaders.cfg
+Framework root:
+blit_ps
+fullscreen_vs
+imgui_pixel
+imgui_vertex
+rect_vs
+sharpen_ps
+skinning_cs
+Framework passes:
+depth_ps
+depth_vs_buffer_loads
+gbuffer_vs_buffer_loads
+light_probe_cubemap_gs
+light_probe_diffuse_probe_ps
+light_probe_environment_brdf_ps
+light_probe_mip_ps
+light_probe_specular_probe_ps
+material_id_ps
+pixel_readback_cs
+UVSR shaders:
+agx_tonemapping_ps
+auto_exposure_histogram_cs
+auto_exposure_resolve_cs
+display_output_ps
+fast_approximate_aa_ps
+backdrop_blur_ps
+denoising_prepare_cs
+denoising_resolve_cs
+denoising_spatial_cs
+heitz_ratio_estimator_shadows_cs_Generate
+ray_traced_flashlight_shadows_cs_GenerateVisibility
+ray_traced_flashlight_shadows_cs_GenerateVisibilityAndHitDistance
+ray_traced_sky_visibility_cs_Generate
+image_based_lighting_background_ps
+lighting_accumulation_cs
+lighting_accumulation_prepare_cs
+msaa_visibility_resolve_cs
+path_tracing_cs
+path_tracing_primary_surface_cs
+path_tracing_stable_plane_resolve_cs
+pbr_deferred_lighting_cs
+pbr_deferred_lighting_msaa_cs
+pbr_gbuffer_ps
+pixel_zoom_ps
+screen_space_indirect_composite_cs
+screen_space_visibility_filter_cs
+screen_space_visibility_cs
+temporal_aa_blend_cs
+temporal_aa_minimum_cs
+temporal_aa_resolve_cs
+temporal_aa_sharpen_cs

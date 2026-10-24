@@ -1,0 +1,87 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\Camera.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\MediaFileSystem.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\imgui_console.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\imgui_nvrhi.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\imgui_renderer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\uvsr_donut_app_overrides\src\app\ApplicationBase.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\uvsr_donut_app_overrides\src\app\DeviceManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\uvsr_donut_app_overrides\src\app\dx12\DeviceManager_DX12.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\uvsr_donut_app_overrides\src\app\UserInterfaceUtils.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\AftermathCrashDump.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\ApplicationBase.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\Camera.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\DeviceManager.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\DeviceManager_DX11.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\DeviceManager_DX12.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\DeviceManager_VK.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\MediaFileSystem.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\StreamlineInterface.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\Timer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\UserInterfaceUtils.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\imgui_console.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\imgui_nvrhi.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\imgui_renderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{C2574E73-3D79-3429-9C5B-3CEB83633B99}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{D9CBBA3F-22D9-3196-AEDD-141CB244E393}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

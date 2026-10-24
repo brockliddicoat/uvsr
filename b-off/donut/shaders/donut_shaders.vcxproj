@@ -1,0 +1,418 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{5FD639B8-50AD-31AB-A00F-599DB2322B92}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>donut_shaders</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <PreBuildEvent>
+      <Message></Message>
+      <Command>setlocal
+..\..\bin\ShaderMake.exe --config C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/shaders/DonutShaders.cfg --out C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut_shaders/dxil --platform DXIL --binaryBlob --outputExt .bin -I C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/include -D TARGET_D3D12 --compiler C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-src/bin/x64/dxc.exe --shaderModel 6_5 --project Donut
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PreBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <PreBuildEvent>
+      <Message></Message>
+      <Command>setlocal
+..\..\bin\ShaderMake.exe --config C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/shaders/DonutShaders.cfg --out C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut_shaders/dxil --platform DXIL --binaryBlob --outputExt .bin -I C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/include -D TARGET_D3D12 --compiler C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-src/bin/x64/dxc.exe --shaderModel 6_5 --project Donut
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PreBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <PreBuildEvent>
+      <Message></Message>
+      <Command>setlocal
+..\..\bin\ShaderMake.exe --config C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/shaders/DonutShaders.cfg --out C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut_shaders/dxil --platform DXIL --binaryBlob --outputExt .bin -I C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/include -D TARGET_D3D12 --compiler C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-src/bin/x64/dxc.exe --shaderModel 6_5 --project Donut
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PreBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <PreBuildEvent>
+      <Message></Message>
+      <Command>setlocal
+..\..\bin\ShaderMake.exe --config C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/shaders/DonutShaders.cfg --out C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut_shaders/dxil --platform DXIL --binaryBlob --outputExt .bin -I C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/include -D TARGET_D3D12 --compiler C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/dxc-src/bin/x64/dxc.exe --shaderModel 6_5 --project Donut
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+    </PreBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\CMakeFiles\0cd4f7c05cc3d3b932bcb5885ffbd9fe\donut_shaders.rule">
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'"></Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\bin\ShaderMake.exe;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\donut\shaders\CMakeFiles\donut_shaders</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</VerifyInputsAndOutputsExist>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'"></Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\bin\ShaderMake.exe;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\donut\shaders\CMakeFiles\donut_shaders</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</VerifyInputsAndOutputsExist>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'"></Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\bin\ShaderMake.exe;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\donut\shaders\CMakeFiles\donut_shaders</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</VerifyInputsAndOutputsExist>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'"></Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\bin\ShaderMake.exe;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\donut\shaders\CMakeFiles\donut_shaders</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+      <VerifyInputsAndOutputsExist Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</VerifyInputsAndOutputsExist>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/shaders/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port -BC:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off --check-stamp-file C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut/shaders/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\CMakeFiles\cmake.verify_globs;C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\compileshaders.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\donut\shaders\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/shaders/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port -BC:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off --check-stamp-file C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut/shaders/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\CMakeFiles\cmake.verify_globs;C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\compileshaders.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\donut\shaders\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/shaders/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port -BC:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off --check-stamp-file C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut/shaders/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\CMakeFiles\cmake.verify_globs;C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\compileshaders.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\donut\shaders\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/shaders/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port -BC:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off --check-stamp-file C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut/shaders/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\CMakeFiles\cmake.verify_globs;C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\compileshaders.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\donut\shaders\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\binding_helpers.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\bindless.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\blit_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\bloom_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\brdf.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\deferred_lighting_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\depth_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\forward_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\forward_vertex.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\gbuffer.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\gbuffer_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\hash_based_rng.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\light_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\light_probe_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\light_types.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\lighting.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\material_bindings.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\material_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\mipmapgen_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\motion_vectors.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\packing.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\pixel_readback_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\scene_material.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\shadows.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\skinning_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\sky.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\sky_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\ssao_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\surface.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\taa_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\tonemapping_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\utils.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\view_cb.h">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\shaders\vulkan.hlsli">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\blit_ps.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\fullscreen_vs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\ies_profile_cs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\imgui_pixel.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\imgui_vertex.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\bloom_ps.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\cubemap_gs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\deferred_lighting_cs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\depth_ps.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\depth_vs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\dlss_exposure_cs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\environment_map_ps.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\exposure_cs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\forward_ps.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\forward_vs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\gbuffer_ps.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\gbuffer_vs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\histogram_cs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\joints.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\light_probe.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\material_id_ps.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\mipmapgen_cs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\motion_vectors_ps.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\pixel_readback_cs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\sky_ps.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\ssao_blur_cs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\ssao_compute_cs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\ssao_deinterleave_cs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\taa_cs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\passes\tonemapping_ps.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\rect_vs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\sharpen_ps.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\shaders\skinning_cs.hlsl">
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\donut\shaders\CMakeFiles\donut_shaders">
+    </None>
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\ZERO_CHECK.vcxproj">
+      <Project>{BEA4813D-EA56-3CF1-8A68-F0CAE64BDBAC}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\donut\ShaderMake\ShaderMake\ShaderMake.vcxproj">
+      <Project>{D860E2B8-7ACE-3DEF-9DCD-6F763FCA770D}</Project>
+      <Name>ShaderMake</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

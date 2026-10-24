@@ -1,0 +1,14 @@
+# Target labels
+ dxc-populate
+# Source files and their labels
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/dxc-populate
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/1e1a59c60ae128ad140ea11bf8d54898/dxc-populate.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/00ebca22e01c92582fef54b1e8eaebef/dxc-populate-complete.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-build.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-configure.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-download.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-install.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-mkdir.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-patch.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-test.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-update.rule

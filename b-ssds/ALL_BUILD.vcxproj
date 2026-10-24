@@ -1,0 +1,401 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ResolveNugetPackages>false</ResolveNugetPackages>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{58BC4B48-40E7-37AA-8ABB-5E1C13FABC2C}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>ALL_BUILD</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port -BC:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds --check-stamp-file C:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\screen-space-directional-shadow-research-port;C:\Users\brock\Documents\uvsr\.git\worktrees\screen-space-directional-shadow-research-port\HEAD;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\legal\licenses\Apache-2.0.txt;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\src\screen_space_directional_shadows_shaders.cfg;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\src\shaders.cfg;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\third_party\bend_sss\upstream\bend_sss_cpu.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\third_party\bend_sss\upstream\bend_sss_gpu.h;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython\Support.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython3.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port -BC:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds --check-stamp-file C:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\screen-space-directional-shadow-research-port;C:\Users\brock\Documents\uvsr\.git\worktrees\screen-space-directional-shadow-research-port\HEAD;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\legal\licenses\Apache-2.0.txt;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\src\screen_space_directional_shadows_shaders.cfg;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\src\shaders.cfg;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\third_party\bend_sss\upstream\bend_sss_cpu.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\third_party\bend_sss\upstream\bend_sss_gpu.h;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython\Support.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython3.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port -BC:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds --check-stamp-file C:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\screen-space-directional-shadow-research-port;C:\Users\brock\Documents\uvsr\.git\worktrees\screen-space-directional-shadow-research-port\HEAD;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\legal\licenses\Apache-2.0.txt;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\src\screen_space_directional_shadows_shaders.cfg;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\src\shaders.cfg;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\third_party\bend_sss\upstream\bend_sss_cpu.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\third_party\bend_sss\upstream\bend_sss_gpu.h;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython\Support.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython3.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port -BC:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds --check-stamp-file C:/Users/brock/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\screen-space-directional-shadow-research-port;C:\Users\brock\Documents\uvsr\.git\worktrees\screen-space-directional-shadow-research-port\HEAD;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\legal\licenses\Apache-2.0.txt;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\src\screen_space_directional_shadows_shaders.cfg;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\src\shaders.cfg;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\third_party\bend_sss\upstream\bend_sss_cpu.h;C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\third_party\bend_sss\upstream\bend_sss_gpu.h;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython\Support.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPython3.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\ZERO_CHECK.vcxproj">
+      <Project>{3CA7DFAC-A04B-368E-8E8A-3342FF4C23E1}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\_deps\directx_headers-build\DirectX-Guids.vcxproj">
+      <Project>{95ABD2EC-0D7C-3501-A50C-ACFCFC1312A7}</Project>
+      <Name>DirectX-Guids</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\_deps\directx_headers-build\DirectX-Headers.vcxproj">
+      <Project>{1C98C565-CAB8-39B1-A37E-16B8BAFCAEF4}</Project>
+      <Name>DirectX-Headers</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\donut\ShaderMake\ShaderMake\ShaderMake.vcxproj">
+      <Project>{00D2550C-6AAC-36B4-9D71-DD30D60DDA47}</Project>
+      <Name>ShaderMake</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\donut\ShaderMake\ShaderMakeBlob.vcxproj">
+      <Project>{A2914CD1-AC83-3DE7-B3CF-F9E7CD31BAA7}</Project>
+      <Name>ShaderMakeBlob</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\donut\thirdparty\glfw\src\glfw.vcxproj">
+      <Project>{7559EBBA-EFD7-3084-A014-FDB9262610F9}</Project>
+      <Name>glfw</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\donut\thirdparty\imgui.vcxproj">
+      <Project>{510B4FFE-53B5-3966-850C-12AEA07D7929}</Project>
+      <Name>imgui</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\donut\thirdparty\jsoncpp_static.vcxproj">
+      <Project>{5F42FFC5-48C8-3F6B-AD3A-CD57CAF9CAB1}</Project>
+      <Name>jsoncpp_static</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\donut\nvrhi\nvrhi.vcxproj">
+      <Project>{26239F2D-5A11-34B7-ADC6-F5B2307F1B15}</Project>
+      <Name>nvrhi</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\donut\nvrhi\nvrhi_d3d12.vcxproj">
+      <Project>{ABAD4508-0E77-3C94-B556-FFE00764661B}</Project>
+      <Name>nvrhi_d3d12</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr.vcxproj">
+      <Project>{A0F803B8-AA30-3003-B940-9E10E4C9BBA7}</Project>
+      <Name>uvsr</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_adaptive_sync_tests.vcxproj">
+      <Project>{1A2A1434-23C0-39C0-B18F-6B93E1115C73}</Project>
+      <Name>uvsr_adaptive_sync_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_auto_exposure_tests.vcxproj">
+      <Project>{28CF19B1-7911-3015-B2FE-1C9972C01903}</Project>
+      <Name>uvsr_auto_exposure_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_camera_collision_tests.vcxproj">
+      <Project>{9B12D0AE-2F4B-33F2-8542-0BDFA3F07876}</Project>
+      <Name>uvsr_camera_collision_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_camera_controls_tests.vcxproj">
+      <Project>{C26757D3-92C0-394F-83AB-73AF81127EA7}</Project>
+      <Name>uvsr_camera_controls_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_command_line_options_tests.vcxproj">
+      <Project>{98F99E67-E72D-358A-82C0-D456C42445D0}</Project>
+      <Name>uvsr_command_line_options_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_denoiser.vcxproj">
+      <Project>{8694774F-E6F9-39AD-A5D3-DA4386905CCE}</Project>
+      <Name>uvsr_denoiser</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_denoiser_tests.vcxproj">
+      <Project>{BF00D349-5661-3342-8909-0AE3BC688FA0}</Project>
+      <Name>uvsr_denoiser_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_diffuse_environment_asset_tests.vcxproj">
+      <Project>{05B4A29D-CDED-3697-878B-528E6BCC1546}</Project>
+      <Name>uvsr_diffuse_environment_asset_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_flashlight_tests.vcxproj">
+      <Project>{172B2CEC-5741-3F2A-B329-32990C786CDF}</Project>
+      <Name>uvsr_flashlight_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_heitz_ratio_estimator_source_contract_tests.vcxproj">
+      <Project>{FDF66B34-D656-359D-AD37-024D7CE2EEB4}</Project>
+      <Name>uvsr_heitz_ratio_estimator_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_heitz_ratio_estimator_tests.vcxproj">
+      <Project>{803D2440-0725-3D0B-BAA6-376BC541BBFE}</Project>
+      <Name>uvsr_heitz_ratio_estimator_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_imgui_dropdown_roll_tests.vcxproj">
+      <Project>{782F9F9F-C754-353F-816F-774CA8B51352}</Project>
+      <Name>uvsr_imgui_dropdown_roll_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_path_tracing_settings_tests.vcxproj">
+      <Project>{82EC4E73-D7F2-3EF6-BD59-806087274F7B}</Project>
+      <Name>uvsr_path_tracing_settings_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_path_tracing_source_contract_tests.vcxproj">
+      <Project>{15707577-6C04-350B-BC98-3B5D084E7F2A}</Project>
+      <Name>uvsr_path_tracing_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_pbr_lighting_source_contract_tests.vcxproj">
+      <Project>{464B3C37-1A90-38D5-8BBE-E8596E24464E}</Project>
+      <Name>uvsr_pbr_lighting_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_pbr_tests.vcxproj">
+      <Project>{4A75E46B-13D3-3B49-BA53-F30DC9F71259}</Project>
+      <Name>uvsr_pbr_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_pixel_zoom_tests.vcxproj">
+      <Project>{60702175-28EC-3231-A5FC-C32A451F21B6}</Project>
+      <Name>uvsr_pixel_zoom_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_production_shader_bundle_tests.vcxproj">
+      <Project>{C0104B61-4ADD-364E-A8E4-CEEDC4B7BC3F}</Project>
+      <Name>uvsr_production_shader_bundle_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_radial_visibility_tests.vcxproj">
+      <Project>{2F67B51C-8599-3C31-A0F2-F43960DE826C}</Project>
+      <Name>uvsr_radial_visibility_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_ray_traced_flashlight_shadow_tests.vcxproj">
+      <Project>{3915591B-5C1E-3C07-8B66-8E2A008342DD}</Project>
+      <Name>uvsr_ray_traced_flashlight_shadow_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_ray_traced_sky_visibility_source_contract_tests.vcxproj">
+      <Project>{7E5AC147-B728-3BC6-8AA4-0F331197676C}</Project>
+      <Name>uvsr_ray_traced_sky_visibility_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_ray_traced_sky_visibility_tests.vcxproj">
+      <Project>{E644D46D-BE45-39EC-BE6C-B76CF82F2F31}</Project>
+      <Name>uvsr_ray_traced_sky_visibility_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_renderer_source_contract_tests.vcxproj">
+      <Project>{B5277C13-A815-3369-8EC4-A516DCF05756}</Project>
+      <Name>uvsr_renderer_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_runtime_shader_bundle_tests.vcxproj">
+      <Project>{C92E1733-35F7-35E6-A62C-6D90EBE2E92D}</Project>
+      <Name>uvsr_runtime_shader_bundle_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_sample_accumulation_settings_tests.vcxproj">
+      <Project>{86E5A898-70BD-3367-A5DF-CB29F1273423}</Project>
+      <Name>uvsr_sample_accumulation_settings_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_scene_asset_contract_tests.vcxproj">
+      <Project>{4C180C34-270F-30CD-BF51-F16D0551C643}</Project>
+      <Name>uvsr_scene_asset_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_scene_catalog_tests.vcxproj">
+      <Project>{9717A7DE-0536-3DA2-AC75-A981BEA593F4}</Project>
+      <Name>uvsr_scene_catalog_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_scene_light_names_tests.vcxproj">
+      <Project>{53C292FC-1077-3347-9B1C-73B5D463942D}</Project>
+      <Name>uvsr_scene_light_names_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_scene_loading_tests.vcxproj">
+      <Project>{0D8C443D-50C9-3F28-BD6C-0A07222A678F}</Project>
+      <Name>uvsr_scene_loading_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_screen_space_directional_shadow_tests.vcxproj">
+      <Project>{256918C9-862F-3368-BCD8-676A66B0D0B7}</Project>
+      <Name>uvsr_screen_space_directional_shadow_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_screen_space_directional_shadows.vcxproj">
+      <Project>{98FB5E16-A572-3F1C-B794-DF3383F0C7F7}</Project>
+      <Name>uvsr_screen_space_directional_shadows</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_settings_snapshot_schema_probe.vcxproj">
+      <Project>{7684920A-4D47-370E-8C35-078A93A5DBA8}</Project>
+      <Name>uvsr_settings_snapshot_schema_probe</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_settings_snapshot_tests.vcxproj">
+      <Project>{62D72787-8822-3932-B958-52EDD0B495AF}</Project>
+      <Name>uvsr_settings_snapshot_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_sponza_camera_tests.vcxproj">
+      <Project>{C094952E-6FEA-37A0-9498-3932911D3C40}</Project>
+      <Name>uvsr_sponza_camera_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_temporal_aa_tests.vcxproj">
+      <Project>{D9BA1AAB-D7BE-3DD6-8C21-33393AD3A294}</Project>
+      <Name>uvsr_temporal_aa_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_ui_animation_tests.vcxproj">
+      <Project>{E5A0074A-E604-311C-ADD6-E82DF1D418AC}</Project>
+      <Name>uvsr_ui_animation_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_ui_command_layout_tests.vcxproj">
+      <Project>{CE2D0FF6-A8F8-3E98-8BB2-BE0C3BDE184F}</Project>
+      <Name>uvsr_ui_command_layout_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_ui_commands_tests.vcxproj">
+      <Project>{3EECCEE7-3747-3362-8F3F-10A70DAB3C90}</Project>
+      <Name>uvsr_ui_commands_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_ui_settings_command_catalog_tests.vcxproj">
+      <Project>{371C70FC-CCEA-3835-8BF1-E5046428C4AA}</Project>
+      <Name>uvsr_ui_settings_command_catalog_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_ui_skin_tests.vcxproj">
+      <Project>{99EEE6CC-8F01-38D6-BAF6-DA2B6EDD1852}</Project>
+      <Name>uvsr_ui_skin_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_ui_source_contract_tests.vcxproj">
+      <Project>{5D1C23E0-0609-3794-ADD3-C74C087BA411}</Project>
+      <Name>uvsr_ui_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_visibility_estimator_tests.vcxproj">
+      <Project>{3F7857BE-FA81-3119-B894-26540048B9BC}</Project>
+      <Name>uvsr_visibility_estimator_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_visibility_projection_tests.vcxproj">
+      <Project>{E9FEDA79-1B08-3BFB-851A-BE70A2CA4DC8}</Project>
+      <Name>uvsr_visibility_projection_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_visibility_sampling_tests.vcxproj">
+      <Project>{5A40234B-8596-33D6-90CC-EE4AFFAD8A3D}</Project>
+      <Name>uvsr_visibility_sampling_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\uvsr_world_space_representation_settings_tests.vcxproj">
+      <Project>{9106176B-04CC-394E-8077-3F613ADE9E3A}</Project>
+      <Name>uvsr_world_space_representation_settings_tests</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

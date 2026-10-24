@@ -1,0 +1,17 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\CMakeFiles\b0227792fcae33f4a68c0fcf6c0e0140\NightlyMemoryCheck.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\_deps\directx_headers-src\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\_deps\directx_headers-build\CMakeFiles\NightlyMemoryCheck" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{6A340BC5-D123-3E02-BB2E-32CE2307A3C9}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

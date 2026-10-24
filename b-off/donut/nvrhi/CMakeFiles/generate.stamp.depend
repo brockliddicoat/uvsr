@@ -1,0 +1,10 @@
+# CMake generation dependency list for this directory.
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/CMakeFiles/cmake.verify_globs
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/nvrhi/CMakeLists.txt
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/CMakeDependentOption.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/ExternalProject/shared_internal_commands.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/FetchContent.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/FetchContent/CMakeLists.cmake.in
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/FindGit.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/FindPackageHandleStandardArgs.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/FindPackageMessage.cmake

@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/directx_headers-subbuild/CMakeFiles/directx_headers-populate"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/directx_headers-subbuild/CMakeFiles/98fdb65d1ede7ca94115cec8bd11d7fc/directx_headers-populate.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/directx_headers-subbuild/CMakeFiles/f4da1f3cbefdb525f2c90258f5b58f3f/directx_headers-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/directx_headers-subbuild/CMakeFiles/102a46b0f493dcd9ebdf3010fdfa9cb4/directx_headers-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/directx_headers-subbuild/CMakeFiles/102a46b0f493dcd9ebdf3010fdfa9cb4/directx_headers-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/directx_headers-subbuild/CMakeFiles/102a46b0f493dcd9ebdf3010fdfa9cb4/directx_headers-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/directx_headers-subbuild/CMakeFiles/102a46b0f493dcd9ebdf3010fdfa9cb4/directx_headers-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/directx_headers-subbuild/CMakeFiles/102a46b0f493dcd9ebdf3010fdfa9cb4/directx_headers-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/directx_headers-subbuild/CMakeFiles/102a46b0f493dcd9ebdf3010fdfa9cb4/directx_headers-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/directx_headers-subbuild/CMakeFiles/102a46b0f493dcd9ebdf3010fdfa9cb4/directx_headers-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/directx_headers-subbuild/CMakeFiles/102a46b0f493dcd9ebdf3010fdfa9cb4/directx_headers-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"directx_headers-populate"
+		],
+		"name" : "directx_headers-populate"
+	}
+}

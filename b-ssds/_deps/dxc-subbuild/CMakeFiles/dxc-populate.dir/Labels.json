@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/dxc-populate"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/1e1a59c60ae128ad140ea11bf8d54898/dxc-populate.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/00ebca22e01c92582fef54b1e8eaebef/dxc-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/CMakeFiles/b5d9d7d6763e2f9e59307fe30bc5bde3/dxc-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"dxc-populate"
+		],
+		"name" : "dxc-populate"
+	}
+}

@@ -1,0 +1,16 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut/thirdparty/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut/thirdparty/glfw/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut/thirdparty/glfw/src/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut/ShaderMake/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut/ShaderMake/ShaderMake/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut/nvrhi/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/directx_headers-build/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/donut/shaders/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

@@ -1,0 +1,16 @@
+# CMake generation dependency list for this directory.
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/CMakeFiles/cmake.verify_globs
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/thirdparty/glfw/CMake/glfw3Config.cmake.in
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/donut/thirdparty/glfw/CMakeLists.txt
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/BasicConfigVersion-SameMajorVersion.cmake.in
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/CMakeDependentOption.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/CMakePackageConfigHelpers.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/CheckCSourceCompiles.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/CheckIncludeFile.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/CheckLibraryExists.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/FindPackageHandleStandardArgs.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/FindPackageMessage.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/FindThreads.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/GNUInstallDirs.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/Internal/CheckSourceCompiles.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/WriteBasicConfigVersionFile.cmake

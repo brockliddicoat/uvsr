@@ -1,0 +1,14 @@
+# Target labels
+ d3d_agility_sdk-populate
+# Source files and their labels
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d3d_agility_sdk-populate
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/d3d_agility_sdk-subbuild/CMakeFiles/6609ae6ec901649724fb698ac88e6c0e/d3d_agility_sdk-populate.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/d3d_agility_sdk-subbuild/CMakeFiles/5a9319337550331c536a102a06943ccd/d3d_agility_sdk-populate-complete.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/d3d_agility_sdk-subbuild/CMakeFiles/30aa82e8b328d33ec1903a68f9f76e67/d3d_agility_sdk-populate-build.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/d3d_agility_sdk-subbuild/CMakeFiles/30aa82e8b328d33ec1903a68f9f76e67/d3d_agility_sdk-populate-configure.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/d3d_agility_sdk-subbuild/CMakeFiles/30aa82e8b328d33ec1903a68f9f76e67/d3d_agility_sdk-populate-download.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/d3d_agility_sdk-subbuild/CMakeFiles/30aa82e8b328d33ec1903a68f9f76e67/d3d_agility_sdk-populate-install.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/d3d_agility_sdk-subbuild/CMakeFiles/30aa82e8b328d33ec1903a68f9f76e67/d3d_agility_sdk-populate-mkdir.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/d3d_agility_sdk-subbuild/CMakeFiles/30aa82e8b328d33ec1903a68f9f76e67/d3d_agility_sdk-populate-patch.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/d3d_agility_sdk-subbuild/CMakeFiles/30aa82e8b328d33ec1903a68f9f76e67/d3d_agility_sdk-populate-test.rule
+C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-off/_deps/d3d_agility_sdk-subbuild/CMakeFiles/30aa82e8b328d33ec1903a68f9f76e67/d3d_agility_sdk-populate-update.rule

@@ -1,0 +1,12 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=url
+command=C:/Users/brock/scoop/apps/cmake/current/bin/cmake.exe;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/dxc-populate-prefix/src/dxc-populate-stamp/download-dxc-populate.cmake;COMMAND;C:/Users/brock/scoop/apps/cmake/current/bin/cmake.exe;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/dxc-populate-prefix/src/dxc-populate-stamp/verify-dxc-populate.cmake;COMMAND;C:/Users/brock/scoop/apps/cmake/current/bin/cmake.exe;-DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE;-P;C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-subbuild/dxc-populate-prefix/src/dxc-populate-stamp/extract-dxc-populate.cmake
+source_dir=C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/dxc-src
+work_dir=C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps
+url(s)=https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602/dxc_2026_02_20.zip
+hash=
+      no_extract=
+

@@ -1,0 +1,38 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <ProjectOutputs>
+    <ProjectOutput>
+      <FullPath>C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\x64\Release\ZERO_CHECK</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\bin\ShaderMake.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\donut\shaders\x64\Release\donut_shaders</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\x64\Release\uvsr_screen_space_directional_shadow_shaders</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\x64\Release\uvsr_shaders</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\x64\Release\uvsr_stage_environments</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\x64\Release\uvsr_stage_noise</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\x64\Release\uvsr_stage_runtime_shaders</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\x64\Release\uvsr_stage_scenes</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-ssds\bin\uvsr.exe</FullPath>
+    </ProjectOutput>
+  </ProjectOutputs>
+  <ContentFiles />
+  <SatelliteDlls />
+  <NonRecipeFileRefs />
+</Project>

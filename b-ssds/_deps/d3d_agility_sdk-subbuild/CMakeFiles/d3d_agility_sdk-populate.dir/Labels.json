@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d3d_agility_sdk-populate"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/d3d_agility_sdk-subbuild/CMakeFiles/5a1fb73b6828506b0e780d8cac10881f/d3d_agility_sdk-populate.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/d3d_agility_sdk-subbuild/CMakeFiles/0146953e995f7df685493de7ab9800b7/d3d_agility_sdk-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d2d27a8d737ea05d9300f9592050075a/d3d_agility_sdk-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d2d27a8d737ea05d9300f9592050075a/d3d_agility_sdk-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d2d27a8d737ea05d9300f9592050075a/d3d_agility_sdk-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d2d27a8d737ea05d9300f9592050075a/d3d_agility_sdk-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d2d27a8d737ea05d9300f9592050075a/d3d_agility_sdk-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d2d27a8d737ea05d9300f9592050075a/d3d_agility_sdk-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d2d27a8d737ea05d9300f9592050075a/d3d_agility_sdk-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/screen-space-directional-shadow-research-port/b-ssds/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d2d27a8d737ea05d9300f9592050075a/d3d_agility_sdk-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"d3d_agility_sdk-populate"
+		],
+		"name" : "d3d_agility_sdk-populate"
+	}
+}

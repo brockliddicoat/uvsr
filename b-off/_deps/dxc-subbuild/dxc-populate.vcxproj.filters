@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\_deps\dxc-subbuild\CMakeFiles\a5ddaad3d05621d5504c18c29fdcef71\dxc-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\_deps\dxc-subbuild\CMakeFiles\a5ddaad3d05621d5504c18c29fdcef71\dxc-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\_deps\dxc-subbuild\CMakeFiles\a5ddaad3d05621d5504c18c29fdcef71\dxc-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\_deps\dxc-subbuild\CMakeFiles\a5ddaad3d05621d5504c18c29fdcef71\dxc-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\_deps\dxc-subbuild\CMakeFiles\a5ddaad3d05621d5504c18c29fdcef71\dxc-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\_deps\dxc-subbuild\CMakeFiles\a5ddaad3d05621d5504c18c29fdcef71\dxc-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\_deps\dxc-subbuild\CMakeFiles\a5ddaad3d05621d5504c18c29fdcef71\dxc-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\_deps\dxc-subbuild\CMakeFiles\a5ddaad3d05621d5504c18c29fdcef71\dxc-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\_deps\dxc-subbuild\CMakeFiles\d4c6a626afac6dc81f2cdb98485b630c\dxc-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\_deps\dxc-subbuild\CMakeFiles\d9f88acbcc92b77d920625a5ccc71e22\dxc-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\_deps\dxc-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\screen-space-directional-shadow-research-port\b-off\_deps\dxc-subbuild\CMakeFiles\dxc-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{B61BC587-6ED4-32A3-BA09-C44421D46248}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
