@@ -5,8 +5,8 @@
 - State: completed
 - Coordinator: `/root`
 - Project/integration branch and worktree:
-  `codex/bend-screen-space-shadows` at
-  `C:\Users\brock\Documents\Codex\2026-07-18\i-want-you-to-take-the\work\uvsr-bend-shadows`
+  the preserved legacy screen-space-shadow branch at
+  `C:\Users\brock\Documents\Codex\2026-07-18\i-want-you-to-take-the\work\uvsr-legacy-shadow-shadows`
 - Base commit: `ea566bc67f744059e6f62e33c541c5b25bde9bd8` plus all preserved
   uncommitted renderer, shadow, lighting, test, documentation, and asset work
 - Started: 2026-07-26

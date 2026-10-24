@@ -295,14 +295,22 @@ lighting.
 
 ## Screen-Space Directional Shadows
 
-The optional Bend Studio screen-space shadow pass consumes the existing
+The optional first-party screen-space shadow pass consumes the existing
 single-sample device-depth texture after the G-buffer pass and produces a
-full-resolution `R8_UNORM` visibility texture. UVSR's adapter preserves Bend's
-released CPU and GPU headers byte-for-byte; projection conversion, reverse-Z
-near/far values, resources, shader permutations, and dispatch bindings remain
-first-party glue outside those headers. The exact source archive, hashes, and
-preservation rules are recorded in the
-[vendored source record](../third_party/bend_sss/README.md).
+full-resolution `R8_UNORM` visibility texture. The CPU projects the
+receiver-to-light direction once. An 8-by-8 compute shader then performs an
+affine projected-depth DDA and writes the complete image in one dispatch. The
+DDA is normalized by its major screen axis, giving every logical step a unique
+raster row or column and preserving the selected reach at diagonal angles.
+Depth on the fractional minor axis is interpolated unless the relative
+discontinuity threshold selects a point endpoint or rejects the edge.
+
+The pass groups 32 logical steps at a time and can load their bounded depth
+footprint cooperatively into about 9 KiB of group-shared memory. It uses the
+cache only when the footprint fits and predicts at least 25% fewer source
+reads. Sparse, divergent, and optional early-out chunks retain an
+output-equivalent direct-load fallback. No extra texture, binding, dispatch, or
+inter-pass transition is introduced, and no matched GPU-time result is claimed.
 
 ### Settings and Shader Variants
 
@@ -311,24 +319,24 @@ four entries:
 
 | Profile | Applied settings |
 |---|---|
-| **Performance** | 60-pixel length, 4 hard samples, 8 fade-out samples, `0.005` surface thickness, `0.02` bilinear threshold, contrast `4`, and every optional mode and debug view off |
-| **Balanced** | Performance settings with a 240-pixel length |
-| **Quality** | Performance settings with a 960-pixel length |
+| **Default** | 60-pixel length, 4 hard samples, 8 fade-out samples, `0.005` surface thickness, `0.02` discontinuity threshold, contrast `4`, and every optional mode and debug view off |
+| **Long** | Default settings with a 240-pixel length |
+| **Maximum Validation** | Default settings with a 960-pixel length |
 | **Custom** | Retains individually edited values |
 
-Applying a profile preserves **Enabled**, so restoring Performance does not
+Applying a profile preserves **Enabled**, so restoring Default does not
 disable an active comparison. Editing any other control selects Custom.
-**Length** maps to compiled `SAMPLE_COUNT` values of 60, 120, 240, 480, or 960
-pixels. **Hard Shadow Samples** maps to compiled counts of 0, 4, or 8, and
-**Fade-Out Samples** maps to compiled counts of 0, 8, or 16. Those three axes
-form 45 registered compute-shader permutations; adding another trace length is
-isolated to the adapter's variant table and shader registration.
+**Length** maps to runtime reach values of 60, 120, 240, 480, or 960 pixels.
+**Hard Shadow Samples** maps to counts of 0, 4, or 8, and **Fade-Out Samples**
+maps to counts of 0, 8, or 16. Those controls feed one compute shader rather
+than multiplying registered permutations.
 
 The remaining continuous controls are **Surface Thickness**, **Bilinear
 Threshold**, and **Shadow Contrast**. Optional algorithm modes are **Ignore Edge
 Pixels**, **Precision Offset**, **Bilinear Offset Mode**, and **Early Out**.
-**Debug View** selects Off, Edge, Thread, or Wave; the three diagnostics present
-the raw R8 result as grayscale instead of compositing it into scene lighting.
+**Debug View** selects Off, Occlusion, Trace Progress, or Ray Bounds; the three
+diagnostics present the raw R8 result as grayscale instead of compositing it
+into scene lighting.
 
 ### Directional-Light Composite
 
@@ -340,12 +348,11 @@ wrong-format, unsupported, or unmatched slots bind white and retain light index
 being evaluated. Indirect diffuse, emissive radiance, environment lighting, and
 unrelated lights are unchanged.
 
-Bend, SVSM, and diagnostic CSM render independently and know nothing about one
-another's types, settings, resources, UI, caches, or benchmarks. `uvsr.cpp`
-adapts their frame-local results into the neutral interface immediately before
-deferred lighting. This keeps all three projects portable while preserving a
-zero-dispatch path for reintegration: every complete factor that targets the
-same exact light is multiplied there and nowhere else.
+Screen-space shadows, SVSM, and diagnostic CSM render independently and know
+nothing about one another's types, settings, resources, UI, caches, or
+benchmarks. `uvsr.cpp` adapts their frame-local results into the neutral
+interface immediately before deferred lighting. Every complete factor that
+targets the same exact light is multiplied there and nowhere else.
 
 ### Canonical Integration Boundary
 
@@ -361,8 +368,7 @@ than weakening that contract.
 
 This near tracer is intentionally a standalone producer. A future Hi-Z or
 hierarchical far tracer can replace one neutral producer slot or deliberately
-extend the renderer boundary without modifying the validated Bend
-implementation.
+extend the renderer boundary without modifying the validated near tracer.
 The current experiment does not allocate temporal history, stochastic inputs,
 a thickness texture, a depth hierarchy, or a far-trace resource.
 
@@ -374,9 +380,9 @@ Environment**, **Cardinal Environment Test**, **Prefiltered Specular**,
 **Environment BRDF**, **Final Specular IBL**, **Combined IBL**, **Specular
 Occlusion**, and **Environment Mip**. These views isolate normal encoding,
 source orientation, convolution, roughness selection, split-sum response, and
-occlusion without changing the production path. The Bend shadow experiment
-separately exposes its released Edge, Thread, and Wave diagnostics as direct
-grayscale views of the R8 output. The Donut legacy comparison path remains
+occlusion without changing the production path. The screen-space shadow pass
+separately exposes Occlusion, Trace Progress, and Ray Bounds diagnostics as
+direct grayscale views of the R8 output. The Donut legacy comparison path remains
 implemented for possible future experiments, but its **Enable PBR** control is
 not exposed in the production UI. Forward and deferred production lighting
 both use the same shared BSDF and IBL evaluator.
@@ -403,12 +409,12 @@ exposure-scaled luminance. Asset staging is dependency-driven, so changing or
 restoring an HDR source reruns staging even when the renderer executable does
 not otherwise need relinking.
 
-`tests/bend_screen_space_shadows_tests.cpp` validates Bend Exact reset values,
-Enabled independence, the Long and Maximum Validation lengths, every registered
-sample-count combination, and Bend's released CPU dispatch-list contract for
-projected light points on either side of the camera. Runtime image quality,
-artifact, reliability, and performance conclusions are recorded separately
-only after the corresponding renderer evaluation.
+`tests/screen_space_directional_shadows_tests.cpp` validates Default reset
+values, Enabled independence, the Long and Maximum Validation lengths, every
+supported runtime sample combination, and the exact affine projected-depth
+slope used by the GPU DDA. Runtime image quality, artifact, reliability, and
+performance conclusions are recorded separately only after the corresponding
+renderer evaluation.
 
 ## Current Limitations and Performance-Sensitive Areas
 
@@ -451,9 +457,10 @@ only after the corresponding renderer evaluation.
 - The fifth `R8_UNORM` render target costs one additional byte of G-buffer
   write/read bandwidth per pixel. It prevents authored ambient occlusion from
   being conflated with direct shadow visibility or discarded.
-- Bend screen-space shadows currently trace only the primary directional light
-  against visible device depth. Occluders outside the screen, hidden behind the
-  first depth layer, or beyond the selected compiled sample count are absent.
+- Screen-space directional shadows currently trace only the primary
+  directional light against visible device depth. Occluders outside the screen,
+  hidden behind the first depth layer, or beyond the selected trace reach are
+  absent.
   The full-resolution R8 visibility target adds one logical byte per pixel while
   the feature is enabled.
 - Deferred direct lighting loops over at most Donut's existing 16 lights per

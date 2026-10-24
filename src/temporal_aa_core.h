@@ -46,12 +46,9 @@ namespace uvsr
         // also invalidate the previous view in the renderer.
         [[nodiscard]] bool Invalidate();
 
-        // Clears the two base color/depth pairs exactly once after an
-        // invalidation. Returns true so a technique can clear its optional
-        // attachments (moments or developer-only snapshots) in the same
-        // transaction.
-        [[nodiscard]] bool PrepareForFirstUse(
-            nvrhi::ICommandList* commandList);
+        // Marks the first fully overwriting write after invalidation. Physical
+        // contents are never cleared because validity gates every history read.
+        [[nodiscard]] bool PrepareForFirstWrite();
 
         [[nodiscard]] bool CanRead(
             uint32_t slot,
@@ -88,6 +85,6 @@ namespace uvsr
         uint32_t m_ResetCount = 0u;
         uint64_t m_LastCommittedSequence = 0u;
         bool m_HasCommittedSequence = false;
-        bool m_ClearPending = true;
+        bool m_FirstWritePending = true;
     };
 }

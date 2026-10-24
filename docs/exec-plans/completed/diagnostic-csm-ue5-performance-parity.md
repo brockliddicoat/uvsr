@@ -4,7 +4,7 @@
 
 - State: completed
 - Coordinator: `/root`
-- Project/integration branch and worktree: `codex/bend-screen-space-shadows` in the existing UVSR Bend/SVSM worktree
+- Project/integration branch and worktree: preserved legacy screen-space-shadow branch in the existing UVSR screen-space-shadow/SVSM worktree
 - Base commit: `ea566bc88a98c9322759694539212f281408de0d` with preserved tracked and untracked work
 - Started: 2026-07-22
 - Last updated: 2026-07-24
@@ -17,7 +17,7 @@ Goal: audit the diagnostic CSM against UE 5.6 conventional cascaded shadow maps,
 Done when:
 
 - [x] Relevant UE renderer and shader source is cross-referenced against the UVSR caster, cache, projection, resolve, filter, timing, and resource paths.
-- [x] Confirmed bugs are fixed without changing or discarding unrelated Bend, SVSM, Donut, NVRHI, or user work.
+- [x] Confirmed bugs are fixed without changing or discarding unrelated legacy screen-space shadow, SVSM, Donut, NVRHI, or user work.
 - [x] Any optimization beyond UE-equivalent behavior is controlled by an independent toggle whose disabled path preserves the reference work and performance behavior.
 - [x] Release builds, focused tests, full CTest, title-case checks, diff checks, runtime image review, and thermally valid stage timings are recorded where the machine permits.
 - [x] Initial and revised probability estimates explicitly state benchmark comparability limits.
@@ -94,7 +94,7 @@ Public interface, ABI, shader binding, resource layout, serialized setting, or a
 | UE filtering parity | Source citations plus shader/static tests | Focused CSM tests and shader build | Passed. The exact nine-gather receiver, bias behavior, and opaque-depth clamp are source-matched, the final Release build passed, and the CSM reference test passed in 0.36 seconds. |
 | Stable, artifact-free shadows | Visual inspection across cascade and scene motion cases | UVSR debug-menu smoke | Position-1 normal, cascade-selection, and cache-action views were coherent through uncached/cached profile and optimization-toggle transitions; no cut-up shadows, seams, stale regions, or missing alpha-tested casters were visible. Deterministic movement, scroll, dirty-region, and cache-transition cases pass; a matched free-camera image sequence was not captured in this final interval. |
 | Four-cascade cost breakdown | Setup, culling, clear/update, raster, sampling, and total values | Position-1 clean preflight and runtime timing | The pre-optimization accepted interval at 42.3-42.8 TFLOPS measured 1.248-1.279 ms GPU total, 0.040-0.042 ms clear, 1.142-1.172 ms raster, and 0.053-0.055 ms sample. CPU all was 0.828-0.885 ms, including 0.617-0.661 ms culling and 0.139-0.170 ms recording. The post-optimization mirrored interval at 41.7-42.9 TFLOPS kept GPU work within noise at 1.269-1.305 ms while one-pass classification reduced CPU culling from 0.677-0.854 ms with four walks to 0.264-0.429 ms with one walk. Optimized cached stationary measured 0.062-0.067 ms GPU and 0.046-0.056 ms CPU with four reused cascades, zero redraws, zero clear/raster, zero caster work, and zero scene walks or sorts. |
-| Repository health | Release build, full CTest, title checks, and diff check | Repository-required commands | Passed. Release CTest was 15 of 15 in 3.48 seconds; the title checker self-test and full 545-heading audit passed with zero violations; `git diff --check` reported no whitespace errors; all six frozen Bend hashes match. |
+| Repository health | Release build, full CTest, title checks, and diff check | Repository-required commands | Passed. Release CTest was 15 of 15 in 3.48 seconds; the title checker self-test and full 545-heading audit passed with zero violations; `git diff --check` reported no whitespace errors; all six frozen legacy screen-space shadow hashes match. |
 
 For performance work, preserve the executable hash, dirty-source identity, adapter/driver, exact preset, scene and camera, thermal/process gate, warmup, raw samples, total frame time, per-stage CSM cost, and image-quality guardrails. Never compare unlike runs or describe estimates as measurements.
 
@@ -207,7 +207,7 @@ VSM, distance-field, contact, far, and per-object shadows, then compare UE
 | --- | --- | --- | --- | --- | --- |
 | 2026-07-22 | `/root` | Complete | Initial estimate | 15 percent prior probability recorded | Audit exact source and benchmarks |
 | 2026-07-23 | UE source/benchmark agents | Complete | Authenticated source commit and public evidence | Splits, fades, projection, bias, D16, receiver, Gather4, profiling scopes, and benchmark limits reviewed | Integrate fixes and measure |
-| 2026-07-24 | `/root` | Complete | Current dirty worktree; accepted cold preflight `outputs/svsm-thermal-state-20260724T001347430Z-25564-fbb63a17.txt`; executable SHA-256 `2CC8E0DA516749B9E55631E106AE7FAF6D2CB1C06CB70918CFCA8EA75507AF8C` | Release build passed; CTest 15 of 15; title-case self-test and 545-heading audit passed; diff check clean apart from line-ending warnings; frozen Bend hashes match; runtime A/B and cached reuse passed above 30 TFLOPS; independent UE/Donut/NVRHI review found no remaining concrete CSM defect | A matched UE capture remains the only way to replace the final probability with measured parity |
+| 2026-07-24 | `/root` | Complete | Current dirty worktree; accepted cold preflight `outputs/svsm-thermal-state-20260724T001347430Z-25564-fbb63a17.txt`; executable SHA-256 `2CC8E0DA516749B9E55631E106AE7FAF6D2CB1C06CB70918CFCA8EA75507AF8C` | Release build passed; CTest 15 of 15; title-case self-test and 545-heading audit passed; diff check clean apart from line-ending warnings; frozen legacy screen-space shadow hashes match; runtime A/B and cached reuse passed above 30 TFLOPS; independent UE/Donut/NVRHI review found no remaining concrete CSM defect | A matched UE capture remains the only way to replace the final probability with measured parity |
 
 ## Risks and Escalation Triggers
 
@@ -221,7 +221,7 @@ Stop and ask the user only if a required action would expand into Donut/NVRHI mo
 ## Completion
 
 - Final integrated commit: intentionally none, as required
-- Verification summary: Release build, 15 of 15 CTest, focused CSM test, title-case self-test and full audit, diff check, Bend hashes, thermally accepted runtime A/B, debug-view image review, and cached stationary reuse all passed
+- Verification summary: Release build, 15 of 15 CTest, focused CSM test, title-case self-test and full audit, diff check, legacy screen-space shadow hashes, thermally accepted runtime A/B, debug-view image review, and cached stationary reuse all passed
 - Independent review: authenticated UE5, pinned Donut, and pinned NVRHI review found no remaining concrete CSM correctness or local performance defect
 - Coming Soon/documentation update: implementation and benchmark notes are recorded in this completed plan and the existing diagnostic CSM documentation
 - Pushed/PR/merged, or intentionally local: intentionally local; no commit, push, pull request, merge, main change, or submodule update

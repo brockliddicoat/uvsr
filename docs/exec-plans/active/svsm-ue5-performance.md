@@ -5,10 +5,10 @@
 - State: active
 - Coordinator: `/root`
 - Project/integration branch and worktree:
-  `codex/bend-screen-space-shadows` at
-  `C:\Users\brock\Documents\Codex\2026-07-18\i-want-you-to-take-the\work\uvsr-bend-shadows`
+  the preserved legacy screen-space-shadow branch at
+  `C:\Users\brock\Documents\Codex\2026-07-18\i-want-you-to-take-the\work\uvsr-legacy-shadow-shadows`
 - Base commit: `ea566bc67f744059e6f62e33c541c5b25bde9bd8` plus the preserved
-  uncommitted UVSR, Bend, SVSM, CSM, benchmark, test, and documentation changes
+  uncommitted UVSR, legacy screen-space shadow, SVSM, CSM, benchmark, test, and documentation changes
 - Started: 2026-07-25
 - Last updated: 2026-07-25
 - Planned archive:
@@ -39,7 +39,7 @@ Done when:
   unrelated physical pages or hiding missing/invalid data.
 - [ ] Deterministic tests cover mapping, invalidation, paired depth, movement,
   fallback, raster classification, filtering, and resource recreation.
-- [ ] Release build, full CTest, Title Case checker, Bend hash verification,
+- [ ] Release build, full CTest, Title Case checker, legacy screen-space shadow hash verification,
   diff checks, runtime image review, and independent source review pass.
 - [ ] Accepted same-hardware measurements show SVSM at least 30 percent faster
   than the documented projected UE5 VSM and diagnostic UE5-style CSM comparison
@@ -74,7 +74,7 @@ Non-goals:
   a new scene database, a new virtual-texture framework, or a CSM rewrite.
 - Donut or NVRHI changes, submodule updates, CPU draw calls per virtual page,
   final-path GPU readback, or a second independent static clipmap system.
-- Bend coupling, a Bend hit/miss mask, or Bend-controlled page requests.
+- legacy screen-space shadow coupling, a legacy screen-space shadow hit/miss mask, or screen-space-shadow-controlled page requests.
 - Commit, push, pull request, merge, main modification, or published-history
   changes.
 
@@ -173,7 +173,7 @@ asset/package contracts:
 - Run full CTest with failure output.
 - Run the Title Case checker self-test and repository scan after documentation
   changes.
-- Verify all frozen Bend hashes.
+- Verify all frozen legacy screen-space shadow hashes.
 - Run `git diff --check` and inspect the complete scoped diff without staging.
 - Launch only through `tools/launch_uvsr.ps1` with a lowercase experiment token.
 - Inspect static, slow-camera, fast-camera, moving-sun, deformation, foliage,
@@ -274,7 +274,7 @@ asset/package contracts:
 
 Stop and ask the user only if:
 
-- a required implementation would modify Bend, Donut, NVRHI, a submodule,
+- a required implementation would modify legacy screen-space shadow, Donut, NVRHI, a submodule,
   `main`, Git history, or remote state;
 - correctness requires a visible quality tradeoff that cannot retain a
   reference mode;

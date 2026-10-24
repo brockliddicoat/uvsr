@@ -6,7 +6,7 @@
 - Coordinator: `/root`
 - Project branch and worktree:
   `experimental/shadow-maps-ibl-20260726` at
-  `C:\Users\brock\Documents\Codex\2026-07-18\i-want-you-to-take-the\work\uvsr-bend-shadows`
+  `C:\Users\brock\Documents\Codex\2026-07-18\i-want-you-to-take-the\work\uvsr-legacy-shadow-shadows`
 - Base commit: `94b8597b79d13e5522fe16d49afc1a6f5768a82a`
 - Started: 2026-07-28
 - Completed: 2026-07-28
@@ -41,7 +41,7 @@ Done when:
       composition paths.
 - [x] Documentation records the branch-local repairs and the MSAA/fused work
       that must remain deferred to the future integration branch.
-- [x] A clean isolated Release build, full CTest suite, Bend hashes, title-case
+- [x] A clean isolated Release build, full CTest suite, legacy screen-space shadow hashes, title-case
       audit, static checks, and independent source review pass.
 - [x] No commit, push, pull request, merge, `main` change, submodule update, or
       destructive Git operation occurs.
@@ -120,7 +120,7 @@ asset/package contracts:
 
 - Preserve the experimental renderer's three `R8_UNORM` directional visibility
   slots and exact-light identity mapping.
-- Preserve independent Bend, CSM, and SVSM producer behavior.
+- Preserve independent legacy screen-space shadow, CSM, and SVSM producer behavior.
 - Preserve all existing shader register and GPU resource layouts.
 - Packaging changes may alter build dependencies and staging locations but not
   runtime virtual paths or shader filenames.
@@ -235,7 +235,7 @@ asset/package contracts:
 | CSM authority fails closed | Deterministic helper tests | Focused CSM test executable | Exhaustive 90-field workload identity and fail-closed frame/query/timing tests passed |
 | Lighting contract remains intact | Source-contract tests | CTest | Three slots, exact producer pairs, white fallback, multiplication, and retired ambient absence passed |
 | Candidate compiles | Warning-free isolated Release build | CMake configure/build | `work/f213748` Release candidate built successfully; executable SHA-256 `0438006E283AC0FD6EF2051970A694BED7C29F9653691F27BF082134311C139F` |
-| Repository policy passes | Hash, title, parser, diff, and status checks | Repository tools | 19/19 CTests, Bend hashes, clean submodule trees, 644-heading audit, and `git diff --check` passed |
+| Repository policy passes | Hash, title, parser, diff, and status checks | Repository tools | 19/19 CTests, legacy screen-space shadow hashes, clean submodule trees, 644-heading audit, and `git diff --check` passed |
 | Runtime smoke | Correctly labeled experiment launch | `tools/launch_uvsr.ps1` equivalent for isolated build | PID 19104 launched as `integrationprep-94b8597-2146`; two visible captures showed a responsive Sponza frame with no error modal |
 
 ## Decisions
@@ -277,7 +277,7 @@ Stop and ask the user if:
 
 - Final integrated commit: intentionally none unless separately requested
 - Verification summary: isolated Release build, 19/19 CTests, shader-bundle
-  mutation tests, HLSL-only incremental rebuild, title-case audit, Bend hashes,
+  mutation tests, HLSL-only incremental rebuild, title-case audit, legacy screen-space shadow hashes,
   submodule cleanliness, static checks, and visible runtime smoke passed
 - Independent review: three final read-only reviews found no remaining staging,
   benchmark-evidence, or lighting-contract blocker in the task-owned diff

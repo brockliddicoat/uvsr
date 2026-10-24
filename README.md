@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 114,859 non-blank source lines.
+**First-Party Lines of Code:** 116,985 non-blank source lines.
 
-**Third-Party Lines of Code:** 387,622 non-blank source lines.
+**Third-Party Lines of Code:** 387,626 non-blank source lines.
 
-**Total Lines of Code:** 502,481 non-blank source lines.
+**Total Lines of Code:** 504,611 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -41,14 +41,14 @@ visibility, anti-aliasing, and shadow-rendering systems.
   With IBL disabled, shadowed regions contain only computed direct light and
   screen-space GI, so regions with neither can reach deep black rather than
   being cosmetically lifted.
-- **Three Shadow-Rendering Research Paths.** Bend Studio screen-space shadows,
+- **Three Shadow-Rendering Research Paths.** Screen-space directional shadows,
   UVSR sparse virtual shadow maps, and a conventional cascaded-shadow-map
   diagnostic each resolve an independent full-resolution visibility texture
   through a producer-neutral deferred-lighting interface. The SVSM path includes
   sparse residency, validated caching, localized invalidation, packet-page
   culling, page-safe filtering, and coarser-clipmap fallback.
-- **Sample-Correct Anti-Aliasing Comparisons.** MiniEngine temporal
-  reconstruction, CMAA2 morphology, and 2x through 16x deferred MSAA share one
+- **Sample-Correct Anti-Aliasing Comparisons.** Temporal reconstruction,
+  CMAA2 morphology, and 2x through 16x deferred MSAA share one
   settings and benchmark surface. MSAA preserves every G-buffer sample through
   material decode and lighting before resolving final HDR radiance.
 - **Built-In Measurement and Inspection.** GPU timings are separated by effect
@@ -78,6 +78,16 @@ This section summarizes stable work that is active but not yet merged into
   (`devin/1784102780-visibility-test-coverage`, PR #11). Adds reference coverage
   for degenerate clipping, radial-mask edge cases, and blue-noise rank fields
   without changing runtime rendering.
+- **First-Party Shadow and Temporal Cost Profiles — Build-Verified Candidate**
+  (`codex/taa-shadow-cleanroom`). Replaces the screen-space directional-shadow
+  producer with first-party code, keeps the established visibility contract,
+  and adds Full Quality, Reduced, and Minimum temporal cost modes. The TAA
+  Developer Options keep actionable image policies, put toggle decisions first,
+  and collapse controls that the selected cost cannot use. Effective cost and
+  execution details stay in Statistics and developer tooling, Full Quality
+  resurrection is available in production, and Morphology uses its
+  implementation-neutral name. Release reverification is active; visual
+  acceptance and matched GPU timing remain outstanding.
 
 ## Build and Run
 
@@ -147,9 +157,9 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-This includes the scene, camera, PBR, AA/UI, screen-space visibility, Bend,
-diagnostic CSM, SVSM, environment, command-line, benchmark, and runtime shader
-bundle contracts.
+This includes the scene, camera, PBR, AA/UI, screen-space visibility,
+screen-space directional shadows, diagnostic CSM, SVSM, environment,
+command-line, benchmark, and runtime shader bundle contracts.
 
 ## Engineering Documentation
 
@@ -162,7 +172,7 @@ bundle contracts.
 - [Screen-Space Visibility](docs/screen-space-visibility.md) documents the
   shared AO/GI traversal, estimators, reconstruction, memory contracts,
   performance profiles, and runtime evidence.
-- [Anti-Aliasing Options](docs/miniengine-taa-options.md) defines temporal,
+- [Anti-Aliasing Options](docs/temporal-aa-options.md) defines temporal,
   morphological, and multisample quality bundles, history behavior, coordinate
   conventions, and motion benchmarks.
 - [AO Optimization Ledger](docs/ao-optimization-ledger.md) records implemented

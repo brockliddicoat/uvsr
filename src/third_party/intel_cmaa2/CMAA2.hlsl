@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Modified by UVSR on 2026-07-30 to correct the retained Microsoft-source
+// attribution. The complete Microsoft MIT notice is staged with the product.
 //
 // Conservative Morphological Anti-Aliasing, version: 2.3
 //
@@ -257,9 +259,10 @@ lpfloat3 LoadSourceColor( uint2 pixelPos, int2 offset, int sampleIndex )
 }
 //
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// (R11G11B10 conversion code below taken from Miniengine's PixelPacking_R11G11B10.hlsli,  
-// Copyright (c) Microsoft, MIT license, Developed by Minigraph, Author:  James Stanard; original file link:
-// https://github.com/Microsoft/DirectX-Graphics-Samples/blob/master/MiniEngine/Core/Shaders/PixelPacking_R11G11B10.hlsli )
+// R11G11B10 conversion code below is from Microsoft DirectX Graphics Samples.
+// Copyright (c) Microsoft. MIT license. Author: James Stanard.
+// The complete permission notice is stored in
+// third_party/microsoft_directx_graphics_samples/LICENSE.txt.
 //
 // The standard 32-bit HDR color format.  Each float has a 5-bit exponent and no sign bit.
 uint Pack_R11G11B10_FLOAT( float3 rgb )
@@ -465,14 +468,15 @@ lpfloat2 ComputeEdge( int x, int y, lpfloat3 pixelColors[3 * 3 - 1] )
 float RGBToLumaForEdges( float3 linearRGB )
 {
 #if 0
-    // this matches Miniengine luma path
+    // this matches the Microsoft sample luma path
     float Luma = dot( linearRGB, float3(0.212671, 0.715160, 0.072169) );
     return log2(1 + Luma * 15) / 4;
 #else
     // this is what original FXAA (and consequently CMAA2) use by default - these coefficients correspond to Rec. 601 and those should be
     // used on gamma-compressed components (see https://en.wikipedia.org/wiki/Luma_(video)#Rec._601_luma_versus_Rec._709_luma_coefficients), 
     float luma = dot( sqrt( linearRGB.rgb ), float3( 0.299, 0.587, 0.114 ) );  // http://en.wikipedia.org/wiki/CCIR_601
-    // using sqrt luma for now but log luma like in miniengine provides a nicer curve on the low-end
+    // The Microsoft sample log-luma curve is smoother at the low end, but
+    // CMAA2 intentionally retains its default square-root luma here.
     return luma;
 #endif
 }

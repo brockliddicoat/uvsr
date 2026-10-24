@@ -4,7 +4,7 @@
 
 - State: complete; intentionally local and uncommitted
 - Coordinator: `/root`
-- Project branch and worktree: `codex/bend-screen-space-shadows` in the
+- Project branch and worktree: preserved legacy screen-space-shadow worktree in the
   preserved UVSR feature checkout
 - Base commit: `ea566bc67f744059e6f62e33c541c5b25bde9bd8`
 - Started: 2026-07-22
@@ -101,7 +101,7 @@ Shared hotspots reserved for the coordinator:
 - Local versus remote state: feature HEAD equals its upstream at `ea566bc`;
   tracked files are clean. Pre-existing untracked reports, benchmark telemetry,
   handoffs, DRED output, and Python cache remain out of scope and untouched.
-- Verified source commit/build: the prior Bend/SVSM candidate was independently
+- Verified source commit/build: the prior screen-space-shadow/SVSM candidate was independently
   reviewed and built before this task; combined verification will be rerun.
 - GPU, scene, camera, resolution, and settings preset when relevant: runtime
   correctness smoke testing will use the existing Sponza diagnostic scene.
@@ -118,7 +118,7 @@ Shared hotspots reserved for the coordinator:
 | UE5 directional CSM | Official Epic behavior/docs plus inspected UE5.6 source | Reviewed | Splits, fades, projections, culling, bias, filtering |
 | UE5 CSM cache | Official setting plus inspected `ShadowSetup` and shadow-depth source | Reviewed | Compatibility, invalidation, overlap reuse |
 | Existing UVSR SVSM | Reuse only neutral seam, reconstruction, timing vocabulary, and Poisson pattern | Verified | Receiver and comparison diagnostics |
-| Existing Bend pass | Independent producer; no CSM references or changes | Frozen | Deferred multiplication only |
+| Existing legacy screen-space shadow pass | Independent producer; no CSM references or changes | Frozen | Deferred multiplication only |
 
 Public interface, ABI, shader binding, resource layout, serialized setting, or
 asset/package contracts:
@@ -163,7 +163,7 @@ asset/package contracts:
   cited UE references
 - Write scope: new CSM files/tests/plan plus narrow CMake, UVSR, and neutral
   deferred-lighting integration
-- No-touch scope: all Bend files, all submodules, main, Git history, remotes,
+- No-touch scope: all legacy screen-space shadow files, all submodules, main, Git history, remotes,
   unrelated source, and pre-existing untracked files
 - Build directory and runtime/GPU/resource lease: existing local Release build;
   one launched renderer only after the testing gate allows it
@@ -299,7 +299,7 @@ or an explicit feature request justifies reopening it.
   re-warm, live resize, and D16/D32 depth recreation.
 - Independent review: three final read-only reviews found no production blocker
 - Coming Soon/documentation update: README component-only build instructions
-  include complete Bend, SVSM, and diagnostic-CSM configurations
+  include complete legacy screen-space shadow, SVSM, and diagnostic-CSM configurations
 - Pushed/PR/merged, or intentionally local: intentionally local and uncommitted
 - Remaining experiments or follow-ups: controlled equal-coverage CSM/SVSM
   performance capture is measurement work and does not keep the CSM source open

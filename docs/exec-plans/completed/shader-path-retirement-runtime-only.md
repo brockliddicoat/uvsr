@@ -70,7 +70,7 @@ Affected subsystems and paths:
 - `src/visibility_sampling.*`
 - `src/shaders.cfg`
 - `src/shaders_production.cfg`
-- `src/taa_miniengine*`
+- `src/temporal_aa*`
 - `src/uvsr.cpp`
 - `tests/*visibility*`
 - `tests/*taa*`
@@ -79,7 +79,7 @@ Affected subsystems and paths:
 - `CMakeLists.txt`
 - `README.md`
 - `docs/screen-space-visibility.md`
-- `docs/miniengine-taa-options.md`
+- `docs/temporal-aa-options.md`
 - `docs/postmortem/shader-path-retirements.md`
 
 Shared hotspots reserved for the coordinator:

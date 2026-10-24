@@ -142,12 +142,14 @@ temporal stability in the current build.
 
 ## Anti-Aliasing
 
-The **Aliasing** drawer exposes **Enabled**, **Method**, **Quality**, **History
-Frames**, **History Strength**, **Dejitter**, and **Sharpness**.
+The **Aliasing** drawer exposes **Enabled**, **Method**, **Quality**, and
+**Temporal Cost**. Temporal Reconstructive also opens a default-expanded
+**Developer Options** segment containing the history and algorithm tuning
+controls.
 
 ### Methods and Quality
 
-- **Temporal Reconstructive** uses MiniEngine temporal history, motion and
+- **Temporal Reconstructive** uses temporal history, motion and
   jitter conventions, reverse-Z validation, disocclusion rejection, and
   rectification.
 - **Conservative Morphological** uses CMAA2 as a spatial presentation method.
@@ -176,59 +178,127 @@ Temporal quality bundles progress as follows:
 reconstruction. **History Frames** accepts 1 through 32 prior frames for
 long-term temporal methods and reports no history for spatial methods.
 **History Strength** accepts 0% through 200%; values above 100% reinforce only
-history that has already passed every validity gate.
+history that has already passed every validity gate. Full Quality, Reduced, and
+Minimum all honor the complete range.
 
-**Aliasing Algorithm Configuration** exposes Subpixel Morphology, Motion Source,
-Reconstruction, and Rectification. Rectification retains Pair Tristimulus and
-Variance YCoCg. Sharpness is disabled by default for every quality. Stable
-Interior and both per-pixel rectification modes are retired.
+TAA **Developer Options** put the available **Dejitter** and **Sharpness**
+toggles first, followed by **History Frames**, **History Strength**,
+**Morphology**, **Motion Source**, **Reconstruction**, **Rectification**,
+**History Storage**, **Previous-Depth Validation**, **History Weight**,
+**Motion Trust**, **Rectification Clip**, **Blend Domain**, **Sharpness
+Policy**, and the Full Quality-only **Sample Resurrection** control. Sharpness
+fades and collapses when its policy disables it; Sample Resurrection does the
+same outside Full Quality. Rectification retains Pair Tristimulus and Variance
+Chroma. Stable Interior and both per-pixel rectification modes are retired.
 
-Effective temporal image or history-layout changes reset history once.
-Presentation-only CMAA2, Sharpness, and image-equivalent execution changes do
-not. Forward and legacy shading leave temporal AA unavailable because they do
-not produce the required motion contract. Visibility Temporal Reconstruction
+**Temporal Cost** offers Minimum, Reduced, and Full Quality from least to most
+expensive, but it is a baseline profile rather than a lock. Full Quality and
+Reduced default to robust history, Four-Texel Footprint validation,
+Confidence Recurrence, Linear Speed motion trust, Velocity-Dilated Line
+clipping, Luminance-Compressed blending, and an enabled Sharpness Policy.
+Reduced changes only execution topology and defaults Sample Resurrection off.
+Minimum defaults Center motion, Direct current color, 1x Bilinear history, Pair
+Tristimulus, compact history, Stationary Bypass validation,
+Immediate Horizon weighting, Squared Speed trust, Tight Component clipping,
+Linear RGB blending, Sharpness Policy Off, and Sample Resurrection Off. Any
+supported explicit Developer Options choice overrides that row's cost default;
+its reset returns the row to **Temporal Cost**. Sample Resurrection is
+editable at Full Quality in production and developer builds. It collapses
+outside Full Quality while retaining the stored Full Quality value.
+
+Minimum normally uses compact `R11G11B10_FLOAT` color and `R16_FLOAT` depth
+history. Compact execution requires Center, Direct, 1x Bilinear, Pair
+Tristimulus, Immediate Horizon, and Sample Resurrection Off. An incompatible
+Minimum algorithm or history-weight override, diagnostics, selective export, or
+incompatible morphology format falls back visibly to robust history and reports
+**Effective Temporal Cost: Reduced** in Statistics. A compatible explicit
+compact-storage request under Full Quality or Reduced can activate the
+dedicated path and reports **Effective Temporal Cost: Minimum** there; an
+incompatible request retains the selected profile's robust path. CMAA2 requires
+`RGBA16_FLOAT`, so it forces a robust fallback when compact color is
+`R11G11B10_FLOAT`; a hardware fallback that already uses `RGBA16_FLOAT` remains
+compatible.
+
+Both robust and compact history pools remain resident. Statistics distinguish
+the effective path's **Active History Memory** from total **Resident History
+Memory**. Full Quality and Reduced preserve their shared robust history when
+their effective image and resurrection settings match. Minimum's hidden
+image-and-stability defaults invalidate history even when its visible algorithm
+matches Low. An actual compact/robust layout transition also resets the physical
+history. Presentation-only CMAA2, Sharpness, storage requests that do not change
+the effective layout, and image-equivalent execution changes do not reset
+history. Forward and legacy shading leave temporal AA unavailable because they
+do not produce the required motion contract. Visibility Temporal Reconstruction
 remains mutually exclusive until both histories share one jitter convention.
 
+The controlled user comparison found Stationary Bypass was the only exposed
+setting that massively stabilized the observed small edges. On a still view,
+that result specifically implicates the bypass: the robust
+four-texel depth footprint repeatedly rejects mixed geometry/background
+silhouettes, while the bypass lets the unchanged downstream accumulation
+stabilize them. This is strong evidence against a broad failure in the other
+TAA stages, but the exact bypass remains unsafe as a universal default until
+newly revealed zero-motion surfaces and other disocclusions are tested. The
+analysis and comparison sequence are documented under [Small-Edge Shimmer
+Isolation](temporal-aa-options.md#small-edge-shimmer-isolation).
+
 The complete coordinate, reset, quality, and motion-test contract is in
-[Anti-Aliasing Options](miniengine-taa-options.md).
+[Anti-Aliasing Options](temporal-aa-options.md).
 
 ## Shadow Visibility Producers
 
-Bend screen-space shadows, Sparse Virtual Shadow Maps, and Diagnostic Cascaded
-Shadow Maps are independent, initially disabled directional-light visibility
-producers. Each resolves a full-resolution linear `R8_UNORM` texture. Deferred
-lighting multiplies complete visibility factors only for the exact
-pointer-identical light.
+Screen-space directional shadows, Sparse Virtual Shadow Maps, and Diagnostic
+Cascaded Shadow Maps are independent, initially disabled directional-light
+visibility producers. Each resolves a full-resolution linear `R8_UNORM`
+texture. Deferred lighting multiplies complete visibility factors only for the
+exact pointer-identical light.
 
 The primary directional sun, `sun_1`, is selected automatically. When
 **Lights** is opened, all three producer drawers start expanded with their
 **Enabled** toggles off. **Lights** itself remains closed at launch.
 
-### Bend Screen-Space Shadows
+### Screen-Space Directional Shadows
 
-Bend shadows require deferred UVSR PBR and a primary directional light. UVSR's
-adapter consumes the existing single-sample reverse-Z depth buffer while
-keeping Bend Studio's released CPU and GPU headers byte-for-byte unchanged.
+Screen-space directional shadows require deferred UVSR PBR and a primary
+directional light. The first-party pass consumes the existing single-sample
+reverse-Z depth buffer and writes every output pixel in one full-screen compute
+dispatch. A major-axis DDA visits one new raster row or column at every logical
+step, so the selected length is the dense reach even for diagonal rays.
+Fractional minor-axis coverage uses edge-aware depth interpolation. The hard
+count covers the first samples, the fade count covers the endpoint, and the
+ordinary body spans everything between them.
+
+The 8-by-8 group processes 32-step chunks. When the projected receiver rays are
+coherent, it cooperatively loads a bounded depth rectangle into about 9 KiB of
+shared memory and reuses those depths across all 64 receivers. It activates the
+cache only when the rectangle fits and predicts at least 25% fewer source reads;
+divergent, sparse, or early-out chunks use the identical direct-load trace.
+This is a structural bandwidth optimization, not a measured GPU-time claim.
 
 | Profile | Length | Shared Defaults |
 | --- | ---: | --- |
-| Performance | 60 pixels | 4 hard samples, 8 fade-out samples |
-| Balanced | 240 pixels | 4 hard samples, 8 fade-out samples |
-| Quality | 960 pixels | 4 hard samples, 8 fade-out samples |
+| Default | 60 pixels | 4 hard samples, 8 fade-out samples |
+| Long | 240 pixels | 4 hard samples, 8 fade-out samples |
+| Maximum Validation | 960 pixels | 4 hard samples, 8 fade-out samples |
 
-All three restore `0.005` surface thickness, `0.02` bilinear threshold,
+All three restore `0.005` surface thickness, `0.02` discontinuity threshold,
 contrast `4`, and optional modes and diagnostics off without changing
-**Enabled**. **Length** selects compiled `SAMPLE_COUNT` variants of 60, 120,
-240, 480, or 960 pixels.
+**Enabled**. **Length** selects a runtime reach of 60, 120, 240, 480, or 960
+pixels without creating shader permutations.
+
+Surface Thickness and Bilinear Threshold remain fractions of the sampled
+nonlinear depth remaining to the far plane. Precision Offset applies a small
+far-relative depth bias. Ignore Edge Pixels rejects detected caster
+discontinuities; otherwise a discontinuity selects the nearer interpolation
+endpoint instead of blending across the edge. Bilinear Offset Mode tests a
+second candidate one pixel farther along the trace. Debug views disable
+optional hard-occlusion early-out so their diagnostics cover the complete ray.
 
 Custom settings include **Surface Thickness**, **Bilinear Threshold**, **Shadow
-Contrast**, compiled **Hard Shadow Samples** and **Fade-Out Samples**, **Ignore
+Contrast**, runtime **Hard Shadow Samples** and **Fade-Out Samples**, **Ignore
 Edge Pixels**, **Precision Offset**, **Bilinear Offset Mode**, and **Early
-Out**. **Debug View** presents Bend's Edge, Thread, or Wave output as grayscale
-visibility.
-
-The vendored integration boundary is recorded in
-[Bend Screen-Space Shadows](../third_party/bend_sss/README.md).
+Out**. **Debug View** presents Occlusion, Trace Progress, or Ray Bounds as
+grayscale visibility.
 
 ### Sparse Virtual Shadow Maps
 
@@ -394,7 +464,10 @@ clean-run GPU time remains the official score.
 
 ## Developer Anti-Aliasing Overrides
 
-Experimental AA execution-path overrides require a developer build:
+Runtime-uniform image-and-stability overrides, History Storage, and Full Quality
+Sample Resurrection are exposed in production under TAA Developer Options.
+Robust execution-topology experiments remain developer-build command-line
+controls rather than noninteractive Settings rows:
 
 ```powershell
 cmake -S . -B build-aa-dev -DUVSR_AA_DEVELOPER_OVERRIDES=ON
@@ -418,40 +491,41 @@ cmake --build build-experiment --config Release --target uvsr
   -BuildDirectory build-experiment
 ```
 
-This configuration compiles 51 UVSR permutations and stages 37 runtime shader
-blobs, compared with 516 first-party compile tasks and 76 blobs in the complete
-production build. It locks renderer-topology drawers to factory settings and
-omits Bend, SVSM, diagnostic CSM, CMAA2, non-default visibility, and developer
-shader families. A fresh tree still compiles Donut's pinned 76-task framework
-catalog once.
+This configuration compiles 61 UVSR permutations and stages 38 runtime shader
+blobs. The complete production build stages 77 blobs. It locks
+renderer-topology drawers to factory settings and omits screen-space
+directional shadows, SVSM, diagnostic CSM, CMAA2, non-default visibility, and
+developer shader families. A fresh tree still compiles Donut's pinned 76-task
+framework catalog once.
 
 Use this mode to shorten repeated UVSR edits, not for release, full-settings,
 diagnostic, or benchmark-matrix verification.
 
 ## Component-Only Builds
 
-Bend, SVSM, and diagnostic CSM are separate static-library targets. A
-component-only configuration can omit the application, other producers, and
-their reference tests.
+Screen-space directional shadows, SVSM, and diagnostic CSM are separate
+static-library targets. A component-only configuration can omit the
+application, other producers, and their reference tests.
 
 Build only SVSM and its deterministic reference test:
 
 ```powershell
-cmake -S . -B build-svsm -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS=OFF -DUVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS=OFF
+cmake -S . -B build-svsm -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS=OFF -DUVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS=OFF
 cmake --build build-svsm --config Release --target uvsr_sparse_virtual_shadow_maps uvsr_sparse_virtual_shadow_map_tests
 ```
 
-Build only Bend screen-space shadows and its deterministic reference test:
+Build only screen-space directional shadows and its deterministic reference
+test:
 
 ```powershell
-cmake -S . -B build-bend -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS=OFF -DUVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS=OFF
-cmake --build build-bend --config Release --target uvsr_bend_screen_space_shadows uvsr_bend_screen_space_shadow_tests
+cmake -S . -B build-screen-space-shadows -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS=OFF -DUVSR_BUILD_DIAGNOSTIC_CASCADED_SHADOW_MAPS=OFF
+cmake --build build-screen-space-shadows --config Release --target uvsr_screen_space_directional_shadows uvsr_screen_space_directional_shadow_tests
 ```
 
 Build only diagnostic CSM and its deterministic reference test:
 
 ```powershell
-cmake -S . -B build-csm -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_BEND_SCREEN_SPACE_SHADOWS=OFF -DUVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS=OFF
+cmake -S . -B build-csm -DUVSR_BUILD_APPLICATION=OFF -DUVSR_BUILD_SCREEN_SPACE_DIRECTIONAL_SHADOWS=OFF -DUVSR_BUILD_SPARSE_VIRTUAL_SHADOW_MAPS=OFF
 cmake --build build-csm --config Release --target uvsr_diagnostic_cascaded_shadow_maps uvsr_diagnostic_cascaded_shadow_map_tests
 ```
 

@@ -127,7 +127,7 @@ replacement production catalog:
 | Integrated Build Surface | Complete Production | Complete Developer | Factory Experiment |
 | --- | ---: | ---: | ---: |
 | UVSR core tasks | 311 | 2,809 | 51 |
-| Bend tasks | 46 | 46 | 0 |
+| Screen-Space Shadow Tasks | 46 | 46 | 0 |
 | SVSM tasks | 105 | 105 | 0 |
 | Diagnostic CSM tasks | 54 | 54 | 0 |
 | Total first-party tasks | 516 | 3,014 | 51 |

@@ -286,7 +286,8 @@ int main(int argc, char** argv)
         "the renderer must retain exactly one shared directional-visibility "
         "adapter initializer");
     constexpr std::array<std::string_view, 3u> ProducerPairs = {
-        "{bendshadowresult.nearvisibility,bendshadowresult.light}",
+        "{screenspaceshadowresult.nearvisibility,"
+            "screenspaceshadowresult.light}",
         "{sparsevirtualshadowmapresult.visibility,"
             "sparsevirtualshadowmapresult.light}",
         "{diagnosticcsmresult.visibility,diagnosticcsmresult.light}"

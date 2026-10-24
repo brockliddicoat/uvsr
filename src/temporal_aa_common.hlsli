@@ -1,5 +1,5 @@
 //
-// Temporal reprojection contract for MiniEngine TAA.
+// Temporal reprojection contract for Temporal AA.
 //
 // Motion.xy is current-to-previous, finite, full-resolution pixels. The
 // producer has already removed projection jitter, so resolved history color is
@@ -140,7 +140,7 @@ float UvsrTemporalDeviceDepthViewAllowance(
     // nearer end of the combined binary16-motion and source-endpoint
     // quantization interval can make an expected depth look spuriously farther
     // than the real previous surface, so only that one-sided uncertainty
-    // belongs in MiniEngine's one-sided disocclusion allowance.
+    // belongs in Temporal AA's one-sided disocclusion allowance.
     const float nearestPlausibleDeviceDepth = min(
         expectedPreviousDeviceDepth +
             UvsrTemporalDeviceDepthError(

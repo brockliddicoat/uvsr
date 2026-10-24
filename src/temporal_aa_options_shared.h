@@ -1,10 +1,13 @@
-#ifndef UVSR_TAA_MINIENGINE_OPTIONS_SHARED_H
-#define UVSR_TAA_MINIENGINE_OPTIONS_SHARED_H
+#ifndef UVSR_TEMPORAL_AA_OPTIONS_SHARED_H
+#define UVSR_TEMPORAL_AA_OPTIONS_SHARED_H
 
 // This macro-only file is the single numeric ABI for C++ PSO indexing and HLSL
-// compile-time specialization. Shipping option values must never be placed in
-// a shader constant buffer: every Cartesian-product combination is compiled as
-// a distinct shader and receives a distinct compute PSO.
+// specialization. The algorithm and execution options below remain static PSO
+// dimensions. The behavior bits at the end are deliberately runtime-uniform
+// developer diagnostics on the robust path: keeping them in one
+// constant-buffer word avoids a 32-way multiplication of every shipping
+// algorithm permutation. Minimum additionally packages one statically folded
+// default shader so normal low-cost frames do not pay for that flexibility.
 
 #define UVSR_TAA_MOTION_CENTER 0
 #define UVSR_TAA_MOTION_CLOSEST_CROSS 1
@@ -55,5 +58,11 @@
 #define UVSR_TAA_LDS_SPLIT 1
 #define UVSR_TAA_LDS_SPLIT_PACKED 2
 #define UVSR_TAA_LDS_LAYOUT_COUNT 3
+
+#define UVSR_TAA_BEHAVIOR_MOVING_POINT_DEPTH (1u << 0u)
+#define UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT (1u << 1u)
+#define UVSR_TAA_BEHAVIOR_SQUARED_MOTION_TRUST (1u << 2u)
+#define UVSR_TAA_BEHAVIOR_TIGHT_RECTIFICATION (1u << 3u)
+#define UVSR_TAA_BEHAVIOR_LINEAR_BLEND_DOMAIN (1u << 4u)
 
 #endif

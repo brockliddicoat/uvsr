@@ -33,7 +33,7 @@ Done when:
 - [x] The motion benchmark advances at the renderer's available frame rate with
       no intentional 40-fps pacing while preserving its per-rendered-frame
       motion contract.
-- [x] Opening Lights selects `sun_1`, presents Bend, Sparse Virtual Shadow Maps,
+- [x] Opening Lights selects `sun_1`, presents legacy screen-space shadow, Sparse Virtual Shadow Maps,
       and Diagnostic Cascaded Shadow Maps expanded, and leaves all three
       disabled.
 - [x] A default-settings-only experiment shader build is opt-in, fast, explicit
@@ -61,7 +61,7 @@ Non-goals:
 
 - Changing emitted-material appearance except by removing the user-selectable
   emissive-source contribution requested here.
-- Changing Bend, SVSM, or diagnostic CSM algorithms, defaults, resources, or
+- Changing legacy screen-space shadow, SVSM, or diagnostic CSM algorithms, defaults, resources, or
   shaders beyond initial enablement/presentation state.
 - Changing the first-Escape General-only Settings contract.
 - Editing Donut, changing DirectX 12 ownership, publishing, merging, or
@@ -116,7 +116,7 @@ Shared hotspots reserved for the coordinator:
 | Screenshot reference | User-provided Lights state | Inspected | Lights presentation |
 | PR #10 | Shared Visibility shader helpers | External and serialized | Later integration |
 | PR #11 | Visibility degenerate-path tests | External and serialized | Later integration |
-| Active shadow plans | Bend, SVSM, and diagnostic CSM own algorithm work in other lineages | Inspected; no implementation changes allowed here | Lights presentation only |
+| Active shadow plans | legacy screen-space shadow, SVSM, and diagnostic CSM own algorithm work in other lineages | Inspected; no implementation changes allowed here | Lights presentation only |
 
 Public interface, ABI, shader binding, resource layout, serialized setting, or
 asset/package contracts:
@@ -140,7 +140,7 @@ asset/package contracts:
 - Agent policy version: `2026-07-22.1`.
 - Owning drawer: Lights.
 - Removed control: Include Emissive Sources and any body it exclusively owns.
-- Changed initial presentation: `sun_1` selected; Bend, Sparse Virtual Shadow
+- Changed initial presentation: `sun_1` selected; legacy screen-space shadow, Sparse Virtual Shadow
   Maps, and Diagnostic Cascaded Shadow Maps nested sections expanded; their
   Enabled toggles remain off.
 - Control classification: removal of an immediate/toggle-owned control plus
@@ -191,7 +191,7 @@ asset/package contracts:
 | Motion benchmark uncapped | Source/history proof plus live frame-rate observation | focused tests and labeled motion run | Sleep, 40 Hz target, and pacing state removed; exact 0.375 degrees per rendered frame and 256-sample schema retained; live run deferred while user PID 8584 owns the renderer |
 | Lights state exact | Source contracts and live screenshot comparison | UI tests and labeled launch | Source/UI contracts pass; live comparison deferred while user PID 8584 owns the renderer |
 | Experiment build minimal and safe | Exact manifest, missing-option behavior, startup smoke | opt-in configure/build/launch | 51 first-party tasks, 37 blobs, exact bundle contract pass, incompatible AA CLI exits 1; interactive startup deferred while user PID 8584 owns the renderer |
-| Full build unaffected | Production and developer shader catalogs compile | normal Release builds | Production 311 + Bend 46 + SVSM 105 + CSM 54 compiled; isolated developer core compiled all 2,809 tasks |
+| Full build unaffected | Production and developer shader catalogs compile | normal Release builds | Production 311 + legacy screen-space shadow 46 + SVSM 105 + CSM 54 compiled; isolated developer core compiled all 2,809 tasks |
 | No broader regression | Focused contracts and full suite | CTest | 28/28 production and 28/28 experiment Release tests pass |
 | Documentation valid | Title Case, line counts, links, diff | repository tools | 914 headings pass; README counts updated to 114,859 first-party and 502,481 total; final `git diff --check` passes |
 | Independent review | Shader/UI/resource/build review | read-only handoff | Pass with no P0/P1 findings; four runtime/product-acceptance checks remain |

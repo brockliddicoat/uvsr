@@ -1,6 +1,6 @@
 # UVSR UI Design and Integration Reference
 
-UI reference version: `2026-07-30.1`.
+UI reference version: `2026-07-30.2`.
 
 ## Purpose
 
@@ -273,8 +273,8 @@ version.
   that control owns and reconcile the profile afterward. Do not attach reset
   icons to adapters, scene destinations, folder buttons, run/cancel commands,
   Screenshot, Restart, or Zoom.
-- Defaults are product behavior. Aliasing presets keep Sharpness and Subpixel
-  Morphology off. Dejitter is off for Low, Medium, and High and on for Ultra.
+- Defaults are product behavior. Aliasing presets keep Sharpness and Morphology
+  off. Dejitter is off for Low, Medium, and High and on for Ultra.
   Changing morphology changes only the CMAA2 morphology override; Visibility
   custom labels retain their originating profile. Do not silently redefine a
   preset while adding its control.
@@ -994,18 +994,60 @@ bindings or history are correctness failures.
 - Keep benchmark controls together in Statistics. Idle state contains the run
   actions only; running status and Cancel appear only while their run state
   exists.
-- Do not restore removed TAA execution-path, kernel, LDS, reuse, early-reject,
-  fusion, cache-blocking, Sample Resurrection, or debug dropdowns in production.
-  Do not create a separate developer performance drawer. Rectification belongs
-  in the default-open **Aliasing Algorithm Configuration** drawer and exposes
-  only Pair Tristimulus and Variance YCoCg. Stable Interior and its
-  moment-history layout are retired.
-- Do not append `(Preset)` to inherited Aliasing controls. The default-open
-  algorithm configuration exposes concrete Subpixel Morphology, Motion Source,
-  Reconstruction, and Rectification selections in least-to-most-expensive
-  order. Keep Sharpness disabled by default for every Aliasing preset, but
-  preserve the user's stored strength while the toggle is off. Place Dejitter
-  above Sharpness; it is off for Low, Medium, and High and on for Ultra.
+- Temporal Reconstructive uses one default-open **Developer Options** segment.
+  Do not create a separate performance drawer. Multisample and standalone
+  CMAA2 retain the narrower **Aliasing Algorithm Configuration** segment.
+- Treat **Temporal Cost** as a baseline profile, not a mask over stored
+  controls. An explicit Developer Options value overrides its cost default; a
+  row reset returns that value to **Temporal Cost**. Do not append `(Preset)` to
+  inherited controls. Sample Resurrection is the exception: it is editable only
+  at Full Quality in supported builds and fades and collapses for Reduced and
+  Minimum while preserving the stored Full Quality value.
+- Put the available **Dejitter** and **Sharpness** toggles first in Developer
+  Options. Follow them with **History Frames**, **History Strength**, and the
+  concrete resolved **Morphology**, **Motion Source**, **Reconstruction**,
+  **Rectification**, **History Storage**, **Previous-Depth Validation**,
+  **History Weight**, **Motion Trust**, **Rectification Clip**, **Blend
+  Domain**, **Sharpness Policy**, and Full Quality-only **Sample Resurrection**
+  controls. Keep least-to-most-expensive ordering where cost ordering is
+  meaningful.
+- Full Quality and Reduced default to robust history, Four-Texel Footprint
+  validation, Confidence Recurrence, Linear Speed trust, Velocity-Dilated Line
+  clipping, Luminance-Compressed blending, and Sharpness Policy On. Reduced
+  changes the execution topology and defaults Sample Resurrection Off.
+  Minimum defaults Center, Direct, 1x Bilinear, Pair Tristimulus, compact
+  history, Stationary Bypass, Immediate Horizon, Squared Speed,
+  Tight Component, Linear RGB, Sharpness Policy Off, and Sample Resurrection
+  Off.
+- Compact execution requires Center motion, Direct current color, 1x Bilinear
+  history, Pair Tristimulus, Immediate Horizon weighting, and Sample
+  Resurrection Off. An incompatible Minimum algorithm or weight, diagnostics,
+  selective output, or incompatible morphology format must use robust storage
+  and report **Effective Temporal Cost: Reduced** in Statistics. A compatible
+  explicit compact request under Full Quality or Reduced can activate the
+  dedicated path and report **Effective Temporal Cost: Minimum** there; an
+  incompatible request retains the selected profile's robust path. Never leave
+  an unsupported compact request looking active.
+- Keep Runtime State, comparison guidance, and execution topology out of
+  Developer Options. Effective cost, dispatches, memory, and timing belong in
+  Statistics. Execution path, compute kernel, LDS layout, shared-work reuse,
+  early rejection, pass fusion, and cache blocking remain runtime-profile or
+  developer command-line concerns, not noninteractive Settings rows.
+- The recommended isolation order is Reduced plus Center first; Minimum with
+  forced Robust History Storage next; Previous-Depth Validation; History
+  Weight; Rectification Clip; then Motion Trust and Blend Domain. Compare
+  compact against robust storage last, after each reset warms up and with every
+  untested setting fixed.
+- Keep Sharpness disabled by default for every Aliasing preset while preserving
+  the stored strength. Place Dejitter above Sharpness and gate the complete
+  Sharpness toggle and strength body with the resolved Sharpness Policy so it
+  fades and collapses while unavailable. Minimum's Sharpness Policy defaults
+  Off but remains overridable; compact sharpening adds one presentation
+  dispatch.
+- Stable Interior and its moment-history layout remain retired. Production
+  exposes no robust execution-path, kernel, LDS, reuse, early-reject, fusion,
+  cache-blocking, or debug controls. Full Quality Sample Resurrection remains a
+  supported production control.
 - Visibility exposes no sampling-implementation selector or developer drawer.
   **Shared Visibility Sampling** owns Estimator, Noise Pattern, Samples, Radius,
   Thickness, and Distribution. Noise Pattern contains only Independent Hash and
@@ -1025,9 +1067,9 @@ bindings or history are correctness failures.
 
 - The outer **Lights** drawer remains closed at launch, so first Escape still
   exposes only General. When Lights is opened, select the scene's primary
-  directional sun and default-open **Bend Screen-Space Shadows**, **Sparse
-  Virtual Shadow Maps**, and **Diagnostic Cascaded Shadow Maps**. Their Enabled
-  toggles remain off.
+  directional sun and default-open **Screen-Space Directional Shadows**,
+  **Sparse Virtual Shadow Maps**, and **Diagnostic Cascaded Shadow Maps**. Their
+  Enabled toggles remain off.
 - Do not expose **Include Emissive Sources** or **Emissive Source Gain**.
   Authored emission remains visible, but screen-space visibility no longer
   owns an emissive source policy, gain, reset, or Statistics control.
@@ -1198,7 +1240,7 @@ The AA-only refresh uses this ownership boundary:
 | Resource or Pass | AA-Only Action | Reason |
 | --- | --- | --- |
 | `RenderTargets` | Recreate | Sample count or motion-vector attachments changed |
-| MiniEngine TAA | Recreate when required | Owns target-bound color, depth, motion, and history resources |
+| Temporal AA | Recreate when required | Owns target-bound color, depth, motion, and history resources |
 | G-buffer pass | Recreate | Its topology names the motion-vector attachment |
 | Forward pass | Recreate only when sample count changes | Its framebuffer/sample topology changed |
 | Pixel readback | Recreate | It owns the replacement Material ID target binding |
@@ -1213,7 +1255,7 @@ If a visibility benchmark is active when topology changes, fail that run rather
 than silently mixing configurations. Initial creation, resize, PBR changes,
 visibility resource or source-radiance ownership changes, view-topology changes,
 and shader reload still require complete `CreateRenderPasses`. A change only to
-TAA pass presence uses `CreateMiniEngineTemporalAAPass` without rebuilding
+TAA pass presence uses `CreateTemporalAAPass` without rebuilding
 unrelated passes.
 
 ### Remaining Synchronous Work
@@ -1247,7 +1289,7 @@ do not add another delay or weaken cache/history invalidation.
 - `uvsr_renderer_source_contract` protects the narrow refresh preconditions,
   resource recreation/retention boundary, binding invalidation, visibility
   history reset, and full-rebuild fallbacks.
-- `uvsr_taa_miniengine_reference` protects TAA history and moment-layout
+- `uvsr_temporal_aa_reference` protects TAA history and moment-layout
   behavior.
 - Live verification keeps Aliasing and Statistics open, switches every Method
   cold and warmed in both directions, confirms roll-up completes before the
@@ -1321,8 +1363,8 @@ After composing incoming behavior:
 1. Build and run the focused UI, renderer, animation, and TAA contracts:
 
    ```powershell
-   cmake --build build --config Release --target uvsr_ui_source_contract_tests uvsr_renderer_source_contract_tests uvsr_ui_animation_tests uvsr_imgui_dropdown_roll_tests uvsr_taa_miniengine_tests
-   ctest --test-dir build -C Release -R "uvsr_ui_(source_contract|animation_reference)|uvsr_imgui_dropdown_roll_lifecycle|uvsr_renderer_source_contract|uvsr_taa_miniengine_reference" --output-on-failure
+   cmake --build build --config Release --target uvsr_ui_source_contract_tests uvsr_renderer_source_contract_tests uvsr_ui_animation_tests uvsr_imgui_dropdown_roll_tests uvsr_temporal_aa_tests
+   ctest --test-dir build -C Release -R "uvsr_ui_(source_contract|animation_reference)|uvsr_imgui_dropdown_roll_lifecycle|uvsr_renderer_source_contract|uvsr_temporal_aa_reference" --output-on-failure
    ```
 
 2. Rebuild shaders and the Release renderer, then run the full CTest suite.
@@ -1418,6 +1460,12 @@ screenshots were checked.
 
 ## Reference Revision History
 
+- `2026-07-30.2`: Renamed the visible morphology control to Morphology.
+  Replaced the Temporal algorithm segment with default-open TAA
+  Developer Options, defined Temporal Cost as an overridable baseline, exposed
+  its image-and-stability policies and Full Quality-only resurrection exception,
+  specified compact fallback reporting, and recorded the code-analysis order
+  for isolating small-edge shimmer.
 - `2026-07-30.1`: Removed the emissive GI-source toggle and gain, made the
   primary directional sun the Lights selection default, and default-opened the
   three disabled directional-shadow sections without opening the outer Lights
@@ -1427,8 +1475,8 @@ screenshots were checked.
   drawers, made Runtime the sole 1-64 sample path, limited Noise Pattern to
   Independent Hash and Toroidal Blue, and placed Distribution in Shared
   Visibility Sampling. Retired Stable Interior and per-pixel rectification;
-  Rectification now belongs to Aliasing Algorithm Configuration and offers Pair
-  Tristimulus and Variance YCoCg.
+  Rectification now belongs to TAA Developer Options and offers Pair Tristimulus
+  and Variance Chroma.
 - `2026-07-29.3`: Defined the fixed editable requested-settings schema for SVSM
   Developer Options, including prerequisite-aware tooltip copy and animated
   regions for bodies directly owned by on/off toggles. Reaffirmed trailing
@@ -1436,9 +1484,9 @@ screenshots were checked.
   nested sections.
 - `2026-07-29.2`: Replaced the procedural-sky baseline with the calibrated
   imported environment background and independent diffuse/specular IBL lobes.
-  Recorded the integrated Bend, diagnostic CSM, SVSM, environment, emissive
-  source, and shadow/IBL Statistics controls under the existing drawer,
-  animation, reset, and deferred-commit contracts.
+  Recorded the integrated legacy screen-space shadow, diagnostic CSM, SVSM,
+  environment, emissive source, and shadow/IBL Statistics controls under the
+  existing drawer, animation, reset, and deferred-commit contracts.
 - `2026-07-29.1`: Defined the current constant-width settings drawer and status
   line, including the compact visible-triangle count. Recorded exact
   `1920 x 1080` work-area centering, the middle-click material picker, the

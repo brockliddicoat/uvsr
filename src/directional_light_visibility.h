@@ -32,9 +32,9 @@ namespace uvsr
     };
 
     // UVSR currently has three independent directional visibility producers:
-    // Bend, SVSM, and the diagnostic CSM. Keeping the fixed ordinary-SRV
-    // interface at exactly that capacity avoids bindless requirements and an
-    // extra full-screen composition dispatch.
+    // Screen-space shadows, SVSM, and the diagnostic CSM. Keeping the fixed
+    // ordinary-SRV interface at exactly that capacity avoids bindless
+    // requirements and an extra full-screen composition dispatch.
     constexpr uint32_t DirectionalLightVisibilityCount = 3u;
     using DirectionalLightVisibilitySet = std::array<
         DirectionalLightVisibility,

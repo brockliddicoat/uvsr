@@ -203,7 +203,7 @@ int main(int argc, char** argv)
         "README line-count verification policy");
     ExpectContains(
         uiReferenceSource,
-        "UI reference version: `2026-07-30.1`.",
+        "UI reference version: `2026-07-30.2`.",
         "current UI reference version");
     ExpectContains(
         uiReferenceSource,
@@ -353,12 +353,12 @@ int main(int argc, char** argv)
     const std::filesystem::path temporalAaPath =
         std::filesystem::path(argv[1]) /
         "src" /
-        "taa_miniengine.cpp";
+        "temporal_aa.cpp";
     const std::string temporalAaSource = ReadFile(temporalAaPath);
     const std::filesystem::path sharpenShaderPath =
         std::filesystem::path(argv[1]) /
         "src" /
-        "taa_miniengine_sharpen_cs.hlsl";
+        "temporal_aa_sharpen_cs.hlsl";
     const std::string sharpenShader = ReadFile(sharpenShaderPath);
     if (temporalAaSource.empty() || sharpenShader.empty())
     {
@@ -837,8 +837,8 @@ int main(int argc, char** argv)
         "Anti-Aliasing statistics selector");
     for (const std::pair<std::string_view, std::string_view>& effect : {
             std::pair<std::string_view, std::string_view>{
-                "StatisticsEffect::BendShadows",
-                "\"Bend Shadows\""},
+                "StatisticsEffect::ScreenSpaceShadows",
+                "\"Screen-Space Shadows\""},
             {
                 "StatisticsEffect::SparseVirtualShadowMaps",
                 "\"Sparse Virtual Shadow Maps\""},
@@ -860,8 +860,8 @@ int main(int argc, char** argv)
     }
     ExpectContains(
         statistics,
-        "m_BendShadowStatLines",
-        "Bend shadow statistics presentation");
+        "m_ScreenSpaceShadowStatLines",
+        "screen-space shadow statistics presentation");
     ExpectContains(
         statistics,
         "m_SparseShadowStatLines",
@@ -931,6 +931,28 @@ int main(int argc, char** argv)
         statistics,
         "\"##AntiAliasingLiveStatistics\"",
         "Anti-Aliasing statistics table");
+    ExpectContains(
+        statistics,
+        "\"Effective Temporal Cost\"",
+        "Statistics ownership of Effective Temporal Cost");
+    ExpectContains(
+        statistics,
+        "m_app->GetTemporalAATimings()",
+        "runtime source of Effective Temporal Cost");
+    const std::string_view effectiveTemporalCostStatistics =
+        ExtractSection(
+            statistics,
+            "\"Effective Temporal Cost\"",
+            "\"Temporal Dispatches\"",
+            "Effective Temporal Cost statistics row");
+    ExpectContains(
+        effectiveTemporalCostStatistics,
+        "GetTemporalAaCostModeLabel(",
+        "Effective Temporal Cost label resolver");
+    ExpectContains(
+        effectiveTemporalCostStatistics,
+        "effectiveCostMode",
+        "timing-derived Effective Temporal Cost value");
     ExpectContains(
         statistics,
         "PresentStructuralBody(m_ui.AntiAliasing)",
@@ -1205,10 +1227,6 @@ int main(int argc, char** argv)
         "Aliasing UI attribution");
     ExpectAbsent(
         aliasing,
-        "\"MiniEngine",
-        "Aliasing UI attribution");
-    ExpectAbsent(
-        aliasing,
         "\"##AliasingEnabledControls\"",
         "Aliasing enabled selector gate");
     ExpectOrdered(
@@ -1247,13 +1265,17 @@ int main(int argc, char** argv)
             std::string_view("\"Dejitter##AliasingDejitter\""),
             std::string_view("\"Motion Source\""),
             std::string_view("\"Reconstruction\""),
-            std::string_view("\"Subpixel Morphology##Developer\"") })
+            std::string_view("\"Morphology##Developer\"") })
     {
         ExpectContains(
             aliasing,
             normalTaaControl,
             "normal production TAA controls");
     }
+    ExpectAbsent(
+        aliasing,
+        "\"Subpixel Morphology##Developer\"",
+        "retired Subpixel Morphology label");
     ExpectAbsent(
         aliasing,
         "\"Current Reconstruction\"",
@@ -1322,7 +1344,7 @@ int main(int argc, char** argv)
         "TAA Motion Source neutral Preset row");
     ExpectOrdered(
         motionSourceOrder,
-        "MiniEngineTaaMotionSourceOverride::Center",
+        "TemporalAaMotionSourceOverride::Center",
         "ClosestCross",
         "TAA Motion Source expense order");
     ExpectOrdered(
@@ -1351,7 +1373,7 @@ int main(int argc, char** argv)
     const std::string_view reconstructionOrder = ExtractSection(
         aliasing,
         "reconstructionOrder = {",
-        "#if UVSR_AA_DEVELOPER_OVERRIDES",
+        "historyStorageOrder = {",
         "TAA Reconstruction expense order");
     ExpectAbsent(
         reconstructionOrder,
@@ -1359,7 +1381,7 @@ int main(int argc, char** argv)
         "TAA Reconstruction neutral Preset row");
     ExpectOrdered(
         reconstructionOrder,
-        "MiniEngineTaaHistoryFilterOverride::Bilinear",
+        "TemporalAaHistoryFilterOverride::Bilinear",
         "OneSampleBicubic",
         "TAA Reconstruction expense order");
     ExpectOrdered(
@@ -1383,7 +1405,7 @@ int main(int argc, char** argv)
         "TAA Sample Resurrection neutral Preset row");
     ExpectOrdered(
         resurrectionOrder,
-        "MiniEngineTaaSampleResurrectionOverride::Off",
+        "TemporalAaSampleResurrectionOverride::Off",
         "OneOlderFrame",
         "TAA Sample Resurrection expense order");
     ExpectOrdered(
@@ -1394,20 +1416,20 @@ int main(int argc, char** argv)
     ExpectContains(
         aliasing,
         "&historyFrames,\n"
-        "                        1,\n"
-        "                        32,",
+        "                            1,\n"
+        "                            32,",
         "32-frame TAA history range");
     ExpectContains(
         aliasing,
         "&historyStrength,\n"
-        "                        0.f,\n"
-        "                        200.f,",
+        "                            0.f,\n"
+        "                            200.f,",
         "200-percent TAA history-strength range");
     ExpectContains(
         aliasing,
         "ImGui::SetItemTooltip(\n"
-        "                    \"%s\",\n"
-        "                    \"Scale accepted history",
+        "                        \"%s\",\n"
+        "                        \"Scale accepted history",
         "literal-safe History Strength tooltip");
     ExpectAbsent(
         aliasing,
@@ -1421,14 +1443,37 @@ int main(int argc, char** argv)
         source,
         "BeginAnimatedMutex",
         "dropdown selection close fading");
-    for (const std::string_view removedPerformanceControl : {
+    for (const std::string_view developerBehaviorControl : {
+            std::string_view("\"History Storage\""),
+            std::string_view("\"Previous-Depth Validation\""),
+            std::string_view("\"History Weight\""),
+            std::string_view("\"Motion Trust\""),
+            std::string_view("\"Rectification Clip\""),
+            std::string_view("\"Blend Domain\""),
+            std::string_view("\"Sharpness Policy\""),
+            std::string_view("\"Sample Resurrection\"") })
+    {
+        ExpectContains(
+            aliasing,
+            developerBehaviorControl,
+            "Aliasing Developer Options image controls");
+    }
+    for (const std::string_view developerTopologyControl : {
+            std::string_view("\"Execution Topology\""),
             std::string_view("\"Execution Path\""),
             std::string_view("\"Compute Kernel\""),
             std::string_view("\"LDS Layout\""),
             std::string_view("\"Shared-Work Reuse\""),
             std::string_view("\"Early History Rejection\""),
             std::string_view("\"Pass Fusion\""),
-            std::string_view("\"Cache Blocking\""),
+            std::string_view("\"Cache Blocking\"") })
+    {
+        ExpectAbsent(
+            aliasing,
+            developerTopologyControl,
+            "removed Aliasing Developer Options topology presentation");
+    }
+    for (const std::string_view removedPerformanceControl : {
             std::string_view("\"Debug View\""),
             std::string_view("\"Stable Interior\"") })
     {
@@ -1445,25 +1490,136 @@ int main(int argc, char** argv)
         aliasing,
         "drawDejitterControl();",
         "\"Sharpness###Sharpness\"",
-        "Dejitter control order");
-    ExpectAbsent(
+        "Dejitter and Sharpness toggle order");
+    ExpectOrdered(
+        aliasing,
+        "\"Sharpness###Sharpness\"",
+        "drawMorphologyOption();",
+        "toggle-first Aliasing Developer Options order");
+    ExpectContains(
         aliasing,
         "\"Developer Options##AliasingDeveloperOptions\"",
-        "removed Aliasing Developer Options panel");
-    const std::string_view aliasingAlgorithmConfiguration = ExtractSection(
+        "Aliasing Developer Options panel");
+    const std::string_view aliasingDeveloperOptions = ExtractSection(
         aliasing,
-        "\"Aliasing Algorithm Configuration\"",
-        "// Resurrection remains last",
-        "Aliasing Algorithm Configuration panel");
+        "\"Developer Options##AliasingDeveloperOptions\"",
+        "EndAnimatedTreeNode();",
+        "Aliasing Developer Options panel");
+    ExpectAbsent(
+        aliasing,
+        "\"Effective Temporal Cost\"",
+        "Statistics-only Effective Temporal Cost ownership");
+    ExpectAbsent(
+        aliasing,
+        "m_app->GetTemporalAATimings()",
+        "Statistics-only temporal timing ownership");
     ExpectContains(
-        aliasingAlgorithmConfiguration,
-        "drawRectificationControl();",
-        "Rectification Algorithm Configuration placement");
+        aliasing,
+        "BeginRoundedCombo(\n"
+        "                        \"Temporal Cost\"",
+        "editable authoritative Temporal Cost selector");
+    ExpectAbsent(
+        aliasing,
+        "\"Requested Temporal Cost\"",
+        "retired verbose Temporal Cost label");
+    const std::string_view aliasingPrimaryControls = ExtractSection(
+        aliasing,
+        "if (temporalMethodSelected)",
+        "\"Developer Options##AliasingDeveloperOptions\"",
+        "Aliasing primary controls");
+    ExpectContains(
+        aliasingPrimaryControls,
+        "\"Temporal Cost\"",
+        "primary Temporal Cost selector");
+    ExpectAbsent(
+        aliasingPrimaryControls,
+        "\"History Frames\"",
+        "History Frames moved out of primary Aliasing controls");
+    ExpectAbsent(
+        aliasingPrimaryControls,
+        "\"History Strength\"",
+        "History Strength moved out of primary Aliasing controls");
+    ExpectContains(
+        aliasingDeveloperOptions,
+        "\"History Frames\"",
+        "History Frames Developer Options placement");
+    ExpectContains(
+        aliasingDeveloperOptions,
+        "\"History Strength\"",
+        "History Strength Developer Options placement");
     ExpectOrdered(
-        aliasingAlgorithmConfiguration,
+        aliasingDeveloperOptions,
+        "\"Sharpness###Sharpness\"",
+        "\"History Frames\"",
+        "toggle-first History Frames placement");
+    ExpectOrdered(
+        aliasingDeveloperOptions,
+        "\"History Frames\"",
+        "\"History Strength\"",
+        "temporal history control order");
+    ExpectOrdered(
+        aliasingDeveloperOptions,
+        "\"History Strength\"",
+        "drawMorphologyOption();",
+        "history controls precede remaining dropdown tuning");
+    for (const std::string_view removedPanelCopy : {
+            std::string_view("\"Runtime State\""),
+            std::string_view("\"Image And Stability\""),
+            std::string_view(
+                "\"Best first comparison for small-edge swimming"),
+            std::string_view("\"Effective Temporal Cost\""),
+            std::string_view("m_app->GetTemporalAATimings()"),
+            std::string_view("drawStatusOption") })
+    {
+        ExpectAbsent(
+            aliasingDeveloperOptions,
+            removedPanelCopy,
+            "removed noninteractive Aliasing Developer Options copy");
+    }
+    ExpectContains(
+        aliasingDeveloperOptions,
+        "drawRectificationControl();",
+        "Rectification Developer Options placement");
+    ExpectContains(
+        aliasingDeveloperOptions,
+        "\"##TemporalSharpnessAvailability\",\n"
+        "                            resolvedCurrent.sharpeningAllowed",
+        "Sharpness policy animated availability gate");
+    ExpectOrdered(
+        aliasingDeveloperOptions,
         "\"Reconstruction\"",
         "drawRectificationControl();",
-        "Aliasing Algorithm Configuration control order");
+        "Aliasing Developer Options algorithm order");
+    ExpectOrdered(
+        aliasingDeveloperOptions,
+        "\"History Storage\"",
+        "\"Previous-Depth Validation\"",
+        "Aliasing Developer Options stability order");
+    ExpectOrdered(
+        aliasingDeveloperOptions,
+        "\"Previous-Depth Validation\"",
+        "\"History Weight\"",
+        "Aliasing Developer Options diagnosis order");
+    ExpectContains(
+        aliasingDeveloperOptions,
+        "\"##SampleResurrectionAvailability\",\n"
+        "                            resolvedCurrent.temporalCostMode ==\n"
+        "                                TemporalAaCostMode::FullQuality",
+        "Sample Resurrection animated Full Quality gate");
+    for (const std::string_view removedGatedStatus : {
+            std::string_view("\"Off - Requires Full Quality\""),
+            std::string_view(
+                "\"Unavailable in Factory Shader Build\"") })
+    {
+        ExpectAbsent(
+            aliasingDeveloperOptions,
+            removedGatedStatus,
+            "collapsed Sample Resurrection status row");
+    }
+    ExpectAbsent(
+        aliasingDeveloperOptions,
+        "TemporalAaPerformanceOverrides& performanceOverrides",
+        "removed Aliasing performance topology surface");
     ExpectAbsent(
         aliasing,
         "(Preset)",
@@ -1499,8 +1655,21 @@ int main(int argc, char** argv)
         "explicit staged Aliasing normalization");
     ExpectContains(
         source,
-        "MiniEngineTaaSharpenEnabled = false;",
+        "TemporalAaSharpenEnabled = false;",
         "default-disabled Aliasing sharpness");
+    const std::string_view temporalPresentationSharpen = ExtractSection(
+        source,
+        "const bool deferTemporalSharpenToPresentation =",
+        "if (m_TemporalAAPass)",
+        "temporal presentation sharpening");
+    ExpectContains(
+        temporalPresentationSharpen,
+        "TemporalAaHistoryStorage::Compact",
+        "compact history presentation sharpening");
+    ExpectAbsent(
+        temporalPresentationSharpen,
+        "m_Cmaa2Pass",
+        "compact history sharpening independent of CMAA2 allocation");
     ExpectContains(
         sharpenShader,
         "#if TAA_SHARPEN_INPUT_PREMULTIPLIED",
@@ -1760,8 +1929,8 @@ int main(int argc, char** argv)
     const std::string compactLights = RemoveAsciiWhitespace(lights);
     for (const std::pair<std::string_view, std::string_view>& shadowControl : {
             std::pair<std::string_view, std::string_view>{
-                "\"Bend Screen-Space Shadows##Lights\"",
-                "m_ui.BendScreenSpaceShadows"},
+                "\"Screen-Space Directional Shadows##Lights\"",
+                "m_ui.ScreenSpaceDirectionalShadows"},
             {
                 "\"Sparse Virtual Shadow Maps##Lights\"",
                 "m_ui.SparseVirtualShadowMaps"},
@@ -1788,8 +1957,8 @@ int main(int argc, char** argv)
     }
     ExpectContains(
         lights,
-        "\"##BendShadowControls\"",
-        "animated Bend shadow controls");
+        "\"##ScreenSpaceShadowControls\"",
+        "animated screen-space shadow controls");
     ExpectContains(
         lights,
         "\"SVSM Enabled\"",
@@ -2010,64 +2179,64 @@ int main(int argc, char** argv)
         }
     }
 
-    const std::string_view bendShadowControls = ExtractSection(
+    const std::string_view screenSpaceShadowControls = ExtractSection(
         lights,
-        "\"Bend Screen-Space Shadows##Lights\"",
+        "\"Screen-Space Directional Shadows##Lights\"",
         "\"Sparse Virtual Shadow Maps##Lights\"",
-        "Bend shadow controls");
-    const std::string compactBendShadowControls =
-        RemoveAsciiWhitespace(bendShadowControls);
+        "screen-space shadow controls");
+    const std::string compactScreenSpaceShadowControls =
+        RemoveAsciiWhitespace(screenSpaceShadowControls);
     for (const std::string_view resetCall : {
             std::string_view(
-                "DrawNestedDropdownResetIcon(\"BendShadowProfile\","),
+                "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowProfile\","),
             std::string_view(
-                "DrawNestedDropdownResetIcon(\"BendShadowLength\","),
+                "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowLength\","),
             std::string_view(
-                "DrawNestedDropdownResetIcon(\"BendShadowHardSamples\","),
+                "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowHardSamples\","),
             std::string_view(
-                "DrawNestedDropdownResetIcon(\"BendShadowFade-OutSamples\","),
+                "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowFade-OutSamples\","),
             std::string_view(
-                "DrawNestedDropdownResetIcon(\"BendShadowDebugView\","),
+                "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowDebugView\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowsEnabled\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowsEnabled\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowSurfaceThickness\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowSurfaceThickness\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowBilinearThreshold\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowBilinearThreshold\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowContrast\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowContrast\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowIgnoreEdgePixels\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowIgnoreEdgePixels\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowPrecisionOffset\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowPrecisionOffset\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowBilinearOffsetMode\","),
+                "DrawPresetResetIcon(\"ScreenSpaceShadowBilinearOffsetMode\","),
             std::string_view(
-                "DrawPresetResetIcon(\"BendShadowEarlyOut\",") })
+                "DrawPresetResetIcon(\"ScreenSpaceShadowEarlyOut\",") })
     {
         ExpectContains(
-            compactBendShadowControls,
+            compactScreenSpaceShadowControls,
             resetCall,
-            "Bend shadow reset coverage");
+            "screen-space shadow reset coverage");
     }
     for (const std::string_view tooltip : {
             std::string_view("Trade trace reach and cost"),
-            std::string_view("Select a precompiled SAMPLE_COUNT shadow length."),
-            std::string_view("Set Bend's nonlinear-depth occluder thickness."),
+            std::string_view("Set the runtime screen-space trace reach."),
+            std::string_view("Set nonlinear-depth occluder thickness."),
             std::string_view("Set the relative depth discontinuity"),
-            std::string_view("Set Bend's visibility transition contrast."),
+            std::string_view("Set visibility transition contrast."),
             std::string_view("fully hard contact"),
             std::string_view("samples that soften"),
             std::string_view("Prevent detected depth-edge pixels"),
-            std::string_view("optional depth precision offset"),
-            std::string_view("Offset bilinear samples"),
-            std::string_view("debug view is active."),
-            std::string_view("Show the raw R8 edge") })
+            std::string_view("toward the near plane"),
+            std::string_view("one pixel farther"),
+            std::string_view("Keep tracing to preserve complete debug"),
+            std::string_view("Show raw occlusion") })
     {
         ExpectContains(
-            bendShadowControls,
+            screenSpaceShadowControls,
             tooltip,
-            "Bend shadow tooltip coverage");
+            "screen-space shadow tooltip coverage");
     }
 
     const std::string_view diagnosticCsmControls = ExtractSection(
@@ -2319,7 +2488,7 @@ int main(int argc, char** argv)
             "Visibility nested dropdown reset scope");
     }
     constexpr const char* aliasingNestedResetCalls[] = {
-        "DrawNestedDropdownResetIcon(\"AliasingSubpixelMorphology\",",
+        "DrawNestedDropdownResetIcon(\"AliasingMorphology\",",
         "DrawNestedDropdownResetIcon(label,"
     };
     for (const char* nestedResetCall : aliasingNestedResetCalls)
@@ -2333,19 +2502,20 @@ int main(int argc, char** argv)
         compactSvsmSettingsSurface,
         "DrawNestedDropdownResetIcon(label,",
         "SVSM nested dropdown reset scope");
-    constexpr const char* bendNestedResetCalls[] = {
-        "DrawNestedDropdownResetIcon(\"BendShadowProfile\",",
-        "DrawNestedDropdownResetIcon(\"BendShadowLength\",",
-        "DrawNestedDropdownResetIcon(\"BendShadowHardSamples\",",
-        "DrawNestedDropdownResetIcon(\"BendShadowFade-OutSamples\",",
-        "DrawNestedDropdownResetIcon(\"BendShadowDebugView\","
+    constexpr const char* screenSpaceShadowNestedResetCalls[] = {
+        "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowProfile\",",
+        "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowLength\",",
+        "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowHardSamples\",",
+        "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowFade-OutSamples\",",
+        "DrawNestedDropdownResetIcon(\"ScreenSpaceShadowDebugView\","
     };
-    for (const char* nestedResetCall : bendNestedResetCalls)
+    for (const char* nestedResetCall :
+        screenSpaceShadowNestedResetCalls)
     {
         ExpectContains(
-            compactBendShadowControls,
+            compactScreenSpaceShadowControls,
             nestedResetCall,
-            "Bend shadow nested dropdown reset scope");
+            "screen-space shadow nested dropdown reset scope");
     }
     constexpr const char* diagnosticCsmNestedResetCalls[] = {
         "DrawNestedDropdownResetIcon(\"DiagnosticCSMProfile\",",
@@ -2385,9 +2555,9 @@ int main(int argc, char** argv)
             1u,
             "SVSM nested dropdown reset wrapper"},
         {
-            bendShadowControls,
+            screenSpaceShadowControls,
             5u,
-            "Bend shadow nested dropdown resets"},
+            "screen-space shadow nested dropdown resets"},
         {
             diagnosticCsmControls,
             4u,
@@ -2776,6 +2946,19 @@ int main(int argc, char** argv)
         source,
         "historyPresetSettings.enabled = true",
         "AA history display independent of execution bypass");
+    ExpectContains(
+        source,
+        "presetLabelSettings.enabled = true;",
+        "AA Developer Options inherited rows independent of execution bypass");
+    ExpectContains(
+        source,
+        "currentLabelSettings.enabled = true;",
+        "AA Developer Options retained state independent of execution bypass");
+    ExpectContains(
+        source,
+        "m_ui.GetResolvedAntiAliasingSettings(\n"
+        "                        currentLabelSettings)",
+        "AA Developer Options resolve retained state while disabled");
     ExpectAbsent(
         source,
         "measurementFreezeUntil",

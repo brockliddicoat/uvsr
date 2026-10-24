@@ -127,8 +127,8 @@ int main(int argc, char** argv)
             std::string_view("ui.RenderMode = RendererMode::Deferred;"),
             std::string_view("ui.AntiAliasing = AntiAliasingSettings{};"),
             std::string_view(
-                "ui.BendScreenSpaceShadows = "
-                "BendScreenSpaceShadowSettings{};"),
+                "ui.ScreenSpaceDirectionalShadows = "
+                "ScreenSpaceDirectionalShadowSettings{};"),
             std::string_view(
                 "ui.SparseVirtualShadowMaps = "
                 "SparseVirtualShadowMapSettings{};"),
@@ -189,8 +189,8 @@ int main(int argc, char** argv)
         "factory experiment pass construction guard");
     passed &= ExpectContains(
         createPasses,
-        "m_BendScreenSpaceShadowPass.reset();",
-        "factory experiment Bend omission");
+        "m_ScreenSpaceDirectionalShadowPass.reset();",
+        "factory experiment screen-space shadow omission");
     passed &= ExpectContains(
         createPasses,
         "m_SparseVirtualShadowMapPass.reset();",

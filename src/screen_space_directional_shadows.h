@@ -1,6 +1,6 @@
 #pragma once
 
-#include "bend_screen_space_shadows_settings.h"
+#include "screen_space_directional_shadows_settings.h"
 
 #include <nvrhi/nvrhi.h>
 
@@ -19,7 +19,7 @@ namespace donut::engine
 
 namespace uvsr
 {
-    struct BendScreenSpaceShadowTimings
+    struct ScreenSpaceDirectionalShadowTimings
     {
         float traceMilliseconds = 0.f;
         uint32_t dispatchCount = 0u;
@@ -30,7 +30,7 @@ namespace uvsr
         bool supported = true;
     };
 
-    struct BendScreenSpaceShadowResult
+    struct ScreenSpaceDirectionalShadowResult
     {
         nvrhi::ITexture* nearVisibility = nullptr;
         const donut::engine::Light* light = nullptr;
@@ -42,21 +42,21 @@ namespace uvsr
         }
     };
 
-    // Thin UVSR adapter around Bend Studio's untouched CPU and GPU headers.
-    // The result is deliberately a standalone near-visibility producer so a
-    // future far tracer can be composed by the renderer without changing Bend.
-    class BendScreenSpaceShadowPass
+    // Full-screen, one-dispatch directional ray marcher. Its public result is
+    // deliberately producer-neutral: full-resolution R8 visibility where one
+    // means unoccluded, associated with the exact light it attenuates.
+    class ScreenSpaceDirectionalShadowPass
     {
     public:
-        BendScreenSpaceShadowPass(
+        ScreenSpaceDirectionalShadowPass(
             nvrhi::IDevice* device,
             const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory,
             const std::shared_ptr<donut::engine::CommonRenderPasses>&
                 commonPasses);
 
-        BendScreenSpaceShadowResult Render(
+        ScreenSpaceDirectionalShadowResult Render(
             nvrhi::ICommandList* commandList,
-            const BendScreenSpaceShadowSettings& settings,
+            const ScreenSpaceDirectionalShadowSettings& settings,
             const donut::engine::IView& view,
             nvrhi::ITexture* depth,
             const donut::engine::DirectionalLight* light);
@@ -65,32 +65,26 @@ namespace uvsr
             nvrhi::ICommandList* commandList,
             nvrhi::IFramebuffer* framebuffer);
 
-        [[nodiscard]] const BendScreenSpaceShadowTimings& GetTimings() const
+        [[nodiscard]] const ScreenSpaceDirectionalShadowTimings&
+            GetTimings() const
         {
             return m_Timings;
         }
 
     private:
-        struct Pipeline
-        {
-            nvrhi::ShaderHandle shader;
-            nvrhi::ComputePipelineHandle pso;
-        };
-
         static constexpr uint32_t c_TimerLatency = 4u;
 
         nvrhi::DeviceHandle m_Device;
         std::shared_ptr<donut::engine::ShaderFactory> m_ShaderFactory;
         std::shared_ptr<donut::engine::CommonRenderPasses> m_CommonPasses;
+        nvrhi::ShaderHandle m_TraceShader;
+        nvrhi::ComputePipelineHandle m_TracePipeline;
         nvrhi::BindingLayoutHandle m_BindingLayout;
         nvrhi::BindingSetHandle m_BindingSet;
         nvrhi::BufferHandle m_ConstantBuffer;
-        std::array<nvrhi::SamplerHandle, 2> m_PointBorderSamplers;
+        nvrhi::SamplerHandle m_PointClampSampler;
         nvrhi::TextureHandle m_NearVisibility;
         nvrhi::ITexture* m_BoundDepth = nullptr;
-        bool m_BoundReverseDepth = true;
-
-        std::array<std::array<std::array<Pipeline, 3>, 3>, 5> m_Pipelines;
 
         nvrhi::ShaderHandle m_DebugPixelShader;
         nvrhi::BindingLayoutHandle m_DebugBindingLayout;
@@ -101,13 +95,11 @@ namespace uvsr
         std::array<bool, c_TimerLatency> m_TimerPending{};
         bool m_TimerActive = false;
         uint32_t m_TimerFrame = 0u;
-        BendScreenSpaceShadowTimings m_Timings;
-        bool m_ReportedInvalidVariant = false;
+        ScreenSpaceDirectionalShadowTimings m_Timings;
+        bool m_ReportedInvalidConfiguration = false;
         bool m_ReportedInvalidInput = false;
 
-        bool EnsureResources(nvrhi::ITexture* depth, bool reverseDepth);
-        Pipeline* EnsurePipeline(
-            const BendScreenSpaceShadowSettings& settings);
+        bool EnsureResources(nvrhi::ITexture* depth);
         void AdvanceTimer();
         void BeginTimer(nvrhi::ICommandList* commandList);
         void EndTimer(nvrhi::ICommandList* commandList);

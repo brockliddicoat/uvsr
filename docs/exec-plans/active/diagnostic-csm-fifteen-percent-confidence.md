@@ -4,7 +4,7 @@
 
 - State: active
 - Coordinator: `/root`
-- Branch/worktree: preserved local `codex/bend-screen-space-shadows` worktree
+- Branch/worktree: preserved local legacy screen-space-shadow worktree
 - Started: 2026-07-24
 - External actions: no commit, push, pull request, merge, main change, submodule update, or destructive Git operation
 
@@ -23,7 +23,7 @@ Done requires:
 - [ ] Raw and 42.5-TFLOPS-normalized detailed-off headline measurements.
 - [ ] Stable normal, cascade-selection, visibility, and cache-action output.
 - [ ] Stationary, motion, teleport, invalidation, alpha-tested, boundary, and resize checks.
-- [x] Release build, focused tests, full CTest, title-case audit, Bend hashes, and diff check.
+- [x] Release build, focused tests, full CTest, title-case audit, legacy screen-space shadow hashes, and diff check.
 - [ ] An evidence-backed confidence assessment that separates UVSR repeatability from uncertainty in the unmatched UE target.
 
 ## Baseline and Targets
@@ -182,7 +182,7 @@ documented proxy rather than the new system's preferred denominator.
 - The combined Release candidate
   `2E9F8C901FBD9A447B5DE9437C0A9C1E758A773FEE275C5ED1C049BEF7E28A58`
   builds and passes the focused CSM test and all 15 Release CTest cases. The
-  title-case checker passed all 555 headings and lead-ins, all eight frozen Bend
+  title-case checker passed all 555 headings and lead-ins, all eight frozen legacy screen-space shadow
   file hashes match, and both tracked and untracked CSM whitespace checks pass.
   A later preflight was deliberately rejected at 63 degrees Celsius GPU core
   and 72.4 degrees Celsius hotspot; external CPU load was acceptable and no
@@ -238,7 +238,7 @@ documented proxy rather than the new system's preferred denominator.
   is `9CFFA9CCEF9E816B38B1575893DA72180A5829FEBD76204AA676F37232B89BFD`.
   All 22 CSM shader tasks compile, the focused CSM test passes, all 15 Release
   CTest cases pass, the title checker passes all 555 headings and lead-ins,
-  all eight frozen Bend hashes match, the submodule remains pinned, no change
+  all eight frozen legacy screen-space shadow hashes match, the submodule remains pinned, no change
   is staged, and whitespace checks pass.
 - DXC inspection confirms that the conservative slope permutation emits a real
   control-flow edge around the reciprocal square root, square root, and divide.

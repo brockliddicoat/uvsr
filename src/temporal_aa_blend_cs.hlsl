@@ -2,15 +2,15 @@
 // Copyright (c) Microsoft. All rights reserved.
 // This code is licensed under the MIT License (MIT).
 //
-// The base pair resolver follows Microsoft MiniEngine commit
-// 357ade6ec6ff0d9dcadc48f35c7a28e37c0cdf7a. UVSR adaptations cover NVRHI,
-// RGBA16F motion validity, arbitrary dimensions, infinite reverse-Z depth, and
-// the compile-time experiment dimensions declared below.
+// Portions are adapted from Microsoft DirectX Graphics Samples and distributed
+// under third_party/microsoft_directx_graphics_samples/LICENSE.txt. UVSR
+// adaptations cover NVRHI, RGBA16F motion validity, arbitrary dimensions,
+// infinite reverse-Z depth, and the compile-time experiment dimensions below.
 //
 
 #pragma pack_matrix(row_major)
 
-#include "taa_miniengine_options_shared.h"
+#include "temporal_aa_options_shared.h"
 #include "temporal_aa_common.hlsli"
 #include <donut/shaders/view_cb.h>
 
@@ -205,7 +205,8 @@ cbuffer CB1 : register(b1)
     // history; it cannot revive invalid motion, failed reverse-Z depth, or
     // out-of-bounds reprojection.
     float MaximumHistoryWeight;
-    uint2 DepthQuantizationPadding;
+    uint TemporalBehaviorFlags;
+    uint TemporalBehaviorPadding;
 #if TAA_SAMPLE_RESURRECTION
     // The resolved persistent color and raw persistent depth occupy different
     // grids. These captured views preserve the producing camera and jitter so
@@ -449,13 +450,13 @@ float2 STtoUV(float2 ST)
 
 float HistoryPositionInBounds(float2 ST)
 {
-    // MiniEngine history color and depth use linear sampling or Gather. Require
+    // Temporal AA history color and depth use linear sampling or Gather. Require
     // their real footprint instead of accepting a clamped half-pixel excursion
     // beyond the viewport.
     return UvsrTemporalLinearFootprintInBounds(ST, BufferDim);
 }
 
-// These are MiniEngine's local reversible blend-domain transforms, not a
+// These are Temporal AA's local reversible blend-domain transforms, not a
 // display tonemapper. Normal scene radiance follows the reference equations.
 // The finite guard prevents experimental negative HDR values from producing
 // NaNs while leaving the ordinary nonnegative path unchanged.
@@ -501,7 +502,7 @@ void GetBBoxForPair(
     out float3 boxMin,
     out float3 boxMax)
 {
-    // This is the original shared horizontal-pair MiniEngine neighborhood.
+    // This is the original shared horizontal-pair Temporal AA neighborhood.
     boxMin = boxMax = LoadWorkingColor(fillIdx);
     float3 a = LoadWorkingColor(fillIdx - kColorPitch - 1);
     float3 b = LoadWorkingColor(fillIdx - kColorPitch + 1);
@@ -1650,7 +1651,7 @@ void WriteSelectiveMorphology(
 #else
     OutMorphologyCurrent[ST] = float4(current, 1.0);
 #endif
-    // MiniEngine confidence starts at 0.5 and reaches 0.8 after four accepted
+    // Temporal AA confidence starts at 0.5 and reaches 0.8 after four accepted
     // contributions. Smoothly remap that per-pixel recurrence to an exact
     // zero instead of combining a binary reprojection step with the global
     // frame count. The old binary mask made a phase-varying silhouette switch
@@ -1735,7 +1736,7 @@ void WriteRejectedCurrent(
     float3 reusedDeJittered)
 {
     WriteTemporalColor(ST, currentRgb, 0.5);
-    WriteDepthOutput(ST, CurDepth[ST]);
+    WriteDepthOutput(ST, LoadDepth(ldsIdx));
     WriteDebugOutput(ST, 0.0);
 #if TAA_EXPORT_SELECTIVE
     WriteSelectiveMorphology(
@@ -1747,6 +1748,20 @@ void WriteRejectedCurrent(
 #endif
 }
 
+bool TemporalBehaviorEnabled(uint flag)
+{
+    return (TemporalBehaviorFlags & flag) != 0u;
+}
+
+struct DelayedPairBounds
+{
+    float3 minimum0;
+    float3 maximum0;
+    float3 minimum1;
+    float3 maximum1;
+    uint ready;
+};
+
 void ApplyTemporalBlend(
     uint2 ST,
     uint ldsIdx,
@@ -1754,7 +1769,10 @@ void ApplyTemporalBlend(
     float3 boxMax,
     uint pairFillIdx,
     uint pairHoleIdx,
-    float3 reusedDeJittered)
+    float3 reusedDeJittered,
+    inout DelayedPairBounds delayedPairBounds,
+    uint delayedPairSlot,
+    bool shareDelayedPairBounds)
 {
     if (any(ST >= BufferDim))
         return;
@@ -1835,10 +1853,17 @@ void ApplyTemporalBlend(
             expectedPreviousDeviceDepth,
             motion.velocity.z,
             SourceDepthPairQuantizationError);
-    float speedFactor =
-        saturate(
+    float velocitySquared =
+        dot(motion.velocity.xy, motion.velocity.xy);
+    float speedFactor = TemporalBehaviorEnabled(
+            UVSR_TAA_BEHAVIOR_SQUARED_MOTION_TRUST)
+        ? saturate(
             1.0 -
-            length(motion.velocity.xy) *
+            velocitySquared *
+                RcpSpeedLimiter * RcpSpeedLimiter)
+        : saturate(
+            1.0 -
+            sqrt(velocitySquared) *
                 RcpSpeedLimiter);
     float preliminaryAcceptance =
         motion.valid *
@@ -1861,31 +1886,71 @@ void ApplyTemporalBlend(
         return;
     }
 
-    // One central history-depth gather is retained for every color-filter
-    // specialization. Both wide Catmull-Rom modes use its coherence as a
-    // common gate before testing each outer tap against a discrete footprint.
-    float4 historyDeviceDepths = PreDepth.Gather(
-        LinearSampler,
-        STtoUV(historyDepthPixel));
-    UvsrTemporalReverseZFootprint historyDepthFootprint =
-        UvsrTemporalReduceReverseZFootprint(
-            historyDeviceDepths);
+    float historyDepthSupport = 1.0;
+    float reprojectionAcceptance = 0.0;
+    [branch]
+    if (TemporalBehaviorEnabled(
+            UVSR_TAA_BEHAVIOR_MOVING_POINT_DEPTH))
+    {
+        const bool stationary =
+            velocitySquared <= 1e-4 &&
+            abs(motion.velocity.z) <= 1e-6;
+        if (stationary)
+        {
+            // Minimum's strongest stability trade: a nominally stationary
+            // silhouette keeps history instead of allowing projection jitter
+            // to alternate a four-texel footprint between geometry and clear.
+            reprojectionAcceptance = 1.0;
+        }
+        else
+        {
+            int2 depthPixel = clamp(
+                int2(floor(historyDepthPixel + 0.5)),
+                int2(0, 0),
+                int2(BufferDim) - 1);
+            float previousDeviceDepth =
+                PreDepth.Load(int3(depthPixel, 0));
+            float depthTolerance = max(
+                max(5e-4, SourceDepthPairQuantizationError),
+                max(
+                    abs(previousDeviceDepth),
+                    abs(expectedPreviousDeviceDepth)) *
+                    0.01);
+            reprojectionAcceptance =
+                UvsrTemporalDeviceDepthValidity(
+                    previousDeviceDepth) *
+                float(
+                    abs(
+                        previousDeviceDepth -
+                        expectedPreviousDeviceDepth) <=
+                    depthTolerance);
+        }
+    }
+    else
+    {
+        // The robust policy validates the complete bilinear/Gather footprint.
+        float4 historyDeviceDepths = PreDepth.Gather(
+            LinearSampler,
+            STtoUV(historyDepthPixel));
+        UvsrTemporalReverseZFootprint historyDepthFootprint =
+            UvsrTemporalReduceReverseZFootprint(
+                historyDeviceDepths);
 #if TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_FIVE_TAP_CATMULL_ROM || \
     TAA_HISTORY_FILTER == UVSR_TAA_HISTORY_NINE_TAP_CATMULL_ROM
-    float historyDepthSupport = HistoryDepthFootprintCoherence(
-        historyDepthFootprint);
-#else
-    float historyDepthSupport = 1.0;
+        historyDepthSupport = HistoryDepthFootprintCoherence(
+            historyDepthFootprint);
 #endif
+        reprojectionAcceptance =
+            UvsrTemporalDepthAccepted(
+                expectedPreviousDeviceDepth,
+                motion.velocity.z,
+                SourceDepthPairQuantizationError,
+                historyDepthFootprint,
+                Projection,
+                1e-3);
+    }
 
-    float reprojectionAcceptance =
-        UvsrTemporalDepthAccepted(
-            expectedPreviousDeviceDepth,
-            motion.velocity.z,
-            SourceDepthPairQuantizationError,
-            historyDepthFootprint,
-            Projection,
-            1e-3) *
+    reprojectionAcceptance *=
         float(HistoryValid != 0u) *
         motion.valid *
         historyPositionValid *
@@ -1912,15 +1977,52 @@ void ApplyTemporalBlend(
 
 #if TAA_EFFECTIVE_EARLY_HISTORY_REJECTION
     // Bounds are deliberately delayed until after the exact-zero exit.
+#if !TAA_PIXEL_SHADER && \
+    TAA_COMPUTE_KERNEL == UVSR_TAA_KERNEL_8X8_TWO_PIXELS
+    if (shareDelayedPairBounds)
+    {
+        if (delayedPairBounds.ready == 0u)
+        {
 #if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_PAIR_RGB
-    GetBBoxForPair(
-        pairFillIdx,
-        pairHoleIdx,
-        boxMin,
-        boxMax);
+            GetBBoxForPair(
+                pairFillIdx,
+                pairHoleIdx,
+                delayedPairBounds.minimum0,
+                delayedPairBounds.maximum0);
+            delayedPairBounds.minimum1 =
+                delayedPairBounds.minimum0;
+            delayedPairBounds.maximum1 =
+                delayedPairBounds.maximum0;
 #else
-    GetBBoxForPixel(ldsIdx, boxMin, boxMax);
+            GetBBoxForAdjacentPixels(
+                pairFillIdx,
+                delayedPairBounds.minimum0,
+                delayedPairBounds.maximum0,
+                delayedPairBounds.minimum1,
+                delayedPairBounds.maximum1);
 #endif
+            delayedPairBounds.ready = 1u;
+        }
+        boxMin = delayedPairSlot == 0u
+            ? delayedPairBounds.minimum0
+            : delayedPairBounds.minimum1;
+        boxMax = delayedPairSlot == 0u
+            ? delayedPairBounds.maximum0
+            : delayedPairBounds.maximum1;
+    }
+    else
+#endif
+    {
+#if TAA_RECTIFICATION == UVSR_TAA_RECTIFICATION_PAIR_RGB
+        GetBBoxForPair(
+            pairFillIdx,
+            pairHoleIdx,
+            boxMin,
+            boxMax);
+#else
+        GetBBoxForPixel(ldsIdx, boxMin, boxMax);
+#endif
+    }
 #endif
 
     HistorySample history =
@@ -1932,8 +2034,13 @@ void ApplyTemporalBlend(
             expectedPreviousDeviceDepth,
             motion.velocity.z,
             expectedPreviousDepthValid);
+    float historyConfidence =
+        TemporalBehaviorEnabled(
+            UVSR_TAA_BEHAVIOR_IMMEDIATE_HISTORY_WEIGHT)
+            ? MaximumHistoryWeight
+            : history.weight;
     float baseHistoryWeight = min(
-        history.weight * hardAcceptance,
+        historyConfidence * hardAcceptance,
         MaximumHistoryWeight);
     float resurrectionPresentationTrust = 0.0;
     float resurrectionDebugValue = 0.0;
@@ -2090,11 +2197,14 @@ void ApplyTemporalBlend(
     boxMax += boxRange * 0.125 + 0.001;
 #endif
 
-    temporalWorking = ClipColor(
-        temporalWorking,
-        boxMin,
-        boxMax,
-        lerp(1.0, 4.0, speedFactor * speedFactor));
+    temporalWorking = TemporalBehaviorEnabled(
+            UVSR_TAA_BEHAVIOR_TIGHT_RECTIFICATION)
+        ? clamp(temporalWorking, boxMin, boxMax)
+        : ClipColor(
+            temporalWorking,
+            boxMin,
+            boxMax,
+            lerp(1.0, 4.0, speedFactor * speedFactor));
     float3 temporalRgb = WorkingToRgb(temporalWorking);
 
     // Strength is applied only after every ownership, bounds, reverse-Z, and
@@ -2105,12 +2215,18 @@ void ApplyTemporalBlend(
         baseHistoryWeight * clamp(TemporalBlendFactor, 0.0, 2.0),
         MaximumHistoryWeight);
 
-    float3 temporalColor = ITM(lerp(
-        TM(currentRgb),
-        TM(temporalRgb),
-        finalHistoryWeight));
+    float3 temporalColor = TemporalBehaviorEnabled(
+            UVSR_TAA_BEHAVIOR_LINEAR_BLEND_DOMAIN)
+        ? lerp(
+            currentRgb,
+            temporalRgb,
+            finalHistoryWeight)
+        : ITM(lerp(
+            TM(currentRgb),
+            TM(temporalRgb),
+            finalHistoryWeight));
 
-    // Presentation strength must not feed back into MiniEngine's stored
+    // Presentation strength must not feed back into Temporal AA's stored
     // confidence; only accepted history advances the recurrence.
     float storedWeight =
         saturate(rcp(2.0 - baseHistoryWeight));
@@ -2118,7 +2234,7 @@ void ApplyTemporalBlend(
     storedWeight = f16tof32(f32tof16(storedWeight));
 
     WriteTemporalColor(ST, temporalColor, storedWeight);
-    WriteDepthOutput(ST, CurDepth[ST]);
+    WriteDepthOutput(ST, LoadDepth(ldsIdx));
     WriteDebugOutput(ST, resurrectionDebugValue);
 #if TAA_EXPORT_SELECTIVE
     // Selective morphology consumes de-jittered current only as a presentation
@@ -2262,6 +2378,8 @@ void main(
     uint2 st1 = st0 + uint2(1, 0);
     float3 reusedDeJittered0 = 0.0;
     float3 reusedDeJittered1 = 0.0;
+    DelayedPairBounds delayedPairBounds =
+        (DelayedPairBounds)0;
 #if TAA_SHARED_WORK_REUSE && \
     (TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED || \
         TAA_EXPORT_SELECTIVE)
@@ -2286,7 +2404,10 @@ void main(
         pairMax,
         idx0,
         idx1,
-        reusedDeJittered0);
+        reusedDeJittered0,
+        delayedPairBounds,
+        0u,
+        true);
     ApplyTemporalBlend(
         st1,
         idx1,
@@ -2294,7 +2415,10 @@ void main(
         pairMax,
         idx0,
         idx1,
-        reusedDeJittered1);
+        reusedDeJittered1,
+        delayedPairBounds,
+        1u,
+        true);
 #else
     float3 boxMin0;
     float3 boxMax0;
@@ -2330,7 +2454,10 @@ void main(
         boxMax0,
         idx0,
         idx1,
-        reusedDeJittered0);
+        reusedDeJittered0,
+        delayedPairBounds,
+        0u,
+        true);
     ApplyTemporalBlend(
         st1,
         idx1,
@@ -2338,7 +2465,10 @@ void main(
         boxMax1,
         idx0,
         idx1,
-        reusedDeJittered1);
+        reusedDeJittered1,
+        delayedPairBounds,
+        1u,
+        true);
 #endif
 #else
     uint idx =
@@ -2348,6 +2478,8 @@ void main(
         kColorBorder;
     uint2 st = uint2(groupOrigin) + GTid.xy;
     float3 reusedDeJittered = 0.0;
+    DelayedPairBounds delayedPairBounds =
+        (DelayedPairBounds)0;
 #if TAA_SHARED_WORK_REUSE && \
     (TAA_CURRENT_RECONSTRUCTION == UVSR_TAA_CURRENT_DEJITTERED || \
         TAA_EXPORT_SELECTIVE || \
@@ -2443,7 +2575,10 @@ void main(
         pairMax,
         pairIdx0,
         pairIdx0 + 1,
-        reusedDeJittered);
+        reusedDeJittered,
+        delayedPairBounds,
+        GTid.x & 1u,
+        false);
 #else
     float3 boxMin;
     float3 boxMax;
@@ -2465,7 +2600,10 @@ void main(
         boxMax,
         idx,
         idx,
-        reusedDeJittered);
+        reusedDeJittered,
+        delayedPairBounds,
+        0u,
+        false);
 #endif
 #endif
 }
@@ -2483,6 +2621,8 @@ struct TaaPixelOutputs
 TaaPixelOutputs main(float4 position : SV_Position)
 {
     uint2 ST = uint2(position.xy);
+    DelayedPairBounds delayedPairBounds =
+        (DelayedPairBounds)0;
     PixelOutTemporal = 0.0;
     PixelOutDepth = 0.0;
     PixelOutDebug = 0.0;
@@ -2515,7 +2655,10 @@ TaaPixelOutputs main(float4 position : SV_Position)
         boxMax,
         pairFillIdx,
         pairHoleIdx,
-        0.0);
+        0.0,
+        delayedPairBounds,
+        ST.x & 1u,
+        false);
 #else
     float3 boxMin = 0.0;
     float3 boxMax = 0.0;
@@ -2529,7 +2672,10 @@ TaaPixelOutputs main(float4 position : SV_Position)
         boxMax,
         ldsIdx,
         ldsIdx,
-        0.0);
+        0.0,
+        delayedPairBounds,
+        0u,
+        false);
 #endif
 
     TaaPixelOutputs output;

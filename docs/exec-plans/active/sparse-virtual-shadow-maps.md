@@ -17,8 +17,9 @@ Goal:
 
 Add the smallest safe Sparse Virtual Shadow Map implementation that follows
 K. T. Stephano's published directional-clipmap design, preserves the existing
-Bend experiment byte-for-byte, and keeps Bend and SVSM independently
-portable behind a producer-neutral deferred-lighting seam. SVSM resolves its
+screen-space shadow experiment byte-for-byte, and keeps screen-space shadows
+and SVSM independently portable behind a producer-neutral deferred-lighting
+seam. SVSM resolves its
 own full-resolution linear `R8_UNORM` visibility before deferred lighting.
 Refine the cached implementation until a thermally valid benchmark
 at camera position 1 measures at most 0.4 ms total SVSM GPU cost both for a
@@ -38,7 +39,7 @@ Done when:
 - [ ] All reference, sampling, marking, cache, profile, debug, timing, resize,
   and resource-recreation requirements are represented
   by independently controllable settings and evidence.
-- [ ] The Release build, full CTest suite, title-case checker, Bend hash
+- [ ] The Release build, full CTest suite, title-case checker, legacy screen-space shadow hash
   verification, diff check, source review, and available runtime matrix pass.
 - [ ] Three repeatable, thermally accepted position-1 runs measure no more than
   0.4 ms median total SVSM GPU cost for the static and motion benchmarks, with
@@ -103,7 +104,7 @@ Shared hotspots reserved for the coordinator:
   `94b8597b79d13e5522fe16d49afc1a6f5768a82a`. It is not current `main`, so
   integration must preserve both lineages on a separate integration branch.
 - Verified source commit/build: source identity recorded; existing candidate
-  reports a passing Release build and CTest in its Bend execution plan, but
+  reports a passing Release build and CTest in its legacy screen-space shadow execution plan, but
   this task will rerun combined verification.
 - GPU, scene, camera, resolution, and settings preset: Benchmark Position 1 at
   1920 by 1080 is the required control; the complete cold baseline is pending a
@@ -128,10 +129,10 @@ Shared hotspots reserved for the coordinator:
   license constraints. The current firmware exposes no live CPU temperature to
   LibreHardwareMonitor, so runs use the documented reduced-evidence exception
   while retaining every other thermal, load, process, power, and bracket gate.
-- Known pre-existing failures: none recorded. The existing Bend runtime matrix
+- Known pre-existing failures: none recorded. The existing legacy screen-space shadow runtime matrix
   still contains pending rows and must not be misreported as complete.
 - Preservation rule: every pre-existing modification and untracked file is
-  retained. Bend source hashes were captured before SVSM edits.
+  retained. legacy screen-space shadow source hashes were captured before SVSM edits.
 
 ## Dependencies and Interfaces
 
@@ -143,14 +144,14 @@ Shared hotspots reserved for the coordinator:
 | StratusGFX branches | Treat the WIP implementation and disabled-cache history as evidence only | Reviewed | Packing and failure cross-check |
 | Timberdoodle | Cross-check allocation, wrap, invalidation, dirty tracking, and sampling only | Reviewed | Sparse/cache design |
 | Epic VSM documentation | Production invalidation and pool-exhaustion lessons | Reviewed | Safety and validation |
-| Bend release and adapter | Byte-for-byte preservation and separate light identity | Frozen | Deferred composition |
+| legacy screen-space shadow release and adapter | Byte-for-byte preservation and separate light identity | Frozen | Deferred composition |
 
 Public interface, shader binding, resource layout, and settings contracts:
 
 - SVSM result: `{ visibilityTexture, exactDirectionalLight }`; both are present
   or both are absent.
 - Deferred lighting binds three neutral full-resolution visibility SRVs and
-  compares each stored light pointer independently. Bend, SVSM, and diagnostic
+  compares each stored light pointer independently. legacy screen-space shadow, SVSM, and diagnostic
   CSM know nothing about one another.
 - Missing, invalid, disabled, unsupported, over-budget, exhausted, or
   out-of-range SVSM samples resolve through coarser valid clipmaps, then white.
@@ -169,7 +170,7 @@ Public interface, shader binding, resource layout, and settings contracts:
 
 | Task ID | Owner | Branch And Worktree | Base | Write Scope | Dependencies | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| research | `/root` | Target worktree, read-only | `a55e215` plus dirty Bend state | Plan and report only | Published and local sources | Complete |
+| research | `/root` | Target worktree, read-only | `a55e215` plus dirty legacy screen-space shadow state | Plan and report only | Published and local sources | Complete |
 | dense-reference | `/root` | Target worktree | Preserved dirty baseline | First-party SVSM and integration files | Research | Implemented; runtime validation pending |
 | sparse-pool | `/root` | Target worktree | Dense implementation | SVSM files and focused integration | Dense reference | Implemented; comparison matrix pending |
 | cache | `/root` | Target worktree | Sparse implementation | SVSM files and tests | Sparse pool | Implemented; invalidation matrix pending |
@@ -182,11 +183,11 @@ Public interface, shader binding, resource layout, and settings contracts:
 
 - Owner/thread: `/root`
 - Branch/worktree: target worktree, read-only research
-- Base commit/state: `a55e215` plus preserved Bend changes
+- Base commit/state: `a55e215` plus preserved legacy screen-space shadow changes
 - Read scope: all user references, all Stephano repositories/branches, pinned
-  local dependencies, UVSR render paths, and existing Bend experiment
+  local dependencies, UVSR render paths, and existing legacy screen-space shadow experiment
 - Write scope: this plan and technical report
-- No-touch scope: dependency files, Bend files, Git history, and external state
+- No-touch scope: dependency files, legacy screen-space shadow files, Git history, and external state
 - Build directory and runtime/GPU/resource lease: none
 - Dependencies already integrated: none
 - Interface/invariant contract: distinguish published design, public WIP code,
@@ -208,19 +209,19 @@ Public interface, shader binding, resource layout, and settings contracts:
 - Read scope: full first-party renderer and pinned APIs
 - Write scope: new SVSM files, narrow PBR/UVSR integration, build registration,
   tests, plan, and report
-- No-touch scope: every `bend_screen_space_shadows*` file, dependencies, main,
+- No-touch scope: every `screen_space_directional_shadows*` file, dependencies, main,
   Git history, remote state, and unrelated changes
 - Build directory and runtime/GPU/resource lease: existing local build; one
   UVSR runtime at a time
 - Dependencies already integrated: research contract
-- Interface/invariant contract: all pages backed, no caching, no Bend
+- Interface/invariant contract: all pages backed, no caching, no legacy screen-space shadow
   optimization, separate exact-light visibility, white on any invalid state
 - Deliverable: selectable dense reference mode and deterministic CPU tests
 - Done when: build/tests pass and dense debug/resolve behavior is observable
 - Required verification: mapping, reverse-Z, presets, composition, resources,
   build, CTest, and runtime inspection
 - Allowed Git and external actions: local file edits/build/tests/run only
-- Stop and report if: implementation requires a dependency or Bend edit, a
+- Stop and report if: implementation requires a dependency or legacy screen-space shadow edit, a
   destructive operation, or a per-page CPU draw loop
 - Handoff revision/artifact: pending
 - Handoff acknowledged by/on: pending
@@ -233,7 +234,7 @@ Public interface, shader binding, resource layout, and settings contracts:
 - Read scope: dense implementation and source-grounded allocation references
 - Write scope: SVSM allocation, marking, clearing, rendering, resolve, tests,
   plan, and report
-- No-touch scope: dense availability, Bend, dependencies, unrelated renderer
+- No-touch scope: dense availability, legacy screen-space shadow, dependencies, unrelated renderer
 - Build directory and runtime/GPU/resource lease: existing local build/runtime
 - Dependencies already integrated: dense reference
 - Interface/invariant contract: fixed pool, no correctness readback, conservative
@@ -254,7 +255,7 @@ Public interface, shader binding, resource layout, and settings contracts:
 - Base commit/state: verified sparse pool
 - Read scope: sparse implementation and invalidation references
 - Write scope: SVSM cache/invalidation code, tests, plan, and report
-- No-touch scope: uncached reference modes, Bend, dependencies
+- No-touch scope: uncached reference modes, legacy screen-space shadow, dependencies
 - Build directory and runtime/GPU/resource lease: existing local build/runtime
 - Dependencies already integrated: sparse pool
 - Interface/invariant contract: page-aligned origins, toroidal reuse, newly
@@ -279,15 +280,15 @@ Public interface, shader binding, resource layout, and settings contracts:
   tests, and current documentation
 - Write scope: first-party SVSM, neutral deferred seam, UI, benchmark, tests,
   and documentation
-- No-touch scope: all Bend-owned files and behavior
+- No-touch scope: all legacy screen-space shadow-owned files and behavior
 - Build directory and runtime/GPU/resource lease: existing local build/runtime
 - Dependencies already integrated: cached SVSM
-- Interface/invariant contract: SVSM and Bend never include, bind, sample,
+- Interface/invariant contract: SVSM and legacy screen-space shadow never include, bind, sample,
   configure, benchmark, or name one another; the renderer adapts their results
   into neutral exact-light factors; every incomplete factor is white
 - Deliverable: independent producers, no cross-producer early reject, and
   Performance, Balanced, Quality, and Custom speed-to-quality profiles
-- Done when: source searches are clean, frozen Bend hashes match, generic
+- Done when: source searches are clean, frozen legacy screen-space shadow hashes match, generic
   composition passes, and the runtime matrix confirms stable output
 - Required verification: focused composition/profile tests, Release build,
   frozen hashes, independent review, and runtime checks
@@ -299,7 +300,7 @@ Public interface, shader binding, resource layout, and settings contracts:
 
 ## Integration Order
 
-1. Freeze and later recheck pre-existing Bend file hashes and worktree changes.
+1. Freeze and later recheck pre-existing legacy screen-space shadow file hashes and worktree changes.
 2. Add deterministic layout, mapping, reverse-Z, profile, and composition tests.
 3. Add the separate SVSM result and deferred-light identity binding, with a
    white default.
@@ -319,7 +320,7 @@ Public interface, shader binding, resource layout, and settings contracts:
 
 | Acceptance Criterion | Evidence Required | Command Or Experiment | Result Or Artifact |
 | --- | --- | --- | --- |
-| Existing work preserved | Pre/post hashes and diff ownership audit | SHA-256 and Git diff inspection | All six Bend source hashes match the frozen baseline; final audit pending |
+| Existing work preserved | Pre/post hashes and diff ownership audit | SHA-256 and Git diff inspection | All six legacy screen-space shadow source hashes match the frozen baseline; final audit pending |
 | Page packing and mapping | Deterministic expected values | Focused unit tests | Passed, including compact render-page owner/physical packing |
 | Reverse-Z atomic depth | Clear zero and nearest-wins ordering | Deterministic CPU model plus shader inspection | Passed focused test; runtime comparison pending |
 | Dense versus sparse | Matching visibility under full residency | Fixed scene image comparison | Pending |
@@ -349,9 +350,9 @@ unmeasured.
 | Date | Decision | Reasoning And Rejected Alternatives | Tasks Affected |
 | --- | --- | --- | --- |
 | 2026-07-29 | Organize the SVSM drawer around a small normal tuning surface, collapsed Developer Options with four default-collapsed raw subgroups, and collapsed Diagnostics. | Adaptive Filtering stays beside Filter Taps on the main receiver surface. Resources And Cache Policy, Movement And Invalidation, Culling And Raster, and Unabstracted compact the raw controls without reintroducing a separate Advanced panel. Low-risk switches trending toward always-on behavior remain independently reversible under Unabstracted. Mode, moving-light bias, and dirty-scatter safety each have one authoritative UI state so duplicate controls cannot contradict the effective runtime configuration. Fine-caster exclusion was removed because it had no conservative implementation. | UI, profiles, documentation, and validation |
-| 2026-07-22 | Fully decouple Bend and SVSM behind a neutral exact-light deferred-lighting interface, initially with two slots and later with a third diagnostic CSM slot. | The Bend-assisted resolve read could only avoid final filtering, could not reduce dominant culling or rendering work, and disabled static full-resolution visibility reuse. A separate composition dispatch and a general bindless visibility system were rejected as extra cost and architecture. Every producer now exposes only an independent full-resolution factor and exact light pointer; deferred lighting performs the optional same-light product across the fixed three-slot interface. | Integration, SVSM resolve/cache, UI, profiles, and motion benchmark |
+| 2026-07-22 | Fully decouple legacy screen-space shadow and SVSM behind a neutral exact-light deferred-lighting interface, initially with two slots and later with a third diagnostic CSM slot. | The screen-space-shadow-assisted resolve read could only avoid final filtering, could not reduce dominant culling or rendering work, and disabled static full-resolution visibility reuse. A separate composition dispatch and a general bindless visibility system were rejected as extra cost and architecture. Every producer now exposes only an independent full-resolution factor and exact light pointer; deferred lighting performs the optional same-light product across the fixed three-slot interface. | Integration, SVSM resolve/cache, UI, profiles, and motion benchmark |
 | 2026-07-22 | Replace implementation-named SVSM presets with Performance, Balanced, Quality, and Custom profiles. | Working reference modes remain available through the backend and Custom controls. The current profiles express the speed-to-quality trade as adaptive nearest-Poisson 8 taps with global `+1` and moving-light `+2` bias; bilinear 4 taps with zero global and moving-light `+1` bias; or bilinear 8 taps with zero bias. Balanced and Quality keep adaptive filtering off, and Quality also keeps receiver-distance clamping off. All use validated no-work cache and submission paths. | Settings, UI, tests, and documentation |
-| 2026-07-20 | Use a separate SVSM visibility texture and exact-light pointer. | It satisfies the requested producer boundary and avoids Donut's four-cascade receiver. Encoding SVSM into Bend channels or `IShadowMap` was rejected. | Integration and resolve |
+| 2026-07-20 | Use a separate SVSM visibility texture and exact-light pointer. | It satisfies the requested producer boundary and avoids Donut's four-cascade receiver. Encoding SVSM into legacy screen-space shadow channels or `IShadowMap` was rejected. | Integration and resolve |
 | 2026-07-20 | Use normal NVRHI `R32_UINT` resources and a software-managed fixed pool. | This matches the required reference backend without dependency changes. Native sparse resources and an NVRHI fork were rejected. | Dense and sparse backends |
 | 2026-07-20 | Translate Stephano's conventional-Z atomic minimum to reverse-Z clear zero plus atomic maximum. | Non-negative IEEE-754 `[0,1]` values preserve unsigned bit ordering. | Depth backend and tests |
 | 2026-07-20 | Keep all allocation and eviction decisions on the GPU. | Readback may expose delayed diagnostics, but cannot drive the final cached path. | Sparse pool and cache |
@@ -365,11 +366,11 @@ unmeasured.
 | 2026-07-21 | Keep HWiNFO optional and never run it implicitly. | Its portable build is cross-vendor on Windows but temporarily loads a kernel driver, automated logging is licensed separately, and it must not be redistributed with UVSR. | Thermal telemetry |
 | 2026-07-21 | Add packet-to-dirty-page compaction behind an independent default-off toggle. | Static packet caches still submit every dirty page to every caster. Conservative per-packet page lists can remove that product term while all invalid, over-limit, allocation-failure, and overflow states retain the full-page reference path. | Cached sparse rendering |
 | 2026-07-21 | Treat the eight TAA jitter requests as an exact union rather than a page halo. | Preserving only the exact previously observed requests eliminates large conservative overmarking while numeric jitter matching handles signed zero. Extending the union invalidates every visibility slice because allocation or eviction can change fallback. | Static cache and marking |
-| 2026-07-21 | Disable static visibility reuse when Bend early reject consumes live Bend output. | Historical prototype decision, superseded on 2026-07-22 by complete producer decoupling and removal of the early reject. | Historical Bend optimization and static visibility |
+| 2026-07-21 | Disable static visibility reuse when legacy screen-space shadow early reject consumes live legacy screen-space shadow output. | Historical prototype decision, superseded on 2026-07-22 by complete producer decoupling and removal of the early reject. | Historical legacy screen-space shadow optimization and static visibility |
 | 2026-07-21 | Require a full-duration, thermally clean measurement window. | A clean suffix cannot redeem earlier contamination. Preflight may wait for cooldown, while measurement latches any failed sample and covers an explicit duration. | Thermal telemetry and benchmarks |
 | 2026-07-21 | Treat unexplained utilization as user occupancy. | High load commonly means the user is working in another program. Agents must not compete, stop unrelated work, or launch on a brief utilization dip. | All builds and runtime validation |
 | 2026-07-21 | Treat a render budget at least as large as the physical pool as effectively unlimited for static request reuse. | At most one dirty owner per physical page can be scheduled in a frame, so a pool-sized budget drains every resident dirty page before reuse. Requiring literal `UINT_MAX` needlessly forced marking, allocation, and culling forever. | Static cached performance |
-| 2026-07-21 | Keep Bend Hybrid on per-pixel page marking. | Historical prototype decision, superseded on 2026-07-22 by producer-local speed-to-quality profiles. Per-pixel marking remains the safe production default. | Historical profile and motion benchmark |
+| 2026-07-21 | Keep legacy hybrid on per-pixel page marking. | Historical prototype decision, superseded on 2026-07-22 by producer-local speed-to-quality profiles. Per-pixel marking remains the safe production default. | Historical profile and motion benchmark |
 | 2026-07-21 | Stable-sort batched packets only behind an independent toggle. | Opaque packets can share buffer and raster state without material identity, while alpha-tested and nonbatchable packets retain exact material state and singleton fallbacks. | Motion packet submission |
 | 2026-07-21 | Gate empty batched clipmaps with a per-level GPU count word. | A zero dirty-page count now parses zero indirect commands, while any nonzero count publishes `UINT_MAX` so D3D12 and pinned NVRHI clamp to the complete draw group. Using the dirty-page count directly was rejected because it can truncate groups whose packet count is larger. | Sparse page rendering |
 | 2026-07-21 | Keep motion refinements independent of named presets. | The automatic motion harness opts into packet-state sorting, empty-level skipping, packet-page culling, small-rectangle direct page-table scans, recent-page eviction grace, and finite-budget allocation-saturation probing. Named presets retain their requested behavior and keep every refinement independently disableable for comparison. | Motion benchmark and reference availability |
@@ -385,14 +386,14 @@ unmeasured.
 
 | Date | Task And Owner | Status | Revision Or Artifact | Checks | Risks Or Next Action |
 | --- | --- | --- | --- | --- | --- |
-| 2026-07-22 | Bend/SVSM decoupling `/root` | Source And Automated Validation Complete; Runtime Matrix Pending | Historical local checkpoint, superseded by published experiment `94b8597` | Bidirectional source scans were clean; separate Bend-only and SVSM-only static-library configurations built and passed their reference tests; all six frozen Bend hashes matched; generic exact-light, fail-white, same-light multiplication, packing, profile, and Custom-retention tests passed; the Release renderer and modified DXIL permutations built; the full then-configured CTest suite passed all 14 targets; title-case and diff checks passed; a bounded launch showed a normal frame and separate drawers without an error dialog | Preserve this row as historical evidence; use current-branch validation for integration decisions |
+| 2026-07-22 | screen-space-shadow/SVSM decoupling `/root` | Source And Automated Validation Complete; Runtime Matrix Pending | Historical local checkpoint, superseded by published experiment `94b8597` | Bidirectional source scans were clean; separate screen-space-shadow-only and SVSM-only static-library configurations built and passed their reference tests; all six frozen legacy screen-space shadow hashes matched; generic exact-light, fail-white, same-light multiplication, packing, profile, and Custom-retention tests passed; the Release renderer and modified DXIL permutations built; the full then-configured CTest suite passed all 14 targets; title-case and diff checks passed; a bounded launch showed a normal frame and separate drawers without an error dialog | Preserve this row as historical evidence; use current-branch validation for integration decisions |
 | 2026-07-20 | Research `/root` | Complete | Technical report | Full source/media/comment/repository sweep | Implement dense foundation |
 | 2026-07-20 | Integrated implementation `/root` | Validation Active | Local uncommitted worktree | Release build, focused tests, and full CTest pass | Complete runtime matrix and source audit |
 | 2026-07-20 | SVSM enable regression `/root` | Passed on Available Discrete GPU | `svsmfix-a55e215-0728` | RTX 4090 Laptop, PBR Sponza Decorated, Stephano Reference, 4096 pages, unlimited budget, moving piloted camera; responsive beyond prior device-removal point | Continue dense/sparse, cache, boundary, resize, toggle, and iGPU matrix |
 | 2026-07-21 | Thermal and benchmark hygiene `/root` | Source And Tooling Complete; Runtime Gate Pending | `AGENTS.md`, thermal/tool scripts, ignored monitoring binaries | Scripts parse; pinned assets, full extractions, release digests, signatures, smoke checks, and independent safety review pass; exact-adapter, hottest-sensor, process, memory-series, and full-window gates added | Trusted live CPU temperature is still unavailable; do not build or benchmark |
 | 2026-07-21 | Packet page compaction `/root` | Source Implemented; Build Pending | Local uncommitted SVSM files | Conservative deforming fail-open, scheduled-clipmap cache keys, 2D fallback dispatch, timing repairs, direct page-table scanning for small packet rectangles, and recent-page eviction grace were added behind independent toggles; the automatic motion harness opts in | Build, focused tests, runtime image checks, and timing remain pending a user-provided quiet window plus thermal clearance |
-| 2026-07-21 | Static cache correctness `/root` | Source Implemented; Build Pending | Historical local SVSM state | Exact eight-jitter union, visibility invalidation on union extension, Bend-dependent reuse guard, material-dirty revision, bounds hash, and packet readiness transition were added; the cross-producer guard was subsequently removed by full Bend/SVSM decoupling | Preserve this row as implementation history; current cache reuse is wholly SVSM-owned |
-| 2026-07-21 | Static and dense source audit `/root` | Source Implemented; Build Pending | Historical local SVSM state | Pool-sized budget reuse, debug-only atomic removal, tap-aware marking, dense Bend gating, dense debug-store gating, distributed adaptive probes, and biased dense draw skipping were reviewed; the Bend gate was subsequently removed by full decoupling, while unsafe pinned-NVRHI partial array clear remained rejected | Preserve this row as implementation history; validate the current decoupled dense path |
+| 2026-07-21 | Static cache correctness `/root` | Source Implemented; Build Pending | Historical local SVSM state | Exact eight-jitter union, visibility invalidation on union extension, screen-space-shadow-dependent reuse guard, material-dirty revision, bounds hash, and packet readiness transition were added; the cross-producer guard was subsequently removed by full screen-space-shadow/SVSM decoupling | Preserve this row as implementation history; current cache reuse is wholly SVSM-owned |
+| 2026-07-21 | Static and dense source audit `/root` | Source Implemented; Build Pending | Historical local SVSM state | Pool-sized budget reuse, debug-only atomic removal, tap-aware marking, dense legacy screen-space shadow gating, dense debug-store gating, distributed adaptive probes, and biased dense draw skipping were reviewed; the legacy screen-space shadow gate was subsequently removed by full decoupling, while unsafe pinned-NVRHI partial array clear remained rejected | Preserve this row as implementation history; validate the current decoupled dense path |
 | 2026-07-21 | Packet-state sorting `/root` | Source Implemented; Build Pending | Local uncommitted SVSM files | Stable state ordering, global argument reindexing, metadata attachment, cache-key participation, independent default-off control, and deterministic models added | Verify D3D12 support/active status and measure only after the occupancy and thermal gates pass |
 | 2026-07-21 | Per-level empty-work skip `/root` | Release Build And Focused Tests Pass; Runtime Validation Pending | Local uncommitted SVSM files | Allocation now publishes a same-frame 0-or-1 culling-dispatch gate and packet fill promotes it to the existing 0-or-`UINT_MAX` draw-count gate. Empty finite-budget levels skip both GPU packet scanning and draws without readback; D3D12 barriers, stale arguments, budget draining, and reference-path availability passed independent review. | Measure static finite-budget GPU culling after a clean preflight; CPU command recording remains a separate bounded-drain opportunity |
 | 2026-07-21 | Dirty-page scatter raster and total-only timing `/root` | Release And Debug Focused Tests Pass; Runtime Validation Pending | Local uncommitted SVSM files | Scatter culling uses one lane per packet, omits exact page-list storage, and retains the default-off exact reference. Motion timing now issues only the outer total query, rejects detailed-query leakage and inactive optimized paths, and enforces the 0.4 ms median plus 0.7 ms worst ceiling. | Two bounded 20 percent preflights were rejected: the first found stale MSBuild workers; after cleanup, the second ended instantaneously green at 52 C and 17.4 percent adjusted CPU average but never held all gates for 30 continuous seconds. Continue source review without polling, then verify High priority, `scatter active`, images, and off/on tail latency in the next clean window |
@@ -425,7 +426,7 @@ unmeasured.
 
 Stop and ask the user if:
 
-- a required implementation would modify a Bend file, Donut, NVRHI, another
+- a required implementation would modify a legacy screen-space shadow file, Donut, NVRHI, another
   submodule, main, Git history, or remote state;
 - no existing scene-draw seam can satisfy opaque and alpha-tested rendering
   without a renderer-wide rewrite;
@@ -438,7 +439,7 @@ Stop and ask the user if:
 - Verification summary: the current bounded-scatter Release application and all
   affected SVSM shader permutations build, and the focused SVSM reference test
   passes. The previous
-  full 14-test CTest suite, Title Case checker, Bend hashes, diff/whitespace
+  full 14-test CTest suite, Title Case checker, legacy screen-space shadow hashes, diff/whitespace
   checks, and RTX 4090 Laptop SVSM-enable regression passed. The current tail
   guards are not yet runtime-tested; the thermally controlled static and motion
   matrices remain pending.

@@ -24,7 +24,7 @@ Done when:
 - [x] The four visibility presets, buffer controls, benchmark/statistics
       workflow, production shader permutations, optimization ledger, and
       source behavior from `16d8fc8` remain present.
-- [x] The destination's MiniEngine TAA, CMAA2, deferred MSAA, production shader
+- [x] The destination's Temporal AA, CMAA2, deferred MSAA, production shader
       bundle, and accepted ImGui UI behavior remain present. Diagnostic SMAA
       was subsequently retired by explicit user request.
 - [x] Shared CPU, HLSL, build, shader-registry, schema, documentation, and
@@ -156,7 +156,7 @@ asset/package contracts:
 | Benchmark/statistics retained | Targets, tests, and CLI workflow | CTest and source audit | Statistics and performance-plan tests pass; the runner, progress, cancel action, and in-memory latest summary remain after the later requested export removal |
 | Shader permutations retained | Developer/production compile and registry audit | Build both shader bundles | Developer bundle passes; production compiles 2,214 tasks and its bundle contract passes |
 | Optimization ledger retained | Title-case checker and content audit | Document checks and `rg` | Ledger imported; checker self-test and 487-heading full scan pass |
-| AA/UI retained | AA tests, production bundle, UI source audit | CTest, build, labeled smoke | MiniEngine TAA and CMAA2 tests pass; deferred MSAA remains; retired SMAA names, source, and blobs are absent; the executable opens a responsive window |
+| AA/UI retained | AA tests, production bundle, UI source audit | CTest, build, labeled smoke | Temporal AA and CMAA2 tests pass; deferred MSAA remains; retired SMAA names, source, and blobs are absent; the executable opens a responsive window |
 | Composed candidate valid | Clean first-party diff, full tests, executable hash | Repository verification suite | The integration checkpoint passed developer 14/14 and production 15/15 tests; later combined verification is recorded under Canonical Publication |
 
 ## Decisions

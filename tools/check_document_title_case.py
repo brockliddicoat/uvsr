@@ -76,7 +76,6 @@ PRESERVED_WORDS = frozenset(
         "LUTs",
         "MSAA",
         "185H",
-        "MiniEngine",
         "NRA-RTAA",
         "PBR",
         "README",
@@ -1018,8 +1017,8 @@ def run_self_tests() -> None:
         "Visibility Optimization and AA/UI Integration": (
             "Visibility Optimization and AA/UI Integration"
         ),
-        "MiniEngine TAA Shipping Options Experiment": (
-            "MiniEngine TAA Shipping Options Experiment"
+        "Temporal AA Shipping Options Experiment": (
+            "Temporal AA Shipping Options Experiment"
         ),
         "Generated DXIL Comparison": "Generated DXIL Comparison",
         "What was over-engineered too early": "What Was Over-Engineered Too Early",

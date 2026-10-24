@@ -1,6 +1,6 @@
 #pragma once
 
-#include "taa_miniengine_options.h"
+#include "temporal_aa_options.h"
 
 #include <algorithm>
 #include <array>
@@ -9,49 +9,49 @@
 
 namespace uvsr
 {
-    struct MiniEngineTaaJitterSample
+    struct TemporalAaJitterSample
     {
         float x;
         float y;
     };
 
-    struct MiniEngineTaaColor
+    struct TemporalAaColor
     {
         float x;
         float y;
         float z;
     };
 
-    struct MiniEngineTaaRange
+    struct TemporalAaRange
     {
         float minimum;
         float maximum;
     };
 
-    struct MiniEngineTaaMotionCandidate
+    struct TemporalAaMotionCandidate
     {
         float viewDepth;
         bool depthValid;
         bool motionValid;
     };
 
-    inline constexpr float MiniEngineTaaDefaultSharpness = 0.5f;
-    inline constexpr float MiniEngineTaaMinimumSharpness = 0.0f;
-    inline constexpr float MiniEngineTaaMaximumSharpness = 1.0f;
-    inline constexpr float MiniEngineTaaSharpenThreshold = 0.001f;
-    struct MiniEngineTaaSharpenWeights
+    inline constexpr float TemporalAaDefaultSharpness = 0.5f;
+    inline constexpr float TemporalAaMinimumSharpness = 0.0f;
+    inline constexpr float TemporalAaMaximumSharpness = 1.0f;
+    inline constexpr float TemporalAaSharpenThreshold = 0.001f;
+    struct TemporalAaSharpenWeights
     {
         float center;
         float lateral;
     };
 
-    // MiniEngine's exact eight-position Halton 2/3 table. MiniEngine moves a
+    // Temporal AA's exact eight-position Halton 2/3 table. Temporal AA moves a
     // positive viewport origin and therefore stores samples in [0, 1), with
     // 0.5 documented as neutral. UVSR jitters its projection in signed pixel
     // units, so only the constant 0.5 center is removed; phase order and all
     // previous-minus-current deltas remain identical.
-    inline constexpr std::array<MiniEngineTaaJitterSample, 8>
-        MiniEngineTaaHalton23 = {{
+    inline constexpr std::array<TemporalAaJitterSample, 8>
+        TemporalAaHalton23 = {{
             { 0.0f / 8.0f, 0.0f / 9.0f },
             { 4.0f / 8.0f, 3.0f / 9.0f },
             { 2.0f / 8.0f, 6.0f / 9.0f },
@@ -62,11 +62,11 @@ namespace uvsr
             { 7.0f / 8.0f, 5.0f / 9.0f }
         }};
 
-    [[nodiscard]] inline constexpr MiniEngineTaaJitterSample
-        GetMiniEngineTaaJitter(uint64_t frameIndex)
+    [[nodiscard]] inline constexpr TemporalAaJitterSample
+        GetTemporalAaJitter(uint64_t frameIndex)
     {
-        const MiniEngineTaaJitterSample sample =
-            MiniEngineTaaHalton23[frameIndex % MiniEngineTaaHalton23.size()];
+        const TemporalAaJitterSample sample =
+            TemporalAaHalton23[frameIndex % TemporalAaHalton23.size()];
         return { sample.x - 0.5f, sample.y - 0.5f };
     }
 
@@ -193,7 +193,7 @@ namespace uvsr
 
     [[nodiscard]] inline constexpr bool
         IsTemporalAaPointPositionInBounds(
-            MiniEngineTaaJitterSample pixelPosition,
+            TemporalAaJitterSample pixelPosition,
             uint32_t width,
             uint32_t height)
     {
@@ -207,7 +207,7 @@ namespace uvsr
 
     [[nodiscard]] inline constexpr bool
         IsTemporalAaLinearFootprintInBounds(
-            MiniEngineTaaJitterSample pixelPosition,
+            TemporalAaJitterSample pixelPosition,
             uint32_t width,
             uint32_t height)
     {
@@ -220,8 +220,8 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr bool
-        IsTemporalAaHistoryPositionInBounds(
-            MiniEngineTaaJitterSample pixelPosition,
+        IsTemporalAaPointHistoryPositionInBounds(
+            TemporalAaJitterSample pixelPosition,
             uint32_t width,
             uint32_t height)
     {
@@ -457,7 +457,7 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr uint64_t
-        GetMiniEngineTaaHistoryBytes(
+        GetTemporalAaHistoryBytes(
             uint32_t width,
             uint32_t height)
     {
@@ -467,7 +467,7 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr uint64_t
-        GetMiniEngineTaaPersistentHistoryBytes(
+        GetTemporalAaPersistentHistoryBytes(
             uint32_t width,
             uint32_t height)
     {
@@ -477,25 +477,56 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr uint64_t
-        GetMiniEngineTaaDebugBytes(uint32_t width, uint32_t height)
+        GetTemporalAaMinimumHistoryBytes(
+            uint32_t width,
+            uint32_t height,
+            uint32_t colorBytesPerPixel,
+            uint32_t depthBytesPerPixel)
+    {
+        // Two color and two depth ping-pong textures.
+        return uint64_t(width) * uint64_t(height) * 2u *
+            uint64_t(colorBytesPerPixel + depthBytesPerPixel);
+    }
+
+    [[nodiscard]] inline constexpr uint64_t
+        GetTemporalAaResidentHistoryBytes(
+            uint32_t width,
+            uint32_t height,
+            uint32_t minimumColorBytesPerPixel,
+            uint32_t minimumDepthBytesPerPixel,
+            bool persistentHistoryAllocated)
+    {
+        return GetTemporalAaHistoryBytes(width, height) +
+            GetTemporalAaMinimumHistoryBytes(
+                width,
+                height,
+                minimumColorBytesPerPixel,
+                minimumDepthBytesPerPixel) +
+            (persistentHistoryAllocated
+                ? GetTemporalAaPersistentHistoryBytes(width, height)
+                : 0u);
+    }
+
+    [[nodiscard]] inline constexpr uint64_t
+        GetTemporalAaDebugBytes(uint32_t width, uint32_t height)
     {
         // R16F stores the developer resurrection diagnostic without adding a
         // runtime selector branch to shipping algorithm permutations.
         return uint64_t(width) * uint64_t(height) * 2u;
     }
 
-    [[nodiscard]] inline constexpr MiniEngineTaaJitterSample
-        AddMiniEngineTaaPixelVectors(
-            MiniEngineTaaJitterSample a,
-            MiniEngineTaaJitterSample b)
+    [[nodiscard]] inline constexpr TemporalAaJitterSample
+        AddTemporalAaPixelVectors(
+            TemporalAaJitterSample a,
+            TemporalAaJitterSample b)
     {
         return { a.x + b.x, a.y + b.y };
     }
 
-    [[nodiscard]] inline constexpr MiniEngineTaaJitterSample
-        GetMiniEngineTaaCurrentToPreviousJitter(
-            MiniEngineTaaJitterSample currentJitter,
-            MiniEngineTaaJitterSample previousJitter)
+    [[nodiscard]] inline constexpr TemporalAaJitterSample
+        GetTemporalAaCurrentToPreviousJitter(
+            TemporalAaJitterSample currentJitter,
+            TemporalAaJitterSample previousJitter)
     {
         // Depth history stores the previous frame's jittered device-depth
         // grid, so de-jittered current-to-previous pixel motion needs this
@@ -506,18 +537,18 @@ namespace uvsr
         };
     }
 
-    [[nodiscard]] inline constexpr MiniEngineTaaJitterSample
-        GetMiniEngineTaaCurrentInputPosition(
-            MiniEngineTaaJitterSample unjitteredPixel,
-            MiniEngineTaaJitterSample currentJitter)
+    [[nodiscard]] inline constexpr TemporalAaJitterSample
+        GetTemporalAaCurrentInputPosition(
+            TemporalAaJitterSample unjitteredPixel,
+            TemporalAaJitterSample currentJitter)
     {
         // Donut PlanarView jitter is signed full-resolution pixels and maps the
         // unjittered output center to input at pixel + currentJitter.
-        return AddMiniEngineTaaPixelVectors(unjitteredPixel, currentJitter);
+        return AddTemporalAaPixelVectors(unjitteredPixel, currentJitter);
     }
 
     [[nodiscard]] inline constexpr std::array<float, 4>
-        GetMiniEngineTaaCatmullRomWeights(float phase)
+        GetTemporalAaCatmullRomWeights(float phase)
     {
         const float phase2 = phase * phase;
         const float phase3 = phase2 * phase;
@@ -529,21 +560,21 @@ namespace uvsr
         };
     }
 
-    [[nodiscard]] inline std::array<MiniEngineTaaJitterSample, 5>
-        GetMiniEngineTaaFiveTapHistoryPositions(
-            MiniEngineTaaJitterSample pixelPosition)
+    [[nodiscard]] inline std::array<TemporalAaJitterSample, 5>
+        GetTemporalAaFiveTapHistoryPositions(
+            TemporalAaJitterSample pixelPosition)
     {
         const float baseX = std::floor(pixelPosition.x);
         const float baseY = std::floor(pixelPosition.y);
         const float phaseX = pixelPosition.x - baseX;
         const float phaseY = pixelPosition.y - baseY;
         const std::array<float, 4> weightsX =
-            GetMiniEngineTaaCatmullRomWeights(phaseX);
+            GetTemporalAaCatmullRomWeights(phaseX);
         const std::array<float, 4> weightsY =
-            GetMiniEngineTaaCatmullRomWeights(phaseY);
+            GetTemporalAaCatmullRomWeights(phaseY);
         const float middleWeightX = weightsX[1] + weightsX[2];
         const float middleWeightY = weightsY[1] + weightsY[2];
-        const MiniEngineTaaJitterSample center = {
+        const TemporalAaJitterSample center = {
             baseX + weightsX[2] / std::max(middleWeightX, 1e-5f),
             baseY + weightsY[2] / std::max(middleWeightY, 1e-5f)
         };
@@ -559,16 +590,16 @@ namespace uvsr
         }};
     }
 
-    [[nodiscard]] inline constexpr MiniEngineTaaRange
-        GetMiniEngineTaaPositiveFootprintRange(
+    [[nodiscard]] inline constexpr TemporalAaRange
+        GetTemporalAaPositiveFootprintRange(
             const std::array<float, 4>& centralCell,
-            MiniEngineTaaJitterSample jitter)
+            TemporalAaJitterSample jitter)
     {
         // Values are top-left, top-right, bottom-left, bottom-right in the
         // positive central Catmull-Rom cell. A zero jitter axis collapses that
         // cell to one column or row and must not let a zero-weight sample
         // expand the anti-ringing bounds.
-        MiniEngineTaaRange range =
+        TemporalAaRange range =
             { centralCell[0], centralCell[0] };
         const bool useSecondColumn = jitter.x != 0.f;
         const bool useSecondRow = jitter.y != 0.f;
@@ -602,9 +633,9 @@ namespace uvsr
         return range;
     }
 
-    [[nodiscard]] inline constexpr float ClipMiniEngineTaaScalar(
+    [[nodiscard]] inline constexpr float ClipTemporalAaScalar(
         float value,
-        MiniEngineTaaRange range)
+        TemporalAaRange range)
     {
         const float center =
             (range.maximum + range.minimum) * 0.5f;
@@ -618,41 +649,41 @@ namespace uvsr
         return center + displacement / scale;
     }
 
-    [[nodiscard]] inline constexpr MiniEngineTaaJitterSample
-        GetMiniEngineTaaHistoryColorPosition(
-            MiniEngineTaaJitterSample currentPixel,
-            MiniEngineTaaJitterSample currentToPreviousMotionPixels)
+    [[nodiscard]] inline constexpr TemporalAaJitterSample
+        GetTemporalAaHistoryColorPosition(
+            TemporalAaJitterSample currentPixel,
+            TemporalAaJitterSample currentToPreviousMotionPixels)
     {
         // G-buffer motion is already de-jittered. Color history is on the
         // unjittered output grid, so no jitter term belongs here.
-        return AddMiniEngineTaaPixelVectors(
+        return AddTemporalAaPixelVectors(
             currentPixel,
             currentToPreviousMotionPixels);
     }
 
-    [[nodiscard]] inline constexpr MiniEngineTaaJitterSample
-        GetMiniEngineTaaHistoryDepthPosition(
-            MiniEngineTaaJitterSample currentPixel,
-            MiniEngineTaaJitterSample currentToPreviousMotionPixels,
-            MiniEngineTaaJitterSample currentJitter,
-            MiniEngineTaaJitterSample previousJitter)
+    [[nodiscard]] inline constexpr TemporalAaJitterSample
+        GetTemporalAaHistoryDepthPosition(
+            TemporalAaJitterSample currentPixel,
+            TemporalAaJitterSample currentToPreviousMotionPixels,
+            TemporalAaJitterSample currentJitter,
+            TemporalAaJitterSample previousJitter)
     {
-        return AddMiniEngineTaaPixelVectors(
-            GetMiniEngineTaaHistoryColorPosition(
+        return AddTemporalAaPixelVectors(
+            GetTemporalAaHistoryColorPosition(
                 currentPixel,
                 currentToPreviousMotionPixels),
-            GetMiniEngineTaaCurrentToPreviousJitter(
+            GetTemporalAaCurrentToPreviousJitter(
                 currentJitter,
                 previousJitter));
     }
 
     [[nodiscard]] inline constexpr bool
-        IsMiniEngineTaaHistoryPositionInBounds(
-            MiniEngineTaaJitterSample pixelPosition,
+        IsTemporalAaHistoryPositionInBounds(
+            TemporalAaJitterSample pixelPosition,
             uint32_t width,
             uint32_t height)
     {
-        // MiniEngine history color and depth use linear filtering or Gather,
+        // Temporal AA history color and depth use linear filtering or Gather,
         // so their requested center must remain between the first and last
         // real texel centers.
         return IsTemporalAaLinearFootprintInBounds(
@@ -662,27 +693,27 @@ namespace uvsr
     }
 
     [[nodiscard]] inline std::array<bool, 5>
-        GetMiniEngineTaaFiveTapHistoryPositionValidity(
-            MiniEngineTaaJitterSample pixelPosition,
-            MiniEngineTaaJitterSample currentToPreviousJitter,
+        GetTemporalAaFiveTapHistoryPositionValidity(
+            TemporalAaJitterSample pixelPosition,
+            TemporalAaJitterSample currentToPreviousJitter,
             uint32_t width,
             uint32_t height)
     {
-        const std::array<MiniEngineTaaJitterSample, 5> positions =
-            GetMiniEngineTaaFiveTapHistoryPositions(pixelPosition);
+        const std::array<TemporalAaJitterSample, 5> positions =
+            GetTemporalAaFiveTapHistoryPositions(pixelPosition);
         std::array<bool, 5> validity = {};
         for (uint32_t index = 0u; index < positions.size(); ++index)
         {
-            const MiniEngineTaaJitterSample depthPosition =
-                AddMiniEngineTaaPixelVectors(
+            const TemporalAaJitterSample depthPosition =
+                AddTemporalAaPixelVectors(
                     positions[index],
                     currentToPreviousJitter);
             validity[index] =
-                IsMiniEngineTaaHistoryPositionInBounds(
+                IsTemporalAaHistoryPositionInBounds(
                     positions[index],
                     width,
                     height) &&
-                IsMiniEngineTaaHistoryPositionInBounds(
+                IsTemporalAaHistoryPositionInBounds(
                     depthPosition,
                     width,
                     height);
@@ -691,14 +722,14 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr int32_t
-        SelectMiniEngineTaaClosestCrossCandidate(
-            const std::array<MiniEngineTaaMotionCandidate, 5>& candidates)
+        SelectTemporalAaClosestCrossCandidate(
+            const std::array<TemporalAaMotionCandidate, 5>& candidates)
     {
         int32_t selected = -1;
         float closestViewDepth = 3.402823466e+38f;
         for (uint32_t index = 0u; index < candidates.size(); ++index)
         {
-            const MiniEngineTaaMotionCandidate& candidate = candidates[index];
+            const TemporalAaMotionCandidate& candidate = candidates[index];
             if (candidate.depthValid &&
                 candidate.motionValid &&
                 candidate.viewDepth < closestViewDepth)
@@ -711,7 +742,7 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr float
-        SelectMiniEngineTaaResurrectionGeometryDepth(
+        SelectTemporalAaResurrectionGeometryDepth(
             float centerDeviceDepth,
             float motionOwnedDeviceDepth)
     {
@@ -722,40 +753,40 @@ namespace uvsr
         return centerDeviceDepth;
     }
 
-    [[nodiscard]] inline constexpr float ClampMiniEngineTaaUnit(float value)
+    [[nodiscard]] inline constexpr float ClampTemporalAaUnit(float value)
     {
         return value < 0.f ? 0.f : value > 1.f ? 1.f : value;
     }
 
     [[nodiscard]] inline constexpr float
-        GetMiniEngineTaaSupportedHistoryEstimate(
+        GetTemporalAaSupportedHistoryEstimate(
             float centerHistory,
             float neighborEstimate,
             float depthSupport)
     {
         // A rejected one-sample bicubic estimate must collapse exactly to the
         // real center history sample before anti-ringing bounds are reduced.
-        const float support = ClampMiniEngineTaaUnit(depthSupport);
+        const float support = ClampTemporalAaUnit(depthSupport);
         return centerHistory +
             (neighborEstimate - centerHistory) * support;
     }
 
-    [[nodiscard]] inline constexpr float MiniEngineTaaSmoothStep(
+    [[nodiscard]] inline constexpr float TemporalAaSmoothStep(
         float minimum,
         float maximum,
         float value)
     {
-        const float normalized = ClampMiniEngineTaaUnit(
+        const float normalized = ClampTemporalAaUnit(
             (value - minimum) / (maximum - minimum));
         return normalized * normalized * (3.f - 2.f * normalized);
     }
 
     [[nodiscard]] inline constexpr int32_t
-        SelectMiniEngineTaaCenterFirstEdgeCandidate(
-            const std::array<MiniEngineTaaMotionCandidate, 5>& candidates)
+        SelectTemporalAaCenterFirstEdgeCandidate(
+            const std::array<TemporalAaMotionCandidate, 5>& candidates)
     {
         const int32_t closest =
-            SelectMiniEngineTaaClosestCrossCandidate(candidates);
+            SelectTemporalAaClosestCrossCandidate(candidates);
         const bool centerDepthValid = candidates[0].depthValid;
         const bool centerMotionValid = candidates[0].motionValid;
         const bool centerValid =
@@ -778,7 +809,7 @@ namespace uvsr
                 : depthDifference) /
             (minimumViewDepth > 1e-3f ? minimumViewDepth : 1e-3f);
         const float silhouetteActivation = centerDepthValid
-            ? MiniEngineTaaSmoothStep(
+            ? TemporalAaSmoothStep(
                 0.005f,
                 0.02f,
                 relativeDepthDifference)
@@ -797,14 +828,14 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr float
-        GetMiniEngineTaaCurrentReconstructionSupport(
+        GetTemporalAaCurrentReconstructionSupport(
             const std::array<float, 9>& depthCoherence,
-            MiniEngineTaaJitterSample jitter)
+            TemporalAaJitterSample jitter)
     {
         // Row-major 3x3 support around center. The positive reconstruction
         // cell contains center, the phase-selected X/Y neighbors, and their
         // diagonal when both jitter axes are nonzero.
-        float support = ClampMiniEngineTaaUnit(depthCoherence[4]);
+        float support = ClampTemporalAaUnit(depthCoherence[4]);
         const int32_t xOffset =
             jitter.x < 0.f ? -1 : jitter.x > 0.f ? 1 : 0;
         const int32_t yOffset =
@@ -813,21 +844,21 @@ namespace uvsr
         {
             support = std::min(
                 support,
-                ClampMiniEngineTaaUnit(
+                ClampTemporalAaUnit(
                     depthCoherence[4 + xOffset]));
         }
         if (yOffset != 0)
         {
             support = std::min(
                 support,
-                ClampMiniEngineTaaUnit(
+                ClampTemporalAaUnit(
                     depthCoherence[4 + 3 * yOffset]));
         }
         if (xOffset != 0 && yOffset != 0)
         {
             support = std::min(
                 support,
-                ClampMiniEngineTaaUnit(
+                ClampTemporalAaUnit(
                     depthCoherence[
                         4 + xOffset + 3 * yOffset]));
         }
@@ -835,10 +866,10 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr float
-        SelectMiniEngineTaaFarthestReverseZDeviceDepth(
+        SelectTemporalAaFarthestReverseZDeviceDepth(
             const std::array<float, 4>& deviceDepths)
     {
-        // MiniEngine deliberately takes the farthest of its four forward
+        // Temporal AA deliberately takes the farthest of its four forward
         // linear-depth samples for conservative disocclusion. UVSR stores
         // infinite reverse-Z device depth, so smaller is farther and cleared
         // background is zero.
@@ -852,35 +883,35 @@ namespace uvsr
     }
 
     [[nodiscard]] inline constexpr float
-        StoreMiniEngineTaaConfidence(float baseHistoryWeight)
+        StoreTemporalAaConfidence(float baseHistoryWeight)
     {
-        const float clamped = ClampMiniEngineTaaUnit(baseHistoryWeight);
-        return ClampMiniEngineTaaUnit(1.f / (2.f - clamped));
+        const float clamped = ClampTemporalAaUnit(baseHistoryWeight);
+        return ClampTemporalAaUnit(1.f / (2.f - clamped));
     }
 
     [[nodiscard]] inline constexpr float
-        GetMiniEngineTaaSelectiveRejection(float acceptedHistoryWeight)
+        GetTemporalAaSelectiveRejection(float acceptedHistoryWeight)
     {
-        // Stored MiniEngine confidence begins at 0.5 and reaches 0.8 after
+        // Stored Temporal AA confidence begins at 0.5 and reaches 0.8 after
         // four accepted contributions. Use that per-pixel recurrence as the
         // continuous selective-morphology fade instead of a binary depth test plus
         // a global frame count. This prevents a phase-varying silhouette from
         // switching an entire dilated tile between spatial and temporal color.
         const float rejection =
-            1.f - MiniEngineTaaSmoothStep(
+            1.f - TemporalAaSmoothStep(
             UVSR_TAA_SELECTIVE_HISTORY_MINIMUM,
             UVSR_TAA_SELECTIVE_HISTORY_TRUSTED,
-            ClampMiniEngineTaaUnit(acceptedHistoryWeight));
+            ClampTemporalAaUnit(acceptedHistoryWeight));
         // Match the shader's R16F export contract: fade the last sub-visible
         // presentation step continuously to exact zero, then classify the
         // same stored mask without a second hard threshold.
-        return ClampMiniEngineTaaUnit(
+        return ClampTemporalAaUnit(
             (rejection - UVSR_TAA_SELECTIVE_REJECTION_FLOOR) /
             (1.f - UVSR_TAA_SELECTIVE_REJECTION_FLOOR));
     }
 
-    [[nodiscard]] inline constexpr MiniEngineTaaColor
-        MiniEngineTaaRgbToYCoCg(MiniEngineTaaColor rgb)
+    [[nodiscard]] inline constexpr TemporalAaColor
+        TemporalAaRgbToYCoCg(TemporalAaColor rgb)
     {
         return {
             0.25f * rgb.x + 0.5f * rgb.y + 0.25f * rgb.z,
@@ -889,8 +920,8 @@ namespace uvsr
         };
     }
 
-    [[nodiscard]] inline constexpr MiniEngineTaaColor
-        MiniEngineTaaYCoCgToRgb(MiniEngineTaaColor ycocg)
+    [[nodiscard]] inline constexpr TemporalAaColor
+        TemporalAaYCoCgToRgb(TemporalAaColor ycocg)
     {
         return {
             ycocg.x + ycocg.y - ycocg.z,
@@ -899,33 +930,33 @@ namespace uvsr
         };
     }
 
-    [[nodiscard]] inline constexpr float ClampMiniEngineTaaSharpness(
+    [[nodiscard]] inline constexpr float ClampTemporalAaSharpness(
         float sharpness)
     {
-        return sharpness < MiniEngineTaaMinimumSharpness
-            ? MiniEngineTaaMinimumSharpness
-            : sharpness > MiniEngineTaaMaximumSharpness
-                ? MiniEngineTaaMaximumSharpness
+        return sharpness < TemporalAaMinimumSharpness
+            ? TemporalAaMinimumSharpness
+            : sharpness > TemporalAaMaximumSharpness
+                ? TemporalAaMaximumSharpness
                 : sharpness;
     }
 
-    [[nodiscard]] inline constexpr bool ShouldSharpenMiniEngineTaa(
+    [[nodiscard]] inline constexpr bool ShouldSharpenTemporalAa(
         bool enabled,
         float sharpness)
     {
         return enabled &&
-            ClampMiniEngineTaaSharpness(sharpness) >=
-                MiniEngineTaaSharpenThreshold;
+            ClampTemporalAaSharpness(sharpness) >=
+                TemporalAaSharpenThreshold;
     }
 
-    [[nodiscard]] inline constexpr MiniEngineTaaSharpenWeights
-        GetMiniEngineTaaSharpenWeights(float sharpness)
+    [[nodiscard]] inline constexpr TemporalAaSharpenWeights
+        GetTemporalAaSharpenWeights(float sharpness)
     {
-        const float clamped = ClampMiniEngineTaaSharpness(sharpness);
+        const float clamped = ClampTemporalAaSharpness(sharpness);
         return { 1.f + clamped, 0.25f * clamped };
     }
 
-    [[nodiscard]] inline constexpr bool IsMiniEngineTaaAvailable(
+    [[nodiscard]] inline constexpr bool IsTemporalAaAvailable(
         bool enabled,
         bool pbrEnabled,
         bool deferredShading,

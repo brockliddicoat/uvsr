@@ -2,12 +2,14 @@
 
 ## Executive Finding
 
-UVSR can add SVSM without changing Bend, Donut, or NVRHI. The lowest-conflict
+UVSR can add SVSM without changing the then-current screen-space shadow path,
+Donut, or NVRHI. The lowest-conflict
 boundary is a first-party directional visibility producer that resolves to its
 own full-resolution linear `R8_UNORM` texture immediately after the G-buffer
 and before deferred lighting. A producer-neutral fixed three-slot interface maps
 each complete texture to an exact light pointer and multiplies matching factors.
-Bend, SVSM, and diagnostic CSM do not include, bind, configure, benchmark, or
+The screen-space shadow, SVSM, and diagnostic CSM paths do not include, bind,
+configure, benchmark, or
 name one another. They also build as separate static-library targets. With the
 aggregate application disabled, each component and its reference test
 configure, build, and pass while the other components are disabled. Each target
@@ -126,11 +128,11 @@ The production warnings become UVSR requirements:
   coarse fallback; and
 - optional static/dynamic separation follows a correct single-cache path.
 
-### Bend and Pinned Resource Interface
+### Legacy Screen-Space Shadow and Pinned Resource Interface
 
-Bend's published design confirms that screen-space directional shadows
-complement shadow maps with visible contact and fine detail; they do not replace
-world-space shadow coverage.
+The archived pass design confirms that screen-space directional shadows
+complement shadow maps with visible contact and fine detail; they do not
+replace world-space shadow coverage.
 
 The pinned local NVRHI revision already supports the required normal
 `R32_UINT`, `R8_UNORM`, UAV, structured-buffer, indirect-dispatch, and
@@ -185,7 +187,7 @@ them, and marks the page plus filter-neighbor pages.
 
 Per-pixel mode is the reference. The 8-by-8 and 16-by-16 modes conservatively
 cover every page touched by a tile and deduplicate page IDs within GPU waves or
-groups. Bend never suppresses requests.
+groups. The screen-space shadow path never suppresses requests.
 
 GPU allocation consumes a compact required-page list, uses free pages first,
 then evicts eligible old pages, updates both ownership directions, and records
@@ -304,8 +306,8 @@ shown because it has no conservative implementation.
 Research, architecture mapping, and the local integrated implementation are
 complete enough for active validation. The decoupled Release renderer, all
 modified shaders, and the focused PBR/SVSM tests build successfully; the focused
-tests pass. Full CTest, title case, frozen Bend hashes, diff checks, and runtime
-validation remain pending at this point in the report.
+tests pass. Full CTest, title case, archived shadow-source hashes, diff checks,
+and runtime validation remain pending at this point in the report.
 No full runtime-matrix claim has been made.
 
 The first interactive enable attempt exposed two startup failures and one
@@ -334,8 +336,9 @@ This is a regression result, not a substitute for the remaining runtime matrix
 or a performance measurement.
 
 The decisive validation gates are deterministic mapping/allocation/cache tests,
-the combined Release build and CTest suite, Bend hash preservation, dense versus
-sparse and cached versus uncached image comparisons, stationary warmup,
+the combined Release build and CTest suite, archived shadow-source hash
+preservation, dense versus sparse and cached versus uncached image comparisons,
+stationary warmup,
 movement/teleport/sun/caster/boundary/exhaustion/resize cases, all requested
 filter and marking combinations, measured per-stage GPU time, and source review.
 RTX 4090 Laptop GPU and Core Ultra 9 185H integrated-GPU results will be reported
@@ -396,14 +399,15 @@ observed CPU temperature is below the limit. No runtime benchmark has been
 accepted under that uncertainty; the later source-only Release build is
 reported below.
 
-Source review found and repaired several issues without changing frozen Bend or
-dependencies:
+Source review found and repaired several issues without changing the archived
+screen-space shadow source or dependencies:
 
 - static camera-depth requests now preserve the exact union of the eight UVSR
   TAA jitter phases instead of a full page halo;
 - extending that union invalidates all cached visibility slices because page
   allocation or eviction can change fallback results;
-- the former cross-producer early reject, Bend texture read, static-cache guard,
+- the former cross-producer early reject, screen-space shadow texture read,
+  static-cache guard,
   counter, debug paths, settings, and benchmark stages were removed; static
   visibility reuse is now wholly SVSM-owned;
 - material-dirty state advances the SVSM scene revision before Donut clears it,
@@ -443,7 +447,7 @@ dependencies:
 - an independent finite-budget drain preserves a stable request union for a
   conservative `ceil(pool pages / fine-page budget)` maintenance window, then
   reaches the same zero-work static path without CPU readback;
-- switching between no jitter and UVSR's eight nonzero MiniEngine TAA offsets
+- switching between no jitter and UVSR's eight nonzero Temporal AA offsets
   resets the request and visibility jitter slots exactly once, preventing the
   ninth `(0,0)` offset from restarting finite draining indefinitely;
 - the finite-budget allocation saturation probe is explicitly nested behind
@@ -470,12 +474,12 @@ directional light changes. The old thermally unqualified trace remains only
 diagnostic, but its approximately 1.19 ms first-turn median and approximately
 0.33 ms return median show that already visited pages were reused. The remaining
 first-turn spike therefore tracks newly revealed requests and page rendering,
-not a per-frame full light invalidation. The earlier Bend Hybrid prototype
+not a per-frame full light invalidation. The earlier legacy hybrid prototype
 retained the requested per-pixel marker rather than overriding it with a
-16-by-16 min/max-depth volume,
-which could conservatively request large page rectangles at Sponza depth
-discontinuities. Its inoperative Bend-dependent static visibility-cache default
-was also removed; static page reuse remains available and resolve stays live.
+16-by-16 min/max-depth volume, which could conservatively request large page
+rectangles at Sponza depth discontinuities. Its inoperative static
+visibility-cache default, which depended on screen-space shadows, was also
+removed; static page reuse remains available and resolve stays live.
 
 The automatic motion harness uses one four-page budget across every
 clipmap, including coarsest, so finite-budget draining and saturation are
@@ -517,18 +521,19 @@ thermally controlled diagnostic motion retry remains required.
 
 At the recorded validation checkpoint, the Release application and every sparse
 shader permutation compiled. The full then-configured Release CTest suite passed
-all 14 targets, including the deterministic SVSM, frozen Bend, and generic PBR
-exact-light composition suites. The document title-case checker and working-tree
-whitespace check also passed. Separate component-only configurations built and
-passed the SVSM reference test with Bend disabled and the Bend reference test
-with SVSM disabled. A bounded launch of that Release build showed a normal
+all 14 targets, including deterministic SVSM, archived screen-space shadow, and
+generic PBR exact-light composition suites. The document title-case checker and
+working-tree whitespace check also passed. Separate component-only
+configurations built and passed the SVSM reference test with screen-space
+shadows disabled and the screen-space shadow reference test with SVSM disabled.
+A bounded launch of that Release build showed a normal
 Sponza frame, separate SVSM and Screen-Space Shadows drawers, and no error
 dialog; active human input prevented automated toggle clicks, so this remains
 historical launch-smoke evidence rather than validation of the current
-integration-preparation build. The next valid runtime
-sequence remains a trusted 30-second preflight, one exact renderer instance,
-three Position-1 controls, independent Bend-only and SVSM-only image checks,
-static and motion debug/image validation, and post-run Position-1 controls.
+integration-preparation build. The next valid runtime sequence remains a trusted
+30-second preflight, one exact renderer instance, three Position-1 controls,
+independent screen-space-shadow-only and SVSM-only image checks, static and
+motion debug/image validation, and post-run Position-1 controls.
 Rows without that evidence remain pending rather than estimated.
 
 Independent post-fix reviews found no remaining monitoring-correctness or

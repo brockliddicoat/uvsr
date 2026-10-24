@@ -1,4 +1,4 @@
-﻿/*
+/*
 * Copyright (c) 2014-2021, NVIDIA CORPORATION. All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining a
@@ -88,7 +88,7 @@
 #include "image_based_lighting_background_pass.h"
 #include "image_based_lighting_environment.h"
 #include "image_based_lighting_shared.h"
-#include "bend_screen_space_shadows.h"
+#include "screen_space_directional_shadows.h"
 #include "diagnostic_cascaded_shadow_map.h"
 #include "diagnostic_csm_benchmark.h"
 #include "gpu_performance_monitor.h"
@@ -106,7 +106,7 @@
 #include "sponza_camera_preset.h"
 #include "sparse_virtual_shadow_map.h"
 #include "svsm_motion_benchmark.h"
-#include "taa_miniengine.h"
+#include "temporal_aa.h"
 #include "ui_animation.h"
 #include "visibility_perf_capture.h"
 #include "world_material_view.h"
@@ -1751,12 +1751,12 @@ struct UIData
     bool                                EnablePbr = true;
     RendererMode                        RenderMode = RendererMode::Deferred;
     AntiAliasingSettings                AntiAliasing;
-    bool                                MiniEngineTaaSharpenEnabled = false;
-    float                               MiniEngineTaaSharpness =
-        MiniEngineTaaDefaultSharpness;
-    MiniEngineTaaDebugView              MiniEngineTaaVisualization =
-        MiniEngineTaaDebugView::Off;
-    BendScreenSpaceShadowSettings       BendScreenSpaceShadows;
+    bool                                TemporalAaSharpenEnabled = false;
+    float                               TemporalAaSharpness =
+        TemporalAaDefaultSharpness;
+    TemporalAaDebugView              TemporalAaVisualization =
+        TemporalAaDebugView::Off;
+    ScreenSpaceDirectionalShadowSettings       ScreenSpaceDirectionalShadows;
     SparseVirtualShadowMapSettings      SparseVirtualShadowMaps;
     DiagnosticCascadedShadowMapSettings DiagnosticCascadedShadowMaps;
     ScreenSpaceVisibilitySettings       ScreenSpaceVisibility;
@@ -1812,7 +1812,7 @@ struct UIData
         return UsesDeferredShading();
     }
 
-    [[nodiscard]] bool HasMiniEngineTaaVisibilityConflict() const
+    [[nodiscard]] bool HasTemporalAaVisibilityConflict() const
     {
         // These visibility histories do not yet receive TAA's subpixel jitter delta.
         return ScreenSpaceVisibility.reconstruction.temporalEnabled;
@@ -1834,7 +1834,7 @@ struct UIData
 
     [[nodiscard]] bool IsTemporalAntiAliasingAvailable() const
     {
-        return IsMiniEngineTaaAvailable(
+        return IsTemporalAaAvailable(
             true,
             EnablePbr,
             RenderMode == RendererMode::Deferred,
@@ -1861,14 +1861,14 @@ struct UIData
         // added after paired warm-camera measurements preserve the image and
         // improve both the normal path and the camera-turn path. The Intel
         // Core Ultra 9 185H Arc iGPU (8086:7D55) consistently benefits from
-        // sharing adjacent MiniEngine pixels' overlapping neighborhoods.
-        // Split/packed LDS, MiniEngine fusion, early rejection, and cache
+        // sharing adjacent Temporal AA pixels' overlapping neighborhoods.
+        // Split/packed LDS, Temporal AA fusion, early rejection, and cache
         // blocking remain explicit experiments because their measured gains
         // were not repeatable.
 #if UVSR_AA_DEVELOPER_OVERRIDES
         const bool sharedReuseAutoRequested =
             settings.performanceOverrides.sharedWorkReuse ==
-                MiniEngineTaaAutoToggle::Auto;
+                TemporalAaAutoToggle::Auto;
 #else
         // Hidden override state is sanitized from production. The validated
         // adapter table therefore remains authoritative there.
@@ -1940,10 +1940,10 @@ static void ApplyFactoryExperimentShaderTopology(UIData& ui)
     ui.EnablePbr = true;
     ui.RenderMode = RendererMode::Deferred;
     ui.AntiAliasing = AntiAliasingSettings{};
-    ui.MiniEngineTaaSharpenEnabled = false;
-    ui.MiniEngineTaaSharpness = MiniEngineTaaDefaultSharpness;
-    ui.MiniEngineTaaVisualization = MiniEngineTaaDebugView::Off;
-    ui.BendScreenSpaceShadows = BendScreenSpaceShadowSettings{};
+    ui.TemporalAaSharpenEnabled = false;
+    ui.TemporalAaSharpness = TemporalAaDefaultSharpness;
+    ui.TemporalAaVisualization = TemporalAaDebugView::Off;
+    ui.ScreenSpaceDirectionalShadows = ScreenSpaceDirectionalShadowSettings{};
     ui.SparseVirtualShadowMaps = SparseVirtualShadowMapSettings{};
     ui.DiagnosticCascadedShadowMaps =
         DiagnosticCascadedShadowMapSettings{};
@@ -2196,14 +2196,14 @@ private:
     std::unique_ptr<ImageBasedLightingBackgroundPass>
                                         m_ImageBasedLightingBackgroundPass;
     std::unique_ptr<AgxToneMappingPass> m_AgxToneMappingPass;
-    std::unique_ptr<BendScreenSpaceShadowPass>
-                                        m_BendScreenSpaceShadowPass;
+    std::unique_ptr<ScreenSpaceDirectionalShadowPass>
+                                        m_ScreenSpaceDirectionalShadowPass;
     std::unique_ptr<SparseVirtualShadowMapPass>
                                         m_SparseVirtualShadowMapPass;
     std::unique_ptr<DiagnosticCascadedShadowMapPass>
                                         m_DiagnosticCascadedShadowMapPass;
     std::unique_ptr<ScreenSpaceVisibilityPass> m_ScreenSpaceVisibilityPass;
-    std::unique_ptr<MiniEngineTemporalAAPass> m_MiniEngineTemporalAAPass;
+    std::unique_ptr<TemporalAAPass> m_TemporalAAPass;
     std::unique_ptr<Cmaa2Pass>          m_Cmaa2Pass;
     std::unique_ptr<MaterialIDPass>     m_MaterialIDPass;
     std::unique_ptr<PixelReadbackPass>  m_PixelReadbackPass;
@@ -2426,7 +2426,7 @@ private:
         false;
     bool                                m_SvsmMotionBenchmarkPreviousTaaSharpenEnabled =
         false;
-    bool                                m_SvsmMotionBenchmarkPreviousBendEnabled =
+    bool                                m_SvsmMotionBenchmarkPreviousScreenSpaceShadowEnabled =
         false;
     bool                                m_SvsmMotionBenchmarkPreviousCsmEnabled =
         false;
@@ -2437,7 +2437,7 @@ private:
     bool                                m_SvsmMotionBenchmarkStartUsesTaa = false;
     bool                                m_SvsmMotionBenchmarkStartTaaSharpenEnabled =
         false;
-    bool                                m_SvsmMotionBenchmarkStartBendEnabled =
+    bool                                m_SvsmMotionBenchmarkStartScreenSpaceShadowEnabled =
         false;
     bool                                m_SvsmMotionBenchmarkStartCsmEnabled =
         false;
@@ -2902,7 +2902,7 @@ public:
             app::GetDirectoryWithExecutable() /
             "aa-motion-test-latest.json";
         m_AaBenchmark.settings = m_ui.AntiAliasing;
-        m_AaBenchmark.sharpness = m_ui.MiniEngineTaaSharpness;
+        m_AaBenchmark.sharpness = m_ui.TemporalAaSharpness;
         m_AaBenchmarkStarted = false;
         m_AaBenchmarkCurrentTag = AaBenchmarkTimerTag{};
         m_InteractiveAaMotionTest = true;
@@ -3187,9 +3187,9 @@ public:
         m_SvsmMotionBenchmarkPreviousTaaEnabled =
             m_ui.AntiAliasing.enabled;
         m_SvsmMotionBenchmarkPreviousTaaSharpenEnabled =
-            m_ui.MiniEngineTaaSharpenEnabled;
-        m_SvsmMotionBenchmarkPreviousBendEnabled =
-            m_ui.BendScreenSpaceShadows.enabled;
+            m_ui.TemporalAaSharpenEnabled;
+        m_SvsmMotionBenchmarkPreviousScreenSpaceShadowEnabled =
+            m_ui.ScreenSpaceDirectionalShadows.enabled;
         m_SvsmMotionBenchmarkPreviousCsmEnabled =
             m_ui.DiagnosticCascadedShadowMaps.enabled;
         m_SvsmMotionBenchmarkPreviousScreenSpaceVisibilityEnabled =
@@ -3199,8 +3199,8 @@ public:
         // producers and temporal consumers. The previous values are restored
         // after either completion or an abort.
         m_ui.AntiAliasing.enabled = false;
-        m_ui.MiniEngineTaaSharpenEnabled = false;
-        m_ui.BendScreenSpaceShadows.enabled = false;
+        m_ui.TemporalAaSharpenEnabled = false;
+        m_ui.ScreenSpaceDirectionalShadows.enabled = false;
         m_ui.DiagnosticCascadedShadowMaps.enabled = false;
         m_ui.ScreenSpaceVisibility.enabled = false;
 
@@ -3211,9 +3211,9 @@ public:
         m_SvsmMotionBenchmarkStartUsesTaa =
             m_ui.UsesLongTermTemporalAA();
         m_SvsmMotionBenchmarkStartTaaSharpenEnabled =
-            m_ui.MiniEngineTaaSharpenEnabled;
-        m_SvsmMotionBenchmarkStartBendEnabled =
-            m_ui.BendScreenSpaceShadows.enabled;
+            m_ui.TemporalAaSharpenEnabled;
+        m_SvsmMotionBenchmarkStartScreenSpaceShadowEnabled =
+            m_ui.ScreenSpaceDirectionalShadows.enabled;
         m_SvsmMotionBenchmarkStartCsmEnabled =
             m_ui.DiagnosticCascadedShadowMaps.enabled;
         m_SvsmMotionBenchmarkStartScreenSpaceVisibilityEnabled =
@@ -3229,10 +3229,10 @@ public:
         {
             m_ui.AntiAliasing.enabled =
                 m_SvsmMotionBenchmarkPreviousTaaEnabled;
-            m_ui.MiniEngineTaaSharpenEnabled =
+            m_ui.TemporalAaSharpenEnabled =
                 m_SvsmMotionBenchmarkPreviousTaaSharpenEnabled;
-            m_ui.BendScreenSpaceShadows.enabled =
-                m_SvsmMotionBenchmarkPreviousBendEnabled;
+            m_ui.ScreenSpaceDirectionalShadows.enabled =
+                m_SvsmMotionBenchmarkPreviousScreenSpaceShadowEnabled;
             m_ui.DiagnosticCascadedShadowMaps.enabled =
                 m_SvsmMotionBenchmarkPreviousCsmEnabled;
             m_ui.ScreenSpaceVisibility.enabled =
@@ -3412,8 +3412,8 @@ public:
 
     void ResetAntiAliasingState()
     {
-        if (m_MiniEngineTemporalAAPass)
-            m_MiniEngineTemporalAAPass->ResetHistory();
+        if (m_TemporalAAPass)
+            m_TemporalAAPass->ResetHistory();
         m_AntiAliasingPhase = 0u;
     }
 
@@ -3519,10 +3519,10 @@ public:
         }
         m_ui.AntiAliasing.enabled =
             m_SvsmMotionBenchmarkPreviousTaaEnabled;
-        m_ui.MiniEngineTaaSharpenEnabled =
+        m_ui.TemporalAaSharpenEnabled =
             m_SvsmMotionBenchmarkPreviousTaaSharpenEnabled;
-        m_ui.BendScreenSpaceShadows.enabled =
-            m_SvsmMotionBenchmarkPreviousBendEnabled;
+        m_ui.ScreenSpaceDirectionalShadows.enabled =
+            m_SvsmMotionBenchmarkPreviousScreenSpaceShadowEnabled;
         m_ui.DiagnosticCascadedShadowMaps.enabled =
             m_SvsmMotionBenchmarkPreviousCsmEnabled;
         m_ui.ScreenSpaceVisibility.enabled =
@@ -3557,8 +3557,8 @@ public:
         m_PreviousView.reset();
         if (m_ScreenSpaceVisibilityPass)
             m_ScreenSpaceVisibilityPass->ResetHistory();
-        if (m_MiniEngineTemporalAAPass)
-            m_MiniEngineTemporalAAPass->ResetHistory();
+        if (m_TemporalAAPass)
+            m_TemporalAAPass->ResetHistory();
 
         if (m_SvsmMotionBenchmarkPreviousWidth > 0 &&
             m_SvsmMotionBenchmarkPreviousHeight > 0)
@@ -3891,8 +3891,8 @@ public:
             << "\n"
             << "taaEnabled="
             << (m_ui.AntiAliasing.enabled ? 1u : 0u) << "\n"
-            << "bendEnabled="
-            << (m_ui.BendScreenSpaceShadows.enabled ? 1u : 0u)
+            << "screenSpaceShadowEnabled="
+            << (m_ui.ScreenSpaceDirectionalShadows.enabled ? 1u : 0u)
             << "\n"
             << "diagnosticCsmEnabled="
             << (m_ui.DiagnosticCascadedShadowMaps.enabled ? 1u : 0u)
@@ -4652,8 +4652,8 @@ public:
             << "taaSharpenEnabled=" << (
                 m_SvsmMotionBenchmarkStartTaaSharpenEnabled
                     ? 1u : 0u) << "\n"
-            << "bendEnabled=" << (
-                m_SvsmMotionBenchmarkStartBendEnabled ? 1u : 0u)
+            << "screenSpaceShadowEnabled=" << (
+                m_SvsmMotionBenchmarkStartScreenSpaceShadowEnabled ? 1u : 0u)
                 << "\n"
             << "diagnosticCsmEnabled=" << (
                 m_SvsmMotionBenchmarkStartCsmEnabled ? 1u : 0u)
@@ -5036,10 +5036,10 @@ public:
                 m_SvsmMotionBenchmarkStartTaaEnabled ||
             m_ui.UsesLongTermTemporalAA() !=
                 m_SvsmMotionBenchmarkStartUsesTaa ||
-            m_ui.MiniEngineTaaSharpenEnabled !=
+            m_ui.TemporalAaSharpenEnabled !=
                 m_SvsmMotionBenchmarkStartTaaSharpenEnabled ||
-            m_ui.BendScreenSpaceShadows.enabled !=
-                m_SvsmMotionBenchmarkStartBendEnabled ||
+            m_ui.ScreenSpaceDirectionalShadows.enabled !=
+                m_SvsmMotionBenchmarkStartScreenSpaceShadowEnabled ||
             m_ui.DiagnosticCascadedShadowMaps.enabled !=
                 m_SvsmMotionBenchmarkStartCsmEnabled ||
             m_ui.ScreenSpaceVisibility.enabled !=
@@ -5393,11 +5393,11 @@ public:
         m_ui.EnablePbr = true;
         m_ui.RenderMode = RendererMode::Deferred;
         m_ui.AntiAliasing = AntiAliasingSettings{};
-        m_ui.MiniEngineTaaSharpenEnabled = false;
-        m_ui.MiniEngineTaaSharpness = MiniEngineTaaDefaultSharpness;
-        m_ui.MiniEngineTaaVisualization = MiniEngineTaaDebugView::Off;
-        m_ui.BendScreenSpaceShadows =
-            BendScreenSpaceShadowSettings{};
+        m_ui.TemporalAaSharpenEnabled = false;
+        m_ui.TemporalAaSharpness = TemporalAaDefaultSharpness;
+        m_ui.TemporalAaVisualization = TemporalAaDebugView::Off;
+        m_ui.ScreenSpaceDirectionalShadows =
+            ScreenSpaceDirectionalShadowSettings{};
         m_ui.SparseVirtualShadowMaps =
             SparseVirtualShadowMapSettings{};
         m_ui.DiagnosticCascadedShadowMaps =
@@ -5779,6 +5779,8 @@ public:
             segmentStatistics(AaBenchmarkSegment::TurnBack);
         const ResolvedAntiAliasingSettings resolved =
             m_ui.GetResolvedAntiAliasingSettings();
+        const TemporalAATimings* temporalTimings =
+            GetTemporalAATimings();
         const bool benchmarkEvidenceValid =
             complete.count == 256u &&
             m_AaBenchmarkIssuedSamples == 256u &&
@@ -5850,17 +5852,45 @@ public:
             << std::quoted(GetAntiAliasingPresetLabel(
                 resolved.implementation))
             << ",\n"
+            << "  \"requested_temporal_cost_mode\": "
+            << std::quoted(GetTemporalAaCostModeLabel(
+                resolved.temporalCostMode))
+            << ",\n"
+            << "  \"effective_temporal_cost_mode\": "
+            << std::quoted(GetTemporalAaCostModeLabel(
+                temporalTimings
+                    ? temporalTimings->effectiveCostMode
+                    : resolved.temporalCostMode))
+            << ",\n"
             << "  \"developer_overrides_compiled\": "
             << (UVSR_AA_DEVELOPER_OVERRIDES ? "true" : "false")
             << ",\n"
+            << "  \"history_storage\": "
+            << std::quoted(GetTemporalAaHistoryStorageLabel(
+                resolved.historyStorage)) << ",\n"
+            << "  \"previous_depth_validation\": "
+            << std::quoted(GetTemporalAaDepthValidationLabel(
+                resolved.depthValidation)) << ",\n"
+            << "  \"history_weight_policy\": "
+            << std::quoted(GetTemporalAaHistoryWeightPolicyLabel(
+                resolved.historyWeight)) << ",\n"
+            << "  \"motion_trust\": "
+            << std::quoted(GetTemporalAaMotionTrustLabel(
+                resolved.motionTrust)) << ",\n"
+            << "  \"rectification_clip\": "
+            << std::quoted(GetTemporalAaRectificationClipLabel(
+                resolved.rectificationClip)) << ",\n"
+            << "  \"blend_domain\": "
+            << std::quoted(GetTemporalAaBlendDomainLabel(
+                resolved.blendDomain)) << ",\n"
             << "  \"execution_path\": "
-            << std::quoted(GetMiniEngineTaaExecutionPathLabel(
+            << std::quoted(GetTemporalAaExecutionPathLabel(
                 resolved.executionPath)) << ",\n"
             << "  \"compute_kernel\": "
-            << std::quoted(GetMiniEngineTaaComputeKernelLabel(
+            << std::quoted(GetTemporalAaComputeKernelLabel(
                 resolved.computeKernel)) << ",\n"
             << "  \"lds_layout\": "
-            << std::quoted(GetMiniEngineTaaLdsLayoutLabel(
+            << std::quoted(GetTemporalAaLdsLayoutLabel(
                 resolved.ldsLayout)) << ",\n"
             << "  \"shared_work_reuse\": "
             << (resolved.sharedWorkReuse ? "true" : "false") << ",\n"
@@ -5868,35 +5898,41 @@ public:
             << (resolved.earlyHistoryRejection ? "true" : "false")
             << ",\n"
             << "  \"pass_fusion\": "
-            << std::quoted(GetMiniEngineTaaPassFusionLabel(
+            << std::quoted(GetTemporalAaPassFusionLabel(
                 resolved.passFusion)) << ",\n"
             << "  \"cache_blocking\": "
-            << std::quoted(GetMiniEngineTaaCacheBlockingLabel(
+            << std::quoted(GetTemporalAaCacheBlockingLabel(
                 resolved.cacheBlocking)) << ",\n"
             << "  \"subpixel_morphology\": "
             << std::quoted(GetMorphologyApplicationLabel(
                 resolved.subpixelMorphology)) << ",\n"
             << "  \"motion_source\": "
-            << std::quoted(GetMiniEngineTaaMotionSourceLabel(
+            << std::quoted(GetTemporalAaMotionSourceLabel(
                 resolved.temporal.motionSource)) << ",\n"
             << "  \"current_reconstruction\": "
             << std::quoted(
-                GetMiniEngineTaaCurrentReconstructionLabel(
+                GetTemporalAaCurrentReconstructionLabel(
                     resolved.temporal.currentReconstruction))
             << ",\n"
             << "  \"history_filter\": "
-            << std::quoted(GetMiniEngineTaaHistoryFilterLabel(
+            << std::quoted(GetTemporalAaHistoryFilterLabel(
                 resolved.temporal.historyFilter)) << ",\n"
             << "  \"rectification\": "
-            << std::quoted(GetMiniEngineTaaRectificationLabel(
+            << std::quoted(GetTemporalAaRectificationLabel(
                 resolved.temporal.rectification)) << ",\n"
             << "  \"sample_resurrection\": "
-            << std::quoted(GetMiniEngineTaaSampleResurrectionLabel(
+            << std::quoted(GetTemporalAaSampleResurrectionLabel(
                 resolved.sampleResurrection)) << ",\n"
             << "  \"sharpness_enabled\": "
-            << (m_ui.MiniEngineTaaSharpenEnabled ? "true" : "false")
+            << (resolved.sharpeningAllowed &&
+                    m_ui.TemporalAaSharpenEnabled
+                ? "true"
+                : "false")
             << ",\n"
-            << "  \"sharpness\": " << m_ui.MiniEngineTaaSharpness
+            << "  \"sharpness_allowed\": "
+            << (resolved.sharpeningAllowed ? "true" : "false")
+            << ",\n"
+            << "  \"sharpness\": " << m_ui.TemporalAaSharpness
             << ",\n"
             << "  \"turn_degrees\": 45.000000,\n"
             << "  \"turn_degrees_per_frame\": 0.375000,\n"
@@ -6565,8 +6601,12 @@ public:
             applied.enabled == requested.enabled &&
             applied.method == requested.method &&
             applied.quality == requested.quality &&
+            applied.temporalCostMode ==
+                requested.temporalCostMode &&
             applied.algorithmOverrides ==
                 requested.algorithmOverrides &&
+            applied.behaviorOverrides ==
+                requested.behaviorOverrides &&
             applied.performanceOverrides ==
                 requested.performanceOverrides)
         {
@@ -6620,10 +6660,10 @@ public:
         planarView->SetViewport(nvrhi::Viewport(
             renderTargetSize.x,
             renderTargetSize.y));
-        MiniEngineTaaJitterSample jitter{ 0.f, 0.f };
+        TemporalAaJitterSample jitter{ 0.f, 0.f };
         if (m_ui.UsesLongTermTemporalAA())
         {
-            jitter = GetMiniEngineTaaJitter(
+            jitter = GetTemporalAaJitter(
                 m_AntiAliasingPhase);
         }
         planarView->SetPixelOffset(float2(jitter.x, jitter.y));
@@ -6678,14 +6718,14 @@ public:
         }
     }
 
-    void CreateMiniEngineTemporalAAPass()
+    void CreateTemporalAAPass()
     {
-        m_MiniEngineTemporalAAPass.reset();
+        m_TemporalAAPass.reset();
         if (!m_ui.UsesLongTermTemporalAA())
             return;
 
-        m_MiniEngineTemporalAAPass =
-            std::make_unique<MiniEngineTemporalAAPass>(
+        m_TemporalAAPass =
+            std::make_unique<TemporalAAPass>(
                 GetDevice(),
                 m_ShaderFactory,
                 m_CommonPasses,
@@ -6728,7 +6768,7 @@ public:
                 "the visibility run.");
         }
 
-        m_MiniEngineTemporalAAPass.reset();
+        m_TemporalAAPass.reset();
 
         if (sampleCountChanged)
         {
@@ -6788,7 +6828,7 @@ public:
         }
         EnsureMsaaVisibilityResolvePass();
 
-        CreateMiniEngineTemporalAAPass();
+        CreateTemporalAAPass();
         if (m_Cmaa2Pass)
         {
             // CMAA2 owns only same-sized single-sample intermediates and can
@@ -6824,7 +6864,7 @@ public:
 
     void CreateRenderPasses()
     {
-        m_MiniEngineTemporalAAPass.reset();
+        m_TemporalAAPass.reset();
         m_Cmaa2Pass.reset();
         if (m_ScreenSpaceVisibilityPass &&
             m_ScreenSpaceVisibilityPass->IsBenchmarkActive())
@@ -6865,12 +6905,12 @@ public:
             m_PbrDeferredLightingPass->Init(m_ShaderFactory);
             EnsureMsaaVisibilityResolvePass();
 #if UVSR_DEFAULT_SETTINGS_EXPERIMENT_SHADERS
-            m_BendScreenSpaceShadowPass.reset();
+            m_ScreenSpaceDirectionalShadowPass.reset();
             m_SparseVirtualShadowMapPass.reset();
             m_DiagnosticCascadedShadowMapPass.reset();
 #else
-            m_BendScreenSpaceShadowPass =
-                std::make_unique<BendScreenSpaceShadowPass>(
+            m_ScreenSpaceDirectionalShadowPass =
+                std::make_unique<ScreenSpaceDirectionalShadowPass>(
                     GetDevice(),
                     m_ShaderFactory,
                     m_CommonPasses);
@@ -6898,7 +6938,7 @@ public:
         {
             m_PbrDeferredLightingPass.reset();
             m_MsaaVisibilityResolvePass.reset();
-            m_BendScreenSpaceShadowPass.reset();
+            m_ScreenSpaceDirectionalShadowPass.reset();
             m_SparseVirtualShadowMapPass.reset();
             m_DiagnosticCascadedShadowMapPass.reset();
             m_ScreenSpaceVisibilityPass.reset();
@@ -6906,7 +6946,7 @@ public:
             m_DeferredLightingPass->Init(m_ShaderFactory);
         }
 
-        CreateMiniEngineTemporalAAPass();
+        CreateTemporalAAPass();
 
         if (m_ui.UsesCmaa2())
             CreateCmaa2Pass();
@@ -8124,7 +8164,7 @@ public:
             m_ui.RenderMode == RendererMode::Deferred &&
             !m_ui.AntiAliasing.enabled &&
             !m_ui.UsesLongTermTemporalAA() &&
-            !m_ui.BendScreenSpaceShadows.enabled &&
+            !m_ui.ScreenSpaceDirectionalShadows.enabled &&
             !m_ui.SparseVirtualShadowMaps.enabled &&
             !m_ui.ScreenSpaceVisibility.enabled &&
             m_ui.WhiteWorld == WhiteWorldMode::Off &&
@@ -8337,7 +8377,8 @@ public:
                 m_ui.HasActiveScreenSpaceVisibilityConsumer();
             // The directional visibility producers consume a single coherent
             // closest surface. Keep the resolve targets allocated for every
-            // deferred PBR MSAA topology so toggling Bend, SVSM, or diagnostic
+            // deferred PBR MSAA topology so toggling screen-space shadows,
+            // SVSM, or diagnostic
             // CSM does not force an unrelated render-pass rebuild.
             const bool msaaClosestSurfaceResolveResourcesRequired =
                 m_ui.EnablePbr &&
@@ -8406,7 +8447,7 @@ public:
             }
 
             const bool refreshTemporalPass =
-                temporalAARequired != bool(m_MiniEngineTemporalAAPass);
+                temporalAARequired != bool(m_TemporalAAPass);
             if (SetupView())
             {
                 needNewPasses = true;
@@ -8448,7 +8489,7 @@ public:
                 // A method transition does not invalidate forward, G-buffer,
                 // lighting, visibility, sky, or output passes while the
                 // render-target topology stays unchanged.
-                CreateMiniEngineTemporalAAPass();
+                CreateTemporalAAPass();
             }
 
             // CMAA2 is a presentation-only spatial filter when Temporal is
@@ -8548,7 +8589,7 @@ public:
                     1u);
 
         m_RenderTargets->Clear(m_CommandList);
-        BendScreenSpaceShadowResult bendShadowResult;
+        ScreenSpaceDirectionalShadowResult screenSpaceShadowResult;
         SparseVirtualShadowMapResult sparseVirtualShadowMapResult;
         DiagnosticCascadedShadowMapResult diagnosticCsmResult;
         DirectionalLightVisibilitySet directionalVisibility{};
@@ -8660,7 +8701,7 @@ public:
             EndRendererStage(RendererTimingStage::Geometry);
 
             const bool directionalVisibilityProducerEnabled =
-                m_ui.BendScreenSpaceShadows.enabled ||
+                m_ui.ScreenSpaceDirectionalShadows.enabled ||
                 m_ui.SparseVirtualShadowMaps.enabled ||
                 m_ui.DiagnosticCascadedShadowMaps.enabled;
             if (m_RenderTargets->GetSampleCount() > 1u &&
@@ -8682,13 +8723,13 @@ public:
                     : m_RenderTargets->GBufferNormals.Get();
 
             if (m_ui.EnablePbr &&
-                m_BendScreenSpaceShadowPass &&
-                (!m_ui.BendScreenSpaceShadows.enabled ||
+                m_ScreenSpaceDirectionalShadowPass &&
+                (!m_ui.ScreenSpaceDirectionalShadows.enabled ||
                     singleSurfaceInputsAvailable))
             {
-                bendShadowResult = m_BendScreenSpaceShadowPass->Render(
+                screenSpaceShadowResult = m_ScreenSpaceDirectionalShadowPass->Render(
                     m_CommandList,
-                    m_ui.BendScreenSpaceShadows,
+                    m_ui.ScreenSpaceDirectionalShadows,
                     *m_View,
                     visibilityDepth,
                     m_SunLight.get());
@@ -8753,7 +8794,8 @@ public:
             }
             deferredInputs.lights = &sceneLights;
 
-            // Bend, SVSM, and diagnostic CSM remain independent visibility
+            // Screen-space shadows, SVSM, and diagnostic CSM remain independent
+            // visibility
             // producers. This frame-local adapter is their only shared
             // integration point, and
             // deferred lighting applies a factor only to its pointer-identical
@@ -8761,8 +8803,8 @@ public:
             // without changing the other.
             directionalVisibility = {{
                 {
-                    bendShadowResult.nearVisibility,
-                    bendShadowResult.light
+                    screenSpaceShadowResult.nearVisibility,
+                    screenSpaceShadowResult.light
                 },
                 {
                     sparseVirtualShadowMapResult.visibility,
@@ -9121,42 +9163,44 @@ public:
             const ResolvedAntiAliasingSettings antiAliasing =
                 m_ui.GetResolvedAntiAliasingSettings();
 #if UVSR_AA_DEVELOPER_OVERRIDES
-            const MiniEngineTaaDebugView activeAaVisualization =
-                m_ui.MiniEngineTaaVisualization;
+            const TemporalAaDebugView activeAaVisualization =
+                m_ui.TemporalAaVisualization;
 #else
             // Debug shaders and routing are absent from production. Ignore
             // stale or hostile programmatic state before it can alter the
             // shipping render graph.
-            constexpr MiniEngineTaaDebugView activeAaVisualization =
-                MiniEngineTaaDebugView::Off;
+            constexpr TemporalAaDebugView activeAaVisualization =
+                TemporalAaDebugView::Off;
 #endif
-            const bool miniEngineDebugVisualizationActive =
-                m_MiniEngineTemporalAAPass &&
+            const bool temporalDebugVisualizationActive =
+                m_TemporalAAPass &&
                 IsLongTermTemporalPreset(
                     antiAliasing.implementation) &&
-                IsMiniEngineTaaDebugVisualization(
+                IsTemporalAaDebugVisualization(
                     activeAaVisualization);
             const bool temporalSharpenEnabled =
-                ShouldSharpenMiniEngineTaa(
-                    m_ui.MiniEngineTaaSharpenEnabled,
-                    m_ui.MiniEngineTaaSharpness);
+                antiAliasing.sharpeningAllowed &&
+                ShouldSharpenTemporalAa(
+                    m_ui.TemporalAaSharpenEnabled,
+                    m_ui.TemporalAaSharpness);
             const bool deferTemporalSharpenToPresentation =
-                m_MiniEngineTemporalAAPass &&
-                m_Cmaa2Pass &&
+                m_TemporalAAPass &&
                 IsLongTermTemporalPreset(
                     antiAliasing.implementation) &&
-                antiAliasing.subpixelMorphology !=
-                    MorphologyApplication::Off &&
-                !miniEngineDebugVisualizationActive &&
-                temporalSharpenEnabled;
-            if (m_MiniEngineTemporalAAPass)
+                !temporalDebugVisualizationActive &&
+                temporalSharpenEnabled &&
+                (antiAliasing.subpixelMorphology !=
+                        MorphologyApplication::Off ||
+                    antiAliasing.historyStorage ==
+                        TemporalAaHistoryStorage::Compact);
+            if (m_TemporalAAPass)
             {
                 // Resolve scene-linear radiance before any display transform.
                 // The pass intentionally has no exposure, grading, LUT, or
                 // transfer dependency, so removing or replacing the display
                 // stage does not change its contract.
                 antiAliasedTexture =
-                    m_MiniEngineTemporalAAPass->Render(
+                    m_TemporalAAPass->Render(
                     m_CommandList,
                     *m_View,
                     m_PreviousView.get(),
@@ -9167,7 +9211,7 @@ public:
                     temporalSharpenEnabled &&
                         !deferTemporalSharpenToPresentation,
                     deferTemporalSharpenToPresentation,
-                    m_ui.MiniEngineTaaSharpness);
+                    m_ui.TemporalAaSharpness);
             }
 
             bool cmaa2RenderedThisFrame = false;
@@ -9191,7 +9235,7 @@ public:
                 // spatial current made a changing selective rejection mask
                 // modulate edge detail.
                 antiAliasedTexture =
-                    m_MiniEngineTemporalAAPass
+                    m_TemporalAAPass
                         ->SharpenPresentation(
                             m_CommandList,
                             antiAliasedTexture);
@@ -9201,7 +9245,7 @@ public:
 
         nvrhi::ITexture* displayTexture = antiAliasedTexture;
         if (m_ui.UsesTonemapper() &&
-            !bendShadowResult.showDebug &&
+            !screenSpaceShadowResult.showDebug &&
             !sparseVirtualShadowMapResult.showDebug &&
             !diagnosticCsmResult.showDebug)
         {
@@ -9235,10 +9279,10 @@ public:
                 m_CommandList,
                 framebuffer);
         }
-        else if (bendShadowResult.showDebug &&
-            m_BendScreenSpaceShadowPass)
+        else if (screenSpaceShadowResult.showDebug &&
+            m_ScreenSpaceDirectionalShadowPass)
         {
-            m_BendScreenSpaceShadowPass->PresentDebug(
+            m_ScreenSpaceDirectionalShadowPass->PresentDebug(
                 m_CommandList,
                 framebuffer);
         }
@@ -9396,8 +9440,8 @@ public:
         {
             m_ScreenSpaceVisibilityPass->ResetHistory();
         }
-        if (m_MiniEngineTemporalAAPass)
-            m_MiniEngineTemporalAAPass->ResetHistory();
+        if (m_TemporalAAPass)
+            m_TemporalAAPass->ResetHistory();
     }
 
     float GetSceneDiagonal() const
@@ -9427,11 +9471,11 @@ public:
             : nullptr;
     }
 
-    const BendScreenSpaceShadowTimings*
-        GetBendScreenSpaceShadowTimings() const
+    const ScreenSpaceDirectionalShadowTimings*
+        GetScreenSpaceDirectionalShadowTimings() const
     {
-        return m_BendScreenSpaceShadowPass
-            ? &m_BendScreenSpaceShadowPass->GetTimings()
+        return m_ScreenSpaceDirectionalShadowPass
+            ? &m_ScreenSpaceDirectionalShadowPass->GetTimings()
             : nullptr;
     }
 
@@ -9469,10 +9513,10 @@ public:
         return m_SunLight;
     }
 
-    const MiniEngineTemporalAATimings* GetMiniEngineTemporalAATimings() const
+    const TemporalAATimings* GetTemporalAATimings() const
     {
-        return m_MiniEngineTemporalAAPass
-            ? &m_MiniEngineTemporalAAPass->GetTimings()
+        return m_TemporalAAPass
+            ? &m_TemporalAAPass->GetTimings()
             : nullptr;
     }
 
@@ -10700,13 +10744,13 @@ private:
         double frameTimeSeconds = 0.0;
         std::string rendererName;
         GpuPerformanceMetrics gpuMetrics;
-        BendScreenSpaceShadowTimings bendShadowTimings;
+        ScreenSpaceDirectionalShadowTimings screenSpaceShadowTimings;
         SparseVirtualShadowMapTimings sparseShadowTimings;
         DiagnosticCsmTimings diagnosticCsmTimings;
         DiagnosticCsmStats diagnosticCsmStats;
         ScreenSpaceVisibilityTimings visibilityTimings;
-        MiniEngineTemporalAATimings temporalAATimings;
-        bool hasBendShadowTimings = false;
+        TemporalAATimings temporalAATimings;
+        bool hasScreenSpaceShadowTimings = false;
         bool hasSparseShadowTimings = false;
         bool hasDiagnosticCsmTimings = false;
         bool hasVisibilityTimings = false;
@@ -10726,7 +10770,7 @@ private:
     double m_StatFrameTimeSum = 0.0;
     uint32_t m_StatFrameTimeCount = 0;
     std::array<std::string, 6> m_PerformanceStatValues;
-    std::array<std::string, 2> m_BendShadowStatLines;
+    std::array<std::string, 2> m_ScreenSpaceShadowStatLines;
     std::array<std::string, 17> m_SparseShadowStatLines;
     std::array<std::string, 11> m_DiagnosticCsmStatLines;
     std::array<std::string, 3> m_VisibilityStatLines;
@@ -10734,7 +10778,7 @@ private:
     std::deque<StatSnapshot> m_StatUpdateQueue;
     bool m_HasAppliedStatSnapshot = false;
     bool m_HasGpuStatSnapshot = false;
-    bool m_HasBendShadowStatSnapshot = false;
+    bool m_HasScreenSpaceShadowStatSnapshot = false;
     bool m_HasSparseShadowStatSnapshot = false;
     bool m_HasDiagnosticCsmStatSnapshot = false;
     bool m_HasVisibilityStatSnapshot = false;
@@ -12763,11 +12807,11 @@ private:
             : m_DisplayedFrameTime;
         snapshot.gpuMetrics =
             QueryGpuPerformanceMetrics(rendererString);
-        if (const BendScreenSpaceShadowTimings* timings =
-                m_app->GetBendScreenSpaceShadowTimings())
+        if (const ScreenSpaceDirectionalShadowTimings* timings =
+                m_app->GetScreenSpaceDirectionalShadowTimings())
         {
-            snapshot.bendShadowTimings = *timings;
-            snapshot.hasBendShadowTimings = true;
+            snapshot.screenSpaceShadowTimings = *timings;
+            snapshot.hasScreenSpaceShadowTimings = true;
         }
         if (const SparseVirtualShadowMapTimings* timings =
                 m_app->GetSparseVirtualShadowMapTimings())
@@ -12792,8 +12836,8 @@ private:
             snapshot.visibilityTimings = *timings;
             snapshot.hasVisibilityTimings = true;
         }
-        if (const MiniEngineTemporalAATimings* timings =
-                m_app->GetMiniEngineTemporalAATimings())
+        if (const TemporalAATimings* timings =
+                m_app->GetTemporalAATimings())
         {
             snapshot.temporalAATimings = *timings;
             snapshot.hasTemporalAATimings = true;
@@ -12888,27 +12932,27 @@ private:
             m_HasGpuStatSnapshot = false;
         }
 
-        if (snapshot.hasBendShadowTimings)
+        if (snapshot.hasScreenSpaceShadowTimings)
         {
-            const BendScreenSpaceShadowTimings& timings =
-                snapshot.bendShadowTimings;
+            const ScreenSpaceDirectionalShadowTimings& timings =
+                snapshot.screenSpaceShadowTimings;
             FormatStatLine(
-                m_BendShadowStatLines[0],
+                m_ScreenSpaceShadowStatLines[0],
                 "Trace %.3f ms / %u dispatches / %u groups",
                 timings.traceMilliseconds,
                 timings.dispatchCount,
                 timings.totalGroups);
             constexpr double BytesPerMib = 1024.0 * 1024.0;
             FormatStatLine(
-                m_BendShadowStatLines[1],
+                m_ScreenSpaceShadowStatLines[1],
                 "%u samples / R8 output %.2f mib",
                 timings.sampleCount,
                 double(timings.outputTextureBytes) / BytesPerMib);
-            m_HasBendShadowStatSnapshot = timings.active;
+            m_HasScreenSpaceShadowStatSnapshot = timings.active;
         }
         else
         {
-            m_HasBendShadowStatSnapshot = false;
+            m_HasScreenSpaceShadowStatSnapshot = false;
         }
 
         if (snapshot.hasSparseShadowTimings)
@@ -13636,7 +13680,7 @@ private:
 
         if (snapshot.hasTemporalAATimings)
         {
-            const MiniEngineTemporalAATimings* timings =
+            const TemporalAATimings* timings =
                 &snapshot.temporalAATimings;
             FormatStatLine(
                 m_TemporalAAStatLines[0],
@@ -13648,8 +13692,14 @@ private:
             constexpr double BytesPerMib = 1024.0 * 1024.0;
             FormatStatLine(
                 m_TemporalAAStatLines[1],
-                "History %.1f mib",
-                double(timings->historyTextureBytes) / BytesPerMib);
+                "%s / Active %.1f / Resident %.1f MiB / %u dispatches",
+                GetTemporalAaCostModeLabel(
+                    timings->effectiveCostMode),
+                double(timings->activeHistoryTextureBytes) /
+                    BytesPerMib,
+                double(timings->residentHistoryTextureBytes) /
+                    BytesPerMib,
+                timings->dispatchCount);
             m_HasTemporalAAStatSnapshot = true;
         }
         else
@@ -15384,7 +15434,7 @@ protected:
                 m_StatUpdateQueue.clear();
                 for (std::string& value : m_PerformanceStatValues)
                     value.clear();
-                for (std::string& value : m_BendShadowStatLines)
+                for (std::string& value : m_ScreenSpaceShadowStatLines)
                     value.clear();
                 for (std::string& value : m_SparseShadowStatLines)
                     value.clear();
@@ -15396,7 +15446,7 @@ protected:
                     value.clear();
                 m_HasAppliedStatSnapshot = false;
                 m_HasGpuStatSnapshot = false;
-                m_HasBendShadowStatSnapshot = false;
+                m_HasScreenSpaceShadowStatSnapshot = false;
                 m_HasSparseShadowStatSnapshot = false;
                 m_HasDiagnosticCsmStatSnapshot = false;
                 m_HasVisibilityStatSnapshot = false;
@@ -17434,7 +17484,7 @@ protected:
                 DirectLighting,
                 ScreenSpaceVisibility,
                 AntiAliasing,
-                BendShadows,
+                ScreenSpaceShadows,
                 SparseVirtualShadowMaps,
                 DiagnosticCascadedShadowMaps,
                 MaterialPicking,
@@ -17457,7 +17507,7 @@ protected:
                 "Direct Lighting",
                 "Screen-Space Visibility",
                 "Anti-Aliasing",
-                "Bend Shadows",
+                "Screen-Space Shadows",
                 "Sparse Virtual Shadow Maps",
                 "Diagnostic Cascaded Shadow Maps",
                 "Material Picking",
@@ -17562,10 +17612,10 @@ protected:
                             };
 
                         bool hasAntiAliasingStatistics = false;
-                        const MiniEngineTemporalAATimings* temporalTimings =
+                        const TemporalAATimings* temporalTimings =
                             statisticsRendererReady &&
                                 temporalStatisticsActive
-                                ? m_app->GetMiniEngineTemporalAATimings()
+                                ? m_app->GetTemporalAATimings()
                                 : nullptr;
                         if (temporalStatisticsActive)
                         {
@@ -17600,13 +17650,61 @@ protected:
                             if (temporalTimings)
                                 ImGui::Text("%.3f ms", temporalTimings->presentationSharpenMilliseconds);
                             else drawPendingTemporalValue();
-                            beginAntiAliasingStatisticsRow("History Memory");
+                            beginAntiAliasingStatisticsRow(
+                                "Active History Memory");
                             if (temporalTimings)
                             {
                                 ImGui::Text(
                                     "%.1f MiB",
-                                    double(temporalTimings->historyTextureBytes) /
+                                    double(temporalTimings->
+                                        activeHistoryTextureBytes) /
                                         BytesPerMiB);
+                            }
+                            else drawPendingTemporalValue();
+                            beginAntiAliasingStatisticsRow(
+                                "Resident History Memory");
+                            if (temporalTimings)
+                            {
+                                ImGui::Text(
+                                    "%.1f MiB",
+                                    double(temporalTimings->
+                                        residentHistoryTextureBytes) /
+                                        BytesPerMiB);
+                            }
+                            else drawPendingTemporalValue();
+                            beginAntiAliasingStatisticsRow(
+                                "Effective Temporal Cost");
+                            if (temporalTimings)
+                            {
+                                ImGui::TextUnformatted(
+                                    GetTemporalAaCostModeLabel(
+                                        temporalTimings->
+                                            effectiveCostMode));
+                            }
+                            else drawPendingTemporalValue();
+                            beginAntiAliasingStatisticsRow(
+                                "Temporal Dispatches");
+                            if (temporalTimings)
+                            {
+                                ImGui::Text(
+                                    "%u",
+                                    temporalTimings->dispatchCount);
+                            }
+                            else drawPendingTemporalValue();
+                            beginAntiAliasingStatisticsRow(
+                                "Minimum History Formats");
+                            if (temporalTimings)
+                            {
+                                ImGui::Text(
+                                    "%s + %s",
+                                    temporalTimings->
+                                            minimumColorIsR11G11B10
+                                        ? "R11G11B10"
+                                        : "RGBA16F",
+                                    temporalTimings->
+                                            minimumDepthIsR16
+                                        ? "R16F"
+                                        : "R32F");
                             }
                             else drawPendingTemporalValue();
                             beginAntiAliasingStatisticsRow("History Status");
@@ -17630,11 +17728,20 @@ protected:
                                 "Shader Permutation");
                             if (temporalTimings)
                             {
-                                ImGui::Text(
-                                    "%u / %u",
-                                    GetMiniEngineTaaBlendPermutationIndex(
-                                        statisticsResolved.temporal) + 1u,
-                                    MiniEngineTaaBlendPermutationCount);
+                                if (temporalTimings->effectiveCostMode ==
+                                    TemporalAaCostMode::Minimum)
+                                {
+                                    ImGui::TextUnformatted(
+                                        "Minimum Dedicated");
+                                }
+                                else
+                                {
+                                    ImGui::Text(
+                                        "%u / %u",
+                                        GetTemporalAaBlendPermutationIndex(
+                                            statisticsResolved.temporal) + 1u,
+                                        TemporalAaBlendPermutationCount);
+                                }
                             }
                             else drawPendingTemporalValue();
                             beginAntiAliasingStatisticsRow(
@@ -17724,13 +17831,13 @@ protected:
                 }
             }
             else if (statisticsEffect == static_cast<int>(
-                    StatisticsEffect::BendShadows) ||
+                    StatisticsEffect::ScreenSpaceShadows) ||
                 statisticsEffect == static_cast<int>(
                     StatisticsEffect::SparseVirtualShadowMaps) ||
                 statisticsEffect == static_cast<int>(
                     StatisticsEffect::DiagnosticCascadedShadowMaps))
             {
-                static constexpr const char* BendShadowStatLabels[] = {
+                static constexpr const char* ScreenSpaceShadowStatLabels[] = {
                     "Trace Work",
                     "Sampling and Output"
                 };
@@ -17823,13 +17930,13 @@ protected:
                 };
 
                 if (statisticsEffect == static_cast<int>(
-                        StatisticsEffect::BendShadows))
+                        StatisticsEffect::ScreenSpaceShadows))
                 {
                     drawStatLines(
-                        "##BendShadowStatistics",
-                        BendShadowStatLabels,
-                        m_BendShadowStatLines,
-                        m_HasBendShadowStatSnapshot);
+                        "##ScreenSpaceShadowStatistics",
+                        ScreenSpaceShadowStatLabels,
+                        m_ScreenSpaceShadowStatLines,
+                        m_HasScreenSpaceShadowStatSnapshot);
                 }
                 else if (statisticsEffect == static_cast<int>(
                         StatisticsEffect::SparseVirtualShadowMaps))
@@ -18725,8 +18832,8 @@ protected:
                     if (g_DeferredAliasingUiPresentation.CommitTo(
                             m_ui.AntiAliasing))
                     {
-                        m_ui.MiniEngineTaaVisualization =
-                            MiniEngineTaaDebugView::Off;
+                        m_ui.TemporalAaVisualization =
+                            TemporalAaDebugView::Off;
                     }
                 };
             const AntiAliasingSettings defaultAliasingSettings;
@@ -19023,6 +19130,80 @@ protected:
                     });
             }
 
+            if (temporalMethodSelected)
+            {
+                const TemporalAaCostMode selectedCostMode =
+                    SanitizeTemporalAaCostMode(
+                        selectorSettings.temporalCostMode);
+                ImGui::SetNextItemWidth(settingsControlWidth);
+                if (BeginRoundedCombo(
+                        "Temporal Cost",
+                        GetTemporalAaCostModeLabel(
+                            selectedCostMode)))
+                {
+                    static constexpr std::array<
+                        TemporalAaCostMode, 3> costModeOrder = {
+                            TemporalAaCostMode::Minimum,
+                            TemporalAaCostMode::Reduced,
+                            TemporalAaCostMode::FullQuality
+                        };
+                    for (const TemporalAaCostMode candidate :
+                        costModeOrder)
+                    {
+                        const bool selected =
+                            candidate == selectedCostMode;
+                        if (DrawDeferredDropdownOption(
+                                GetTemporalAaCostModeLabel(candidate),
+                                GetTemporalAaCostModeLabel(candidate),
+                                selected,
+                                commitDeferredAliasingPresentation))
+                        {
+                            g_DeferredAliasingUiPresentation.Stage(
+                                m_ui.AntiAliasing,
+                                false,
+                                ImGui::GetFrameCount(),
+                                [candidate](
+                                    AntiAliasingSettings& staged)
+                                {
+                                    staged.temporalCostMode =
+                                        candidate;
+                                });
+                        }
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SetItemTooltip(
+                    "Full Quality preserves the robust confidence/depth path. "
+                    "Reduced enables packed shared memory, adjacent-work reuse, "
+                    "early rejection, and one-pass output. Minimum uses compact "
+                    "history and one compute dispatch, defaults to its low-cost "
+                    "stability policies with sharpening off, and targets the cost class "
+                    "of the Wicked Engine TAA reference. Presentation "
+                    "morphology falls back to Reduced when compact color is "
+                    "not format-compatible. Developer Options can override "
+                    "each image policy; incompatible compact combinations "
+                    "fall back visibly to robust history.");
+                if (DrawPresetResetIcon(
+                        "Temporal Cost",
+                        selectedCostMode !=
+                            TemporalAaCostMode::FullQuality))
+                {
+                    QueueDeferredControlUiAction(
+                        commitDeferredAliasingPresentation);
+                    g_DeferredAliasingUiPresentation.Stage(
+                        m_ui.AntiAliasing,
+                        false,
+                        ImGui::GetFrameCount(),
+                        [](AntiAliasingSettings& staged)
+                        {
+                            staged.temporalCostMode =
+                                TemporalAaCostMode::FullQuality;
+                        });
+                }
+            }
+
             AntiAliasingSettings& settings =
                 g_DeferredAliasingUiPresentation.
                     PresentStructuralBody(m_ui.AntiAliasing);
@@ -19051,128 +19232,34 @@ protected:
             if (effectiveTemporalSelectionUnavailable)
             {
                 DrawDisabledTextWrapped(
-                    m_ui.HasMiniEngineTaaVisibilityConflict()
+                    m_ui.HasTemporalAaVisibilityConflict()
                         ? "Temporal anti-aliasing is paused until visibility\n"
                             "Temporal Reconstruction is disabled."
                         : "Temporal anti-aliasing requires deferred UVSR PBR\n"
                             "motion and depth.");
             }
 
-            MiniEngineTaaAlgorithmOverrides& historyOverrides =
-                settings.algorithmOverrides;
-            AntiAliasingSettings historyPresetSettings = settings;
-            // The enabled toggle controls execution, not the retained preset
-            // presentation. Resolve inherited history from the active method
-            // while its controls collapse so 6 / 100% never flashes to 0.
-            historyPresetSettings.enabled = true;
-            historyPresetSettings.algorithmOverrides.historyFrames =
-                -1;
-            historyPresetSettings.algorithmOverrides.historyStrength =
-                -1.f;
-            const ResolvedAntiAliasingSettings historyPreset =
-                m_ui.GetResolvedAntiAliasingSettings(
-                    historyPresetSettings);
-            const bool usesConfigurableHistory =
-                longTermTemporalControlsAvailable;
-            if (usesConfigurableHistory)
-            {
-                int historyFrames =
-                    historyOverrides.historyFrames >= 0
-                        ? historyOverrides.historyFrames
-                        : static_cast<int>(
-                            historyPreset.historyFrames);
-                std::string historyFramesLabel =
-                    "History Frames";
-                historyFramesLabel +=
-                    "##ResolvedHistoryFrames";
-                ImGui::SetNextItemWidth(settingsControlWidth);
-                if (DrawSliderInt(
-                        historyFramesLabel.c_str(),
-                        &historyFrames,
-                        1,
-                        32,
-                        "%d"))
-                {
-                    historyOverrides.historyFrames =
-                        historyFrames ==
-                            static_cast<int>(
-                                historyPreset.historyFrames)
-                            ? -1
-                            : historyFrames;
-                }
-                ImGui::SetItemTooltip(
-                    "Cap the logical number of prior frames that can influence temporal AA. The physical allocation remains two ping-pong textures.");
-                if (DrawPresetResetIcon(
-                        "Aliasing History Frames",
-                        historyOverrides.historyFrames >= 0))
-                {
-                    historyOverrides.historyFrames = -1;
-                }
-                float historyStrength =
-                    100.f *
-                    (historyOverrides.historyStrength >= 0.f
-                        ? historyOverrides.historyStrength
-                        : historyPreset.historyStrength);
-                std::string historyStrengthLabel =
-                    "History Strength";
-                historyStrengthLabel +=
-                    "##ResolvedHistoryStrength";
-                ImGui::SetNextItemWidth(settingsControlWidth);
-                if (DrawSliderFloat(
-                        historyStrengthLabel.c_str(),
-                        &historyStrength,
-                        0.f,
-                        200.f,
-                        "%.0f%%"))
-                {
-                    historyOverrides.historyStrength =
-                        std::clamp(
-                            historyStrength * 0.01f,
-                            0.f,
-                            2.f);
-                    if (std::abs(
-                            historyOverrides.historyStrength -
-                            historyPreset.historyStrength) < 1e-4f)
-                    {
-                        historyOverrides.historyStrength = -1.f;
-                    }
-                }
-                ImGui::SetItemTooltip(
-                    "%s",
-                    "Scale accepted history after motion, bounds, reverse-Z "
-                    "depth, disocclusion, and rectification gates. Values "
-                    "above 100% strengthen only accepted "
-                    "history, remain capped by the selected frame horizon, "
-                    "and cannot revive a rejected sample.");
-                if (DrawPresetResetIcon(
-                        "Aliasing History Strength",
-                        historyOverrides.historyStrength >= 0.f))
-                {
-                    historyOverrides.historyStrength = -1.f;
-                }
-            }
-
             const auto drawDejitterControl = [&]()
                 {
-                    MiniEngineTaaAlgorithmOverrides& algorithmOverrides =
+                    TemporalAaAlgorithmOverrides& algorithmOverrides =
                         settings.algorithmOverrides;
                     AntiAliasingSettings dejitterPresetSettings =
                         settings;
                     dejitterPresetSettings.algorithmOverrides =
-                        MiniEngineTaaAlgorithmOverrides{};
+                        TemporalAaAlgorithmOverrides{};
                     const bool presetDejitter =
                         m_ui.GetResolvedAntiAliasingSettings(
                                 dejitterPresetSettings)
                                 .temporal.currentReconstruction ==
-                            MiniEngineTaaCurrentReconstruction::DeJittered;
+                            TemporalAaCurrentReconstruction::DeJittered;
                     const bool inherited =
                         algorithmOverrides.currentReconstruction ==
-                        MiniEngineTaaCurrentReconstructionOverride::
+                        TemporalAaCurrentReconstructionOverride::
                             FromPreset;
                     bool dejitter = inherited
                         ? presetDejitter
                         : algorithmOverrides.currentReconstruction ==
-                            MiniEngineTaaCurrentReconstructionOverride::
+                            TemporalAaCurrentReconstructionOverride::
                                 DeJittered;
                     if (ImGui::Checkbox(
                             "Dejitter##AliasingDejitter",
@@ -19181,16 +19268,16 @@ protected:
                         if (dejitter == presetDejitter)
                         {
                             algorithmOverrides.currentReconstruction =
-                                MiniEngineTaaCurrentReconstructionOverride::
+                                TemporalAaCurrentReconstructionOverride::
                                     FromPreset;
                         }
                         else
                         {
                             algorithmOverrides.currentReconstruction =
                                 dejitter
-                                ? MiniEngineTaaCurrentReconstructionOverride::
+                                ? TemporalAaCurrentReconstructionOverride::
                                     DeJittered
-                                : MiniEngineTaaCurrentReconstructionOverride::
+                                : TemporalAaCurrentReconstructionOverride::
                                     Direct;
                         }
                     }
@@ -19203,79 +19290,38 @@ protected:
                             !inherited))
                     {
                         algorithmOverrides.currentReconstruction =
-                            MiniEngineTaaCurrentReconstructionOverride::
+                            TemporalAaCurrentReconstructionOverride::
                                 FromPreset;
                     }
                 };
 
             const auto drawRectificationControl = [&]()
                 {
-                    MiniEngineTaaAlgorithmOverrides& algorithmOverrides =
+                    TemporalAaAlgorithmOverrides& algorithmOverrides =
                         settings.algorithmOverrides;
                     AntiAliasingSettings rectificationPresetSettings =
                         settings;
                     rectificationPresetSettings.algorithmOverrides =
-                        MiniEngineTaaAlgorithmOverrides{};
+                        TemporalAaAlgorithmOverrides{};
                     const ResolvedAntiAliasingSettings resolvedForLabels =
                         m_ui.GetResolvedAntiAliasingSettings(
                             rectificationPresetSettings);
                     static constexpr std::array<
-                        MiniEngineTaaRectificationOverride, 2>
+                        TemporalAaRectificationOverride, 2>
                         rectificationOrder = {
-                            MiniEngineTaaRectificationOverride::PairRgb,
-                            MiniEngineTaaRectificationOverride::VarianceYCoCg
+                            TemporalAaRectificationOverride::PairRgb,
+                            TemporalAaRectificationOverride::VarianceYCoCg
                         };
                     drawEnumOption(
                         "Rectification",
                         algorithmOverrides.rectification,
                         rectificationOrder,
-                        GetMiniEngineTaaRectificationOverrideLabel,
+                        GetTemporalAaRectificationOverrideLabel,
                         "Choose pair-clamp RGB or variance-aware YCoCg history "
                         "rectification.",
-                        GetMiniEngineTaaRectificationLabel(
+                        GetTemporalAaRectificationLabel(
                             resolvedForLabels.temporal.rectification));
                 };
-
-            if (longTermTemporalControlsAvailable)
-            {
-                drawDejitterControl();
-                ImGui::Checkbox(
-                    "Sharpness###Sharpness",
-                    &m_ui.MiniEngineTaaSharpenEnabled);
-                ImGui::SetItemTooltip(
-                    "Enable or bypass temporal output sharpening while retaining the selected strength.");
-                if (DrawPresetResetIcon(
-                        "Aliasing Sharpness Enabled",
-                        m_ui.MiniEngineTaaSharpenEnabled))
-                {
-                    m_ui.MiniEngineTaaSharpenEnabled = false;
-                }
-                if (BeginAnimatedToggleRegion(
-                        "##SharpnessStrengthControls",
-                        m_ui.MiniEngineTaaSharpenEnabled))
-                {
-                    ImGui::SetNextItemWidth(settingsControlWidth);
-                    DrawSliderFloat(
-                        "Sharpness Strength",
-                        &m_ui.MiniEngineTaaSharpness,
-                        MiniEngineTaaMinimumSharpness,
-                        MiniEngineTaaMaximumSharpness,
-                        "%.2f");
-                    ImGui::SetItemTooltip(
-                        "Set temporal output sharpness. The stored value is "
-                        "retained while sharpening is disabled.");
-                    if (DrawPresetResetIcon(
-                            "Aliasing Sharpness Strength",
-                            std::abs(
-                                m_ui.MiniEngineTaaSharpness -
-                                MiniEngineTaaDefaultSharpness) > 1e-4f))
-                    {
-                        m_ui.MiniEngineTaaSharpness =
-                            MiniEngineTaaDefaultSharpness;
-                    }
-                    EndAnimatedToggleRegion();
-                }
-            }
 
             const bool algorithmConfigurationAvailable =
                 longTermTemporalControlsAvailable ||
@@ -19284,22 +19330,38 @@ protected:
                 selectedImplementation == AntiAliasingPreset::Msaa4x ||
                 selectedImplementation == AntiAliasingPreset::Msaa8x ||
                 selectedImplementation == AntiAliasingPreset::Msaa16x;
+            const char* algorithmConfigurationLabel =
+                longTermTemporalControlsAvailable
+                    ? "Developer Options##AliasingDeveloperOptions"
+                    : "Aliasing Algorithm Configuration";
             if (algorithmConfigurationAvailable &&
                 BeginAnimatedTreeNode(
-                    "Aliasing Algorithm Configuration",
+                    algorithmConfigurationLabel,
                     ImGuiTreeNodeFlags_DefaultOpen))
             {
-                MiniEngineTaaAlgorithmOverrides& overrides =
+                TemporalAaAlgorithmOverrides& overrides =
                     settings.algorithmOverrides;
                 AntiAliasingSettings presetLabelSettings =
                     settings;
+                // Enabled controls execution, not the retained Developer
+                // Options state. Keep the requested cost and its inherited
+                // rows stable while the Aliasing toggle collapses.
+                presetLabelSettings.enabled = true;
                 presetLabelSettings.algorithmOverrides =
-                    MiniEngineTaaAlgorithmOverrides{};
+                    TemporalAaAlgorithmOverrides{};
+                presetLabelSettings.behaviorOverrides =
+                    TemporalAaBehaviorOverrides{};
+                presetLabelSettings.performanceOverrides =
+                    TemporalAaPerformanceOverrides{};
                 const ResolvedAntiAliasingSettings resolvedForLabels =
                     m_ui.GetResolvedAntiAliasingSettings(
                         presetLabelSettings);
+                AntiAliasingSettings currentLabelSettings =
+                    settings;
+                currentLabelSettings.enabled = true;
                 const ResolvedAntiAliasingSettings resolvedCurrent =
-                    m_ui.GetResolvedAntiAliasingSettings(settings);
+                    m_ui.GetResolvedAntiAliasingSettings(
+                        currentLabelSettings);
 
                 const auto drawMorphologyOption = [&]()
                 {
@@ -19311,7 +19373,7 @@ protected:
                             GetAntiAliasingQualityLabel(
                                 resolvedForLabels.morphologyQuality);
                         drawFixedOption(
-                            "Subpixel Morphology##Developer",
+                            "Morphology##Developer",
                             fixedLabel.c_str(),
                             "The Conservative Morphological method uses the "
                             "strength selected by Quality.");
@@ -19345,7 +19407,7 @@ protected:
                         ImGui::SetNextItemWidth(settingsControlWidth);
                         const bool morphologyComboOpen =
                             BeginRoundedCombo(
-                                "Subpixel Morphology##Developer",
+                                "Morphology##Developer",
                                 morphologyPreview.c_str());
                         if (morphologyComboOpen)
                         {
@@ -19363,7 +19425,7 @@ protected:
                                     AntiAliasingQuality::High,
                                     AntiAliasingQuality::Ultra
                                 };
-                            MiniEngineTaaAlgorithmOverrides*
+                            TemporalAaAlgorithmOverrides*
                                 overridesPointer = &overrides;
                             const bool offRepresentsInherited =
                                 morphologyInherited && morphologyOff;
@@ -19381,8 +19443,8 @@ protected:
                                             FromPreset
                                         : MorphologyApplicationOverride::Off;
                                     overridesPointer->morphologyQuality = -1;
-                                    m_ui.MiniEngineTaaVisualization =
-                                        MiniEngineTaaDebugView::Off;
+                                    m_ui.TemporalAaVisualization =
+                                        TemporalAaDebugView::Off;
                                 });
                             for (const AntiAliasingQuality candidateQuality :
                                 morphologyQualityOrder)
@@ -19399,7 +19461,7 @@ protected:
                                 std::string candidateLabel =
                                     morphologyLabels[index];
                                 candidateLabel += "##MorphologyCandidate";
-                                MiniEngineTaaAlgorithmOverrides*
+                                TemporalAaAlgorithmOverrides*
                                     overridesPointer = &overrides;
                                 DrawDeferredDropdownOption(
                                     candidateLabel.c_str(),
@@ -19421,8 +19483,8 @@ protected:
                                             candidateRepresentsInherited
                                             ? -1
                                             : int32_t(candidateQuality);
-                                        m_ui.MiniEngineTaaVisualization =
-                                            MiniEngineTaaDebugView::Off;
+                                        m_ui.TemporalAaVisualization =
+                                            TemporalAaDebugView::Off;
                                     });
                                 if (selected)
                                     ImGui::SetItemDefaultFocus();
@@ -19432,15 +19494,18 @@ protected:
                         }
                         ImGui::SetItemTooltip(
                             "Choose the CMAA2 strength applied after the "
-                            "resolved Temporal or Multisample image.");
+                            "resolved Temporal or Multisample image. With "
+                            "Minimum, compact R11G11B10 color reports an "
+                            "effective Reduced fallback so CMAA2 receives "
+                            "RGBA16F input.");
                         if (DrawNestedDropdownResetIcon(
-                                "Aliasing Subpixel Morphology",
+                                "Aliasing Morphology",
                                 overrides.subpixelMorphology !=
                                     MorphologyApplicationOverride::
                                         FromPreset ||
                                     overrides.morphologyQuality >= 0))
                         {
-                            MiniEngineTaaAlgorithmOverrides*
+                            TemporalAaAlgorithmOverrides*
                                 overridesPointer = &overrides;
                             QueueDeferredControlUiAction(
                                 [this, overridesPointer]()
@@ -19449,86 +19514,354 @@ protected:
                                         MorphologyApplicationOverride::
                                             FromPreset;
                                     overridesPointer->morphologyQuality = -1;
-                                    m_ui.MiniEngineTaaVisualization =
-                                        MiniEngineTaaDebugView::Off;
+                                    m_ui.TemporalAaVisualization =
+                                        TemporalAaDebugView::Off;
                                 });
                         }
                     }
                 };
 
                 static constexpr std::array<
-                    MiniEngineTaaMotionSourceOverride, 3>
+                    TemporalAaMotionSourceOverride, 3>
                     motionSourceOrder = {
-                        MiniEngineTaaMotionSourceOverride::Center,
-                        MiniEngineTaaMotionSourceOverride::ClosestCross,
-                        MiniEngineTaaMotionSourceOverride::
+                        TemporalAaMotionSourceOverride::Center,
+                        TemporalAaMotionSourceOverride::ClosestCross,
+                        TemporalAaMotionSourceOverride::
                             CenterFirstEdgeDilation
                     };
                 static constexpr std::array<
-                    MiniEngineTaaHistoryFilterOverride, 4>
+                    TemporalAaHistoryFilterOverride, 4>
                     reconstructionOrder = {
-                        MiniEngineTaaHistoryFilterOverride::Bilinear,
-                        MiniEngineTaaHistoryFilterOverride::
+                        TemporalAaHistoryFilterOverride::Bilinear,
+                        TemporalAaHistoryFilterOverride::
                             OneSampleBicubic,
-                        MiniEngineTaaHistoryFilterOverride::
+                        TemporalAaHistoryFilterOverride::
                             FiveTapCatmullRom,
-                        MiniEngineTaaHistoryFilterOverride::
+                        TemporalAaHistoryFilterOverride::
                             NineTapCatmullRom
                     };
-#if UVSR_AA_DEVELOPER_OVERRIDES
                 static constexpr std::array<
-                    MiniEngineTaaSampleResurrectionOverride, 3>
+                    TemporalAaHistoryStorageOverride, 2>
+                    historyStorageOrder = {
+                        TemporalAaHistoryStorageOverride::Robust,
+                        TemporalAaHistoryStorageOverride::Compact
+                    };
+                static constexpr std::array<
+                    TemporalAaDepthValidationOverride, 2>
+                    depthValidationOrder = {
+                        TemporalAaDepthValidationOverride::
+                            FourTexelFootprint,
+                        TemporalAaDepthValidationOverride::MovingPoint
+                    };
+                static constexpr std::array<
+                    TemporalAaHistoryWeightPolicyOverride, 2>
+                    historyWeightOrder = {
+                        TemporalAaHistoryWeightPolicyOverride::
+                            ConfidenceRecurrence,
+                        TemporalAaHistoryWeightPolicyOverride::
+                            ImmediateHorizon
+                    };
+                static constexpr std::array<
+                    TemporalAaMotionTrustOverride, 2>
+                    motionTrustOrder = {
+                        TemporalAaMotionTrustOverride::LinearSpeed,
+                        TemporalAaMotionTrustOverride::SquaredSpeed
+                    };
+                static constexpr std::array<
+                    TemporalAaRectificationClipOverride, 2>
+                    rectificationClipOrder = {
+                        TemporalAaRectificationClipOverride::
+                            VelocityDilatedLine,
+                        TemporalAaRectificationClipOverride::
+                            TightComponent
+                    };
+                static constexpr std::array<
+                    TemporalAaBlendDomainOverride, 2>
+                    blendDomainOrder = {
+                        TemporalAaBlendDomainOverride::
+                            LuminanceCompressed,
+                        TemporalAaBlendDomainOverride::LinearRgb
+                    };
+                static constexpr std::array<
+                    TemporalAaAutoToggle, 2>
+                    toggleOrder = {
+                        TemporalAaAutoToggle::Off,
+                        TemporalAaAutoToggle::On
+                    };
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
+                static constexpr std::array<
+                    TemporalAaSampleResurrectionOverride, 3>
                     sampleResurrectionOrder = {
-                        MiniEngineTaaSampleResurrectionOverride::Off,
-                        MiniEngineTaaSampleResurrectionOverride::
+                        TemporalAaSampleResurrectionOverride::Off,
+                        TemporalAaSampleResurrectionOverride::
                             OneOlderFrame,
-                        MiniEngineTaaSampleResurrectionOverride::
+                        TemporalAaSampleResurrectionOverride::
                             TwoOlderFrames
                     };
 #endif
 
                 if (longTermTemporalControlsAvailable)
                 {
+                    TemporalAaBehaviorOverrides& behaviorOverrides =
+                        settings.behaviorOverrides;
+
+                    drawDejitterControl();
+                    if (BeginAnimatedToggleRegion(
+                            "##TemporalSharpnessAvailability",
+                            resolvedCurrent.sharpeningAllowed))
+                    {
+                        ImGui::Checkbox(
+                            "Sharpness###Sharpness",
+                            &m_ui.TemporalAaSharpenEnabled);
+                        ImGui::SetItemTooltip(
+                            "Enable or bypass temporal output sharpening "
+                            "while retaining the selected strength.");
+                        if (DrawPresetResetIcon(
+                                "Aliasing Sharpness Enabled",
+                                m_ui.TemporalAaSharpenEnabled))
+                        {
+                            m_ui.TemporalAaSharpenEnabled = false;
+                        }
+                        if (BeginAnimatedToggleRegion(
+                                "##SharpnessStrengthControls",
+                                m_ui.TemporalAaSharpenEnabled))
+                        {
+                            ImGui::SetNextItemWidth(settingsControlWidth);
+                            DrawSliderFloat(
+                                "Sharpness Strength",
+                                &m_ui.TemporalAaSharpness,
+                                TemporalAaMinimumSharpness,
+                                TemporalAaMaximumSharpness,
+                                "%.2f");
+                            ImGui::SetItemTooltip(
+                                "Set temporal output sharpness. The stored "
+                                "value is retained while sharpening is "
+                                "disabled.");
+                            if (DrawPresetResetIcon(
+                                    "Aliasing Sharpness Strength",
+                                    std::abs(
+                                        m_ui.TemporalAaSharpness -
+                                        TemporalAaDefaultSharpness) > 1e-4f))
+                            {
+                                m_ui.TemporalAaSharpness =
+                                    TemporalAaDefaultSharpness;
+                            }
+                            EndAnimatedToggleRegion();
+                        }
+                        EndAnimatedToggleRegion();
+                    }
+
+                    AntiAliasingSettings historyPresetSettings = settings;
+                    // The enabled toggle controls execution, not the retained
+                    // preset presentation. Resolve inherited history from the
+                    // active method while its controls collapse so 6 / 100%
+                    // never flashes to 0.
+                    historyPresetSettings.enabled = true;
+                    historyPresetSettings.algorithmOverrides.historyFrames =
+                        -1;
+                    historyPresetSettings.algorithmOverrides.historyStrength =
+                        -1.f;
+                    const ResolvedAntiAliasingSettings historyPreset =
+                        m_ui.GetResolvedAntiAliasingSettings(
+                            historyPresetSettings);
+                    int historyFrames =
+                        overrides.historyFrames >= 0
+                            ? overrides.historyFrames
+                            : static_cast<int>(
+                                historyPreset.historyFrames);
+                    std::string historyFramesLabel =
+                        "History Frames";
+                    historyFramesLabel +=
+                        "##ResolvedHistoryFrames";
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (DrawSliderInt(
+                            historyFramesLabel.c_str(),
+                            &historyFrames,
+                            1,
+                            32,
+                            "%d"))
+                    {
+                        overrides.historyFrames =
+                            historyFrames ==
+                                static_cast<int>(
+                                    historyPreset.historyFrames)
+                                ? -1
+                                : historyFrames;
+                    }
+                    ImGui::SetItemTooltip(
+                        "Cap the logical number of prior frames that can "
+                        "influence temporal AA. The physical allocation "
+                        "remains two ping-pong textures.");
+                    if (DrawPresetResetIcon(
+                            "Aliasing History Frames",
+                            overrides.historyFrames >= 0))
+                    {
+                        overrides.historyFrames = -1;
+                    }
+                    float historyStrength =
+                        100.f *
+                        (overrides.historyStrength >= 0.f
+                            ? overrides.historyStrength
+                            : historyPreset.historyStrength);
+                    std::string historyStrengthLabel =
+                        "History Strength";
+                    historyStrengthLabel +=
+                        "##ResolvedHistoryStrength";
+                    ImGui::SetNextItemWidth(settingsControlWidth);
+                    if (DrawSliderFloat(
+                            historyStrengthLabel.c_str(),
+                            &historyStrength,
+                            0.f,
+                            200.f,
+                            "%.0f%%"))
+                    {
+                        overrides.historyStrength =
+                            std::clamp(
+                                historyStrength * 0.01f,
+                                0.f,
+                                2.f);
+                        if (std::abs(
+                                overrides.historyStrength -
+                                historyPreset.historyStrength) < 1e-4f)
+                        {
+                            overrides.historyStrength = -1.f;
+                        }
+                    }
+                    ImGui::SetItemTooltip(
+                        "%s",
+                        "Scale accepted history after motion, bounds, "
+                        "reverse-Z depth, disocclusion, and rectification "
+                        "gates. Values above 100% strengthen only accepted "
+                        "history, remain capped by the selected frame horizon, "
+                        "and cannot revive a rejected sample.");
+                    if (DrawPresetResetIcon(
+                            "Aliasing History Strength",
+                            overrides.historyStrength >= 0.f))
+                    {
+                        overrides.historyStrength = -1.f;
+                    }
+
                     drawMorphologyOption();
                     drawEnumOption(
                         "Motion Source",
                         overrides.motionSource,
                         motionSourceOrder,
-                        GetMiniEngineTaaMotionSourceOverrideLabel,
-                        "Override motion ownership. Changing it resets all temporal state.",
-                        GetMiniEngineTaaMotionSourceLabel(
+                        GetTemporalAaMotionSourceOverrideLabel,
+                        "Choose motion ownership. Center is the strongest "
+                        "existing-setting explanation for Minimum's calmer "
+                        "thin edges because it avoids phase-varying borrowed "
+                        "foreground motion. Changing it resets temporal state.",
+                        GetTemporalAaMotionSourceLabel(
                             resolvedForLabels.temporal.motionSource));
                     drawEnumOption(
                         "Reconstruction",
                         overrides.historyFilter,
                         reconstructionOrder,
-                        GetMiniEngineTaaHistoryFilterOverrideLabel,
-                        "Choose the real history reconstruction filter, "
-                        "including the full nine-tap Catmull-Rom option.",
-                        GetMiniEngineTaaHistoryFilterLabel(
+                        GetTemporalAaHistoryFilterOverrideLabel,
+                        "Choose the history reconstruction filter, including "
+                        "the full nine-tap Catmull-Rom option.",
+                        GetTemporalAaHistoryFilterLabel(
                             resolvedForLabels.temporal.historyFilter));
                     drawRectificationControl();
+
+                    drawEnumOption(
+                        "History Storage",
+                        behaviorOverrides.historyStorage,
+                        historyStorageOrder,
+                        GetTemporalAaHistoryStorageOverrideLabel,
+                        "Choose robust RGBA16/R32 history or the compact "
+                        "Minimum history. Compact storage uses the dedicated "
+                        "one-dispatch path only when the selected algorithms "
+                        "are compatible; otherwise runtime retains robust "
+                        "history. Statistics reports the effective cost.",
+                        GetTemporalAaHistoryStorageLabel(
+                            resolvedForLabels.historyStorage));
+                    drawEnumOption(
+                        "Previous-Depth Validation",
+                        behaviorOverrides.depthValidation,
+                        depthValidationOrder,
+                        GetTemporalAaDepthValidationOverrideLabel,
+                        "Four-Texel Footprint validates the full jittered "
+                        "bilinear footprint. Stationary Bypass uses a point "
+                        "depth sample while moving and lets otherwise-valid "
+                        "stationary history pass the depth gate.",
+                        GetTemporalAaDepthValidationLabel(
+                            resolvedForLabels.depthValidation));
+                    drawEnumOption(
+                        "History Weight",
+                        behaviorOverrides.historyWeight,
+                        historyWeightOrder,
+                        GetTemporalAaHistoryWeightPolicyOverrideLabel,
+                        "Confidence Recurrence ramps per-pixel trust through "
+                        "history alpha. Immediate Horizon uses the selected "
+                        "frame horizon on the first accepted prior sample. "
+                        "Compact history requires Immediate Horizon.",
+                        GetTemporalAaHistoryWeightPolicyLabel(
+                            resolvedForLabels.historyWeight));
+                    drawEnumOption(
+                        "Motion Trust",
+                        behaviorOverrides.motionTrust,
+                        motionTrustOrder,
+                        GetTemporalAaMotionTrustOverrideLabel,
+                        "Choose the robust linear-speed confidence curve or "
+                        "Minimum's cheaper squared-speed response.",
+                        GetTemporalAaMotionTrustLabel(
+                            resolvedForLabels.motionTrust));
+                    drawEnumOption(
+                        "Rectification Clip",
+                        behaviorOverrides.rectificationClip,
+                        rectificationClipOrder,
+                        GetTemporalAaRectificationClipOverrideLabel,
+                        "Velocity-Dilated Line preserves more history along "
+                        "the current-to-history line. Tight Component clamps "
+                        "each channel to Minimum's exact pair bounds.",
+                        GetTemporalAaRectificationClipLabel(
+                            resolvedForLabels.rectificationClip));
+                    drawEnumOption(
+                        "Blend Domain",
+                        behaviorOverrides.blendDomain,
+                        blendDomainOrder,
+                        GetTemporalAaBlendDomainOverrideLabel,
+                        "Choose the robust luminance-compressed blend or "
+                        "Minimum's direct linear-RGB blend.",
+                        GetTemporalAaBlendDomainLabel(
+                            resolvedForLabels.blendDomain));
+                    drawEnumOption(
+                        "Sharpness Policy",
+                        behaviorOverrides.sharpening,
+                        toggleOrder,
+                        GetTemporalAaAutoToggleLabel,
+                        "Temporal Cost disables sharpening in Minimum by "
+                        "default. Override that policy here; compact history "
+                        "adds one presentation-sharpen dispatch when enabled.",
+                        resolvedForLabels.sharpeningAllowed
+                            ? "On"
+                            : "Off");
+
+#if UVSR_TAA_SAMPLE_RESURRECTION_AVAILABLE
+                    if (BeginAnimatedToggleRegion(
+                            "##SampleResurrectionAvailability",
+                            resolvedCurrent.temporalCostMode ==
+                                TemporalAaCostMode::FullQuality))
+                    {
+                        drawEnumOption(
+                            "Sample Resurrection",
+                            overrides.sampleResurrection,
+                            sampleResurrectionOrder,
+                            GetTemporalAaSampleResurrectionOverrideLabel,
+                            "Reuse one or two older validated samples when "
+                            "immediate history is unreliable.",
+                            GetTemporalAaSampleResurrectionLabel(
+                                resolvedForLabels.sampleResurrection));
+                        EndAnimatedToggleRegion();
+                    }
+#endif
+
                 }
                 else
                 {
                     drawMorphologyOption();
                 }
-
-                // Resurrection remains last because it is a recovery policy
-                // applied after the primary spatial and temporal choices.
-#if UVSR_AA_DEVELOPER_OVERRIDES
-                if (longTermTemporalControlsAvailable)
-                {
-                    drawEnumOption(
-                        "Sample Resurrection",
-                        overrides.sampleResurrection,
-                        sampleResurrectionOrder,
-                        GetMiniEngineTaaSampleResurrectionOverrideLabel,
-                        "Reuse one or two older validated samples when immediate history is unreliable.",
-                        GetMiniEngineTaaSampleResurrectionLabel(
-                            resolvedForLabels.sampleResurrection));
-                }
-#endif
 
                 EndAnimatedTreeNode();
             }
@@ -20172,15 +20505,15 @@ protected:
                 m_app->HasPrimaryDirectionalLight();
 
             if (BeginAnimatedTreeNode(
-                    "Bend Screen-Space Shadows##Lights",
+                    "Screen-Space Directional Shadows##Lights",
                     ImGuiTreeNodeFlags_DefaultOpen))
             {
-                BendScreenSpaceShadowSettings& shadows =
-                    m_ui.BendScreenSpaceShadows;
-                const BendScreenSpaceShadowSettings bendDefaults{};
-                static constexpr auto isSameBendConfiguration =
-                    [](const BendScreenSpaceShadowSettings& left,
-                        const BendScreenSpaceShadowSettings& right)
+                ScreenSpaceDirectionalShadowSettings& shadows =
+                    m_ui.ScreenSpaceDirectionalShadows;
+                const ScreenSpaceDirectionalShadowSettings shadowDefaults{};
+                static constexpr auto isSameShadowConfiguration =
+                    [](const ScreenSpaceDirectionalShadowSettings& left,
+                        const ScreenSpaceDirectionalShadowSettings& right)
                     {
                         return left.length == right.length &&
                             left.surfaceThickness ==
@@ -20202,22 +20535,22 @@ protected:
                             left.useEarlyOut == right.useEarlyOut &&
                             left.debugView == right.debugView;
                     };
-                static constexpr auto reconcileBendPreset =
-                    [](BendScreenSpaceShadowSettings& settings)
+                static constexpr auto reconcileShadowPreset =
+                    [](ScreenSpaceDirectionalShadowSettings& settings)
                     {
-                        constexpr BendShadowPreset Presets[] = {
-                            BendShadowPreset::BendExact,
-                            BendShadowPreset::Long,
-                            BendShadowPreset::MaximumValidation
+                        constexpr ScreenSpaceShadowPreset Presets[] = {
+                            ScreenSpaceShadowPreset::Default,
+                            ScreenSpaceShadowPreset::Long,
+                            ScreenSpaceShadowPreset::MaximumValidation
                         };
-                        for (const BendShadowPreset preset : Presets)
+                        for (const ScreenSpaceShadowPreset preset : Presets)
                         {
-                            BendScreenSpaceShadowSettings presetSettings =
+                            ScreenSpaceDirectionalShadowSettings presetSettings =
                                 settings;
-                            ApplyBendShadowPreset(
+                            ApplyScreenSpaceShadowPreset(
                                 presetSettings,
                                 preset);
-                            if (isSameBendConfiguration(
+                            if (isSameShadowConfiguration(
                                     settings,
                                     presetSettings))
                             {
@@ -20225,28 +20558,28 @@ protected:
                                 return;
                             }
                         }
-                        settings.preset = BendShadowPreset::Custom;
+                        settings.preset = ScreenSpaceShadowPreset::Custom;
                     };
                 if (!directionalVisibilityAvailable)
                     ImGui::BeginDisabled();
-                ImGui::Checkbox("Enabled##BendShadows", &shadows.enabled);
+                ImGui::Checkbox("Enabled##ScreenSpaceShadows", &shadows.enabled);
                 ImGui::SetItemTooltip(
                     "Trace the existing depth buffer for the primary "
                     "directional light.");
                 if (DrawPresetResetIcon(
-                        "Bend Shadows Enabled",
+                        "ScreenSpaceShadowsEnabled",
                         shadows.enabled))
                 {
                     shadows.enabled = false;
                 }
                 if (BeginAnimatedToggleRegion(
-                        "##BendShadowControls",
+                        "##ScreenSpaceShadowControls",
                         shadows.enabled))
                 {
-                    bool bendCustomChanged = false;
-                    bool bendResetApplied = false;
+                    bool shadowCustomChanged = false;
+                    bool shadowResetApplied = false;
                     static constexpr const char* PresetLabels[] = {
-                        "Bend Exact",
+                        "Default",
                         "Long",
                         "Maximum Validation",
                         "Custom"
@@ -20257,22 +20590,22 @@ protected:
                         int(std::size(PresetLabels)) - 1);
                     ImGui::SetNextItemWidth(settingsControlWidth);
                     if (BeginRoundedCombo(
-                            "Profile##BendShadows",
+                            "Profile##ScreenSpaceShadows",
                             PresetLabels[presetIndex]))
                     {
                         for (int index = 0;
                             index < int(std::size(PresetLabels));
                             ++index)
                         {
-                            const BendShadowPreset preset =
-                                BendShadowPreset(index);
+                            const ScreenSpaceShadowPreset preset =
+                                ScreenSpaceShadowPreset(index);
                             DrawDeferredDropdownOption(
                                 PresetLabels[index],
                                 PresetLabels[index],
                                 shadows.preset == preset,
                                 [settings = &shadows, preset]()
                                 {
-                                    ApplyBendShadowPreset(
+                                    ApplyScreenSpaceShadowPreset(
                                         *settings,
                                         preset);
                                 });
@@ -20280,53 +20613,53 @@ protected:
                         ImGui::EndCombo();
                     }
                     ImGui::SetItemTooltip(
-                        "Trade trace reach and cost: 60 pixels for Bend "
-                        "Exact, 240 for Long, or 960 for Maximum Validation.");
-                    BendScreenSpaceShadowSettings bendExactSettings =
+                        "Trade trace reach and cost: 60 pixels for Default, "
+                        "240 for Long, or 960 for Maximum Validation.");
+                    ScreenSpaceDirectionalShadowSettings defaultSettings =
                         shadows;
-                    ApplyBendShadowPreset(
-                        bendExactSettings,
-                        BendShadowPreset::BendExact);
+                    ApplyScreenSpaceShadowPreset(
+                        defaultSettings,
+                        ScreenSpaceShadowPreset::Default);
                     if (DrawNestedDropdownResetIcon(
-                            "Bend Shadow Profile",
+                            "ScreenSpaceShadowProfile",
                             shadows.preset !=
-                                    BendShadowPreset::BendExact ||
-                                !isSameBendConfiguration(
+                                    ScreenSpaceShadowPreset::Default ||
+                                !isSameShadowConfiguration(
                                     shadows,
-                                    bendExactSettings),
-                            "Reset every Bend shadow setting to Bend Exact."))
+                                    defaultSettings),
+                            "Reset every screen-space shadow setting to Default."))
                     {
                         QueueDeferredControlUiAction(
                             [settings = &shadows]()
                             {
-                                ApplyBendShadowPreset(
+                                ApplyScreenSpaceShadowPreset(
                                     *settings,
-                                    BendShadowPreset::BendExact);
+                                    ScreenSpaceShadowPreset::Default);
                             });
                     }
 
                     static constexpr const char* LengthLabels[] = {
                         "60 px", "120 px", "240 px", "480 px", "960 px"
                     };
-                    int lengthIndex = FindBendShadowCompiledValue(
-                        BendShadowSampleCounts,
-                        GetBendShadowSampleCount(shadows.length));
+                    int lengthIndex = FindScreenSpaceShadowSupportedValue(
+                        ScreenSpaceShadowTraceReaches,
+                        GetScreenSpaceShadowTraceReach(shadows.length));
                     lengthIndex = std::clamp(
                         lengthIndex,
                         0,
                         int(std::size(LengthLabels)) - 1);
                     ImGui::SetNextItemWidth(settingsControlWidth);
                     if (BeginRoundedCombo(
-                            "Length##BendShadows",
+                            "Length##ScreenSpaceShadows",
                             LengthLabels[lengthIndex]))
                     {
                         for (int index = 0;
                             index < int(std::size(LengthLabels));
                             ++index)
                         {
-                            const BendShadowLength length =
-                                BendShadowLength(
-                                    BendShadowSampleCounts[size_t(index)]);
+                            const ScreenSpaceShadowLength length =
+                                ScreenSpaceShadowLength(
+                                    ScreenSpaceShadowTraceReaches[size_t(index)]);
                             DrawDeferredDropdownOption(
                                 LengthLabels[index],
                                 LengthLabels[index],
@@ -20335,46 +20668,46 @@ protected:
                                 {
                                     settings->length = length;
                                     settings->preset =
-                                        BendShadowPreset::Custom;
+                                        ScreenSpaceShadowPreset::Custom;
                                 });
                         }
                         ImGui::EndCombo();
                     }
                     ImGui::SetItemTooltip(
-                        "Select a precompiled SAMPLE_COUNT shadow length.");
+                        "Set the runtime screen-space trace reach.");
                     if (DrawNestedDropdownResetIcon(
-                            "Bend Shadow Length",
-                            shadows.length != bendDefaults.length))
+                            "ScreenSpaceShadowLength",
+                            shadows.length != shadowDefaults.length))
                     {
-                        const BendShadowLength defaultLength =
-                            bendDefaults.length;
+                        const ScreenSpaceShadowLength defaultLength =
+                            shadowDefaults.length;
                         QueueDeferredControlUiAction(
                             [settings = &shadows, defaultLength]()
                             {
                                 settings->length = defaultLength;
-                                reconcileBendPreset(*settings);
+                                reconcileShadowPreset(*settings);
                             });
                     }
 
-                    bendCustomChanged |= DrawSliderFloat(
-                        "Surface Thickness##BendShadows",
+                    shadowCustomChanged |= DrawSliderFloat(
+                        "Surface Thickness##ScreenSpaceShadows",
                         &shadows.surfaceThickness,
                         0.f,
                         0.05f,
                         "%.4f");
                     ImGui::SetItemTooltip(
-                        "Set Bend's nonlinear-depth occluder thickness.");
+                        "Set nonlinear-depth occluder thickness.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Surface Thickness",
+                            "ScreenSpaceShadowSurfaceThickness",
                             shadows.surfaceThickness !=
-                                bendDefaults.surfaceThickness))
+                                shadowDefaults.surfaceThickness))
                     {
                         shadows.surfaceThickness =
-                            bendDefaults.surfaceThickness;
-                        bendResetApplied = true;
+                            shadowDefaults.surfaceThickness;
+                        shadowResetApplied = true;
                     }
-                    bendCustomChanged |= DrawSliderFloat(
-                        "Bilinear Threshold##BendShadows",
+                    shadowCustomChanged |= DrawSliderFloat(
+                        "Bilinear Threshold##ScreenSpaceShadows",
                         &shadows.bilinearThreshold,
                         0.f,
                         0.1f,
@@ -20383,42 +20716,42 @@ protected:
                         "Set the relative depth discontinuity that disables "
                         "interpolation.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Bilinear Threshold",
+                            "ScreenSpaceShadowBilinearThreshold",
                             shadows.bilinearThreshold !=
-                                bendDefaults.bilinearThreshold))
+                                shadowDefaults.bilinearThreshold))
                     {
                         shadows.bilinearThreshold =
-                            bendDefaults.bilinearThreshold;
-                        bendResetApplied = true;
+                            shadowDefaults.bilinearThreshold;
+                        shadowResetApplied = true;
                     }
-                    bendCustomChanged |= DrawSliderFloat(
-                        "Shadow Contrast##BendShadows",
+                    shadowCustomChanged |= DrawSliderFloat(
+                        "Shadow Contrast##ScreenSpaceShadows",
                         &shadows.shadowContrast,
                         1.f,
                         16.f,
                         "%.1f");
                     ImGui::SetItemTooltip(
-                        "Set Bend's visibility transition contrast.");
+                        "Set visibility transition contrast.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Contrast",
+                            "ScreenSpaceShadowContrast",
                             shadows.shadowContrast !=
-                                bendDefaults.shadowContrast))
+                                shadowDefaults.shadowContrast))
                     {
                         shadows.shadowContrast =
-                            bendDefaults.shadowContrast;
-                        bendResetApplied = true;
+                            shadowDefaults.shadowContrast;
+                        shadowResetApplied = true;
                     }
 
                     static constexpr const char* HardSampleLabels[] = {
                         "0", "4", "8"
                     };
                     const int selectedHard =
-                        FindBendShadowCompiledValue(
-                            BendShadowHardSampleCounts,
+                        FindScreenSpaceShadowSupportedValue(
+                            ScreenSpaceShadowHardSampleCounts,
                             shadows.hardShadowSamples);
                     ImGui::SetNextItemWidth(settingsControlWidth);
                     if (BeginRoundedCombo(
-                            "Hard Shadow Samples##BendShadows",
+                            "Hard Shadow Samples##ScreenSpaceShadows",
                             selectedHard >= 0
                                 ? HardSampleLabels[selectedHard]
                                 : "Unsupported"))
@@ -20428,7 +20761,7 @@ protected:
                             ++index)
                         {
                             const uint32_t value =
-                                BendShadowHardSampleCounts[size_t(index)];
+                                ScreenSpaceShadowHardSampleCounts[size_t(index)];
                             DrawDeferredDropdownOption(
                                 HardSampleLabels[index],
                                 HardSampleLabels[index],
@@ -20437,28 +20770,28 @@ protected:
                                 {
                                     settings->hardShadowSamples = value;
                                     settings->preset =
-                                        BendShadowPreset::Custom;
+                                        ScreenSpaceShadowPreset::Custom;
                                 });
                         }
                         ImGui::EndCombo();
                     }
                     ImGui::SetItemTooltip(
-                        "Select the compiled count of fully hard contact "
+                        "Set the runtime count of fully hard contact "
                         "samples.");
                     if (DrawNestedDropdownResetIcon(
-                            "Bend Shadow Hard Samples",
+                            "ScreenSpaceShadowHardSamples",
                             shadows.hardShadowSamples !=
-                                bendDefaults.hardShadowSamples))
+                                shadowDefaults.hardShadowSamples))
                     {
                         const uint32_t defaultHardShadowSamples =
-                            bendDefaults.hardShadowSamples;
+                            shadowDefaults.hardShadowSamples;
                         QueueDeferredControlUiAction(
                             [settings = &shadows,
                                 defaultHardShadowSamples]()
                             {
                                 settings->hardShadowSamples =
                                     defaultHardShadowSamples;
-                                reconcileBendPreset(*settings);
+                                reconcileShadowPreset(*settings);
                             });
                     }
 
@@ -20466,12 +20799,12 @@ protected:
                         "0", "8", "16"
                     };
                     const int selectedFade =
-                        FindBendShadowCompiledValue(
-                            BendShadowFadeSampleCounts,
+                        FindScreenSpaceShadowSupportedValue(
+                            ScreenSpaceShadowFadeSampleCounts,
                             shadows.fadeOutSamples);
                     ImGui::SetNextItemWidth(settingsControlWidth);
                     if (BeginRoundedCombo(
-                            "Fade-Out Samples##BendShadows",
+                            "Fade-Out Samples##ScreenSpaceShadows",
                             selectedFade >= 0
                                 ? FadeSampleLabels[selectedFade]
                                 : "Unsupported"))
@@ -20481,7 +20814,7 @@ protected:
                             ++index)
                         {
                             const uint32_t value =
-                                BendShadowFadeSampleCounts[size_t(index)];
+                                ScreenSpaceShadowFadeSampleCounts[size_t(index)];
                             DrawDeferredDropdownOption(
                                 FadeSampleLabels[index],
                                 FadeSampleLabels[index],
@@ -20490,96 +20823,96 @@ protected:
                                 {
                                     settings->fadeOutSamples = value;
                                     settings->preset =
-                                        BendShadowPreset::Custom;
+                                        ScreenSpaceShadowPreset::Custom;
                                 });
                         }
                         ImGui::EndCombo();
                     }
                     ImGui::SetItemTooltip(
-                        "Select the compiled count of samples that soften "
+                        "Set the runtime count of samples that soften "
                         "the trace endpoint.");
                     if (DrawNestedDropdownResetIcon(
-                            "Bend Shadow Fade-Out Samples",
+                            "ScreenSpaceShadowFade-OutSamples",
                             shadows.fadeOutSamples !=
-                                bendDefaults.fadeOutSamples))
+                                shadowDefaults.fadeOutSamples))
                     {
                         const uint32_t defaultFadeOutSamples =
-                            bendDefaults.fadeOutSamples;
+                            shadowDefaults.fadeOutSamples;
                         QueueDeferredControlUiAction(
                             [settings = &shadows,
                                 defaultFadeOutSamples]()
                             {
                                 settings->fadeOutSamples =
                                     defaultFadeOutSamples;
-                                reconcileBendPreset(*settings);
+                                reconcileShadowPreset(*settings);
                             });
                     }
 
-                    bendCustomChanged |= ImGui::Checkbox(
-                        "Ignore Edge Pixels##BendShadows",
+                    shadowCustomChanged |= ImGui::Checkbox(
+                        "Ignore Edge Pixels##ScreenSpaceShadows",
                         &shadows.ignoreEdgePixels);
                     ImGui::SetItemTooltip(
                         "Prevent detected depth-edge pixels from casting "
                         "shadows.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Ignore Edge Pixels",
+                            "ScreenSpaceShadowIgnoreEdgePixels",
                             shadows.ignoreEdgePixels !=
-                                bendDefaults.ignoreEdgePixels))
+                                shadowDefaults.ignoreEdgePixels))
                     {
                         shadows.ignoreEdgePixels =
-                            bendDefaults.ignoreEdgePixels;
-                        bendResetApplied = true;
+                            shadowDefaults.ignoreEdgePixels;
+                        shadowResetApplied = true;
                     }
-                    bendCustomChanged |= ImGui::Checkbox(
-                        "Precision Offset##BendShadows",
+                    shadowCustomChanged |= ImGui::Checkbox(
+                        "Precision Offset##ScreenSpaceShadows",
                         &shadows.usePrecisionOffset);
                     ImGui::SetItemTooltip(
-                        "Apply Bend's optional depth precision offset.");
+                        "Bias the ray origin slightly toward the near plane "
+                        "to compensate for depth quantization.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Precision Offset",
+                            "ScreenSpaceShadowPrecisionOffset",
                             shadows.usePrecisionOffset !=
-                                bendDefaults.usePrecisionOffset))
+                                shadowDefaults.usePrecisionOffset))
                     {
                         shadows.usePrecisionOffset =
-                            bendDefaults.usePrecisionOffset;
-                        bendResetApplied = true;
+                            shadowDefaults.usePrecisionOffset;
+                        shadowResetApplied = true;
                     }
-                    bendCustomChanged |= ImGui::Checkbox(
-                        "Bilinear Offset Mode##BendShadows",
+                    shadowCustomChanged |= ImGui::Checkbox(
+                        "Bilinear Offset Mode##ScreenSpaceShadows",
                         &shadows.bilinearSamplingOffsetMode);
                     ImGui::SetItemTooltip(
-                        "Offset bilinear samples onto the shared wavefront "
-                        "ray.");
+                        "Add a second depth candidate one pixel farther "
+                        "along the trace, allowing neighbor-only crossings.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Bilinear Offset Mode",
+                            "ScreenSpaceShadowBilinearOffsetMode",
                             shadows.bilinearSamplingOffsetMode !=
-                                bendDefaults.bilinearSamplingOffsetMode))
+                                shadowDefaults.bilinearSamplingOffsetMode))
                     {
                         shadows.bilinearSamplingOffsetMode =
-                            bendDefaults.bilinearSamplingOffsetMode;
-                        bendResetApplied = true;
+                            shadowDefaults.bilinearSamplingOffsetMode;
+                        shadowResetApplied = true;
                     }
-                    bendCustomChanged |= ImGui::Checkbox(
-                        "Early Out##BendShadows",
+                    shadowCustomChanged |= ImGui::Checkbox(
+                        "Early Out##ScreenSpaceShadows",
                         &shadows.useEarlyOut);
                     ImGui::SetItemTooltip(
-                        shadows.debugView == BendShadowDebugView::None
-                            ? "Skip pixels outside Bend's directional depth "
-                                "bounds."
-                            : "Bend suppresses effective early-out while a "
-                                "debug view is active.");
+                        shadows.debugView == ScreenSpaceShadowDebugView::None
+                            ? "Stop tracing after confirmed hard occlusion."
+                            : "Keep tracing to preserve complete debug "
+                                "diagnostics.");
                     if (DrawPresetResetIcon(
-                            "Bend Shadow Early Out",
+                            "ScreenSpaceShadowEarlyOut",
                             shadows.useEarlyOut !=
-                                bendDefaults.useEarlyOut))
+                                shadowDefaults.useEarlyOut))
                     {
                         shadows.useEarlyOut =
-                            bendDefaults.useEarlyOut;
-                        bendResetApplied = true;
+                            shadowDefaults.useEarlyOut;
+                        shadowResetApplied = true;
                     }
 
                     static constexpr const char* DebugLabels[] = {
-                        "Off", "Edge", "Thread", "Wave"
+                        "Off", "Occlusion", "Trace Progress", "Ray Bounds"
                     };
                     const int debugIndex = std::clamp(
                         int(shadows.debugView),
@@ -20587,15 +20920,15 @@ protected:
                         int(std::size(DebugLabels)) - 1);
                     ImGui::SetNextItemWidth(settingsControlWidth);
                     if (BeginRoundedCombo(
-                            "Debug View##BendShadows",
+                            "Debug View##ScreenSpaceShadows",
                             DebugLabels[debugIndex]))
                     {
                         for (int index = 0;
                             index < int(std::size(DebugLabels));
                             ++index)
                         {
-                            const BendShadowDebugView view =
-                                BendShadowDebugView(index);
+                            const ScreenSpaceShadowDebugView view =
+                                ScreenSpaceShadowDebugView(index);
                             DrawDeferredDropdownOption(
                                 DebugLabels[index],
                                 DebugLabels[index],
@@ -20604,31 +20937,31 @@ protected:
                                 {
                                     settings->debugView = view;
                                     settings->preset =
-                                        BendShadowPreset::Custom;
+                                        ScreenSpaceShadowPreset::Custom;
                                 });
                         }
                         ImGui::EndCombo();
                     }
                     ImGui::SetItemTooltip(
-                        "Show the raw R8 edge, thread, or wave diagnostic "
-                        "output.");
+                        "Show raw occlusion, trace-progress, or ray-bounds "
+                        "diagnostics.");
                     if (DrawNestedDropdownResetIcon(
-                            "Bend Shadow Debug View",
-                            shadows.debugView != bendDefaults.debugView))
+                            "ScreenSpaceShadowDebugView",
+                            shadows.debugView != shadowDefaults.debugView))
                     {
-                        const BendShadowDebugView defaultDebugView =
-                            bendDefaults.debugView;
+                        const ScreenSpaceShadowDebugView defaultDebugView =
+                            shadowDefaults.debugView;
                         QueueDeferredControlUiAction(
                             [settings = &shadows, defaultDebugView]()
                             {
                                 settings->debugView = defaultDebugView;
-                                reconcileBendPreset(*settings);
+                                reconcileShadowPreset(*settings);
                             });
                     }
-                    if (bendCustomChanged)
-                        shadows.preset = BendShadowPreset::Custom;
-                    else if (bendResetApplied)
-                        reconcileBendPreset(shadows);
+                    if (shadowCustomChanged)
+                        shadows.preset = ScreenSpaceShadowPreset::Custom;
+                    else if (shadowResetApplied)
+                        reconcileShadowPreset(shadows);
                     EndAnimatedToggleRegion();
                 }
                 if (!directionalVisibilityAvailable)
@@ -22102,18 +22435,18 @@ bool ProcessCommandLine(
             if (value == "preset")
             {
                 aaBenchmark.settings.algorithmOverrides.rectification =
-                    MiniEngineTaaRectificationOverride::FromPreset;
+                    TemporalAaRectificationOverride::FromPreset;
             }
             else if (value == "pair" || value == "pair-rgb")
             {
                 aaBenchmark.settings.algorithmOverrides.rectification =
-                    MiniEngineTaaRectificationOverride::PairRgb;
+                    TemporalAaRectificationOverride::PairRgb;
             }
             else if (value == "variance" ||
                 value == "variance-ycocg")
             {
                 aaBenchmark.settings.algorithmOverrides.rectification =
-                    MiniEngineTaaRectificationOverride::VarianceYCoCg;
+                    TemporalAaRectificationOverride::VarianceYCoCg;
             }
             else
             {
@@ -22130,13 +22463,13 @@ bool ProcessCommandLine(
             const std::string value = argv[++i];
             if (value == "auto")
                 aaBenchmark.settings.performanceOverrides.executionPath =
-                    MiniEngineTaaExecutionPath::Auto;
+                    TemporalAaExecutionPath::Auto;
             else if (value == "compute")
                 aaBenchmark.settings.performanceOverrides.executionPath =
-                    MiniEngineTaaExecutionPath::Compute;
+                    TemporalAaExecutionPath::Compute;
             else if (value == "pixel")
                 aaBenchmark.settings.performanceOverrides.executionPath =
-                    MiniEngineTaaExecutionPath::FullscreenPixelShader;
+                    TemporalAaExecutionPath::FullscreenPixelShader;
             else
                 return invalidValue(
                     "--aa-execution",
@@ -22150,13 +22483,13 @@ bool ProcessCommandLine(
             const std::string value = argv[++i];
             if (value == "auto")
                 aaBenchmark.settings.performanceOverrides.computeKernel =
-                    MiniEngineTaaComputeKernel::Auto;
+                    TemporalAaComputeKernel::Auto;
             else if (value == "8x8")
                 aaBenchmark.settings.performanceOverrides.computeKernel =
-                    MiniEngineTaaComputeKernel::Threads8x8TwoPixels;
+                    TemporalAaComputeKernel::Threads8x8TwoPixels;
             else if (value == "16x8")
                 aaBenchmark.settings.performanceOverrides.computeKernel =
-                    MiniEngineTaaComputeKernel::Threads16x8OnePixel;
+                    TemporalAaComputeKernel::Threads16x8OnePixel;
             else
                 return invalidValue(
                     "--aa-kernel",
@@ -22170,16 +22503,16 @@ bool ProcessCommandLine(
             const std::string value = argv[++i];
             if (value == "auto")
                 aaBenchmark.settings.performanceOverrides.ldsLayout =
-                    MiniEngineTaaLdsLayout::Auto;
+                    TemporalAaLdsLayout::Auto;
             else if (value == "legacy")
                 aaBenchmark.settings.performanceOverrides.ldsLayout =
-                    MiniEngineTaaLdsLayout::Legacy;
+                    TemporalAaLdsLayout::Legacy;
             else if (value == "split")
                 aaBenchmark.settings.performanceOverrides.ldsLayout =
-                    MiniEngineTaaLdsLayout::Split;
+                    TemporalAaLdsLayout::Split;
             else if (value == "packed" || value == "split-packed")
                 aaBenchmark.settings.performanceOverrides.ldsLayout =
-                    MiniEngineTaaLdsLayout::SplitAndPacked;
+                    TemporalAaLdsLayout::SplitAndPacked;
             else
                 return invalidValue(
                     "--aa-lds",
@@ -22194,13 +22527,13 @@ bool ProcessCommandLine(
             const bool reuse = !strcmp(argv[i], "--aa-reuse");
             const char* option = argv[i];
             const std::string value = argv[++i];
-            MiniEngineTaaAutoToggle parsed;
+            TemporalAaAutoToggle parsed;
             if (value == "auto")
-                parsed = MiniEngineTaaAutoToggle::Auto;
+                parsed = TemporalAaAutoToggle::Auto;
             else if (value == "off")
-                parsed = MiniEngineTaaAutoToggle::Off;
+                parsed = TemporalAaAutoToggle::Off;
             else if (value == "on")
-                parsed = MiniEngineTaaAutoToggle::On;
+                parsed = TemporalAaAutoToggle::On;
             else
                 return invalidValue(option, value, "auto|off|on");
             if (reuse)
@@ -22217,13 +22550,13 @@ bool ProcessCommandLine(
             const std::string value = argv[++i];
             if (value == "auto")
                 aaBenchmark.settings.performanceOverrides.passFusion =
-                    MiniEngineTaaPassFusion::Auto;
+                    TemporalAaPassFusion::Auto;
             else if (value == "separate")
                 aaBenchmark.settings.performanceOverrides.passFusion =
-                    MiniEngineTaaPassFusion::Separate;
+                    TemporalAaPassFusion::Separate;
             else if (value == "fused")
                 aaBenchmark.settings.performanceOverrides.passFusion =
-                    MiniEngineTaaPassFusion::Fused;
+                    TemporalAaPassFusion::Fused;
             else
                 return invalidValue(
                     "--aa-fusion",
@@ -22237,19 +22570,19 @@ bool ProcessCommandLine(
             const std::string value = argv[++i];
             if (value == "auto")
                 aaBenchmark.settings.performanceOverrides.cacheBlocking =
-                    MiniEngineTaaCacheBlocking::Auto;
+                    TemporalAaCacheBlocking::Auto;
             else if (value == "off")
                 aaBenchmark.settings.performanceOverrides.cacheBlocking =
-                    MiniEngineTaaCacheBlocking::Off;
+                    TemporalAaCacheBlocking::Off;
             else if (value == "2")
                 aaBenchmark.settings.performanceOverrides.cacheBlocking =
-                    MiniEngineTaaCacheBlocking::Bands2;
+                    TemporalAaCacheBlocking::Bands2;
             else if (value == "3")
                 aaBenchmark.settings.performanceOverrides.cacheBlocking =
-                    MiniEngineTaaCacheBlocking::Bands3;
+                    TemporalAaCacheBlocking::Bands3;
             else if (value == "4")
                 aaBenchmark.settings.performanceOverrides.cacheBlocking =
-                    MiniEngineTaaCacheBlocking::Bands4;
+                    TemporalAaCacheBlocking::Bands4;
             else
                 return invalidValue(
                     "--aa-cache",
@@ -23158,8 +23491,8 @@ int main(int __argc, const char* const* __argv)
         if (aaBenchmark.enabled)
         {
             uiData.AntiAliasing = aaBenchmark.settings;
-            uiData.MiniEngineTaaSharpness =
-                ClampMiniEngineTaaSharpness(
+            uiData.TemporalAaSharpness =
+                ClampTemporalAaSharpness(
                     aaBenchmark.sharpness);
         }
         if (g_VisibilityPerfCapture.Enabled())
@@ -23172,7 +23505,7 @@ int main(int __argc, const char* const* __argv)
             else
                 log::info(
                     "UVSR_PERF applied variant token: taaprime");
-            uiData.MiniEngineTaaSharpenEnabled = false;
+            uiData.TemporalAaSharpenEnabled = false;
 
             ScreenSpaceVisibilitySettings& visibility =
                 uiData.ScreenSpaceVisibility;
@@ -23287,8 +23620,8 @@ int main(int __argc, const char* const* __argv)
             uiData.EnablePbr = true;
             uiData.RenderMode = RendererMode::Deferred;
             uiData.AntiAliasing.enabled = false;
-            uiData.MiniEngineTaaSharpenEnabled = false;
-            uiData.BendScreenSpaceShadows.enabled = false;
+            uiData.TemporalAaSharpenEnabled = false;
+            uiData.ScreenSpaceDirectionalShadows.enabled = false;
             uiData.SparseVirtualShadowMaps.enabled = false;
             uiData.ScreenSpaceVisibility.enabled = false;
             uiData.DiagnosticCascadedShadowMaps =
@@ -23318,8 +23651,8 @@ int main(int __argc, const char* const* __argv)
             uiData.EnablePbr = true;
             uiData.RenderMode = RendererMode::Deferred;
             uiData.AntiAliasing.enabled = false;
-            uiData.MiniEngineTaaSharpenEnabled = false;
-            uiData.BendScreenSpaceShadows.enabled = false;
+            uiData.TemporalAaSharpenEnabled = false;
+            uiData.ScreenSpaceDirectionalShadows.enabled = false;
             uiData.DiagnosticCascadedShadowMaps.enabled = false;
             uiData.ScreenSpaceVisibility.enabled = false;
             uiData.SparseVirtualShadowMaps =

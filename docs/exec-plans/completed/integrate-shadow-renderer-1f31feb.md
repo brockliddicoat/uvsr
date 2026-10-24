@@ -29,7 +29,7 @@ Done when:
 - [x] The exact source lineage is semantically merged without wholesale
   `ours`/`theirs` conflict resolution.
 - [x] Main's accepted AA, UI, fused visibility, runtime shader, and packaging
-  contracts coexist with Bend, diagnostic CSM, SVSM, exact-light shadow
+  contracts coexist with legacy screen-space shadow, diagnostic CSM, SVSM, exact-light shadow
   composition, and IBL.
 - [x] Required source, shader, documentation, build, and full CTest checks pass
   from a fresh integration build directory.
@@ -50,7 +50,7 @@ In scope:
 - Merge the complete source ancestry ending at `1f31feb`.
 - Preserve and combine current-main AA, UI, screen-space visibility, shader
   packaging, tests, documentation, and launch behavior.
-- Integrate Bend screen-space directional shadows, diagnostic CSM, SVSM,
+- Integrate screen-space directional shadows, diagnostic CSM, SVSM,
   image-based lighting and sky behavior, exact-light visibility composition,
   command-line controls, benchmark hardening, and runtime shader-bundle
   synchronization from the source lineage.
@@ -73,7 +73,7 @@ Affected subsystems and paths:
 
 - Root build and launch: `CMakeLists.txt`, `tools/launch_uvsr.ps1`
 - Renderer/UI integration: `src/uvsr.cpp`, `src/command_line_options.h`
-- PBR, visibility, IBL, Bend, CSM, and SVSM first-party source and shaders
+- PBR, visibility, IBL, legacy screen-space shadow, CSM, and SVSM first-party source and shaders
 - Runtime shader catalog and exact synchronization
 - Unit, source-contract, shader-bundle, and benchmark-validation tests
 - `README.md`, PBR/visibility design documentation, execution plans, and
@@ -120,7 +120,7 @@ Shared hotspots reserved for the coordinator:
 | Source lineage | Exact tip `1f31feb`, including parents `94b8597` and `ea566bc` | Complete | Semantic merge |
 | Donut submodule | Preserve pinned Gitlink `bc1ea24` shared by both parents | Complete | Configure/build |
 | UI reference | Started from `2026-07-29.1`; integrated environment/shadow controls recorded in `2026-07-29.3` | Complete | `src/uvsr.cpp` integration |
-| Runtime shader bundle | Exact 80-file main AA/fused plus Bend/CSM/SVSM/IBL manifest | Review Cleared | Release runtime |
+| Runtime shader bundle | Exact 80-file main AA/fused plus legacy screen-space shadow/CSM/SVSM/IBL manifest | Review Cleared | Release runtime |
 | User product acceptance | Exact launched candidate, executable, and runtime identity | Complete | Canonical publication |
 
 Public interface, ABI, shader binding, resource layout, serialized setting, or
@@ -129,7 +129,7 @@ asset/package contracts:
 - Preserve the current CPU/HLSL resource-slot contract for forward, deferred,
   MSAA, fused visibility, and screen-space paths while adding the three
   pointer-identical directional-light visibility producers.
-- Bend, CSM, and SVSM resolve to independent single-sample visibility inputs;
+- legacy screen-space shadow, CSM, and SVSM resolve to independent single-sample visibility inputs;
   missing, invalid, disabled, unsupported, or out-of-range shadow visibility
   remains white.
 - Final directional-light visibility preserves the source contract while main's
@@ -151,7 +151,7 @@ animated-toggle, reset, tooltip, and Statistics presentation contracts.
 
 ### Visibility and Shadow Controls
 
-- Bend screen-space directional shadow enablement, profile, trace/filter
+- screen-space directional shadow enablement, profile, trace/filter
   controls, and diagnostics remain owned by Lights; timings remain owned by
   Statistics.
 - Diagnostic CSM enablement, comparison/profile controls, cascade coverage,
@@ -159,7 +159,7 @@ animated-toggle, reset, tooltip, and Statistics presentation contracts.
   and Diagnostics remain owned by Lights; benchmark actions and timings remain
   owned by Statistics.
 - SVSM enablement, profile, dense/sparse/cached behavior, clipmap/page/pool
-  controls, marking, filtering, resolution bias, Bend-assisted optimizations,
+  controls, marking, filtering, resolution bias, screen-space-shadow-assisted optimizations,
   Developer Options, Unabstracted controls, and Diagnostics remain owned by
   Lights; benchmark actions, counters, and timings remain owned by Statistics.
 - Toggle-owned dependent rows use balanced animated regions. Profile and mode
@@ -305,7 +305,7 @@ animated-toggle, reset, tooltip, and Statistics presentation contracts.
 | Exact ancestry | Two-parent merge with exact base/source identity | `git show`, `git merge-base`, `git rev-list` | Pass; merge `bcf4f7e` has exact parents `c683023` and `1f31feb` |
 | Runtime shader union and exact sync | Bundle contracts plus staged file inventory | Full Release build and shader-bundle CTests | Pass; runtime and production bundle contracts |
 | Current AA/UI preserved | Focused source, animation, dropdown, renderer, and TAA contracts | Focused build/CTest regex from UI reference | Pass; source, animation, dropdown, renderer, and TAA |
-| Shadow/IBL behavior composes | Bend hash, CSM/SVSM/PBR/source-contract tests | Full CTest and independent review | Pass; final renderer and coverage reviews clear |
+| Shadow/IBL behavior composes | legacy screen-space shadow hash, CSM/SVSM/PBR/source-contract tests | Full CTest and independent review | Pass; final renderer and coverage reviews clear |
 | Documentation policy | Self-tests and complete scans pass | Title Case and README line-count tools | Pass; self-tests, final 860-heading scan, and current generated totals |
 | Build reproducibility | Fresh Release configuration builds every target | CMake configure and unqualified Release build | Pass in `build-integration`; repeated successfully at exact commit `bcf4f7e` |
 | Full automated verification | Every registered test passes | `ctest --test-dir build-integration -C Release --output-on-failure` | Pass; 28 of 28 |
@@ -329,7 +329,7 @@ animated-toggle, reset, tooltip, and Statistics presentation contracts.
 | 2026-07-29 18:50 CDT | Use a fixed editable requested-settings schema for SVSM expert values | Mode- or policy-inactive expert values are retained configuration rather than unavailable controls; prerequisite-aware tooltips preserve meaning without resting grayscale, while bodies directly owned by toggles still animate | Shadow UI and UI reference |
 | 2026-07-29 18:56 CDT | Make SVSM dropdown reset placement explicit and treat Dirty Page Scatter as a composite owner | Top-level resets must retain the trailing lane, nested dropdowns alone use the gutter, and reset/profile reconciliation must restore the scatter raster together with its hidden intrinsic guard | Shadow UI and source contracts |
 | 2026-07-29 19:12 CDT | Validate and cache MSAA against the exact allocated format topology | Donut selects one depth format before applying sample count; accepting any later depth format could fail texture creation, probing linear RGBA alone missed the allocated sRGB view, and per-frame queries could repeat fallback warnings | Renderer fallback and source contracts |
-| 2026-07-29 19:13 CDT | Keep Bend reference assertions active in Release | Standard `assert` becomes a no-op under `NDEBUG`; the test now uses the same aborting Release-safe assertion contract as SVSM | Bend verification |
+| 2026-07-29 19:13 CDT | Keep legacy screen-space shadow reference assertions active in Release | Standard `assert` becomes a no-op under `NDEBUG`; the test now uses the same aborting Release-safe assertion contract as SVSM | legacy screen-space shadow verification |
 
 ## Progress and Handoffs
 
@@ -343,10 +343,10 @@ animated-toggle, reset, tooltip, and Statistics presentation contracts.
 | 2026-07-29 18:04 CDT | Build/bundle and PBR/visibility composition | Complete | Exact 80-file manifest and unified normal/MSAA/fused contracts | Fresh configure matrix, focused C++ tests, 17 DXC permutations, independent review | Complete renderer/UI handoff and whole-tree verification |
 | 2026-07-29 18:05 CDT | Documentation policy | Complete for current tree | UI reference `2026-07-29.3` and reconciled roadmap/docs | Title Case self-test and 1,008-heading scan pass | Rerun after final plan update |
 | 2026-07-29 18:31 CDT | Independent integration review | Complete | Renderer-path lifecycle and actual-MSAA fallback repaired | Shader-reload/MSAA path reinspection cleared; UI source contracts passed | Restored CSM/SVSM controls reviewed separately |
-| 2026-07-29 18:50 CDT | Shadow UI restoration | Complete | Full 44-field CSM, 13-control Bend, and fixed-schema SVSM surfaces | Focused UI source contract and independent gating review | Final whole-tree review |
-| 2026-07-29 18:57 CDT | First application compile gate | Complete after one repair | `build-integration\bin\uvsr.exe` | 3,120 UVSR, 76 Donut, 46 Bend, diagnostic CSM, and 105 SVSM shader tasks passed; MSVC application link passed | Build every registered target |
+| 2026-07-29 18:50 CDT | Shadow UI restoration | Complete | Full 44-field CSM, 13-control legacy screen-space shadow, and fixed-schema SVSM surfaces | Focused UI source contract and independent gating review | Final whole-tree review |
+| 2026-07-29 18:57 CDT | First application compile gate | Complete after one repair | `build-integration\bin\uvsr.exe` | 3,120 UVSR, 76 Donut, 46 legacy screen-space shadow, diagnostic CSM, and 105 SVSM shader tasks passed; MSVC application link passed | Build every registered target |
 | 2026-07-29 19:07 CDT | Full pre-commit verification | Complete | Fresh `build-integration` all-target Release tree | Unqualified build passed; 28 of 28 CTests passed; README and Title Case self-tests/checks passed | Final read-only review, stage, merge commit, exact-SHA rebuild |
-| 2026-07-29 19:16 CDT | Coverage-review repairs and revalidation | Complete | Exact selected-depth MSAA validation, query cache, Release-safe Bend test | Focused targets passed; unqualified Release build and 28 of 28 CTests passed again; coverage re-review clear | Final renderer review, stage, merge commit, exact-SHA rebuild |
+| 2026-07-29 19:16 CDT | Coverage-review repairs and revalidation | Complete | Exact selected-depth MSAA validation, query cache, Release-safe legacy screen-space shadow test | Focused targets passed; unqualified Release build and 28 of 28 CTests passed again; coverage re-review clear | Final renderer review, stage, merge commit, exact-SHA rebuild |
 | 2026-07-29 19:19 CDT | Final read-only reviews | Complete | Frozen semantic merge after coverage repairs | Renderer, binding, lifecycle, bundle, coverage, ancestry, staging, and hygiene reviews clear | Stage, merge commit, exact-SHA rebuild |
 | 2026-07-29 19:20 CDT | Exact candidate launch | Complete | `bcf4f7e`; executable SHA-256 `4228B26E...BE2E4`; `3106816` bytes | PID `18360` launched through the repository launch tool with title `shadowmerge-bcf4f7e-1920` | Await user acceptance |
 | 2026-07-29 19:37 CDT | Product acceptance and publication | Complete | Accepted merge `bcf4f7e` | User approved the exact launched build; fresh fetch proved fast-forward ancestry; exact SHA pushed directly to `origin/main` | Post-publication verification |
