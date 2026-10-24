@@ -1,0 +1,42 @@
+{
+  "schema_version": 2,
+  "build": "bed36f9-bent-normal-ao-candidate-dirty",
+  "adapter": "NVIDIA GeForce RTX 4090 Laptop GPU",
+  "live_priority": "High",
+  "variants": "bentoff,taaon,timersoff,performance16,toroidal",
+  "isolate_visibility": false,
+  "framebuffer_width": 1896,
+  "framebuffer_height": 1064,
+  "warmup_frames": 120,
+  "measured_frames": 1889,
+  "minimum_measured_seconds": 5.000000000,
+  "collection_elapsed_seconds": 5.001938100,
+  "trace_composition_aligned_samples": 1889,
+  "trace_composition_alignment_fraction": 1.000000000,
+  "trace_plus_composition_of_stage_medians_ms": 0.793599982,
+  "permutation": "High/class=2/trace=1/first-specialization=1/later-specialization=1/math=1/raw-ao=1/edges=1/reconstruction=1/temporal-mode=1/application=1/depth=1/bindings=1/consumer=0/estimator=1/resolution=0/scheduler=1/first=20/later=20/bounces=1/output=1896x1064/radius=3/thickness=0.5/exponent=2/group=8x8/temporal=0/spatial=0/hierarchy=0/runtime-config=8826456549433837445",
+  "settings": "resolution=full;samples=20;estimator=uniform-solid-angle;radius=3;thickness=0.5;exponent=2;ao=on;gi=off;bounces=1;temporal=off;spatial=off;bent_ao=off;bent_apply=none;bent_storage=rgba32f-plus-r32f;scheduler=toroidal;trace=runtime;ao_precision=r16f;gi_precision=rgba16f;renderer_aa_requested=on;renderer_taa_active=on;renderer_aa_preset=Temporal Medium",
+  "timing_provenance": "fresh NVRHI GPU queries carry originating renderer frame IDs; visibility effect-envelope and complete-renderer samples are retained only when those IDs match; trace and composition alignment is recorded separately; CPU interval is arrival-frame start-to-start; Intel absolute timings are not used",
+  "resources": {
+    "output_texture_bytes": 4034688,
+    "working_texture_bytes": 65536,
+    "raw_ambient_texture_bytes": 4034688,
+    "raw_indirect_texture_bytes": 0,
+    "directional_texture_bytes": 0
+  },
+  "keys": {
+    "permutation": 14146054127134403483,
+    "shader_permutation": 3255292303903412557,
+    "history_reset": 13624474513260029615
+  },
+  "aggregate_fps": 377.461047529,
+  "distributions_ms": {
+    "frame_start_to_start": {"mean": 2.649279989, "median": 2.570100000, "p95": 2.708260000, "min": 0.761600000, "max": 110.329600000},
+    "trace": {"mean": 0.731546895, "median": 0.733183980, "p95": 0.782335997, "min": 0.653312027, "max": 0.916480005},
+    "composition": {"mean": 0.059871204, "median": 0.060416002, "p95": 0.062464003, "min": 0.052223999, "max": 0.063487999},
+    "trace_plus_composition": {"mean": 0.791418100, "median": 0.793599982, "p95": 0.837631994, "min": 0.707584027, "max": 0.976896007},
+    "effect": {"mean": 0.800311025, "median": 0.802816033, "p95": 0.849510372, "min": 0.715776026, "max": 0.988160014},
+    "renderer_gpu": {"mean": 2.520189220, "median": 2.514943838, "p95": 2.631270409, "min": 2.274303913, "max": 3.046399832}
+  },
+  "raw_csv": "C:\\Users\\brock\\OneDrive\\Documents\\uvsr\\work\\bent-normal-ao\\outputs\\bent-ao-diagnostic\\20260801T162513Z-optimized-full\\bentoff-before.csv"
+}

@@ -1,0 +1,4 @@
+reference,relative_ao_overhead_pct,evidence_scope
+Filament raw variant medians,14.97,Local whole-renderer GPU-active proxy
+Intel XeGTAO reported reference,25.00,Upstream relative effect-cost statement
+Filament paired-bracket sensitivity,30.68,Local whole-renderer GPU-active proxy
