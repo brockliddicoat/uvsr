@@ -1,0 +1,78 @@
+#define UVSR_DENOISING_ID_INNER(scope, symbol) Denoising##scope##symbol
+#define UVSR_DENOISING_ID(scope, symbol) UVSR_DENOISING_ID_INNER(scope, symbol)
+#define UVSR_DENOISING_LABELS_Method .Label("svgf", "SVGF")
+#define UVSR_DENOISING_LABELS_Guidance .Label("depth-and-normal", "Depth and Normal")
+#define UVSR_DENOISING_LABELS_Resolution
+#define UVSR_DENOISING_ENUM(symbol, member, type, initial, key, tokens, tokenDefault, values, label, help) \
+    UVSR_FIELD(UVSR_DENOISING_ID(UVSR_DENOISING_SCOPE, symbol), UVSR_DENOISING_PREFIX key, \
+        Value(id, Section::Denoising, EnumerationDomain(tokens), LiteralTokenDefault(tokenDefault)) UVSR_DENOISING_LABELS_##symbol, \
+        UIData, Denoising.UVSR_DENOISING_MEMBER.member, values)
+#define UVSR_DENOISING_BOOL(symbol, member, initial, key, label, help) \
+    UVSR_FIELD(UVSR_DENOISING_ID(UVSR_DENOISING_SCOPE, symbol), UVSR_DENOISING_PREFIX key, \
+        Value(id, Section::Denoising, BooleanDomain("on|off"), LiteralBooleanDefault(initial)), UIData, Denoising.UVSR_DENOISING_MEMBER.member)
+#define UVSR_DENOISING_UINT(symbol, member, initial, minimum, maximum, key, label, help) \
+    UVSR_FIELD(UVSR_DENOISING_ID(UVSR_DENOISING_SCOPE, symbol), UVSR_DENOISING_PREFIX key, \
+        Value(id, Section::Denoising, IntegerDomain(minimum, maximum, "integer"), LiteralIntegerDefault(initial)), UIData, Denoising.UVSR_DENOISING_MEMBER.member)
+#define UVSR_DENOISING_FLOAT(symbol, member, initial, minimum, maximum, key, label, help) \
+    UVSR_FIELD(UVSR_DENOISING_ID(UVSR_DENOISING_SCOPE, symbol), UVSR_DENOISING_PREFIX key, \
+        Value(id, Section::Denoising, FloatDomain(minimum, maximum, "float"), LiteralFloatDefault(initial)), UIData, Denoising.UVSR_DENOISING_MEMBER.member)
+
+#define UVSR_DENOISING_SCOPE Global
+#define UVSR_DENOISING_PREFIX "denoising.global."
+#define UVSR_DENOISING_MEMBER global
+#include "denoising_fields.def"
+#undef UVSR_DENOISING_SCOPE
+#undef UVSR_DENOISING_PREFIX
+#undef UVSR_DENOISING_MEMBER
+#define UVSR_DENOISING_SCOPE Ao
+#define UVSR_DENOISING_PREFIX "denoising.ao."
+#define UVSR_DENOISING_MEMBER ambientOcclusion
+#include "denoising_fields.def"
+#undef UVSR_DENOISING_SCOPE
+#undef UVSR_DENOISING_PREFIX
+#undef UVSR_DENOISING_MEMBER
+#define UVSR_DENOISING_SCOPE Gi
+#define UVSR_DENOISING_PREFIX "denoising.gi."
+#define UVSR_DENOISING_MEMBER diffuseGi
+#include "denoising_fields.def"
+#undef UVSR_DENOISING_SCOPE
+#undef UVSR_DENOISING_PREFIX
+#undef UVSR_DENOISING_MEMBER
+#define UVSR_DENOISING_SCOPE Sun
+#define UVSR_DENOISING_PREFIX "denoising.sun."
+#define UVSR_DENOISING_MEMBER sunShadow
+#include "denoising_fields.def"
+#undef UVSR_DENOISING_SCOPE
+#undef UVSR_DENOISING_PREFIX
+#undef UVSR_DENOISING_MEMBER
+#define UVSR_DENOISING_SCOPE Flashlight
+#define UVSR_DENOISING_PREFIX "denoising.flashlight."
+#define UVSR_DENOISING_MEMBER flashlightShadow
+#include "denoising_fields.def"
+#undef UVSR_DENOISING_SCOPE
+#undef UVSR_DENOISING_PREFIX
+#undef UVSR_DENOISING_MEMBER
+#define UVSR_DENOISING_SCOPE Sky
+#define UVSR_DENOISING_PREFIX "denoising.sky."
+#define UVSR_DENOISING_MEMBER skyVisibility
+#include "denoising_fields.def"
+#undef UVSR_DENOISING_SCOPE
+#undef UVSR_DENOISING_PREFIX
+#undef UVSR_DENOISING_MEMBER
+#define UVSR_DENOISING_SCOPE Path
+#define UVSR_DENOISING_PREFIX "denoising.path."
+#define UVSR_DENOISING_MEMBER pathTracing
+#include "denoising_fields.def"
+#undef UVSR_DENOISING_SCOPE
+#undef UVSR_DENOISING_PREFIX
+#undef UVSR_DENOISING_MEMBER
+
+#undef UVSR_DENOISING_ENUM
+#undef UVSR_DENOISING_BOOL
+#undef UVSR_DENOISING_UINT
+#undef UVSR_DENOISING_FLOAT
+#undef UVSR_DENOISING_LABELS_Method
+#undef UVSR_DENOISING_LABELS_Guidance
+#undef UVSR_DENOISING_LABELS_Resolution
+#undef UVSR_DENOISING_ID
+#undef UVSR_DENOISING_ID_INNER
