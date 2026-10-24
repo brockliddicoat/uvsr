@@ -1,0 +1,120 @@
+{
+  "schema": 1,
+  "suiteId": "uvsr-adaptive-msaa-image-diff-v1",
+  "width": 1920,
+  "height": 1080,
+  "phases": [0.25, 0.5],
+  "camera": {
+    "position": [0.0, 0.2, 8.0],
+    "direction": [0.0, 0.0, -1.0],
+    "up": [0.0, 1.0, 0.0],
+    "verticalFovDegrees": 42.0
+  },
+  "cases": [
+    {
+      "id": "crossing-triangles",
+      "roi": { "x": 220, "y": 90, "width": 360, "height": 300 },
+      "nodes": ["CrossingTriangles"],
+      "materials": ["CrossingWarm", "CrossingCool"],
+      "settings": { "taa": false, "flashlight": false, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "shared-material-submeshes",
+      "roi": { "x": 700, "y": 90, "width": 360, "height": 300 },
+      "nodes": ["SharedMaterialSubmeshes"],
+      "materials": ["SharedMatte"],
+      "settings": { "taa": false, "flashlight": false, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "instancing",
+      "roi": { "x": 190, "y": 430, "width": 520, "height": 290 },
+      "nodes": ["InstancedDiamondLeft", "InstancedDiamondRight"],
+      "materials": ["InstancedGold"],
+      "settings": { "taa": false, "flashlight": false, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "alpha-cutouts",
+      "roi": { "x": 1230, "y": 80, "width": 370, "height": 330 },
+      "nodes": ["AlphaMaskCutout"],
+      "materials": ["AlphaMaskCutout"],
+      "settings": { "taa": false, "flashlight": false, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "double-sided",
+      "roi": { "x": 610, "y": 430, "width": 310, "height": 300 },
+      "nodes": ["DoubleSidedBackface"],
+      "materials": ["DoubleSidedTeal"],
+      "settings": { "taa": false, "flashlight": false, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "tiny-steep-geometry",
+      "roi": { "x": 850, "y": 430, "width": 390, "height": 300 },
+      "nodes": ["TinyTriangle", "SteepGrazingTriangle"],
+      "materials": ["TinyAndGrazing"],
+      "settings": { "taa": false, "flashlight": false, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "sharp-specular",
+      "roi": { "x": 1220, "y": 420, "width": 360, "height": 320 },
+      "nodes": ["SharpSpecular"],
+      "materials": ["SharpSpecular"],
+      "settings": { "taa": false, "flashlight": true, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "normal-mapped",
+      "roi": { "x": 320, "y": 760, "width": 390, "height": 300 },
+      "nodes": ["NormalMapped"],
+      "materials": ["NormalMapped"],
+      "settings": { "taa": false, "flashlight": false, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "emissive-detail",
+      "roi": { "x": 730, "y": 760, "width": 360, "height": 300 },
+      "nodes": ["LocalizedEmissive"],
+      "materials": ["EmissiveDetail"],
+      "settings": { "taa": false, "flashlight": false, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "sky-edges",
+      "roi": { "x": 1280, "y": 730, "width": 420, "height": 340 },
+      "nodes": ["SilhouetteSpikes"],
+      "materials": ["SilhouetteDark"],
+      "settings": { "taa": false, "flashlight": false, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "motion-taa",
+      "roi": { "x": 560, "y": 520, "width": 330, "height": 310 },
+      "nodes": ["AnimatedOccluder"],
+      "materials": ["MotionMarker"],
+      "settings": { "taa": true, "flashlight": false, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "moving-shadow-edges",
+      "roi": { "x": 520, "y": 500, "width": 430, "height": 350 },
+      "nodes": ["AnimatedOccluder", "DoubleSidedBackface"],
+      "materials": ["MotionMarker", "DoubleSidedTeal"],
+      "settings": { "taa": false, "flashlight": true, "flashlightShadows": true, "directionalShadows": true, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "nearby-lights",
+      "roi": { "x": 1170, "y": 390, "width": 460, "height": 390 },
+      "nodes": ["SharpSpecular", "AlphaMaskCutout"],
+      "materials": ["SharpSpecular", "AlphaMaskCutout"],
+      "settings": { "taa": false, "flashlight": true, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "grazing-geometry",
+      "roi": { "x": 970, "y": 440, "width": 300, "height": 290 },
+      "nodes": ["SteepGrazingTriangle"],
+      "materials": ["TinyAndGrazing"],
+      "settings": { "taa": false, "flashlight": true, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": false }
+    },
+    {
+      "id": "screen-space-visibility",
+      "roi": { "x": 1210, "y": 690, "width": 500, "height": 380 },
+      "nodes": ["SilhouetteSpikes", "SharpSpecular"],
+      "materials": ["SilhouetteDark", "SharpSpecular"],
+      "settings": { "taa": false, "flashlight": false, "flashlightShadows": false, "directionalShadows": false, "screenSpaceVisibility": true }
+    }
+  ]
+}

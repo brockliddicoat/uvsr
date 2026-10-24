@@ -1,0 +1,18 @@
+{
+  "displayName": "Adaptive MSAA Validation",
+  "initialCamera": {
+    "position": [0.0, 0.2, 8.0],
+    "direction": [0.0, 0.0, -1.0],
+    "up": [0.0, 1.0, 0.0],
+    "verticalFovDegrees": 42.0
+  },
+  "models": [
+    "adaptive_msaa_validation.gltf"
+  ],
+  "graph": [
+    {
+      "name": "Adaptive MSAA Validation Geometry",
+      "model": 0
+    }
+  ]
+}
