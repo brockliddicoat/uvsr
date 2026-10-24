@@ -10,11 +10,13 @@ SDK, or neural component.
 
 Render, display, output, immediate history, and persistent history all use the
 window's native width and height. UVSR renders one sample per native pixel with
-a subpixel projection offset, then runs two full-resolution compute stages:
+a subpixel projection offset, then runs one or two full-resolution compute
+stages according to the static performance tier:
 
 1. scene-linear HDR opaque PBR and screen-space indirect lighting;
 2. procedural sky;
-3. `RTAA_Prepare`;
+3. `RTAA_Prepare` for Balanced and Maximum Quality; Performance fuses these
+   calculations into Resolve and allocates no prepare transients;
 4. `RTAA_Resolve`;
 5. optional, profile-gated conservative RTAA sharpening fused into AgX;
 6. AgX white balance, exposure, tone scale, grade/LUT, gamut and display
@@ -142,13 +144,26 @@ expansion; severe reactivity or failed geometry removes the relaxation.
 
 Resolve cooperatively loads one shared tile for each 8x8 output group.
 Performance and Balanced use a 10x10 tile with a one-pixel halo; Maximum Quality
-uses a 12x12 tile with a two-pixel halo. The tile supplies the 3x3 YCoCg
-neighborhood, profile-selected thin classification, and spatial fallback.
+uses a 12x12 tile with a two-pixel halo. RGB is sanitized and transformed to
+compressed YCoCg once per shared-tile sample rather than once for every output
+pixel and neighborhood tap. Performance also caches exact Rec.709 luminance
+once per tile sample. Every tier keeps the complete 3x3 statistical footprint;
+a cardinal-only low-cost clamp was rejected because it cannot see a
+diagonal-only silhouette and can collapse temporal history back to the rotating
+current sample. The same tile supplies clipping, profile-selected thin
+classification, and spatial fallback.
 History is reconstructed by the statically selected bilinear path or, in
 Maximum Quality, the configured optimized Catmull-Rom path. It is sanitized
 against non-finite and negative radiance, then line-clipped toward the current
 neighborhood center using variance, minimum, maximum, and bounded thin-geometry
 expansion.
+
+Complete rejection skips the history-color fetch, neighborhood reduction, and
+clipping when resurrection/debug output cannot consume them. Performance
+production also recognizes an exactly matching recurrent RGB sample: because
+that sample is the current center and therefore inside every valid box, it can
+skip the statistical reduction and color transform without relaxing rejection.
+Low-confidence pixels still retain their surface-aware spatial fallback.
 
 CPU code evaluates the three response exponentials once per frame:
 
@@ -190,47 +205,59 @@ All values below are bytes per native pixel.
 
 | Resource | Format | Bytes | Packing |
 |---|---:|---:|---|
-| prepared reprojection | `RG16_FLOAT` | 4 | de-jittered current-to-previous motion XY |
-| prepared classification | `RGBA8_UNORM` | 4 | 3x3 source index, velocity confidence, explicit application reactive, authored thin candidate |
+| prepared reprojection, split tiers | `RG16_FLOAT` | 4 | de-jittered current-to-previous motion XY |
+| prepared classification, split tiers | `RGBA8_UNORM` | 4 | 3x3 source index, velocity confidence, explicit application reactive, authored thin candidate |
 | history color, per slot | `RGBA16_FLOAT` | 8 | scene-linear HDR RGB, thin coverage A |
-| history moments, per slot | `RG16_FLOAT` | 4 | log-luminance first and second moments |
+| history moments, Balanced/Maximum per slot | `RG16_FLOAT` | 4 | log-luminance first and second moments for downstream sharpening suppression |
 | history metadata, per slot | `RGBA8_UNORM` | 4 | sample count, confidence, R8 thin-lock lifetime, packed reactive4/motion4 |
 | history depth, per slot | `R32_FLOAT` | 4 | device depth |
 | history surface, per slot | `RG32_UINT` | 8 | exact material32; oct-normal16 plus optional instance-token16 |
 
-Each history slot is 28 B/pixel. Every profile allocates two immediate slots
-(56 B/pixel). Maximum Quality adds one or two persistent slots only when
-resurrection is configured, for 84 or 112 B/pixel; Heavy Temporal plus Maximum
-Quality defaults to four total slots. The packed prepare transients add 8
-B/pixel. A full-resolution `RGBA16_FLOAT` debug output exists only while a debug
-view is active; production final output uses the current history-color slot
-directly.
+Performance strips moments because it also compiles sharpening out, so each of
+its two immediate slots is 24 B/pixel (48 B/pixel total). Balanced and Maximum
+Quality retain 28 B/pixel slots and two immediate slots (56 B/pixel). Maximum
+Quality reserves `persistent count * frame interval` older ring positions when
+resurrection is configured, so its supported combinations total three, four,
+or six slots (84, 112, or 168 B/pixel); Heavy Temporal plus Maximum Quality
+defaults to four total slots. Balanced and Maximum allocate the packed 8
+B/pixel prepare pair.
+Performance fuses Prepare and allocates neither transient. A full-resolution
+`RGBA16_FLOAT` debug output exists only while a debug view is active; production
+final output uses the current history-color slot directly and does not bind a
+dummy debug UAV.
 
-At 1920x1080, two or four history slots are approximately 110.7 MiB or 221.5
-MiB. At 3840x2160 they are approximately 443.0 MiB or 885.9 MiB. Packed prepare
-transients are approximately 15.8 MiB at 1080p and 63.3 MiB at 4K. These figures
-exclude allocator alignment, the existing G-buffer, and the optional debug
-texture.
+At 1920x1080, Performance history is approximately 94.9 MiB. Two, three, four,
+or six moment-bearing slots are approximately 110.7, 166.1, 221.5, or 332.2
+MiB. At 3840x2160 the corresponding Performance figure is 379.7 MiB, while the
+moment-bearing totals are approximately 443.0, 664.5, 885.9, or 1,328.9 MiB.
+Split-tier prepare transients are approximately 15.8 MiB at 1080p and 63.3 MiB
+at 4K. These figures exclude allocator alignment, the existing G-buffer, and
+the optional debug texture.
 
-On a valid center surface, `RTAA_Prepare` reads depth, motion, diffuse, and
-specular data for a 20 B/pixel baseline, plus 1 B/pixel when the explicit mask
-is consumed, and writes the packed 8 B/pixel pair above. Only uncovered pixels
-conditionally inspect the other eight depths for dilation. Resolve reuses its
-cooperatively loaded current-frame tile for neighborhood clipping, profile-
-selected thin work, and fallback. The default Medium Temporal plus Balanced
-profile reports approximately 133 B/pixel of logical reads and 36 B/pixel of
-writes. Maximum Quality with Catmull-Rom reports approximately 248 B/pixel of
-logical reads and the same 36 B/pixel writes. These deliberately conservative
-figures are before cache reuse; they exclude conditional dilation and persistent
-history reads, and rejected disocclusions can skip filtered color history.
-Performance executes less classification and fallback work than Balanced even
-though their conservative byte estimates are equal. An active full-resolution
-debug view adds 8 B/pixel of writes.
-The debug UI also reports
-measured prepare, resolve, fused AgX-plus-sharpen display, and total GPU
-intervals. Because sharpening is intentionally fused into AgX, the display
-interval is an upper bound that also contains tone mapping, grading, LUT and
-dither work; it is not presented as an isolated sharpening cost.
+On a valid center surface, split-tier `RTAA_Prepare` reads depth, motion,
+diffuse, and specular data for a 20 B/pixel baseline, plus 1 B/pixel when the
+explicit mask is consumed, and writes the packed 8 B/pixel pair above. Only
+uncovered pixels conditionally inspect the other eight depths for dilation.
+Performance performs the same selection inside Resolve, reuses shared depth and
+center specular, and removes the 8 B/pixel transient write/read round trip,
+dispatch, and inter-pass dependency. Its conservative steady-state footprint is
+approximately 104 B/pixel of logical reads without an explicit mask (105 with
+one) and 24 B/pixel of writes. The default Medium Temporal plus Balanced profile
+reports approximately 133 B/pixel of logical reads and 36 B/pixel of writes.
+Maximum Quality with Catmull-Rom reports approximately 248 B/pixel of logical
+reads and the same 36 B/pixel writes. These estimates are before cache reuse;
+they exclude conditional dilation and persistent-history reads, and rejected
+disocclusions skip filtered color history and neighborhood clipping. An active
+full-resolution debug view adds 8 B/pixel of writes.
+
+The UI reports coherent latest, 120-sample median, and P95 RTAA measurements.
+Prepare plus Resolve samples carry matching history-validity, resolution,
+profile, debug, and history-reset epochs; stale timestamp results are discarded.
+When RTAA sharpening runs, the UI also shows a separate Display+sharpen
+interval. It is not included in total RTAA and contains AgX tone mapping,
+grading, LUT and dither work rather than isolated sharpening cost. Performance
+does not run sharpening and therefore does not show a misleading zero-valued
+AgX row.
 In Maximum Quality, resurrection is a conditional branch inside resolve, so
 its overhead is included in resolve rather than represented by a misleading
 extra dispatch.
@@ -269,23 +296,40 @@ The resolve tiers are separate static shader variants:
 |---|---|---|---|
 | history reconstruction | bilinear | bilinear | configured bilinear or Catmull-Rom |
 | shared tile per 8x8 group | 10x10 | 10x10 | 12x12 |
+| neighborhood statistics | full 3x3 | full 3x3 | full 3x3 |
+| shared memory per group | 4,400 B | 4,400 B | 6,912 B |
 | thin evidence | authored plus cheap silhouette coverage | authored plus center structural evidence | authored plus structural evidence and optional gated 3x3 diffusion |
 | spatial fallback | low-cost 5-tap cross | fixed 3x3 bilateral | configured direction-aware 3x3 or 5x5 |
+| prepare scheduling | fused into Resolve | separate pass | separate pass |
+| history moments | compiled out | retained | retained |
+| native FP16 color/statistics | capability-gated A/B with FP32 fallback | FP32 | FP32 |
 | persistent resurrection | compiled out | compiled out | optional and conditionally sampled |
 | fused sharpening neighborhood | disabled | enabled when configured | enabled when configured |
 
+The shared-memory figures are useful footprint accounting, not a claimed fixed
+occupancy threshold. The older Xe-LP guidance's approximate 4,672 B step does
+not transfer directly to Meteor Lake Xe-LPG, whose occupancy depends on the
+compiler-selected SIMD width and GRF mode. Intel GPU Analyzer/Profiler evidence
+is required before trading additional unpack/conversion ALU for a smaller tile.
+
 Static specialization removes disabled high-cost paths instead of selecting
-them through per-pixel dynamic branches. Exactly six reachable resolve variants
-are built: Performance, Balanced, and the four Maximum Quality combinations of
-bilinear/Catmull-Rom with resurrection off/on. Changing the profile resets
-history so the new interpretation begins from current data.
+them through per-pixel dynamic branches. Production permutations compile the
+32-way diagnostic switch and debug UAV completely out. The package contains 14
+resolve blobs: production/debug FP32/FP16 Performance, production/debug
+Balanced, and production/debug for the four Maximum Quality combinations of
+bilinear/Catmull-Rom with resurrection off/on. Runtime creates the native FP16
+Performance PSOs only when D3D12 reports native 16-bit shader operations;
+geometry, depth, motion, matrices, shared storage, and reprojection stay FP32.
+Changing the profile or FP16 mode resets history so the new interpretation
+begins from current data.
 
 ## History reset and diagnostics
 
 History resets on first use, re-enable, resize/resource reallocation, scene or
 camera-mode change, shader recreation, force reset, missing previous view,
 camera teleport/large rotation, non-jittered projection change, performance-
-profile change, or another change to the interpretation-setting signature.
+profile change, native-FP16 mode change, procedural-sky or scene-light edit, or
+another change to the interpretation-setting signature.
 Exposure edits do not reset history because exposure is downstream and history
 remains in the same scene-linear convention.
 
@@ -319,11 +363,17 @@ not replace or contaminate temporal history.
   interval, and resurrection overhead is part of Resolve; isolating either
   without a controlled A/B capture would require the extra passes this design
   intentionally avoids.
-- Runtime validation currently consists of one 1920x1080 Bistro Exterior
-  Medium Temporal/Balanced smoke profile. A dedicated synthetic validation
-  scene, Heavy / Medium / Light / no-AA capture matrix, all three performance
-  tiers, 30/60/120 FPS visual playback, and offline supersampled references have
-  not yet been produced.
+- Latest-published-main Intel validation at 1920x1080 covers Medium
+  Temporal/Balanced in distant and close geometry and Performance in close
+  geometry. The close views were moved interactively, so they are smoke and
+  workload-range measurements rather than a controlled static-camera FP16/FP32
+  comparison. A dedicated synthetic validation scene, Heavy / Medium / Light /
+  no-AA capture matrix, controlled native-FP16 A/B, all-tier playback at
+  30/60/120 FPS, and offline supersampled references have not yet been produced.
+- Pure clear-depth background uses a deliberately cheap temporal path. User
+  edits to the procedural sky and scene lights reset history, but a future
+  continuously animated sky must provide explicit reactivity or an equivalent
+  invalidation signal.
 - Automated reference tests cover temporal presets; performance-profile ABI,
   defaults, names, independence, and sanitization; finite-cycle jitter bounds
   and strict 8/16-sample R2 centering; resolved-color versus raw-auxiliary
@@ -335,5 +385,6 @@ not replace or contaminate temporal history.
   expiry and hard-disocclusion cleanup; reactive/motion metadata packing;
   stationary shading clipping; fallback/thin gates; camera-only resurrection
   gating; and odd-resolution dispatch coverage. The shader target separately
-  compiles all six reachable RTAA variants. Image-quality judgments and GPU
+  compiles all 14 production/debug, tier, filtering, resurrection, and
+  capability permutations used by the runtime. Image-quality judgments and GPU
   timings remain adapter-, scene-, resolution-, and driver-specific.

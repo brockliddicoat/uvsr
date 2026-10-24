@@ -5,6 +5,10 @@
 #include <donut/engine/View.h>
 #include <nvrhi/utils.h>
 
+#if DONUT_WITH_DX12
+#include <d3d12.h>
+#endif
+
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -47,6 +51,26 @@ namespace
         const uvsr::ReconstructiveTemporalAASettings& settings)
     {
         return UsesMaximumQuality(settings) && settings.resurrectionEnabled;
+    }
+
+    bool UsesHistoryMoments(
+        const uvsr::ReconstructiveTemporalAASettings& settings)
+    {
+        // Performance statically disables the downstream sharpening pass, so
+        // moments have no consumer in that tier.
+        return settings.performanceProfile !=
+            uvsr::ReconstructiveTemporalPerformanceProfile::Performance;
+    }
+
+    bool UsesFusedPrepare(
+        const uvsr::ReconstructiveTemporalAASettings& settings)
+    {
+        // Performance has no structural thin-classification halo, so Prepare
+        // can be folded into Resolve without duplicating diffuse/specular
+        // neighborhood reads. Higher tiers retain their cheaper shared
+        // classification input until those halos are fused as a whole.
+        return settings.performanceProfile ==
+            uvsr::ReconstructiveTemporalPerformanceProfile::Performance;
     }
 
     uint64_t HashBytes(uint64_t hash, const void* data, size_t size)
@@ -134,6 +158,27 @@ namespace
         return desc.width == resolution.x && desc.height == resolution.y &&
             desc.dimension == nvrhi::TextureDimension::Texture2D;
     }
+
+    bool SupportsNativeFp16(nvrhi::IDevice* device)
+    {
+#if DONUT_WITH_DX12
+        if (!device || device->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D12)
+            return false;
+
+        ID3D12Device* nativeDevice = device->getNativeObject(
+            nvrhi::ObjectTypes::D3D12_Device);
+        if (!nativeDevice)
+            return false;
+
+        D3D12_FEATURE_DATA_D3D12_OPTIONS4 options4{};
+        return SUCCEEDED(nativeDevice->CheckFeatureSupport(
+            D3D12_FEATURE_D3D12_OPTIONS4, &options4, sizeof(options4))) &&
+            options4.Native16BitShaderOpsSupported != FALSE;
+#else
+        (void)device;
+        return false;
+#endif
+    }
 }
 
 namespace uvsr
@@ -166,6 +211,7 @@ namespace uvsr
             .setAllAddressModes(nvrhi::SamplerAddressMode::Clamp)
             .setAllFilters(true));
 
+        m_NativeFp16Supported = SupportsNativeFp16(device);
         CreatePipelines(shaderFactory);
 
         for (auto& stageQueries : m_TimerQueries)
@@ -217,39 +263,100 @@ namespace uvsr
         };
         for (uint32_t variant : ResolveVariants)
         {
-            std::vector<ShaderMacro> macros;
-            macros.emplace_back("RTAA_VARIANT", std::to_string(variant));
-
-            std::vector<nvrhi::BindingLayoutItem> resolveBindings = {
-                nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-                nvrhi::BindingLayoutItem::Sampler(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(0),
-                nvrhi::BindingLayoutItem::Texture_SRV(1),
-                nvrhi::BindingLayoutItem::Texture_SRV(4),
-                nvrhi::BindingLayoutItem::Texture_SRV(6),
-                nvrhi::BindingLayoutItem::Texture_SRV(7),
-                nvrhi::BindingLayoutItem::Texture_SRV(8),
-                nvrhi::BindingLayoutItem::Texture_SRV(9),
-                nvrhi::BindingLayoutItem::Texture_SRV(10),
-                nvrhi::BindingLayoutItem::Texture_SRV(11),
-                nvrhi::BindingLayoutItem::Texture_SRV(12),
-                nvrhi::BindingLayoutItem::Texture_SRV(13),
-                nvrhi::BindingLayoutItem::Texture_SRV(14)
-            };
-            if ((variant & 2u) != 0u)
+            const bool usesMoments = (variant >> 2u) != 0u;
+            const bool fusedPrepare = variant == 0u;
+            for (uint32_t debugVariant = 0; debugVariant < 2u; ++debugVariant)
             {
-                for (uint32_t slot = 15u; slot <= 22u; ++slot)
+                const bool enableDebugOutput = debugVariant != 0u;
+                // Native FP16 is a low-throughput Performance-tier
+                // specialization. Higher tiers keep FP32: their larger
+                // divergent shaders add enough half/float conversion pressure
+                // to erase the arithmetic-rate benefit on current drivers.
+                const uint32_t fp16VariantCount =
+                    m_NativeFp16Supported && variant == 0u ? 2u : 1u;
+                for (uint32_t fp16Variant = 0u;
+                    fp16Variant < fp16VariantCount; ++fp16Variant)
+                {
+                    const bool useNativeFp16 = fp16Variant != 0u;
+                    std::vector<ShaderMacro> macros;
+                    macros.emplace_back("RTAA_VARIANT", std::to_string(variant));
+                    macros.emplace_back("RTAA_ENABLE_DEBUG_OUTPUT",
+                        enableDebugOutput ? "1" : "0");
+                    macros.emplace_back("RTAA_ENABLE_MOMENTS",
+                        usesMoments ? "1" : "0");
+                    macros.emplace_back("RTAA_USE_FP16", useNativeFp16 ? "1" : "0");
+                    macros.emplace_back("RTAA_FUSED_PREPARE",
+                        fusedPrepare ? "1" : "0");
+
+                    std::vector<nvrhi::BindingLayoutItem> resolveBindings = {
+                        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+                        nvrhi::BindingLayoutItem::Sampler(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(0),
+                        nvrhi::BindingLayoutItem::Texture_SRV(1)
+                    };
+                    if (fusedPrepare)
+                    {
+                        resolveBindings.push_back(
+                            nvrhi::BindingLayoutItem::Texture_SRV(2));
+                        resolveBindings.push_back(
+                            nvrhi::BindingLayoutItem::Texture_SRV(3));
+                    }
                     resolveBindings.push_back(
-                        nvrhi::BindingLayoutItem::Texture_SRV(slot));
-            }
-            for (uint32_t slot = 0u; slot <= 5u; ++slot)
-            {
-                resolveBindings.push_back(
-                    nvrhi::BindingLayoutItem::Texture_UAV(slot));
-            }
+                        nvrhi::BindingLayoutItem::Texture_SRV(4));
+                    resolveBindings.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(6));
+                    if (!fusedPrepare)
+                    {
+                        resolveBindings.push_back(
+                            nvrhi::BindingLayoutItem::Texture_SRV(7));
+                        resolveBindings.push_back(
+                            nvrhi::BindingLayoutItem::Texture_SRV(8));
+                    }
+                    resolveBindings.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(9));
+                    resolveBindings.push_back(
+                        nvrhi::BindingLayoutItem::Texture_SRV(10));
+                    if (usesMoments)
+                    {
+                        resolveBindings.push_back(
+                            nvrhi::BindingLayoutItem::Texture_SRV(11));
+                    }
+                    for (uint32_t slot = 12u; slot <= 14u; ++slot)
+                    {
+                        resolveBindings.push_back(
+                            nvrhi::BindingLayoutItem::Texture_SRV(slot));
+                    }
+                    if ((variant & 2u) != 0u)
+                    {
+                        for (uint32_t slot = 15u; slot <= 22u; ++slot)
+                        {
+                            resolveBindings.push_back(
+                                nvrhi::BindingLayoutItem::Texture_SRV(slot));
+                        }
+                    }
+                    resolveBindings.push_back(
+                        nvrhi::BindingLayoutItem::Texture_UAV(0));
+                    if (usesMoments)
+                    {
+                        resolveBindings.push_back(
+                            nvrhi::BindingLayoutItem::Texture_UAV(1));
+                    }
+                    for (uint32_t slot = 2u; slot <= 4u; ++slot)
+                    {
+                        resolveBindings.push_back(
+                            nvrhi::BindingLayoutItem::Texture_UAV(slot));
+                    }
+                    if (enableDebugOutput)
+                    {
+                        resolveBindings.push_back(
+                            nvrhi::BindingLayoutItem::Texture_UAV(5));
+                    }
 
-            createPipeline(m_ResolvePipelines[variant],
-                "uvsr/rtaa_resolve_cs.hlsl", resolveBindings, &macros);
+                    createPipeline(
+                        m_ResolvePipelines[variant][debugVariant][fp16Variant],
+                        "uvsr/rtaa_resolve_cs.hlsl", resolveBindings, &macros);
+                }
+            }
         }
     }
 
@@ -271,8 +378,15 @@ namespace uvsr
         const uint32_t persistentInterval = std::clamp(
             settings.persistentFrameInterval, 1u, 2u);
         const uint32_t historySlotCount = 2u + persistentCount * persistentInterval;
-        const bool historyResourcesChanged = !m_PreparedData || !m_Classification ||
-            !all(m_Resolution == resolution) || m_History.size() != historySlotCount;
+        const bool needsMoments = UsesHistoryMoments(settings);
+        const bool fusedPrepare = UsesFusedPrepare(settings);
+        const bool transientResourcesMismatch = fusedPrepare
+            ? m_PreparedData || m_Classification
+            : !m_PreparedData || !m_Classification;
+        const bool historyResourcesChanged = transientResourcesMismatch ||
+            !all(m_Resolution == resolution) || m_History.size() != historySlotCount ||
+            (!m_History.empty() &&
+                (m_History.front().moments.Get() != nullptr) != needsMoments);
 
         auto createTexture = [this](
             uint2 size,
@@ -299,10 +413,13 @@ namespace uvsr
             m_History.clear();
 
             m_Resolution = resolution;
-            m_PreparedData = createTexture(resolution, nvrhi::Format::RG16_FLOAT,
-                "NRA-RTAA/PreparedData");
-            m_Classification = createTexture(resolution, nvrhi::Format::RGBA8_UNORM,
-                "NRA-RTAA/Classification");
+            if (!fusedPrepare)
+            {
+                m_PreparedData = createTexture(resolution,
+                    nvrhi::Format::RG16_FLOAT, "NRA-RTAA/PreparedData");
+                m_Classification = createTexture(resolution,
+                    nvrhi::Format::RGBA8_UNORM, "NRA-RTAA/Classification");
+            }
 
             m_History.resize(historySlotCount);
             for (uint32_t index = 0; index < historySlotCount; ++index)
@@ -311,8 +428,11 @@ namespace uvsr
                 HistorySlot& slot = m_History[index];
                 slot.color = createTexture(resolution, nvrhi::Format::RGBA16_FLOAT,
                     prefix + "Color");
-                slot.moments = createTexture(resolution, nvrhi::Format::RG16_FLOAT,
-                    prefix + "Moments");
+                if (needsMoments)
+                {
+                    slot.moments = createTexture(resolution, nvrhi::Format::RG16_FLOAT,
+                        prefix + "Moments");
+                }
                 slot.metadata = createTexture(resolution, nvrhi::Format::RGBA8_UNORM,
                     prefix + "Metadata");
                 slot.depth = createTexture(resolution, nvrhi::Format::R32_FLOAT,
@@ -325,12 +445,6 @@ namespace uvsr
             }
 
             ResetHistory();
-        }
-
-        if (!m_DebugSink)
-        {
-            m_DebugSink = createTexture(uint2(1u, 1u), nvrhi::Format::RGBA16_FLOAT,
-                "NRA-RTAA/DebugSink1x1");
         }
 
         const bool needsFullDebug = DebugNeedsFullResolution(settings.debugMode);
@@ -352,30 +466,38 @@ namespace uvsr
         m_MemoryStats.resolution = resolution;
         m_MemoryStats.historySlotCount = historySlotCount;
         m_MemoryStats.persistentHistoryCount = persistentCount;
-        m_MemoryStats.transientBytes = pixelCount * 8ull;
-        m_MemoryStats.historyBytes = pixelCount * 28ull * historySlotCount;
-        m_MemoryStats.debugBytes = 8ull +
-            (needsFullDebug ? pixelCount * 8ull : 0ull);
+        m_MemoryStats.transientBytes = fusedPrepare ? 0ull : pixelCount * 8ull;
+        const uint64_t historyBytesPerPixel = needsMoments ? 28ull : 24ull;
+        m_MemoryStats.historyBytes = pixelCount * historyBytesPerPixel * historySlotCount;
+        m_MemoryStats.debugBytes = needsFullDebug ? pixelCount * 8ull : 0ull;
         m_MemoryStats.totalBytes = m_MemoryStats.transientBytes +
             m_MemoryStats.historyBytes + m_MemoryStats.debugBytes;
         // Steady-state logical texel footprint before cache reuse. Prepare's
         // valid-center path reads depth, RGBA16F motion, diffuse, and specular
         // (20 B); uncovered pixels may conditionally inspect eight more depths.
         // Resolve amortizes a 10x10 or 12x12 28-B shared tile over each 8x8
-        // group, then directly reads prepared/classification/raw motion (16 B).
+        // group. Split tiers then read prepared/classification/raw motion;
+        // fused Performance replaces the two transient reads with center
+        // diffuse/reactive inputs and reuses shared depth plus raw motion.
         // Immediate history adds a 4-texel bilinear or 16-texel Catmull color
         // footprint plus 20 B of metadata/depth/surface. Conditional dilation
         // and persistent resurrection reads are scene-dependent and excluded.
-        const float prepareReadBytes = 20.f;
+        const float prepareReadBytes = fusedPrepare ? 0.f : 20.f;
         const HistorySampleFilter effectiveFilter = GetEffectiveHistoryFilter(settings);
-        const float immediateHistoryReadBytes =
+        float immediateHistoryReadBytes =
             effectiveFilter == HistorySampleFilter::CatmullRom
             ? 148.f : 52.f;
-        const float resolveBaseReadBytes = UsesMaximumQuality(settings)
-            ? 79.f : 60.f;
+        if (!needsMoments)
+            immediateHistoryReadBytes -= 4.f;
+        const float resolveBaseReadBytes = fusedPrepare ? 56.f :
+            (UsesMaximumQuality(settings) ? 79.f : 60.f);
         m_MemoryStats.approximateReadBytesPerPixel = prepareReadBytes +
             resolveBaseReadBytes + immediateHistoryReadBytes;
-        m_MemoryStats.approximateWriteBytesPerPixel = needsFullDebug ? 44.f : 36.f;
+        const float historyWriteBytes = needsMoments ? 28.f : 24.f;
+        const float baselineWriteBytes = historyWriteBytes +
+            (fusedPrepare ? 0.f : 8.f);
+        m_MemoryStats.approximateWriteBytesPerPixel = baselineWriteBytes +
+            (needsFullDebug ? 8.f : 0.f);
 
         return historyResourcesChanged;
     }
@@ -385,7 +507,6 @@ namespace uvsr
         m_PreparedData = nullptr;
         m_Classification = nullptr;
         m_DebugOutput = nullptr;
-        m_DebugSink = nullptr;
         m_History.clear();
         m_Resolution = uint2::zero();
         m_PersistentCount = 0;
@@ -425,7 +546,11 @@ namespace uvsr
         // strand an active NVRHI timer query forever.
         ReleaseResources();
         m_WasEnabled = false;
-        m_Timings = {};
+        ++m_TimerEpoch;
+        m_TimerConfigurationSignature = 0;
+        m_TimerResolution = uint2::zero();
+        m_TimerCaptureActive = false;
+        ResetTimerStatistics();
         m_Weights = {};
     }
 
@@ -473,6 +598,7 @@ namespace uvsr
         uint64_t hash = kFNVOffsetBasis;
         hash = HashValue(hash, settings.preset);
         hash = HashValue(hash, settings.performanceProfile);
+        hash = HashValue(hash, settings.nativeFp16Enabled);
         hash = HashValue(hash, settings.jitterSequence);
         hash = HashValue(hash, settings.jitterPeriod);
         hash = HashValue(hash, settings.jitterScale);
@@ -594,31 +720,183 @@ namespace uvsr
         return valid;
     }
 
-    void ReconstructiveTemporalAAPass::AdvanceTimers()
+    void ReconstructiveTemporalAAPass::ResetTimerStatistics()
     {
+        m_Timings = {};
+        m_TotalTimingHistory.fill(0.f);
+        m_TotalTimingHistoryCount = 0;
+        m_TotalTimingHistoryWriteIndex = 0;
+    }
+
+    void ReconstructiveTemporalAAPass::BeginTimerSample(
+        const ReconstructiveTemporalAASettings& settings,
+        uint2 resolution,
+        bool historyValid,
+        bool resetEpoch)
+    {
+        uint64_t configurationSignature = ComputeHistorySignature(settings);
+        configurationSignature = HashValue(configurationSignature,
+            settings.debugMode);
+        configurationSignature = HashValue(configurationSignature, resolution.x);
+        configurationSignature = HashValue(configurationSignature, resolution.y);
+        configurationSignature = HashValue(configurationSignature,
+            m_NativeFp16Supported);
+        // Accepted-history frames execute a materially different shader path
+        // from reset/disocclusion frames. Keep them in separate cohorts so a
+        // camera teleport cannot make the rolling median or P95 look cheaper.
+        configurationSignature = HashValue(configurationSignature, historyValid);
+        const uint32_t performanceProfile = GetPerformanceTier(settings);
+
+        const bool configurationChanged =
+            configurationSignature != m_TimerConfigurationSignature ||
+            performanceProfile != m_TimerPerformanceProfile ||
+            !all(resolution == m_TimerResolution);
+        if (configurationChanged || resetEpoch)
+        {
+            ++m_TimerEpoch;
+            ResetTimerStatistics();
+        }
+
+        m_TimerConfigurationSignature = configurationSignature;
+        m_TimerPerformanceProfile = performanceProfile;
+        m_TimerResolution = resolution;
+
+        // Query completion is not guaranteed to follow the CPU frame modulo.
+        // Poll every outstanding slot before deciding whether the next slot is
+        // reusable; otherwise one late result can be delayed by another full
+        // ring traversal and appear under a newer preset.
+        AdvanceTimers();
+
         const uint32_t slot = m_TimerFrame % c_TimerLatency;
+        m_TimerCaptureActive = true;
         for (uint32_t stageIndex = 0;
             stageIndex < static_cast<uint32_t>(Stage::Count); ++stageIndex)
         {
-            if (!m_TimerPending[stageIndex][slot])
-                continue;
-
-            nvrhi::ITimerQuery* query = m_TimerQueries[stageIndex][slot];
-            if (!m_Device->pollTimerQuery(query))
-                continue;
-
-            const float milliseconds = m_Device->getTimerQueryTime(query) * 1000.f;
-            m_Device->resetTimerQuery(query);
-            m_TimerPending[stageIndex][slot] = false;
-
-            switch (static_cast<Stage>(stageIndex))
+            if (m_TimerPending[stageIndex][slot] || m_TimerActive[stageIndex])
             {
-            case Stage::Prepare: m_Timings.prepareMs = milliseconds; break;
-            case Stage::Resolve: m_Timings.resolveMs = milliseconds; break;
-            case Stage::FusedSharpening: m_Timings.fusedSharpeningMs = milliseconds; break;
-            case Stage::Total: m_Timings.totalMs = milliseconds; break;
-            default: break;
+                m_TimerCaptureActive = false;
+                break;
             }
+        }
+
+        if (m_TimerCaptureActive)
+        {
+            TimerSample& sample = m_TimerSamples[slot];
+            sample = {};
+            sample.epoch = m_TimerEpoch;
+            sample.resolution = resolution;
+            sample.performanceProfile = performanceProfile;
+            sample.valid = true;
+            if (UsesFusedPrepare(settings))
+            {
+                constexpr uint32_t PrepareIndex =
+                    static_cast<uint32_t>(Stage::Prepare);
+                sample.milliseconds[PrepareIndex] = 0.f;
+                sample.ready[PrepareIndex] = true;
+            }
+        }
+    }
+
+    void ReconstructiveTemporalAAPass::PublishTimerSample(TimerSample& sample)
+    {
+        const bool currentTag = sample.valid &&
+            sample.epoch == m_TimerEpoch &&
+            sample.performanceProfile == m_TimerPerformanceProfile &&
+            all(sample.resolution == m_TimerResolution);
+        if (!currentTag)
+            return;
+
+        constexpr uint32_t PrepareIndex = static_cast<uint32_t>(Stage::Prepare);
+        constexpr uint32_t ResolveIndex = static_cast<uint32_t>(Stage::Resolve);
+        constexpr uint32_t FusedIndex =
+            static_cast<uint32_t>(Stage::FusedSharpening);
+
+        if (!sample.coherentPairPublished && sample.ready[PrepareIndex] &&
+            sample.ready[ResolveIndex])
+        {
+            const float prepareMs = sample.milliseconds[PrepareIndex];
+            const float resolveMs = sample.milliseconds[ResolveIndex];
+            const float totalMs = prepareMs + resolveMs;
+            sample.coherentPairPublished = true;
+
+            if (std::isfinite(totalMs) && prepareMs >= 0.f && resolveMs >= 0.f)
+            {
+                m_Timings.prepareMs = prepareMs;
+                m_Timings.resolveMs = resolveMs;
+                m_Timings.totalMs = totalMs;
+
+                m_TotalTimingHistory[m_TotalTimingHistoryWriteIndex] = totalMs;
+                m_TotalTimingHistoryWriteIndex =
+                    (m_TotalTimingHistoryWriteIndex + 1u) %
+                    c_TimerStatisticsWindow;
+                m_TotalTimingHistoryCount = std::min(
+                    m_TotalTimingHistoryCount + 1u,
+                    c_TimerStatisticsWindow);
+
+                std::vector<float> sortedTimings(
+                    m_TotalTimingHistory.begin(),
+                    m_TotalTimingHistory.begin() + m_TotalTimingHistoryCount);
+                std::sort(sortedTimings.begin(), sortedTimings.end());
+                const uint32_t count = m_TotalTimingHistoryCount;
+                if ((count & 1u) != 0u)
+                {
+                    m_Timings.totalMedianMs = sortedTimings[count / 2u];
+                }
+                else
+                {
+                    m_Timings.totalMedianMs = 0.5f *
+                        (sortedTimings[count / 2u - 1u] +
+                         sortedTimings[count / 2u]);
+                }
+                const uint32_t p95Index = std::min(
+                    static_cast<uint32_t>(std::ceil(0.95f * float(count))) - 1u,
+                    count - 1u);
+                m_Timings.totalP95Ms = sortedTimings[p95Index];
+                m_Timings.coherentSampleCount = count;
+            }
+        }
+
+        if (!sample.fusedPublished && sample.ready[FusedIndex])
+        {
+            sample.fusedPublished = true;
+            const float fusedMs = sample.milliseconds[FusedIndex];
+            if (std::isfinite(fusedMs) && fusedMs >= 0.f)
+                m_Timings.fusedSharpeningMs = fusedMs;
+        }
+    }
+
+    void ReconstructiveTemporalAAPass::AdvanceTimers()
+    {
+        for (uint32_t slot = 0; slot < c_TimerLatency; ++slot)
+        {
+            TimerSample& sample = m_TimerSamples[slot];
+            for (uint32_t stageIndex = 0;
+                stageIndex < static_cast<uint32_t>(Stage::Count); ++stageIndex)
+            {
+                if (!m_TimerPending[stageIndex][slot])
+                    continue;
+
+                nvrhi::ITimerQuery* query = m_TimerQueries[stageIndex][slot];
+                if (!m_Device->pollTimerQuery(query))
+                    continue;
+
+                const float milliseconds =
+                    m_Device->getTimerQueryTime(query) * 1000.f;
+                m_Device->resetTimerQuery(query);
+                m_TimerPending[stageIndex][slot] = false;
+
+                const bool currentTag = sample.valid &&
+                    sample.epoch == m_TimerEpoch &&
+                    sample.performanceProfile == m_TimerPerformanceProfile &&
+                    all(sample.resolution == m_TimerResolution);
+                if (currentTag)
+                {
+                    sample.milliseconds[stageIndex] = milliseconds;
+                    sample.ready[stageIndex] = true;
+                }
+            }
+
+            PublishTimerSample(sample);
         }
 
         m_Timings.resurrectionOverheadMs = 0.f;
@@ -629,6 +907,9 @@ namespace uvsr
         nvrhi::ICommandList* commandList,
         Stage stage)
     {
+        if (!m_TimerCaptureActive)
+            return;
+
         const uint32_t stageIndex = static_cast<uint32_t>(stage);
         const uint32_t slot = m_TimerFrame % c_TimerLatency;
         if (m_TimerPending[stageIndex][slot] || m_TimerActive[stageIndex])
@@ -668,9 +949,9 @@ namespace uvsr
             return;
 
         EndStage(commandList, Stage::FusedSharpening);
-        EndStage(commandList, Stage::Total);
         m_AwaitingFusedSharpening = false;
         ++m_TimerFrame;
+        m_TimerCaptureActive = false;
     }
 
     void ReconstructiveTemporalAAPass::Render(
@@ -688,9 +969,9 @@ namespace uvsr
             if (commandList && m_AwaitingFusedSharpening)
             {
                 EndStage(commandList, Stage::FusedSharpening);
-                EndStage(commandList, Stage::Total);
                 m_AwaitingFusedSharpening = false;
                 ++m_TimerFrame;
+                m_TimerCaptureActive = false;
             }
             Deactivate();
             return;
@@ -731,23 +1012,27 @@ namespace uvsr
             return;
         }
 
-        // Close a total query if integration skipped the optional downstream
-        // sharpening bracket. This keeps the four-frame ring nonblocking.
+        // Close an AgX query if integration skipped the optional downstream
+        // timer hook. RTAA's Prepare+Resolve measurement is already complete.
         if (m_AwaitingFusedSharpening)
         {
             EndStage(commandList, Stage::FusedSharpening);
-            EndStage(commandList, Stage::Total);
             m_AwaitingFusedSharpening = false;
             ++m_TimerFrame;
+            m_TimerCaptureActive = false;
         }
 
         const bool forceReset = settings.forceHistoryReset;
         settings.forceHistoryReset = false;
+        const bool fusedPrepare = UsesFusedPrepare(settings);
         const bool resourcesChanged = EnsureResources(resolution, settings);
-        AdvanceTimers();
-
         bool historyValid = UpdateHistoryValidity(settings, currentView,
             previousView, resourcesChanged, forceReset);
+        // Determine validity before tagging this frame. BeginTimerSample still
+        // precedes every GPU timestamp, so moving it here changes only cohort
+        // bookkeeping and cannot add unrelated work to the measured interval.
+        BeginTimerSample(settings, resolution, historyValid,
+            resourcesChanged || forceReset);
         if (!historyValid)
         {
             for (HistorySlot& slot : m_History)
@@ -760,15 +1045,20 @@ namespace uvsr
         }
 
         m_Weights = ComputeReconstructiveTemporalWeights(settings, deltaSeconds);
-        const float prepareReadBytes = 20.f +
-            (inputs.explicitReactiveMask && settings.explicitReactiveMaskEnabled
-                ? 1.f : 0.f);
+        const float explicitReactiveReadBytes =
+            inputs.explicitReactiveMask && settings.explicitReactiveMaskEnabled
+                ? 1.f : 0.f;
+        const float prepareReadBytes = fusedPrepare
+            ? 0.f : 20.f + explicitReactiveReadBytes;
         const HistorySampleFilter effectiveFilter = GetEffectiveHistoryFilter(settings);
-        const float immediateHistoryReadBytes =
+        float immediateHistoryReadBytes =
             effectiveFilter == HistorySampleFilter::CatmullRom
             ? 148.f : 52.f;
-        const float resolveBaseReadBytes = UsesMaximumQuality(settings)
-            ? 79.f : 60.f;
+        if (!UsesHistoryMoments(settings))
+            immediateHistoryReadBytes -= 4.f;
+        const float resolveBaseReadBytes = fusedPrepare
+            ? 56.f + explicitReactiveReadBytes
+            : (UsesMaximumQuality(settings) ? 79.f : 60.f);
         m_MemoryStats.approximateReadBytesPerPixel = prepareReadBytes +
             resolveBaseReadBytes + immediateHistoryReadBytes;
 
@@ -868,8 +1158,8 @@ namespace uvsr
             ? inputs.explicitReactiveMask : inputs.depth;
 
         commandList->beginMarker("NRA-RTAA");
-        BeginStage(commandList, Stage::Total);
 
+        if (!fusedPrepare)
         {
             nvrhi::BindingSetDesc bindings;
             bindings.bindings = {
@@ -898,15 +1188,18 @@ namespace uvsr
         HistorySlot& writeSlot = m_History[m_NextWriteIndex];
         HistorySlot& persistentStorage0 = persistent0 ? *persistent0 : immediateStorage;
         HistorySlot& persistentStorage1 = persistent1 ? *persistent1 : persistentStorage0;
-        nvrhi::ITexture* debugTarget = m_DebugOutput
-            ? m_DebugOutput.Get() : m_DebugSink.Get();
         const bool useResurrection = UsesResurrection(settings) &&
             persistentValidMask != 0u;
         const uint32_t resolveVariant =
             (effectiveFilter == HistorySampleFilter::CatmullRom ? 1u : 0u) |
             (useResurrection ? 2u : 0u) |
             (GetPerformanceTier(settings) << 2u);
-        Pipeline& resolvePipeline = m_ResolvePipelines[resolveVariant];
+        const bool enableDebugOutput = DebugNeedsFullResolution(settings.debugMode);
+        const bool useMoments = UsesHistoryMoments(settings);
+        Pipeline& resolvePipeline =
+            m_ResolvePipelines[resolveVariant][enableDebugOutput ? 1u : 0u]
+                [m_NativeFp16Supported && settings.nativeFp16Enabled &&
+                    resolveVariant == 0u ? 1u : 0u];
 
         {
             nvrhi::BindingSetDesc bindings;
@@ -914,18 +1207,40 @@ namespace uvsr
                 nvrhi::BindingSetItem::ConstantBuffer(0, m_ConstantBuffer),
                 nvrhi::BindingSetItem::Sampler(0, m_LinearClampSampler),
                 nvrhi::BindingSetItem::Texture_SRV(0, inputs.sceneColor),
-                nvrhi::BindingSetItem::Texture_SRV(1, inputs.depth),
-                nvrhi::BindingSetItem::Texture_SRV(4, inputs.gbufferSpecular),
-                nvrhi::BindingSetItem::Texture_SRV(6, inputs.surfaceIds),
-                nvrhi::BindingSetItem::Texture_SRV(7, m_PreparedData),
-                nvrhi::BindingSetItem::Texture_SRV(8, m_Classification),
-                nvrhi::BindingSetItem::Texture_SRV(9, inputs.motionVectors),
-                nvrhi::BindingSetItem::Texture_SRV(10, immediateStorage.color),
-                nvrhi::BindingSetItem::Texture_SRV(11, immediateStorage.moments),
+                nvrhi::BindingSetItem::Texture_SRV(1, inputs.depth)
+            };
+            if (fusedPrepare)
+            {
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(2, inputs.gbufferDiffuse));
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(3, reactiveTexture));
+            }
+            bindings.bindings.push_back(
+                nvrhi::BindingSetItem::Texture_SRV(4, inputs.gbufferSpecular));
+            bindings.bindings.push_back(
+                nvrhi::BindingSetItem::Texture_SRV(6, inputs.surfaceIds));
+            if (!fusedPrepare)
+            {
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(7, m_PreparedData));
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(8, m_Classification));
+            }
+            bindings.bindings.push_back(
+                nvrhi::BindingSetItem::Texture_SRV(9, inputs.motionVectors));
+            bindings.bindings.push_back(
+                nvrhi::BindingSetItem::Texture_SRV(10, immediateStorage.color));
+            if (useMoments)
+            {
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_SRV(11, immediateStorage.moments));
+            }
+            bindings.bindings.insert(bindings.bindings.end(), {
                 nvrhi::BindingSetItem::Texture_SRV(12, immediateStorage.metadata),
                 nvrhi::BindingSetItem::Texture_SRV(13, immediateStorage.depth),
                 nvrhi::BindingSetItem::Texture_SRV(14, immediateStorage.normalMaterial)
-            };
+            });
             if (useResurrection)
             {
                 bindings.bindings.insert(bindings.bindings.end(), {
@@ -939,14 +1254,24 @@ namespace uvsr
                 nvrhi::BindingSetItem::Texture_SRV(22, persistentStorage1.normalMaterial)
                 });
             }
+            bindings.bindings.push_back(
+                nvrhi::BindingSetItem::Texture_UAV(0, writeSlot.color));
+            if (useMoments)
+            {
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_UAV(1, writeSlot.moments));
+            }
             bindings.bindings.insert(bindings.bindings.end(), {
-                nvrhi::BindingSetItem::Texture_UAV(0, writeSlot.color),
-                nvrhi::BindingSetItem::Texture_UAV(1, writeSlot.moments),
                 nvrhi::BindingSetItem::Texture_UAV(2, writeSlot.metadata),
                 nvrhi::BindingSetItem::Texture_UAV(3, writeSlot.depth),
-                nvrhi::BindingSetItem::Texture_UAV(4, writeSlot.normalMaterial),
-                nvrhi::BindingSetItem::Texture_UAV(5, debugTarget)
+                nvrhi::BindingSetItem::Texture_UAV(4, writeSlot.normalMaterial)
             });
+            if (enableDebugOutput)
+            {
+                assert(m_DebugOutput);
+                bindings.bindings.push_back(
+                    nvrhi::BindingSetItem::Texture_UAV(5, m_DebugOutput));
+            }
             nvrhi::BindingSetHandle bindingSet = m_Device->createBindingSet(
                 bindings, resolvePipeline.bindingLayout);
             nvrhi::ComputeState state;
@@ -986,8 +1311,8 @@ namespace uvsr
         else
         {
             m_Timings.fusedSharpeningMs = 0.f;
-            EndStage(commandList, Stage::Total);
             ++m_TimerFrame;
+            m_TimerCaptureActive = false;
         }
     }
 }

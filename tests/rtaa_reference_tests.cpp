@@ -172,6 +172,65 @@ namespace
         });
     }
 
+    float Rec709Luminance(const Float3& color)
+    {
+        const Float3 sanitized = SanitizeHdr(color);
+        return 0.2126f * sanitized.x + 0.7152f * sanitized.y +
+            0.0722f * sanitized.z;
+    }
+
+    float Rec709LuminanceFromCompressedYCoCg(const Float3& value)
+    {
+        const float y = std::max(std::exp2(value.x) - 1.0f, 0.0f);
+        return std::max(y + (1.0f + y) *
+            (0.1404f * value.y + 0.4304f * value.z), 0.0f);
+    }
+
+    struct ScalarNeighborhoodStatistics
+    {
+        float mean = 0.0f;
+        float variance = 0.0f;
+        float lower = std::numeric_limits<float>::infinity();
+        float upper = -std::numeric_limits<float>::infinity();
+    };
+
+    template <size_t SampleCount>
+    ScalarNeighborhoodStatistics ComputeOriginCenteredStatistics(
+        const std::array<float, 9>& values,
+        const std::array<size_t, SampleCount>& sampleIndices)
+    {
+        const float origin = values[4];
+        float deltaMean = 0.0f;
+        float deltaSecondMoment = 0.0f;
+        ScalarNeighborhoodStatistics result;
+        for (size_t sampleIndex : sampleIndices)
+        {
+            const float value = values[sampleIndex];
+            const float delta = value - origin;
+            deltaMean += delta;
+            deltaSecondMoment += delta * delta;
+            result.lower = std::min(result.lower, value);
+            result.upper = std::max(result.upper, value);
+        }
+        const float inverseSampleCount = 1.0f /
+            static_cast<float>(SampleCount);
+        deltaMean *= inverseSampleCount;
+        deltaSecondMoment *= inverseSampleCount;
+        result.mean = origin + deltaMean;
+        result.variance = std::max(
+            deltaSecondMoment - deltaMean * deltaMean, 0.0f);
+        return result;
+    }
+
+    float OriginCenteredVariance(const std::array<float, 9>& values)
+    {
+        constexpr std::array<size_t, 9> FullNeighborhood = {
+            0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u
+        };
+        return ComputeOriginCenteredStatistics(
+            values, FullNeighborhood).variance;
+    }
+
     Float3 ClipLineToBox(
         const Float3& history,
         const Float3& center,
@@ -311,12 +370,29 @@ namespace
         return reverseZ ? 0.0f : 1.0f;
     }
 
+    bool IsValidRawMotion(
+        const Float3& motion,
+        float validBit,
+        Float2 resolution)
+    {
+        const Float2 generousLimit = {
+            std::max(resolution.x * 2.0f, 1.0f),
+            std::max(resolution.y * 2.0f, 1.0f)
+        };
+        return validBit > 0.5f && IsFinite(motion) &&
+            std::abs(motion.x) <= generousLimit.x &&
+            std::abs(motion.y) <= generousLimit.y;
+    }
+
     float ReferencePreparedReactive(
-        bool centerDepthValid,
+        bool /* centerDepthValid */,
         float explicitReactive,
         bool /* staticMaterialFeaturePresent */)
     {
-        return centerDepthValid ? Saturate(explicitReactive) : 0.0f;
+        // Explicit reactivity belongs to the composited shading result, not to
+        // opaque geometry ownership.  Depthless particles and translucency
+        // must retain the application-authored rejection signal.
+        return Saturate(explicitReactive);
     }
 
     float ReferenceAuthoredThin(
@@ -748,6 +824,7 @@ namespace
     {
         ReconstructiveTemporalAASettings settings;
         settings.enabled = false;
+        settings.nativeFp16Enabled = false;
         settings.freezeJitter = true;
         settings.holdJitterPhase = true;
         settings.heldJitterPhase = 1;
@@ -757,6 +834,8 @@ namespace
 
         Require(settings.preset == preset, "preset identifier");
         Require(!settings.enabled, "preset preserves enabled state");
+        Require(!settings.nativeFp16Enabled,
+            "temporal preset preserves native-FP16 preference");
         Require(settings.freezeJitter, "preset preserves frozen-jitter state");
         Require(settings.holdJitterPhase && settings.heldJitterPhase == 1,
             "preset preserves held jitter phase state");
@@ -835,6 +914,8 @@ namespace
         Require(defaults.performanceProfile ==
             ReconstructiveTemporalPerformanceProfile::Balanced,
             "Balanced is the default RTAA performance profile");
+        Require(defaults.nativeFp16Enabled,
+            "native FP16 is preferred when the Performance profile and hardware support it");
         Require(std::strcmp(GetReconstructiveTemporalPerformanceProfileName(
             ReconstructiveTemporalPerformanceProfile::Performance),
             "Performance") == 0, "stable Performance profile name");
@@ -1273,8 +1354,18 @@ namespace
             "static material feature presence is not temporal reactivity");
         RequireNear(ReferencePreparedReactive(true, 0.75f, false), 0.75f,
             "an explicit application-authored signal remains reactive");
-        RequireNear(ReferencePreparedReactive(false, 1.0f, false), 0.0f,
-            "cleared background does not read stale reactive classification");
+        RequireNear(ReferencePreparedReactive(false, 1.0f, false), 1.0f,
+            "depthless composited shading retains explicit reactivity");
+
+        Require(IsValidRawMotion({ 0.0f, 0.0f, 0.25f }, 1.0f,
+            { 1920.0f, 1080.0f }),
+            "finite producer-valid motion may supply raw expected depth");
+        Require(!IsValidRawMotion({ 5000.0f, 0.0f, 0.25f }, 1.0f,
+            { 1920.0f, 1080.0f }),
+            "oversized rejected xy motion cannot leak its z depth delta");
+        Require(!IsValidRawMotion({ 0.0f, 0.0f, 0.25f }, 0.0f,
+            { 1920.0f, 1080.0f }),
+            "producer-invalid motion cannot supply raw expected depth");
 
         RequireNear(ReferenceAuthoredThin(false, 0.0f, true), 0.0f,
             "clear sky cannot become authored thin geometry");
@@ -1377,6 +1468,32 @@ namespace
         RequireNear(roundTrip.y, hdr.y, "HDR transform preserves green", 2e-5f);
         RequireNear(roundTrip.z, hdr.z, "HDR transform preserves blue", 2e-5f);
 
+        constexpr std::array<Float3, 7> LuminanceCases = {{
+            { 0.0f, 0.0f, 0.0f },
+            { 1.0f, 1.0f, 1.0f },
+            { 12.0f, 3.0f, 1.0f },
+            { 0.01f, 64.0f, 0.25f },
+            { 4096.0f, 0.0f, 0.0f },
+            { 0.0f, 4096.0f, 0.0f },
+            { 0.0f, 0.0f, 4096.0f }
+        }};
+        for (const Float3& color : LuminanceCases)
+        {
+            RequireNear(Rec709LuminanceFromCompressedYCoCg(
+                RgbToCompressedYCoCg(color)), Rec709Luminance(color),
+                "direct compressed Rec.709 luminance matches RGB dot",
+                2e-3f);
+        }
+
+        const std::array<float, 9> brightLowVariance = {
+            12.000f, 12.002f, 12.004f,
+            12.001f, 12.003f, 12.005f,
+            12.002f, 12.004f, 12.006f
+        };
+        const float stableVariance = OriginCenteredVariance(brightLowVariance);
+        Require(stableVariance > 0.0f && std::isfinite(stableVariance),
+            "origin-centered HDR variance preserves finite subpixel spread");
+
         const Float3 center = RgbToCompressedYCoCg({ 4.0f, 3.0f, 2.0f });
         const Float3 lower = center - Float3{ 0.45f, 0.10f, 0.10f };
         const Float3 upper = center + Float3{ 0.45f, 0.10f, 0.10f };
@@ -1419,6 +1536,74 @@ namespace
             "non-finite history sanitizes to finite nonnegative radiance");
         RequireNear(Length(nonFiniteRoundTrip), 0.0f,
             "one non-finite HDR channel invalidates the complete sample");
+    }
+
+    void TestDiagonalNeighborhoodStatistics()
+    {
+        // A diagonal silhouette can differ only at a corner while the center
+        // and all four cardinal samples match. In compressed YCoCg, black and
+        // white have luminance coordinates 0 and 1, making the expected
+        // distribution and clipping bounds exact and easy to audit.
+        const float black = RgbToCompressedYCoCg(
+            { 0.0f, 0.0f, 0.0f }).x;
+        const float white = RgbToCompressedYCoCg(
+            { 1.0f, 1.0f, 1.0f }).x;
+        std::array<float, 9> diagonalOnly;
+        diagonalOnly.fill(black);
+        diagonalOnly[0] = white;
+
+        constexpr std::array<size_t, 9> FullNeighborhood = {
+            0u, 1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u
+        };
+        constexpr std::array<size_t, 5> CardinalCross = {
+            1u, 3u, 4u, 5u, 7u
+        };
+        const ScalarNeighborhoodStatistics full =
+            ComputeOriginCenteredStatistics(diagonalOnly, FullNeighborhood);
+        const ScalarNeighborhoodStatistics cross =
+            ComputeOriginCenteredStatistics(diagonalOnly, CardinalCross);
+
+        RequireNear(full.mean, 1.0f / 9.0f,
+            "diagonal sample contributes to the complete 3x3 mean");
+        RequireNear(full.variance, 8.0f / 81.0f,
+            "diagonal sample contributes to the complete 3x3 variance");
+        RequireNear(full.lower, black,
+            "complete 3x3 lower bound retains the center phase");
+        RequireNear(full.upper, white,
+            "complete 3x3 upper bound includes diagonal coverage");
+        RequireNear(cross.mean, black,
+            "cardinal-only mean cannot see diagonal coverage");
+        RequireNear(cross.variance, 0.0f,
+            "cardinal-only variance collapses on diagonal coverage");
+        RequireNear(cross.lower, black,
+            "cardinal-only lower bound collapses to the center phase");
+        RequireNear(cross.upper, black,
+            "cardinal-only upper bound collapses to the center phase");
+
+        ReconstructiveTemporalAASettings settings;
+        ApplyReconstructiveTemporalPreset(
+            settings, ReconstructiveTemporalPreset::MediumTemporal);
+        const float luminanceSigma = std::sqrt(full.variance) *
+            settings.varianceClipSigma * settings.luminanceClipStrength;
+        const float fullLower = std::max(
+            full.lower, full.mean - luminanceSigma);
+        const float fullUpper = std::min(
+            full.upper, full.mean + luminanceSigma);
+        const Float3 reprojectedHistory = { 0.5f, 0.0f, 0.0f };
+        const Float3 fullClipped = ClipLineToBox(reprojectedHistory,
+            { full.mean, 0.0f, 0.0f }, { fullLower, 0.0f, 0.0f },
+            { fullUpper, 0.0f, 0.0f });
+        const Float3 crossClipped = ClipLineToBox(reprojectedHistory,
+            { cross.mean, 0.0f, 0.0f },
+            { cross.lower, 0.0f, 0.0f },
+            { cross.upper, 0.0f, 0.0f });
+
+        Require(fullUpper > reprojectedHistory.x,
+            "complete 3x3 variance box admits the diagonal history phase");
+        RequireNear(fullClipped.x, reprojectedHistory.x,
+            "complete 3x3 statistics preserve diagonal temporal accumulation");
+        RequireNear(crossClipped.x, black,
+            "cardinal-only statistics reproduce the diagonal collapse");
     }
 
     void TestAdaptiveAccumulationAtFrameRates()
@@ -1840,6 +2025,7 @@ int main()
     TestConfidenceBootstrap();
     TestDepthNormalAndMaterialValidation();
     TestHdrLineBoxClipping();
+    TestDiagonalNeighborhoodStatistics();
     TestAdaptiveAccumulationAtFrameRates();
     TestNeighborhoodAwareCoverageAccumulation();
     TestFallbackAndThinRelaxationGates();

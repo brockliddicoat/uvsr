@@ -296,13 +296,16 @@ void main(uint2 pixel : SV_DispatchThreadID)
     else if (backgroundReconstructed)
         velocityConfidence = 0.75f;
 
-    float reactive = 0.0f;
+    // Producer-authored reactivity describes shading/composition validity and
+    // is intentionally independent of opaque depth. Depthless particles,
+    // translucency, and other composited effects are precisely the pixels
+    // where an explicit reactive mask is most valuable.
+    float reactive = ComputeReactiveClassification(centerPixel);
     float thinCandidate = 0.0f;
     if (centerDepthValid)
     {
         float4 diffuse = t_Diffuse.Load(int3(centerPixel, 0));
         float4 specular = t_Specular.Load(int3(centerPixel, 0));
-        reactive = ComputeReactiveClassification(centerPixel);
         thinCandidate = ComputeAuthoredThinCandidate(diffuse, specular);
     }
 

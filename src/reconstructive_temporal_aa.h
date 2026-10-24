@@ -24,10 +24,15 @@ namespace uvsr
         float prepareMs = 0.f;
         float resolveMs = 0.f;
         // Sharpening is executed inside the downstream tone mapper. This is
-        // therefore the measured AgX-plus-sharpen display interval (an upper
-        // bound on sharpening), retained under the shorter field name.
+        // the separate AgX-plus-sharpen display interval, not part of totalMs.
         float fusedSharpeningMs = 0.f;
+        // A coherent Prepare+Resolve pair from one tagged frame. The stages
+        // are summed instead of nesting another timestamp interval around
+        // their query resolves, which would perturb the measured interval.
         float totalMs = 0.f;
+        float totalMedianMs = 0.f;
+        float totalP95Ms = 0.f;
+        uint32_t coherentSampleCount = 0;
 
         // Resurrection is a divergent conditional read inside Resolve. It is
         // deliberately not measured with a misleading full-dispatch query.
@@ -85,8 +90,8 @@ namespace uvsr
         void Deactivate();
 
         // Bracket the downstream display pass that contains fused RTAA
-        // sharpening. EndFusedSharpeningTimer also closes the end-to-end RTAA
-        // interval; neither query is an isolated sharpening measurement.
+        // sharpening. This AgX interval is reported separately and never
+        // contaminates the coherent Prepare+Resolve RTAA total.
         void BeginFusedSharpeningTimer(nvrhi::ICommandList* commandList);
         void EndFusedSharpeningTimer(nvrhi::ICommandList* commandList);
 
@@ -94,6 +99,10 @@ namespace uvsr
         [[nodiscard]] nvrhi::ITexture* GetHistoryMetadata() const;
         [[nodiscard]] nvrhi::ITexture* GetHistoryMoments() const;
         [[nodiscard]] bool IsHistoryValid() const { return m_HistoryValid; }
+        [[nodiscard]] bool IsNativeFp16Supported() const
+        {
+            return m_NativeFp16Supported;
+        }
         [[nodiscard]] const ReconstructiveTemporalAATimings& GetTimings() const { return m_Timings; }
         [[nodiscard]] const ReconstructiveTemporalWeights& GetWeights() const { return m_Weights; }
         [[nodiscard]] const ReconstructiveTemporalAAMemoryStats& GetMemoryStats() const { return m_MemoryStats; }
@@ -104,8 +113,19 @@ namespace uvsr
             Prepare,
             Resolve,
             FusedSharpening,
-            Total,
             Count
+        };
+
+        struct TimerSample
+        {
+            uint64_t epoch = 0;
+            dm::uint2 resolution = dm::uint2::zero();
+            uint32_t performanceProfile = 0;
+            std::array<float, static_cast<size_t>(Stage::Count)> milliseconds{};
+            std::array<bool, static_cast<size_t>(Stage::Count)> ready{};
+            bool valid = false;
+            bool coherentPairPublished = false;
+            bool fusedPublished = false;
         };
 
         struct Pipeline
@@ -128,13 +148,20 @@ namespace uvsr
         };
 
         static constexpr uint32_t c_TimerLatency = 4;
+        static constexpr uint32_t c_TimerStatisticsWindow = 120;
 
         nvrhi::DeviceHandle m_Device;
         nvrhi::BufferHandle m_ConstantBuffer;
         nvrhi::SamplerHandle m_LinearClampSampler;
         Pipeline m_PreparePipeline;
-        // filter bit | resurrection bit | (performance tier << 2)
-        std::array<Pipeline, 12> m_ResolvePipelines;
+        // First index: filter bit | resurrection bit | (performance tier << 2).
+        // Second index: statically compiled production/debug-output path.
+        // Third index: FP32/native-FP16 arithmetic path.
+        // Keeping the diagnostic switch out of production shaders shortens
+        // live ranges and removes the debug UAV from their root signatures.
+        std::array<std::array<std::array<Pipeline, 2>, 2>, 12>
+            m_ResolvePipelines;
+        bool m_NativeFp16Supported = false;
 
         dm::uint2 m_Resolution = dm::uint2::zero();
         uint32_t m_PersistentCount = 0;
@@ -142,7 +169,6 @@ namespace uvsr
         nvrhi::TextureHandle m_PreparedData;
         nvrhi::TextureHandle m_Classification;
         nvrhi::TextureHandle m_DebugOutput;
-        nvrhi::TextureHandle m_DebugSink;
         std::vector<HistorySlot> m_History;
 
         uint32_t m_NextWriteIndex = 0;
@@ -164,7 +190,16 @@ namespace uvsr
             static_cast<size_t>(Stage::Count)> m_TimerPending{};
         std::array<bool, static_cast<size_t>(Stage::Count)> m_TimerActive{};
         std::array<uint32_t, static_cast<size_t>(Stage::Count)> m_TimerActiveSlot{};
+        std::array<TimerSample, c_TimerLatency> m_TimerSamples{};
+        std::array<float, c_TimerStatisticsWindow> m_TotalTimingHistory{};
         uint32_t m_TimerFrame = 0;
+        uint32_t m_TotalTimingHistoryCount = 0;
+        uint32_t m_TotalTimingHistoryWriteIndex = 0;
+        uint64_t m_TimerEpoch = 1;
+        uint64_t m_TimerConfigurationSignature = 0;
+        dm::uint2 m_TimerResolution = dm::uint2::zero();
+        uint32_t m_TimerPerformanceProfile = 0;
+        bool m_TimerCaptureActive = false;
         bool m_AwaitingFusedSharpening = false;
 
         ReconstructiveTemporalAATimings m_Timings;
@@ -189,6 +224,13 @@ namespace uvsr
 
         void BeginStage(nvrhi::ICommandList* commandList, Stage stage);
         void EndStage(nvrhi::ICommandList* commandList, Stage stage);
+        void BeginTimerSample(
+            const ReconstructiveTemporalAASettings& settings,
+            dm::uint2 resolution,
+            bool historyValid,
+            bool resetEpoch);
+        void PublishTimerSample(TimerSample& sample);
+        void ResetTimerStatistics();
         void AdvanceTimers();
     };
 }

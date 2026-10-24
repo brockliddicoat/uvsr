@@ -1970,6 +1970,13 @@ public:
 
             displayTexture = m_RenderTargets->LdrColor;
         }
+        else if (rtaaActive)
+        {
+            // BeginFusedSharpeningTimer may have emitted a timestamp when RTAA
+            // sharpening is enabled. NVRHI requires the matching end timestamp
+            // in this command-list recording, even when AgX is bypassed.
+            m_ReconstructiveTemporalAAPass->EndFusedSharpeningTimer(m_CommandList);
+        }
 
         // The tonemapperless renderer intentionally sends forward scene-linear
         // radiance straight to the sRGB swap-chain target. The render-target
@@ -2077,6 +2084,12 @@ public:
         return m_ReconstructiveTemporalAAPass
             ? &m_ReconstructiveTemporalAAPass->GetMemoryStats()
             : nullptr;
+    }
+
+    bool IsReconstructiveTemporalAANativeFp16Supported() const
+    {
+        return m_ReconstructiveTemporalAAPass &&
+            m_ReconstructiveTemporalAAPass->IsNativeFp16Supported();
     }
 
     void ResetReconstructiveTemporalAAHistory()
@@ -2467,15 +2480,48 @@ protected:
             ImGui::SetItemTooltip(
                 "Select a statically compiled GPU-cost tier independently of Heavy, Medium, or Light temporal response. Performance and Balanced use bilinear history; Maximum Quality enables the selected filter, thin diffusion, and optional resurrection.");
 
+            const bool nativeFp16Supported =
+                m_app->IsReconstructiveTemporalAANativeFp16Supported();
+            const bool nativeFp16Available = nativeFp16Supported &&
+                rtaa.performanceProfile ==
+                    ReconstructiveTemporalPerformanceProfile::Performance;
+            ImGui::BeginDisabled(!nativeFp16Available);
+            if (ImGui::Checkbox("Native FP16##RTAA", &rtaa.nativeFp16Enabled))
+                rtaa.forceHistoryReset = true;
+            ImGui::EndDisabled();
+            ImGui::SetItemTooltip(nativeFp16Supported
+                ? "Use native half precision for bounded Performance-tier color statistics, reactive calculations, and weights. Disable for an FP32 A/B; depth, motion, matrices, and reprojection always remain FP32."
+                : "Native 16-bit shader operations are unavailable on this D3D12 adapter, so RTAA uses the FP32 fallback.");
+
             if (const ReconstructiveTemporalAATimings* timings =
                 m_app->GetReconstructiveTemporalAATimings())
             {
-                ImGui::Text(
-                    "GPU %.2f ms | Prepare %.2f | Resolve %.2f | AgX+sharpen %.2f",
-                    timings->totalMs, timings->prepareMs, timings->resolveMs,
-                    timings->fusedSharpeningMs);
+                const bool rtaaSharpeningRuns =
+                    m_app->IsReconstructiveTemporalAAActive() &&
+                    m_ui.UsesTonemapper() && rtaa.sharpeningEnabled &&
+                    rtaa.performanceProfile !=
+                        ReconstructiveTemporalPerformanceProfile::Performance &&
+                    (rtaa.debugMode == ReconstructiveTemporalDebugMode::FinalOutput ||
+                        rtaa.debugMode == ReconstructiveTemporalDebugMode::FinalNraRtaaOutput ||
+                        rtaa.debugMode == ReconstructiveTemporalDebugMode::SharpeningContribution);
+                if (rtaaSharpeningRuns)
+                {
+                    ImGui::Text("RTAA %.2f ms | Prepare %.2f | Resolve %.2f | "
+                        "Display+sharpen %.2f",
+                        timings->totalMs, timings->prepareMs,
+                        timings->resolveMs, timings->fusedSharpeningMs);
+                }
+                else
+                {
+                    ImGui::Text("RTAA %.2f ms | Prepare %.2f | Resolve %.2f",
+                        timings->totalMs, timings->prepareMs,
+                        timings->resolveMs);
+                }
+                ImGui::Text("Median %.2f ms | P95 %.2f ms | %u samples",
+                    timings->totalMedianMs, timings->totalP95Ms,
+                    timings->coherentSampleCount);
                 ImGui::SetItemTooltip(
-                    "Latest GPU intervals. Resurrection is a conditional read included in Resolve. AgX+sharpen is the measured fused display-pass interval, an upper bound rather than isolated sharpening cost.");
+                    "RTAA is one coherent Prepare+Resolve sample. Median and P95 use the latest 120 matching samples; stale profile, history-validity, resolution, debug-mode, and reset-epoch results are discarded. The optional Display+sharpen interval includes AgX and is never included in RTAA.");
             }
             else
             {
@@ -3289,23 +3335,39 @@ protected:
             "Sky", "Expand procedural sky controls.");
         if (skyOpen)
         {
+            bool skyChanged = false;
             if (!m_ui.EnableProceduralSky)
                 ImGui::BeginDisabled();
-            ImGui::SliderFloat("Brightness", &m_ui.SkyParams.brightness, 0.f, 1.f);
+            skyChanged |= ImGui::SliderFloat(
+                "Brightness", &m_ui.SkyParams.brightness, 0.f, 1.f);
             ImGui::SetItemTooltip("Set sky and ambient-light brightness.");
-            ImGui::SliderFloat("Glow Size", &m_ui.SkyParams.glowSize, 0.f, 90.f);
+            skyChanged |= ImGui::SliderFloat(
+                "Glow Size", &m_ui.SkyParams.glowSize, 0.f, 90.f);
             ImGui::SetItemTooltip("Set the sun-glow angular size.");
-            ImGui::SliderFloat("Glow Sharpness", &m_ui.SkyParams.glowSharpness, 1.f, 10.f);
+            skyChanged |= ImGui::SliderFloat("Glow Sharpness",
+                &m_ui.SkyParams.glowSharpness, 1.f, 10.f);
             ImGui::SetItemTooltip("Control how tightly the sun glow falls off.");
-            ImGui::SliderFloat("Glow Intensity", &m_ui.SkyParams.glowIntensity, 0.f, 1.f);
+            skyChanged |= ImGui::SliderFloat("Glow Intensity",
+                &m_ui.SkyParams.glowIntensity, 0.f, 1.f);
             ImGui::SetItemTooltip("Set the sun-glow brightness.");
-            ImGui::SliderFloat("Horizon Size", &m_ui.SkyParams.horizonSize, 0.f, 90.f);
+            skyChanged |= ImGui::SliderFloat(
+                "Horizon Size", &m_ui.SkyParams.horizonSize, 0.f, 90.f);
             ImGui::SetItemTooltip("Set the horizon transition width.");
             if (!m_ui.EnableProceduralSky)
                 ImGui::EndDisabled();
 
-            ImGui::Checkbox("Enable Procedural Sky", &m_ui.EnableProceduralSky);
+            skyChanged |= ImGui::Checkbox(
+                "Enable Procedural Sky", &m_ui.EnableProceduralSky);
             ImGui::SetItemTooltip("Render the procedural sky behind the scene.");
+            if (skyChanged)
+            {
+                // Uniform clear-depth pixels intentionally use RTAA's cheap
+                // sky accumulation path instead of per-pixel neighborhood
+                // reactivity. A user-authored sky discontinuity must therefore
+                // invalidate that history explicitly rather than smear stale
+                // radiance across its long stable time constant.
+                m_app->ResetReconstructiveTemporalAAHistory();
+            }
         }
 
         const auto& lights = m_app->GetScene()->GetSceneGraph()->GetLights();
@@ -3351,7 +3413,14 @@ protected:
 
                 if (m_SelectedLight)
                 {
-                    app::LightEditor(*m_SelectedLight);
+                    if (app::LightEditor(*m_SelectedLight))
+                    {
+                        // The procedural sky derives its glow direction and
+                        // radiance from the selected sun. Its clear-depth RTAA
+                        // fast path has no neighborhood-reactive calculation,
+                        // so light edits are explicit temporal discontinuities.
+                        m_app->ResetReconstructiveTemporalAAHistory();
+                    }
                 }
             }
         }

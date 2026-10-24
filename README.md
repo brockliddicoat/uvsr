@@ -17,8 +17,10 @@ is also available from the scene picker.
   independent, statically compiled **Performance Profile** selector with
   Performance, Balanced, and Maximum Quality tiers. The factory default is
   Medium Temporal plus Balanced. Analytical validation and rejection controls,
-  32 debug views, memory estimates, and GPU timings remain available, and all
-  scene color and history resources stay at display resolution.
+  a capability-gated **Native FP16** Performance-tier A/B control, 32 debug
+  views, memory estimates, and coherent latest/median/P95 GPU timings remain
+  available, and all scene color and history resources stay at display
+  resolution.
 - Screen-space visibility feeds current-frame AO/GI directly into composition;
   it has no temporal accumulation or spatial filtering stage.
 - The renderer selector provides **Deferred**, **Forward**, and **Forward
@@ -81,11 +83,16 @@ that has not merged into `main`, plus every project or feature an agent is
 currently working on. An entry is not shipped on `main`, and experimental
 entries are not promises that the work will merge.
 
-- **Visibility-Pipeline Simplification — [Draft PR #3](https://github.com/brockliddicoat/uvsr/pull/3)**
-  (`agent/visibility-cleanup-coming-soon`). Remove only the visibility bitmask's
-  temporal AO/GI accumulator and bilateral spatial filter, then feed current-
-  frame visibility directly into composition. NRA-RTAA remains the independent
-  downstream anti-aliasing and temporal-reconstruction stage.
+- **RTAA Intel Performance and Stability — Active Local Implementation.**
+  Optimize NRA-RTAA's shared-tile color statistics, production shader
+  permutations, Performance-tier resources, Prepare/Resolve scheduling,
+  stable-interior rejection paths, native FP16 fallback, timing telemetry, and
+  temporal reconstruction correctness on weak Intel GPUs. This changes
+  `src/rtaa_*`, RTAA CPU/resource plumbing, shader packaging, tests, and the
+  **Aliasing** UI. It consumes the motion/G-buffer contracts that the listed
+  texture-filtering/specular-AA/NRD effort may change, and the HZB experiment
+  must revalidate its RTAA history assumptions after integration; it does not
+  modify visibility traversal or forward/deferred lighting.
 - **Forward Renderer Simplification — Local Implementation Complete; Awaiting
   Integration.** Remove the broken Forward Tonemapperless mode and its display-
   pipeline bypass, leaving supported Forward and Deferred rendering on the

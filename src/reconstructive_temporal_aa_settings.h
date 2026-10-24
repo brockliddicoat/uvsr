@@ -80,6 +80,10 @@ namespace uvsr
         ReconstructiveTemporalPreset preset = ReconstructiveTemporalPreset::MediumTemporal;
         ReconstructiveTemporalPerformanceProfile performanceProfile =
             ReconstructiveTemporalPerformanceProfile::Balanced;
+        // Applies only to the Performance resolve and only when D3D12 reports
+        // native 16-bit shader arithmetic. FP32 remains an explicit A/B and
+        // driver-workaround path on capable hardware.
+        bool nativeFp16Enabled = true;
 
         // Projection jitter. jitterScale is measured in pixels and is bounded
         // to one so the generated offset never exceeds half a pixel per axis.
