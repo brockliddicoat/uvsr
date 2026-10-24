@@ -1,11 +1,44 @@
 # San Miguel
 
-UVSR packages a full detail conversion of San Miguel 2.1 from the
+UVSR uses a modified main-building scene from San Miguel 2.1 in the
 [Computer Graphics Archive](https://casual-effects.com/data/). Guillermo M.
 Leal Llaguno created the model. Morgan McGuire, Guedis Cardenas, Michael Mara,
 and Nicholas Hull improved the 2017 version with the creator's permission. the
 exact source and conversion facts are in
 [`source-provenance.json`](source-provenance.json).
+
+## current geometry
+
+[`geometry-revision.json`](geometry-revision.json) records the edits from
+`08cbbaaf2893d952726fbd52c1ecddb970711ee6` and audits every current component.
+the separate courtyard enclosure, its paving, the street apron, and the
+photographic street wall were removed. the main courtyard building remains.
+
+the four elevations use different arrangements of the original interior
+arcade pillars, stone arches, and gallery railing:
+
+| elevation, in the original Z-up coordinates | facade |
+| --- | --- |
+| south | a central three-bay gallery on two floors, with solid side wings |
+| north | a longer five-bay gallery on two floors and an offset solid wing |
+| west | a single-bay portico around the two existing doorways |
+| east | a three-bay entrance porch with an open terrace above |
+
+the outer walls use the existing weathered plaster and stone textures. the
+roof and decks use the interior terracotta paving. the curved parapet stays,
+with its exposed faces and ends repaired. foliage that crossed the outer
+wall was clipped at that boundary. the entrance and original camera remain
+open and unchanged in position.
+
+the revision has 10,248,871 rendered triangles, 2,190 unchanged original
+meshes, all 287 original materials, and all 269 original images. the facade
+instances existing arcade geometry. no texture was reencoded. the five-buffer
+layout and 90 MB buffer limit remain intact.
+
+the original provenance, import report, repack report, and supplied license
+remain immutable records of the source conversion. the geometry revision
+owns the current output hashes. its SHA-256 is
+`074D0F1C99680A8F45032D64DE7FDF282AA766B1BBD07D6F2AF0706F44A635A8`.
 
 ## source identity and terms
 
@@ -23,7 +56,7 @@ separate permission or the scene is replaced. the
 [legal record](../../../legal/documentation/san-miguel-2-1.md) owns that
 clearance boundary.
 
-## conversion
+## original conversion
 
 Blender 5.1.2 build `ec6e62d40fa9` imported the OBJ without decimation, Draco,
 or texture reencoding. the generated
@@ -41,7 +74,7 @@ UVSR has no blended or transmissive draw pass. the conversion keeps
 63,910 triangles, but do not preserve transmission. the ambiguous height or
 normal map is omitted instead of being mislabeled as tangent space data.
 
-the glTF geometry was repacked by buffer view into five external buffers. the
+the original glTF geometry was repacked by buffer view into five external buffers. the
 generated
 [`components/buffer-repack-report.json`](components/buffer-repack-report.json)
 records all 275 component files, 493,729,206 output bytes, and every SHA-256.

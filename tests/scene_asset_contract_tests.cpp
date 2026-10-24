@@ -105,6 +105,8 @@ namespace
         const char* repackHash;
         size_t materialCount, imageCount;
         bool bistro;
+        const char* geometryRevisionHash = nullptr;
+        bool openPositiveXEntry = false;
     };
 
     constexpr Scene Scenes[] = {
@@ -117,7 +119,8 @@ namespace
             { { 27.6255f, 1.49616f, 2.42353f }, { -.9673232088f, -.0081301951f, -.2534160802f },
                 { -.0078644596f, .9999669523f, -.0020602299f }, 57.2209f },
             "1117561844626cea69078c3668cf389de8ef5dd4c97ce793427474f37dbf7577",
-            "2fdb20e180585fffe00e0bff799ed825044a8262fdc08cd3a9e5aab7cb096cdc", 287, 269, false }
+            "2fdb20e180585fffe00e0bff799ed825044a8262fdc08cd3a9e5aab7cb096cdc", 287, 269, false,
+            "074d0f1c99680a8f45032d64de7fdf282aa766b1bbd07d6f2af0706f44a635a8", true }
     };
 
     Json Audit(const fs::path& path, std::string_view hash)
@@ -189,7 +192,21 @@ namespace
     {
         const auto provenance = Audit(root / "source-provenance.json", scene.provenanceHash);
         Require(Member(provenance, "scene", Kind::String).string == scene.directory, "provenance scene mismatch");
-        const auto report = Audit(root / "components/buffer-repack-report.json", scene.repackHash);
+        const auto originalReport = Audit(root / "components/buffer-repack-report.json", scene.repackHash);
+        // revisions audit current geometry while the original conversion remains immutable.
+        const auto report = scene.geometryRevisionHash ?
+            Audit(root / "geometry-revision.json", scene.geometryRevisionHash) : originalReport;
+        if (scene.geometryRevisionHash)
+        {
+            const auto& originalFiles = Member(originalReport, "files", Kind::Array).array;
+            const auto originalModel = std::find_if(originalFiles.begin(), originalFiles.end(), [&](const Json& file) {
+                return Member(file, "path", Kind::String).string == scene.model;
+            });
+            Require(originalModel != originalFiles.end() &&
+                Member(report, "sourceGltfSha256", Kind::String).string ==
+                    Member(*originalModel, "sha256", Kind::String).string,
+                "geometry revision lost its original conversion identity");
+        }
         const auto& outputs = Member(report, "files", Kind::Array).array;
         std::set<std::string> reported;
         uint64_t bufferBytes = 0;
@@ -222,7 +239,7 @@ namespace
             const auto imported = Audit(root / "blender-import-report.json",
                 "21694870a8584b0854b96737b3955dc49ffe814991633a5d82798bb214911a3b");
             Require(Member(imported, "outputGltfSha256", Kind::String).string ==
-                Member(report, "sourceContainerSha256", Kind::String).string, "Blender/repack chain is broken");
+                Member(originalReport, "sourceContainerSha256", Kind::String).string, "Blender/repack chain is broken");
         }
         return report;
     }
@@ -361,9 +378,17 @@ namespace
             }
         }
         Require(triangles > 0 && std::isfinite(diagonal) && diagonal > 0, "scene has no finite geometry");
-        for (const auto distance : hits)
-            Require(std::isfinite(distance) && distance > radius && distance <= diagonal * 1.01f,
+        for (size_t ray = 0; ray < hits.size(); ++ray)
+        {
+            // the main-building scene ends at the open entry; its former street backdrop is gone.
+            if (scene.openPositiveXEntry && ray == 1)
+            {
+                Require(std::isinf(hits[ray]), "the authored open entrance axis is blocked");
+                continue;
+            }
+            Require(std::isfinite(hits[ray]) && hits[ray] > radius && hits[ray] <= diagonal * 1.01f,
                 "initial camera lost floor, four-sided enclosure or forward geometry");
+        }
         Require(hits[0] <= 3.f, "initial camera is more than three meters above its floor");
         std::cout << scene.label << ": " << triangles << " transformed triangles, floor " << hits[0] << " m\n";
     }
