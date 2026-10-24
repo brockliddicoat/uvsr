@@ -3,17 +3,14 @@
 **Unified Visibility Stochastic Rendering**
 
 UVSR is a DirectX 12 renderer built on NVIDIA's pinned Donut framework and its
-NVRHI graphics abstraction layer. It launches the NVIDIA Bistro exterior scene
-with its authored materials by default; the converted Bistro Interior Wine scene
-is also available from the scene picker.
+NVRHI graphics abstraction layer. It ships with two ready-to-run Intel PBR
+Sponza flat-roof scenes. The default includes Intel's separately distributed
+curtains and ivy; the second is the same architecture without either add-on.
 
 ## Renderer Baseline
 
 - Deferred shading, UVSR PBR, screen-space visibility AO/GI, and the procedural
   sky start enabled.
-- NRA-RTAA v1 is retired and removed. Its failure analysis remains in the
-  [NRA-RTAA v1 postmortem](docs/nra-rtaa-v1-postmortem.md) so a successor starts
-  from a proven reprojection base instead of restoring the failed subsystem.
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
   linear resolution. Full resolution can composite raw output; reconstruction
   adds SSRT3-style temporal accumulation and either compact or Gaussian joint-
@@ -43,11 +40,6 @@ is also available from the scene picker.
   **Filter-Adapted Spatiotemporal Noise**. Every scheduler toroidally
   rotates the complete nested radial prefix, so fixed-work and adaptive modes
   do not reuse global radius shells as the budget changes.
-- The renderer selector provides **Deferred**, **Forward**, and **Forward
-  Tonemapperless** modes. The tonemapperless mode renders with the forward path
-  and sends its scene-linear HDR result directly to the sRGB display target,
-  bypassing AgX, exposure, grading, LUTs, and dithering; out-of-range values are
-  clipped by the display target.
 - Renderer settings always start from factory defaults; **Reset Settings**
   restores those defaults in-session, and settings are not carried between
   launches.
@@ -57,12 +49,15 @@ is also available from the scene picker.
   timings on one row. Two memory rows report exact logical **Outputs**,
   **Working**, **Mask Cache**, and **Avoided** payloads; **Shared** is explicitly
   an estimate of duplicate mask payload avoided by shared AO/GI traversal.
-- UVSR's shared forward/deferred metallic-roughness PBR path is always enabled
-  in the production UI. The legacy Donut comparison path remains implemented
-  for possible future experiments, but its control is hidden.
+- The default deferred UVSR PBR path starts enabled. **Visibility > Enabled**
+  turns visibility and PBR off or on together. The legacy Donut comparison path
+  remains implemented for possible future experiments, but its separate control
+  is hidden.
 - The top **General** drawer contains renderer and performance information, GPU
-  selection, camera mode, White World, and rendering-path selection, with the
-  scene picker at the bottom.
+  selection, camera mode, and White World, with the scene picker at the bottom.
+  Named multi-model descriptors appear as one clean entry while their component
+  GLBs stay available to explicit command-line loads without cluttering the
+  picker.
 - **White World Off** is the default. **White World On**, **White World Preserve
   Normals**, and **White World Preserve Emissives** override material color
   without modifying source assets. The last mode keeps authored emissive color
@@ -127,6 +122,42 @@ entries are not promises that the work will merge.
   bounce contribution cutoff conservatively without changing visibility
   estimator math or adding motion-reprojected local-exposure history.
 
+- **Agent Collaboration Policy — Active Development**
+  (`codex/casual-agent-policy`). Replace the repository's agent-operating
+  guidance with a coordinator-led collaboration policy, conversational-language
+  guidance, and reusable execution-plan documentation. This owns `AGENTS.md`
+  and `docs/agent-collaboration.md`, `docs/casual-agent-language.md`, and
+  `docs/exec-plans/`; it has no renderer, asset, shader, or scene overlap with
+  the Sponza work.
+
+- **Screen-Space Visibility Shared Shader Helpers — In Review**
+  (`devin/1784102514-screen-space-shared-helpers`, PR #10). Consolidate the
+  identical depth, pixel-coordinate, and safe-normal helpers used by the
+  screen-space visibility sampling, depth-hierarchy, temporal, and filter
+  shaders into `src/screen_space_visibility_common.hlsli`. This is a textual
+  extraction with no equations, bindings, UI, or scene changes and does not
+  overlap the Sponza work.
+
+- **Visibility Degenerate-Path Test Coverage — In Review**
+  (`devin/1784102780-visibility-test-coverage`, PR #11). Add reference coverage
+  for degenerate visibility clipping, radial-mask edge cases, and blue-noise
+  rank-field paths. This owns only the existing visibility test sources, has no
+  runtime rendering or asset change, and does not overlap the Sponza work.
+
+- **Camera Collision and Input Reset — Active Development**
+  (`codex/camera-collision-input-reset`). Add scene-triangle collision for both
+  camera modes and reconcile held movement and mouse input after focus or UI
+  transitions. This owns camera collision code and tests and overlaps
+  `src/uvsr.cpp`, `CMakeLists.txt`, and `README.md` only; it does not overlap the
+  standardized Sponza assets or scene catalog.
+
+- **Three-Band Sky and Night Mode — Experiment**
+  (`codex/sky-night-mode`). Add a first-party three-band atmospheric sky and a
+  Night Mode with a soft moon and deterministic procedural stars. This owns sky
+  shaders, constants, controls, reference tests, and sky documentation; it
+  preserves PBR, visibility, and display-pipeline equations and does not overlap
+  the standardized Sponza assets or scene catalog.
+
 ### How Work Gets Listed
 
 This README-first workflow is how every project or feature gets onto Coming
@@ -167,25 +198,13 @@ At startup, UVSR selects the D3D12-capable adapter with the most dedicated
 video memory. The **Graphics Adapter** selector lists every compatible GPU and
 restarts the renderer immediately on the selected adapter.
 
-The Bistro source assets are licensed local content and are intentionally
-gitignored. Before building, place these files in
-`assets/scenes/nvidia_bistro/`:
-
-```text
-BistroExterior.glb
-BistroInterior_Wine.glb
-LICENSE.txt
-README.txt
-```
-
-**A Beautiful Game** is a tracked, self-contained GLB scene. CMake packages
-`assets/scenes/a_beautiful_game/ABeautifulGame.glb` automatically, and the
-renderer exposes it as `a_beautiful_game/ABeautifulGame.glb` in the scene
-picker.
-
-The larger downloaded **Cornell Box** is also tracked and self-contained. CMake
-packages `assets/scenes/cornell_box/cornellBox.glb`, exposed as
-`cornell_box/cornellBox.glb` in the scene picker.
+Intel PBR Sponza is completely included in the repository and staged by CMake;
+there is no separate model download, conversion, or scene setup step. The
+default **Intel PBR Sponza** scene composes the flat-roof architecture, curtains,
+and roof-trimmed ivy. **Intel PBR Sponza - Plain** loads only the same two
+architecture components. Every component remains below GitHub's 100 MB
+per-file limit. Attribution and the exact runtime edits are recorded in
+[`assets/scenes/intel_sponza/README.md`](assets/scenes/intel_sponza/README.md).
 
 Configure and build a Release executable from PowerShell:
 
@@ -218,41 +237,13 @@ environment variable; omitted descriptions default to `main`.
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the PBR, radial-visibility, estimator, visibility-projection, and
-visibility-sampling reference tests separately:
+Build and run the scene-catalog, PBR, radial-visibility, estimator,
+visibility-projection, and visibility-sampling reference tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
+cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_pbr_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
-
-## Bistro Material Preparation
-
-UVSR renders Bistro materials two-sided because the FBX source contains thin
-surfaces with mixed winding. The repair identifies the small set of base-color
-images with real binary/fractional alpha, converts those materials to
-depth-writing alpha test, and restores opaque domain for the exporter-mislabeled
-remainder while preserving genuine Water/Ice/Wine blend materials. White World
-samples only real coverage alpha and overrides RGB in a
-shader permutation, so foliage cutouts survive without leaking albedo.
-
-Some source conversions label packed roughness/metalness maps as specular
-extension textures. Repair freshly converted GLBs once with:
-
-```powershell
-tools\repair_bistro_orm.cmd assets/scenes/nvidia_bistro/BistroExterior.glb assets/scenes/nvidia_bistro/BistroInterior_Wine.glb
-```
-
-The repair changes only GLB metadata, saves the original JSON chunk in a
-`.pre-uvsr-json` file, and ignores the maps' zero-filled red channel so authored
-material occlusion is not fabricated. Screen-space ambient visibility remains a
-separate renderer input. Pass `--restore` to restore the original chunks.
-
-The Bistro light is normalized from its exported real-world lux value to the
-renderer's unoccluded-light range and uses a neutral illuminant so White World
-does not inherit the source scene's strong amber cast. This scene-specific
-calibration is applied to the light, outside the shared BSDF, and remains
-editable in **Lights**.
 
 ## Documentation and Conventions
 
@@ -271,7 +262,8 @@ The [NRA-RTAA v1 postmortem](docs/nra-rtaa-v1-postmortem.md) preserves why the
 retired anti-aliasing experiment failed and the required order for any successor.
 
 UVSR runs uncapped with a single planar view. UVSR-owned interactive controls
-provide concise hover tooltips; new controls should follow the same convention.
+provide short, plain-English hover tooltips; new controls should follow the same
+convention.
 The bottom action row exposes equally sized **Reload Shaders**, **Reset Settings**,
 **Restart**, and **Screenshot** buttons.
 

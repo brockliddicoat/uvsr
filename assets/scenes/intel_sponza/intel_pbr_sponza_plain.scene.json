@@ -1,0 +1,17 @@
+{
+  "displayName": "Intel PBR Sponza - Plain",
+  "models": [
+    "components/intel_pbr_sponza_flat_roof_part1.glb",
+    "components/intel_pbr_sponza_flat_roof_part2.glb"
+  ],
+  "graph": [
+    {
+      "name": "Flat-Roof Sponza Architecture A",
+      "model": 0
+    },
+    {
+      "name": "Flat-Roof Sponza Architecture B",
+      "model": 1
+    }
+  ]
+}

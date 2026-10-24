@@ -1,0 +1,6 @@
+Files left out of this snapshot (build output, binaries, large or secret-looking):
+assets/scenes/intel_sponza/components/intel_pbr_sponza_curtains.glb  (82.4 MB)
+assets/scenes/intel_sponza/components/intel_pbr_sponza_flat_roof_part1.glb  (72.6 MB)
+assets/scenes/intel_sponza/components/intel_pbr_sponza_flat_roof_part2.glb  (73.2 MB)
+assets/scenes/intel_sponza/components/ivy/intel_pbr_sponza_ivy_part1.glb  (85.3 MB)
+assets/scenes/intel_sponza/components/ivy/intel_pbr_sponza_ivy_part2.glb  (85.3 MB)
