@@ -1,0 +1,24 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\16f14c15ae6720c23659541d7a10a4d2\update_mappings.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\glfw\src\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\glfw\src\mappings.h.in">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\glfw\CMake\GenerateMappings.cmake" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\donut\thirdparty\glfw\src\CMakeFiles\update_mappings" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{F3FE3EFF-CE9C-3EDE-887F-FD0286899DBD}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{E2B365EF-5770-3F65-A81A-031C6B7FD829}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

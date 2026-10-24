@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\dxc-subbuild\CMakeFiles\3c224b7c5b198d93f828d0429b83214f\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{1C8D9903-618B-3AA8-98D8-8CFB03954463}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

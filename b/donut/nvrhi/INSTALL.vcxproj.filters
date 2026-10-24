@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\cfd54652af192c695b1e65a0228eae59\INSTALL_force.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{F3FE3EFF-CE9C-3EDE-887F-FD0286899DBD}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

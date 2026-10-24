@@ -1,0 +1,125 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\9cdea305c1e3a0d95a7eb481e01eff67\donut_shaders.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\binding_helpers.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\bindless.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\blit_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\bloom_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\brdf.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\deferred_lighting_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\depth_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\forward_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\forward_vertex.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\gbuffer.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\gbuffer_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\hash_based_rng.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\light_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\light_probe_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\light_types.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\lighting.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\material_bindings.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\material_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\mipmapgen_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\motion_vectors.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\packing.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\pixel_readback_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\scene_material.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\shadows.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\skinning_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\sky.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\sky_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\ssao_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\surface.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\taa_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\tonemapping_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\utils.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\view_cb.h">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\shaders\vulkan.hlsli" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\blit_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\fullscreen_vs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\ies_profile_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\imgui_pixel.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\imgui_vertex.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\bloom_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\cubemap_gs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\deferred_lighting_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\depth_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\depth_vs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\dlss_exposure_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\environment_map_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\exposure_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\forward_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\forward_vs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\gbuffer_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\gbuffer_vs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\histogram_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\joints.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\light_probe.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\material_id_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\mipmapgen_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\motion_vectors_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\pixel_readback_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\sky_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\ssao_blur_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\ssao_compute_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\ssao_deinterleave_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\taa_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\passes\tonemapping_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\rect_vs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\sharpen_ps.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\shaders\skinning_cs.hlsl" />
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\donut\shaders\CMakeFiles\donut_shaders" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{F3FE3EFF-CE9C-3EDE-887F-FD0286899DBD}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{E2B365EF-5770-3F65-A81A-031C6B7FD829}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

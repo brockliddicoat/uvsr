@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f1cce5931525f995c062155839593fc0\d3d_agility_sdk-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f1cce5931525f995c062155839593fc0\d3d_agility_sdk-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f1cce5931525f995c062155839593fc0\d3d_agility_sdk-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f1cce5931525f995c062155839593fc0\d3d_agility_sdk-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f1cce5931525f995c062155839593fc0\d3d_agility_sdk-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f1cce5931525f995c062155839593fc0\d3d_agility_sdk-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f1cce5931525f995c062155839593fc0\d3d_agility_sdk-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\d3d_agility_sdk-subbuild\CMakeFiles\f1cce5931525f995c062155839593fc0\d3d_agility_sdk-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\d3d_agility_sdk-subbuild\CMakeFiles\b147350328e891013d08f0b376a1da64\d3d_agility_sdk-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\d3d_agility_sdk-subbuild\CMakeFiles\86807d89c581b7142c41adbcb2ccb662\d3d_agility_sdk-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\d3d_agility_sdk-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\brock\OneDrive\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\d3d_agility_sdk-subbuild\CMakeFiles\d3d_agility_sdk-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{3563BD95-3038-33C5-96FE-169CF53A00FE}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

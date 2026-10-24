@@ -1,0 +1,9 @@
+# CMake generation dependency list for this directory.
+C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/CMakeFiles/cmake.verify_globs
+C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/directx_headers-src/CMakeLists.txt
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/CTest.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/CTestTargets.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/CTestUseLaunchers.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/DartConfiguration.tcl.in
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Modules/GNUInstallDirs.cmake
+C:/Users/brock/scoop/apps/cmake/current/share/cmake-4.4/Templates/CTestScript.cmake.in

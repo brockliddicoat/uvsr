@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/dxc-populate"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/3c224b7c5b198d93f828d0429b83214f/dxc-populate.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/dfea4d7c8cf932ab2dc4551674c72d92/dxc-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/ec54f8fc215533f24b48eb416e8f3295/dxc-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/ec54f8fc215533f24b48eb416e8f3295/dxc-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/ec54f8fc215533f24b48eb416e8f3295/dxc-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/ec54f8fc215533f24b48eb416e8f3295/dxc-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/ec54f8fc215533f24b48eb416e8f3295/dxc-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/ec54f8fc215533f24b48eb416e8f3295/dxc-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/ec54f8fc215533f24b48eb416e8f3295/dxc-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/ec54f8fc215533f24b48eb416e8f3295/dxc-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"dxc-populate"
+		],
+		"name" : "dxc-populate"
+	}
+}

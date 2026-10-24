@@ -1,0 +1,385 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ResolveNugetPackages>false</ResolveNugetPackages>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{C0984344-51C9-3690-A147-483AA62D98AB}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>ALL_BUILD</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <Midl>
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep -BC:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b --check-stamp-file C:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\ratio-shadow-msaa-cmaa2-prep;C:\Users\brock\Documents\uvsr\.git\worktrees\ratio-shadow-msaa-cmaa2-prep\HEAD;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep -BC:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b --check-stamp-file C:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\ratio-shadow-msaa-cmaa2-prep;C:\Users\brock\Documents\uvsr\.git\worktrees\ratio-shadow-msaa-cmaa2-prep\HEAD;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep -BC:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b --check-stamp-file C:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\ratio-shadow-msaa-cmaa2-prep;C:\Users\brock\Documents\uvsr\.git\worktrees\ratio-shadow-msaa-cmaa2-prep\HEAD;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule C:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+C:\Users\brock\scoop\apps\cmake\current\bin\cmake.exe -SC:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep -BC:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b --check-stamp-file C:/Users/brock/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\.git\refs\heads\codex\ratio-shadow-msaa-cmaa2-prep;C:\Users\brock\Documents\uvsr\.git\worktrees\ratio-shadow-msaa-cmaa2-prep\HEAD;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\4.4.0\CMakeCXXCompiler.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\4.4.0\CMakeRCCompiler.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\4.4.0\CMakeSystem.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\cmake.verify_globs;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\cmake\FetchAgilitySDK.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\compileshaders.cmake;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\app\ApplicationBase.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\app\DeviceManager.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\app\UserInterfaceUtils.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\engine\Scene.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\engine\SceneTypes.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\include\donut\engine\ThreadPool.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\ApplicationBase.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\DeviceManager.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\UserInterfaceUtils.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\app\dx12\DeviceManager_DX12.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\GltfImporter.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\Scene.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\TextureCache.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\src\engine\ThreadPool.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_demo.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_draw.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_internal.h;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_tables.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\donut\thirdparty\imgui\imgui_widgets.cpp;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-app-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-app.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-engine.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-loading-app.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\donut-loading.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-combo-roll.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-slider-controls.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-tooltip-picker.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-ui-polish.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\overrides\imgui-ui.patch;C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\src\shaders.cfg;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCXXInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeCommonLanguageInclude.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeGenericSystem.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeInitializeConfigs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeLanguageInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeRCInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\CMakeSystemSpecificInitialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\CMakeCommonCompilerMacros.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Compiler\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\ExternalProject\shared_internal_commands.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FetchContent\CMakeLists.cmake.in;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindGit.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageHandleStandardArgs.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\FindPackageMessage.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCXXLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Internal\CMakeCommonLinkerInformation.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Linker\MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Linker\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-Initialize.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC-CXX.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows-MSVC.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\Windows.cmake;C:\Users\brock\scoop\apps\cmake\current\share\cmake-4.4\Modules\Platform\WindowsPaths.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\ZERO_CHECK.vcxproj">
+      <Project>{8C757772-381C-3117-91A6-650AE1BADB4D}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\directx_headers-build\DirectX-Guids.vcxproj">
+      <Project>{A3E2D1A0-1770-35FC-900C-F6DA85F2F90C}</Project>
+      <Name>DirectX-Guids</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\_deps\directx_headers-build\DirectX-Headers.vcxproj">
+      <Project>{93A69AEC-D7E6-3D35-BB37-EACC66499CD5}</Project>
+      <Name>DirectX-Headers</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\donut\ShaderMake\ShaderMake\ShaderMake.vcxproj">
+      <Project>{414A58AC-1333-3DE1-9361-F2A76AD0DF02}</Project>
+      <Name>ShaderMake</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\donut\ShaderMake\ShaderMakeBlob.vcxproj">
+      <Project>{2AB77AA1-7AF2-3E2C-9271-9ECBFA94EF76}</Project>
+      <Name>ShaderMakeBlob</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\donut\thirdparty\glfw\src\glfw.vcxproj">
+      <Project>{3A0B1081-B056-3AD3-8B50-E39D00685101}</Project>
+      <Name>glfw</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\donut\thirdparty\imgui.vcxproj">
+      <Project>{C9CBC456-D32E-3C43-B839-44C55EE4D848}</Project>
+      <Name>imgui</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\donut\thirdparty\jsoncpp_static.vcxproj">
+      <Project>{F10DEE61-671A-3756-83BD-BC2EB2261C2F}</Project>
+      <Name>jsoncpp_static</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\donut\nvrhi\nvrhi.vcxproj">
+      <Project>{43892D50-C349-3D6B-8D30-1AE2B2AA3201}</Project>
+      <Name>nvrhi</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\donut\nvrhi\nvrhi_d3d12.vcxproj">
+      <Project>{DDADA322-3714-342D-928D-36E2482C7AE4}</Project>
+      <Name>nvrhi_d3d12</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr.vcxproj">
+      <Project>{17C148A4-0FD3-3A90-999D-390CDC6892F7}</Project>
+      <Name>uvsr</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_adaptive_sync_tests.vcxproj">
+      <Project>{5711C0A8-8908-3D4A-B0DF-2B220465F2A8}</Project>
+      <Name>uvsr_adaptive_sync_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_auto_exposure_tests.vcxproj">
+      <Project>{D9915DA2-467D-3EA1-B06B-3FFA03957F3B}</Project>
+      <Name>uvsr_auto_exposure_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_camera_collision_tests.vcxproj">
+      <Project>{E0A376FA-BAB9-386D-AC4C-6E11EDE07C03}</Project>
+      <Name>uvsr_camera_collision_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_camera_controls_tests.vcxproj">
+      <Project>{CF891C4E-8E5F-3A91-BBD2-EB7CAE53EDD0}</Project>
+      <Name>uvsr_camera_controls_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_command_line_options_tests.vcxproj">
+      <Project>{964BEFC4-BEAD-3147-8898-62B7C8A4F30A}</Project>
+      <Name>uvsr_command_line_options_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_denoiser.vcxproj">
+      <Project>{227C60B2-291D-3E1C-9316-13C47775EEEE}</Project>
+      <Name>uvsr_denoiser</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_denoiser_tests.vcxproj">
+      <Project>{BA4F82AD-24BA-3BC9-85D8-E49B8A835448}</Project>
+      <Name>uvsr_denoiser_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_diffuse_environment_asset_tests.vcxproj">
+      <Project>{0B14F4E1-9A66-31D2-9E4E-0B847F6BADDD}</Project>
+      <Name>uvsr_diffuse_environment_asset_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_flashlight_tests.vcxproj">
+      <Project>{D7AE02B0-78B4-3232-B3E2-8B6E85AC878D}</Project>
+      <Name>uvsr_flashlight_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_heitz_ratio_estimator_source_contract_tests.vcxproj">
+      <Project>{D6D64CF9-A89F-3206-9FBC-988A4C122AE4}</Project>
+      <Name>uvsr_heitz_ratio_estimator_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_heitz_ratio_estimator_tests.vcxproj">
+      <Project>{94E8ECEB-A736-35DC-B165-281F7CABA408}</Project>
+      <Name>uvsr_heitz_ratio_estimator_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_imgui_dropdown_roll_tests.vcxproj">
+      <Project>{636E4839-E49F-3693-A840-BB076F9A2B4E}</Project>
+      <Name>uvsr_imgui_dropdown_roll_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_path_tracing_settings_tests.vcxproj">
+      <Project>{D193A6B4-3543-3D6F-8379-30F2C8C8C02D}</Project>
+      <Name>uvsr_path_tracing_settings_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_path_tracing_source_contract_tests.vcxproj">
+      <Project>{D29178B9-2473-3550-A136-C2B867D4DFD2}</Project>
+      <Name>uvsr_path_tracing_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_pbr_lighting_source_contract_tests.vcxproj">
+      <Project>{B5982400-1D11-3E93-9B86-FBD619315989}</Project>
+      <Name>uvsr_pbr_lighting_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_pbr_tests.vcxproj">
+      <Project>{C1A31391-D3D2-36C8-A96B-DA57156F058B}</Project>
+      <Name>uvsr_pbr_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_pixel_zoom_tests.vcxproj">
+      <Project>{F52D25A1-5919-3D67-8EB4-F306C13D1ABE}</Project>
+      <Name>uvsr_pixel_zoom_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_production_shader_bundle_tests.vcxproj">
+      <Project>{491797FA-57FF-35C1-9D8F-13BFE1558308}</Project>
+      <Name>uvsr_production_shader_bundle_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_radial_visibility_tests.vcxproj">
+      <Project>{9A05BD11-D458-3073-8DD2-E0494292F2D4}</Project>
+      <Name>uvsr_radial_visibility_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_ray_traced_flashlight_shadow_tests.vcxproj">
+      <Project>{1665AE4F-4B3D-3638-B91E-C9D6577CBE1F}</Project>
+      <Name>uvsr_ray_traced_flashlight_shadow_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_ray_traced_sky_visibility_source_contract_tests.vcxproj">
+      <Project>{18944CA4-25D6-3CA8-BA3D-CB1130811502}</Project>
+      <Name>uvsr_ray_traced_sky_visibility_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_ray_traced_sky_visibility_tests.vcxproj">
+      <Project>{34523364-2B9F-386E-AF31-E9E719ACD29C}</Project>
+      <Name>uvsr_ray_traced_sky_visibility_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_renderer_source_contract_tests.vcxproj">
+      <Project>{1303E03A-05BC-3DEE-A6F4-B241FE8B55F9}</Project>
+      <Name>uvsr_renderer_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_runtime_shader_bundle_tests.vcxproj">
+      <Project>{10282F63-9B0B-3C3A-843E-807DC7C7B3F8}</Project>
+      <Name>uvsr_runtime_shader_bundle_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_sample_accumulation_settings_tests.vcxproj">
+      <Project>{F544E1B6-B428-3188-A711-2738E49006F9}</Project>
+      <Name>uvsr_sample_accumulation_settings_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_scene_asset_contract_tests.vcxproj">
+      <Project>{C8F0146C-1DA6-3747-AE57-52426BAC1B33}</Project>
+      <Name>uvsr_scene_asset_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_scene_catalog_tests.vcxproj">
+      <Project>{1EAC285A-222F-304E-8887-D0C470B57BBE}</Project>
+      <Name>uvsr_scene_catalog_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_scene_light_names_tests.vcxproj">
+      <Project>{319BF964-0E04-3E53-9FE1-E54964499313}</Project>
+      <Name>uvsr_scene_light_names_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_scene_loading_tests.vcxproj">
+      <Project>{EBFCBAF7-8147-32B7-BA51-B8587044A438}</Project>
+      <Name>uvsr_scene_loading_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_sponza_camera_tests.vcxproj">
+      <Project>{C755F26D-1494-39EB-B421-5031AC59D0A7}</Project>
+      <Name>uvsr_sponza_camera_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_temporal_aa_tests.vcxproj">
+      <Project>{FA79614B-F733-35D7-A5DD-914D1329443D}</Project>
+      <Name>uvsr_temporal_aa_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_ui_animation_tests.vcxproj">
+      <Project>{FEB7571B-D07A-35A0-956D-5BE341B0B191}</Project>
+      <Name>uvsr_ui_animation_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_ui_command_layout_tests.vcxproj">
+      <Project>{6E44D542-23FA-3372-8103-83141D3A9A5B}</Project>
+      <Name>uvsr_ui_command_layout_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_ui_commands_tests.vcxproj">
+      <Project>{5E83EF32-24BF-33B8-ABE7-463E24F1E1C4}</Project>
+      <Name>uvsr_ui_commands_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_ui_settings_command_catalog_tests.vcxproj">
+      <Project>{3DC7C984-81B0-38CA-A37C-273A594DEDF1}</Project>
+      <Name>uvsr_ui_settings_command_catalog_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_ui_skin_tests.vcxproj">
+      <Project>{0562D76A-C312-3E18-82B6-0135727FF27E}</Project>
+      <Name>uvsr_ui_skin_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_ui_source_contract_tests.vcxproj">
+      <Project>{9490F5D3-5F29-37D2-97A4-598F955D3E0F}</Project>
+      <Name>uvsr_ui_source_contract_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_visibility_estimator_tests.vcxproj">
+      <Project>{BBE765FB-2566-3C02-BBDC-71E2A03753D2}</Project>
+      <Name>uvsr_visibility_estimator_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_visibility_projection_tests.vcxproj">
+      <Project>{E7CD2197-3367-3475-9C91-441FB56D4BF1}</Project>
+      <Name>uvsr_visibility_projection_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_visibility_sampling_tests.vcxproj">
+      <Project>{3E6C241E-A057-324E-941A-90F26494FA6A}</Project>
+      <Name>uvsr_visibility_sampling_tests</Name>
+    </ProjectReference>
+    <ProjectReference Include="C:\Users\brock\Documents\uvsr\work\ratio-shadow-msaa-cmaa2-prep\b\uvsr_world_space_representation_settings_tests.vcxproj">
+      <Project>{B872F067-8A28-322F-8425-18439C0F5BD8}</Project>
+      <Name>uvsr_world_space_representation_settings_tests</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

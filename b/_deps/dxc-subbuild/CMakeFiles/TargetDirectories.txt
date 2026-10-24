@@ -1,0 +1,3 @@
+C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/dxc-populate.dir
+C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/ALL_BUILD.dir
+C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/dxc-subbuild/CMakeFiles/ZERO_CHECK.dir

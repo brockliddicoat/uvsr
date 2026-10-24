@@ -1,0 +1,16 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/donut/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/donut/thirdparty/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/donut/thirdparty/glfw/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/donut/thirdparty/glfw/src/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/donut/ShaderMake/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/donut/ShaderMake/ShaderMake/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/donut/nvrhi/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/directx_headers-build/cmake_install.cmake",
+		"C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/donut/shaders/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

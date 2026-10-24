@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/d3d_agility_sdk-subbuild/CMakeFiles/d3d_agility_sdk-populate"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/d3d_agility_sdk-subbuild/CMakeFiles/86807d89c581b7142c41adbcb2ccb662/d3d_agility_sdk-populate.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/d3d_agility_sdk-subbuild/CMakeFiles/b147350328e891013d08f0b376a1da64/d3d_agility_sdk-populate-complete.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/d3d_agility_sdk-subbuild/CMakeFiles/f1cce5931525f995c062155839593fc0/d3d_agility_sdk-populate-build.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/d3d_agility_sdk-subbuild/CMakeFiles/f1cce5931525f995c062155839593fc0/d3d_agility_sdk-populate-configure.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/d3d_agility_sdk-subbuild/CMakeFiles/f1cce5931525f995c062155839593fc0/d3d_agility_sdk-populate-download.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/d3d_agility_sdk-subbuild/CMakeFiles/f1cce5931525f995c062155839593fc0/d3d_agility_sdk-populate-install.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/d3d_agility_sdk-subbuild/CMakeFiles/f1cce5931525f995c062155839593fc0/d3d_agility_sdk-populate-mkdir.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/d3d_agility_sdk-subbuild/CMakeFiles/f1cce5931525f995c062155839593fc0/d3d_agility_sdk-populate-patch.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/d3d_agility_sdk-subbuild/CMakeFiles/f1cce5931525f995c062155839593fc0/d3d_agility_sdk-populate-test.rule"
+		},
+		{
+			"file" : "C:/Users/brock/OneDrive/Documents/uvsr/work/ratio-shadow-msaa-cmaa2-prep/b/_deps/d3d_agility_sdk-subbuild/CMakeFiles/f1cce5931525f995c062155839593fc0/d3d_agility_sdk-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"d3d_agility_sdk-populate"
+		],
+		"name" : "d3d_agility_sdk-populate"
+	}
+}
