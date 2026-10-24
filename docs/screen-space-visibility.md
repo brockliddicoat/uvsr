@@ -42,8 +42,8 @@ selectable; their historical measurements remain in the optimization ledger.
   rather than a user control.
 - The Indirect Diffuse Response view is disabled.
 - Visibility temporal accumulation is disabled and has no settings surface;
-  renderer TAA owns temporal stability. Spatial filtering is disabled and its
-  dormant Gaussian joint-bilateral radius remains 4.0.
+  renderer TAA owns temporal stability. High enables Gaussian joint-bilateral
+  spatial reconstruction at radius 4.0 before composition.
 
 ## Performance Profiles and Controls
 
@@ -134,8 +134,8 @@ product presets:
 | --- | --- | ---: | ---: | --- |
 | Low | Quarter | 8 | 1 | Compact joint-bilateral upsampling |
 | Medium | Half | 8 | 1 | Compact joint-bilateral upsampling |
-| High | Full | 20 | 1 | Unreconstructed full-resolution input |
-| Ultra | Full | 48 | 2 | Unreconstructed full-resolution input |
+| High | Full | 20 | 1 | Gaussian joint-bilateral, radius 4 |
+| Ultra | Full | 48 | 2 | Gaussian joint-bilateral, radius 4 |
 
 High is the factory default and matches the current launch/reference state.
 Low uses Uniform Projected Angle; Medium, High, and Ultra use Uniform Solid
@@ -479,8 +479,8 @@ receive separate semantic layers rather than translated copies of one scalar
 texture. Dimension-specific toroidal temporal steps preserve each layer's
 spatial spectrum, and hashed cycle offsets prevent exact 64-frame repetition.
 It is spatiotemporal as a runtime sequence, but its eight 2D layers were not
-jointly optimized as one 3D space-time volume.
-This is the default scheduler.
+jointly optimized as one 3D space-time volume. It remains the first-party
+alternative to the factory preset's offline-computed scheduler.
 
 **Offline Spacetime Noise** uses a 64x64x32 scalar-uniform
 volume generated offline by Electronic Arts' FastNoise optimizer. Its fixed

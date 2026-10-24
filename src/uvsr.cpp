@@ -2335,37 +2335,76 @@ public:
         m_AntiAliasingPhase = 0u;
     }
 
-    void ApplySponzaCameraPreset(const SponzaCameraPreset& preset)
+    void ApplyCameraPose(
+        float3 position,
+        float3 direction,
+        float3 up,
+        float3 right,
+        float verticalFovDegrees)
     {
-        m_CameraVerticalFov = preset.VerticalFovDegrees;
+        m_CameraVerticalFov = verticalFovDegrees;
         const float zoomReferenceDistance =
             m_ThirdPersonCamera.GetReferenceZoomDistance();
         m_ThirdPersonCamera.ResetZoomReferenceDistance(zoomReferenceDistance);
         m_ThirdPersonCamera.SetExactPose(
-            preset.Position,
-            preset.Direction,
-            preset.Up,
-            preset.Right);
+            position,
+            direction,
+            up,
+            right);
         m_FirstPersonCamera.SetExactPose(
-            preset.Position,
-            preset.Direction,
-            preset.Up,
-            preset.Right);
+            position,
+            direction,
+            up,
+            right);
         m_PivotCamera.SetExactPose(
-            preset.Position,
-            preset.Direction,
-            preset.Up,
-            preset.Right);
+            position,
+            direction,
+            up,
+            right);
         m_StaticCamera.SetExactPose(
-            preset.Position,
-            preset.Direction,
-            preset.Up,
-            preset.Right);
+            position,
+            direction,
+            up,
+            right);
 
         m_PreviousView.reset();
         if (m_ScreenSpaceVisibilityPass)
             m_ScreenSpaceVisibilityPass->ResetHistory();
         ResetAntiAliasingState();
+    }
+
+    void ApplySponzaCameraPreset(const SponzaCameraPreset& preset)
+    {
+        ApplyCameraPose(
+            preset.Position,
+            preset.Direction,
+            preset.Up,
+            preset.Right,
+            preset.VerticalFovDegrees);
+    }
+
+    void ApplySceneInitialCamera(const SceneInitialCamera& preset)
+    {
+        const float3 position(
+            preset.Position[0],
+            preset.Position[1],
+            preset.Position[2]);
+        const float3 direction = normalize(float3(
+            preset.Direction[0],
+            preset.Direction[1],
+            preset.Direction[2]));
+        const float3 upHint = normalize(float3(
+            preset.Up[0],
+            preset.Up[1],
+            preset.Up[2]));
+        const float3 right = normalize(cross(direction, upHint));
+        const float3 up = normalize(cross(right, direction));
+        ApplyCameraPose(
+            position,
+            direction,
+            up,
+            right,
+            preset.VerticalFovDegrees);
     }
 
     void SetSponzaCameraLocation(SponzaCameraLocation location)
@@ -3386,8 +3425,17 @@ public:
         const SponzaCameraPreset* sponzaCamera = m_SponzaCameraLocationsAvailable
             ? FindSponzaCameraPreset(m_SponzaCameraLocation)
             : nullptr;
+        const SceneCatalogEntry* currentCatalogEntry =
+            FindSceneCatalogEntry(m_SceneCatalog, m_CurrentSceneName);
+        const SceneInitialCamera* sceneInitialCamera =
+            currentCatalogEntry && currentCatalogEntry->InitialCamera
+            ? &*currentCatalogEntry->InitialCamera
+            : nullptr;
         if (sponzaCamera)
             m_CameraVerticalFov = sponzaCamera->VerticalFovDegrees;
+        else if (sceneInitialCamera)
+            m_CameraVerticalFov =
+                sceneInitialCamera->VerticalFovDegrees;
 
         std::shared_ptr<SceneGraphNode> cameraTarget = m_Scene->GetSceneGraph()->GetRootNode();
         // Prefer the compact asteroid core when present so the initial view
@@ -3415,10 +3463,21 @@ public:
                 sponzaCamera->ReferenceHeight,
                 sponzaCamera->VerticalFovDegrees);
         }
+        else if (sceneInitialCamera)
+        {
+            ApplySceneInitialCamera(*sceneInitialCamera);
+            log::info(
+                "Applied descriptor initial camera to '%s' at %.3f, %.3f, %.3f and %.1f degrees vertical FOV",
+                m_CurrentSceneName.c_str(),
+                sceneInitialCamera->Position[0],
+                sceneInitialCamera->Position[1],
+                sceneInitialCamera->Position[2],
+                sceneInitialCamera->VerticalFovDegrees);
+        }
 
         m_ui.Camera = CameraMode::ThirdPerson;
 
-        if (!sponzaCamera)
+        if (!sponzaCamera && !sceneInitialCamera)
         {
             const float3 initialPosition = m_ThirdPersonCamera.GetPosition();
             const float3 initialDirection = m_ThirdPersonCamera.GetDir();
@@ -9600,10 +9659,11 @@ protected:
                     "and one GI bounce.",
                 "Factory default: full resolution, exact 20 samples, "
                     "Offline Packed Spacetime Noise, Default Precision "
-                    "buffers, and one GI bounce.",
+                    "buffers, Gaussian bilateral reconstruction, and one "
+                    "GI bounce.",
                 "Full resolution, exact 48 samples, Offline Packed "
-                    "Spacetime Noise, Default Precision buffers, and two "
-                    "GI bounces."
+                    "Spacetime Noise, Default Precision buffers, Gaussian "
+                    "bilateral reconstruction, and two GI bounces."
             };
             const bool qualityPresetSelected =
                 visibility.quality != ScreenSpaceVisibilityQuality::Custom;
@@ -12337,6 +12397,7 @@ protected:
                 }
             }
 
+#if UVSR_AA_DEVELOPER_OVERRIDES
             const auto drawStableInteriorControl = [&]()
                 {
                     MiniEngineTaaAlgorithmOverrides& algorithmOverrides =
@@ -12388,11 +12449,11 @@ protected:
                             MiniEngineTaaStableInteriorOverride::FromPreset;
                     }
                 };
+#endif
 
 #if !UVSR_AA_DEVELOPER_OVERRIDES
             if (longTermTemporalControlsAvailable)
             {
-                drawStableInteriorControl();
                 ImGui::Checkbox(
                     "Sharpness###Sharpness",
                     &m_ui.MiniEngineTaaSharpenEnabled);

@@ -1061,13 +1061,13 @@ namespace uvsr
                 GetMiniEngineTaaBlendPermutationIndex(options);
 #else
             const uint32_t algorithmIndex =
-                settings.implementation ==
-                        AntiAliasingPreset::TemporalBalanced
-                    ? 1u
-                    : settings.implementation ==
-                            AntiAliasingPreset::TemporalQuality
-                        ? 2u
-                        : 0u;
+                GetProductionMiniEngineTaaAlgorithmPermutationIndex(
+                    settings.implementation);
+            if (algorithmIndex >=
+                c_RuntimeAlgorithmPermutationCount)
+            {
+                return bypassMissingPermutation();
+            }
 #endif
             const uint32_t performanceIndex =
                 GetMiniEngineTaaStaticPerformanceIndex(

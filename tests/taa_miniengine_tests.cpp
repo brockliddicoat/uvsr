@@ -185,6 +185,61 @@ int main(int argc, char** argv)
     const uvsr::MiniEngineTaaOptions qualityOptions =
         uvsr::GetPresetTemporalOptions(
             Preset::TemporalQuality);
+    const uvsr::MiniEngineTaaOptions ultraOptions =
+        uvsr::GetPresetTemporalOptions(
+            Preset::TemporalUltra);
+    constexpr std::array<uint32_t, 4>
+        expectedProductionAlgorithmIndexes = {
+            0u, 1u, 2u, 2u
+        };
+    passed &= Check(
+        uvsr::ProductionMiniEngineTaaAlgorithmPermutationCount == 3u,
+        "production must cache exactly the three distinct shipping TAA algorithms");
+    for (uint32_t presetIndex = 0u;
+        presetIndex < expectedTemporal.size();
+        ++presetIndex)
+    {
+        const uint32_t algorithmIndex =
+            uvsr::GetProductionMiniEngineTaaAlgorithmPermutationIndex(
+                expectedTemporal[presetIndex]);
+        passed &= Check(
+            algorithmIndex ==
+                    expectedProductionAlgorithmIndexes[presetIndex] &&
+                algorithmIndex <
+                    uvsr::
+                        ProductionMiniEngineTaaAlgorithmPermutationCount,
+            "every shipping TAA preset must map to its intended production cache slot");
+    }
+    for (uint32_t left = 0u; left < expectedTemporal.size(); ++left)
+    {
+        for (uint32_t right = left + 1u;
+            right < expectedTemporal.size();
+            ++right)
+        {
+            const bool sharesCacheSlot =
+                uvsr::
+                    GetProductionMiniEngineTaaAlgorithmPermutationIndex(
+                        expectedTemporal[left]) ==
+                uvsr::
+                    GetProductionMiniEngineTaaAlgorithmPermutationIndex(
+                        expectedTemporal[right]);
+            const bool sharesShaderOptions =
+                uvsr::GetPresetTemporalOptions(
+                    expectedTemporal[left]) ==
+                uvsr::GetPresetTemporalOptions(
+                    expectedTemporal[right]);
+            passed &= Check(
+                sharesCacheSlot == sharesShaderOptions,
+                "production TAA presets may share cache slots only when their shader options are identical");
+        }
+    }
+    passed &= Check(
+        qualityOptions == ultraOptions &&
+            uvsr::GetProductionMiniEngineTaaAlgorithmPermutationIndex(
+                Preset::Off) ==
+                uvsr::
+                    ProductionMiniEngineTaaAlgorithmPermutationCount,
+        "Temporal High and Ultra must deliberately share shader options while invalid presets stay out of range");
     for (uint32_t presetIndex = 0u;
         presetIndex < static_cast<uint32_t>(Preset::Count);
         ++presetIndex)
@@ -229,6 +284,33 @@ int main(int argc, char** argv)
     uvsr::AntiAliasingSettings temporal;
     temporal.method = Method::TemporalSubpixelMorphological;
     temporal.quality = Quality::Medium;
+    uvsr::AntiAliasingSettings stableInteriorOverride = temporal;
+    stableInteriorOverride.algorithmOverrides.stableInterior =
+        uvsr::MiniEngineTaaStableInteriorOverride::On;
+    stableInteriorOverride.algorithmOverrides.historyFrames = 11;
+    stableInteriorOverride.algorithmOverrides.historyStrength = 0.75f;
+    const auto compiledStableInterior =
+        uvsr::GetCompiledAntiAliasingSettings(stableInteriorOverride);
+#if UVSR_AA_DEVELOPER_OVERRIDES
+    passed &= Check(
+        compiledStableInterior.algorithmOverrides.stableInterior ==
+                uvsr::MiniEngineTaaStableInteriorOverride::On &&
+            uvsr::ResolveCompiledAntiAliasingSettings(
+                stableInteriorOverride).temporal.interiorWeighting ==
+                uvsr::MiniEngineTaaInteriorWeighting::StableInterior,
+        "developer builds must preserve the compiled Stable Interior override");
+#else
+    passed &= Check(
+        compiledStableInterior.algorithmOverrides.stableInterior ==
+                uvsr::MiniEngineTaaStableInteriorOverride::FromPreset &&
+            compiledStableInterior.algorithmOverrides.historyFrames == 11 &&
+            compiledStableInterior.algorithmOverrides.historyStrength ==
+                0.75f &&
+            uvsr::ResolveCompiledAntiAliasingSettings(
+                stableInteriorOverride).temporal.interiorWeighting ==
+                uvsr::MiniEngineTaaInteriorWeighting::Off,
+        "production builds must discard uncompiled Stable Interior state while preserving shipping history controls");
+#endif
     uvsr::AntiAliasingSettings performanceChange = temporal;
     performanceChange.performanceOverrides.computeKernel =
         uvsr::MiniEngineTaaComputeKernel::Threads16x8OnePixel;

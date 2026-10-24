@@ -165,6 +165,45 @@ int main(int argc, char** argv)
             "taa_miniengine_blend_cs.hlsl") == 3u,
         "production must compile exactly the three long-term temporal preset bundles");
     passed &= Check(
+        CountOccurrences(config, "TAA_INTERIOR_WEIGHTING=0") == 3u &&
+            config.find("TAA_INTERIOR_WEIGHTING=1") == std::string::npos &&
+            config.find(
+                "TAA_MOTION_SOURCE=0 -D TAA_CURRENT_RECONSTRUCTION=0 -D TAA_INTERIOR_WEIGHTING=0 -D TAA_HISTORY_FILTER=1 -D TAA_RECTIFICATION=0") !=
+                std::string::npos &&
+            config.find(
+                "TAA_MOTION_SOURCE=2 -D TAA_CURRENT_RECONSTRUCTION=1 -D TAA_INTERIOR_WEIGHTING=0 -D TAA_HISTORY_FILTER=1 -D TAA_RECTIFICATION=2") !=
+                std::string::npos &&
+            config.find(
+                "TAA_MOTION_SOURCE=2 -D TAA_CURRENT_RECONSTRUCTION=1 -D TAA_INTERIOR_WEIGHTING=0 -D TAA_HISTORY_FILTER=2 -D TAA_RECTIFICATION=3") !=
+                std::string::npos,
+        "production TAA shader permutations must match the resolved Performance, Balanced, and Quality/Ultra presets");
+    passed &= Check(
+        CountOccurrences(
+            config,
+            "TAA_COMPUTE_KERNEL=0 -D TAA_LDS_LAYOUT=0 -D TAA_SHARED_WORK_REUSE={0,1} -D TAA_EARLY_HISTORY_REJECTION=0 -D TAA_FUSED_OUTPUT={0,1}") ==
+                3u &&
+            CountOccurrences(config, "TAA_COMPUTE_KERNEL=0") == 3u &&
+            CountOccurrences(config, "TAA_LDS_LAYOUT=0") == 3u &&
+            CountOccurrences(
+                config,
+                "TAA_SHARED_WORK_REUSE={0,1}") == 3u &&
+            CountOccurrences(
+                config,
+                "TAA_EARLY_HISTORY_REJECTION=0") == 3u &&
+            CountOccurrences(config, "TAA_FUSED_OUTPUT={0,1}") == 3u &&
+            config.find("TAA_COMPUTE_KERNEL=1") ==
+                std::string::npos &&
+            config.find("TAA_COMPUTE_KERNEL={") ==
+                std::string::npos &&
+            config.find("TAA_LDS_LAYOUT=1") == std::string::npos &&
+            config.find("TAA_LDS_LAYOUT=2") == std::string::npos &&
+            config.find("TAA_LDS_LAYOUT={") == std::string::npos &&
+            config.find("TAA_EARLY_HISTORY_REJECTION=1") ==
+                std::string::npos &&
+            config.find("TAA_EARLY_HISTORY_REJECTION={") ==
+                std::string::npos,
+        "production TAA bundles must keep baseline compute, LDS, and early-rejection topology while compiling both validated shared-reuse and fused-output states");
+    passed &= Check(
         CountOccurrences(config, "TAA_EXPORT_SELECTIVE=0") == 3u &&
             CountOccurrences(config, "TAA_SAMPLE_RESURRECTION=0") == 3u &&
             CountOccurrences(config, "TAA_DEVELOPER_DEBUG=0") == 3u &&

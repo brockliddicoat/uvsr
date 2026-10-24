@@ -3,11 +3,11 @@
 **Unified Visibility Stochastic Rendering**
 
 <!-- uvsr-codebase-size:start -->
-**First-Party Lines of Code:** 53,295 non-blank source lines.
+**First-Party Lines of Code:** 55,229 non-blank source lines.
 
 **Third-Party Lines of Code:** 387,622 non-blank source lines.
 
-**Total Lines of Code:** 440,917 non-blank source lines.
+**Total Lines of Code:** 442,851 non-blank source lines.
 
 Counts cover UVSR source, tests, tools, build scripts, retained pinned
 dependency source, and final first-party dependency overrides. Documentation,
@@ -16,10 +16,11 @@ with `tools/update_readme_line_counts.cmd --write`.
 <!-- uvsr-codebase-size:end -->
 
 UVSR is a DirectX 12 renderer built on NVIDIA's pinned Donut framework and its
-NVRHI graphics abstraction layer. It ships with two ready-to-run Intel PBR
-Sponza flat-roof scenes. The default **PBR Sponza Decorated** includes Intel's
-separately distributed curtains and ivy; **PBR Sponza Plain** uses the same
-architecture without either add-on.
+NVRHI graphics abstraction layer. It ships with four ready-to-run scenes:
+**Living Room**, **Sponza**, and two Intel PBR Sponza flat-roof variants. The
+default **PBR Sponza Decorated** includes Intel's separately distributed
+curtains and ivy; **PBR Sponza Plain** uses the same architecture without
+either add-on.
 
 ## Renderer Baseline
 
@@ -51,10 +52,10 @@ architecture without either add-on.
   or rectification.
   Production shows **Sharpness** only for the four long-term temporal
   qualities. Developer builds move it into default-open **Aliasing Algorithm
-  Configuration** without annotating inherited controls. Sharpness is disabled
-  by default for every quality. The separate developer performance section was
-  removed. **Stable Interior** appears immediately above **Sharpness** and is
-  off in every preset.
+  Configuration** without annotating inherited controls and place **Stable
+  Interior** immediately above it. Sharpness is disabled by default for every
+  quality, and every preset leaves Stable Interior off. The separate developer
+  performance section was removed.
   MiniEngine TAA owns the temporal history, validity, reset, bounds,
   motion/jitter, reverse-Z validation, and early-rejection infrastructure.
   The motion-test button runs the exact Benchmark Position 1 warm,
@@ -75,12 +76,13 @@ architecture without either add-on.
   [`docs/miniengine-taa-options.md`](docs/miniengine-taa-options.md).
 - Screen-space visibility traces AO/GI at selectable full, half, or quarter
   linear resolution. Visibility-owned temporal accumulation is not exposed;
-  renderer TAA owns temporal stability in the current build. The **Spatial
-  Reconstruction** section exposes an explicit **Unreconstructed Full
-  Resolution Input** choice, guide-aware upsampling for reduced-resolution data,
-  the two legacy joint-bilateral reconstruction methods, and the retained Intel
-  edge-guided methods. Full-resolution visibility can therefore composite
-  unfiltered current output without a spatial dispatch or filter target.
+  renderer TAA owns temporal stability in the current build. Factory High and
+  Ultra apply radius-4 Gaussian joint-bilateral reconstruction to stabilize
+  full-resolution AO/GI before TAA. The **Spatial Reconstruction** section also
+  exposes an explicit **Unreconstructed Full Resolution Input** custom choice,
+  guide-aware upsampling for reduced-resolution data, the two legacy
+  joint-bilateral reconstruction methods, and the retained Intel edge-guided
+  methods.
 - Screen-space visibility uses one exact compiled sample count shared by AO and
   every GI bounce. The factory default traces one stochastic slice with
   **20 Exact Samples** for every eligible pixel; the selectable counts are
@@ -199,11 +201,12 @@ architecture without either add-on.
   **Medium** uses Uniform Solid Angle, half resolution, the same 8 samples,
   and the same upsampler. Factory-default **High** uses full resolution and
   20 samples; **Ultra** uses full resolution, 48 samples, and two GI bounces.
-  High and Ultra use unreconstructed full-resolution input. Every preset uses
-  Offline Packed Spacetime Noise. Low and Medium select Performance Precision
-  buffers; High and Ultra select Default Precision buffers. Failed experiments,
-  diagnostic floors, and implementation-profile presets are not packaged or
-  selectable, while the retained controls remain independently editable.
+  High and Ultra use radius-4 Gaussian joint-bilateral reconstruction. Every
+  preset uses Offline Packed Spacetime Noise. Low and Medium select Performance
+  Precision buffers; High and Ultra select Default Precision buffers. Failed
+  experiments, diagnostic floors, and implementation-profile presets are not
+  packaged or selectable, while the retained controls remain independently
+  editable.
 - While a benchmark is queued, warming up, or collecting data, an independent
   top-right overlay remains visible even when the settings UI is hidden. It
   animates from `Benchmarking.` through `Benchmarking...` and reports collected
@@ -394,13 +397,17 @@ At startup, UVSR selects the D3D12-capable adapter with the most dedicated
 video memory. The **Graphics Adapter** selector lists every compatible GPU and
 restarts the renderer immediately on the selected adapter.
 
-Intel PBR Sponza is completely included in the repository and staged by CMake;
-there is no separate model download, conversion, or scene setup step. The
-default **PBR Sponza Decorated** scene composes the flat-roof architecture,
+All four runtime scenes are completely included in the repository and staged by
+CMake; there is no separate model download, conversion, or scene setup step.
+The default **PBR Sponza Decorated** scene composes the flat-roof architecture,
 curtains, and roof-trimmed ivy. **PBR Sponza Plain** loads only the same two
 architecture components. Every component remains below GitHub's 100 MB
-per-file limit. Attribution and the exact runtime edits are recorded in
+per-file limit. Intel Sponza attribution and exact runtime edits are recorded
+in
 [`assets/scenes/intel_sponza/README.md`](assets/scenes/intel_sponza/README.md).
+Downloaded-scene conversion decisions, hashes, attribution, and license
+restrictions are recorded in
+[`assets/scenes/DOWNLOADED_SCENES.md`](assets/scenes/DOWNLOADED_SCENES.md).
 
 Configure and build a Release executable from PowerShell:
 
@@ -517,14 +524,14 @@ environment variable; omitted descriptions default to `main`.
 The first configure may download Microsoft's Direct3D 12 Agility SDK if it is
 not already cached.
 
-Build and run the scene-catalog, experiment-title, camera-collision,
-camera-controls, Sponza-camera-preset, PBR, World-Material-view,
-radial-visibility, estimator, visibility-projection, visibility-sampling,
-visibility-performance-plan, and visibility-benchmark-statistics tests
-separately:
+Build and run the scene-catalog, scene-asset-contract, experiment-title,
+camera-collision, camera-controls, Sponza-camera-preset, PBR,
+World-Material-view, radial-visibility, estimator, visibility-projection,
+visibility-sampling, visibility-quality-preset, visibility-performance-plan,
+and visibility-benchmark-statistics tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_sponza_camera_tests uvsr_pbr_tests uvsr_world_material_view_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests uvsr_visibility_performance_plan_tests uvsr_visibility_benchmark_statistics_tests
+cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_scene_asset_contract_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_sponza_camera_tests uvsr_pbr_tests uvsr_world_material_view_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests uvsr_visibility_quality_preset_tests uvsr_visibility_performance_plan_tests uvsr_visibility_benchmark_statistics_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 

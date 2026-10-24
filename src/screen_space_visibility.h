@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lighting_contribution_shared.h"
+#include "visibility_quality_preset.h"
 #include "visibility_benchmark_statistics.h"
 #include "visibility_performance_plan.h"
 
@@ -48,15 +49,6 @@ namespace uvsr
         UVSR_LIGHTING_SOURCE_INDIRECT_SPECULAR;
     inline constexpr uint32_t LightingSource_All = UVSR_LIGHTING_SOURCE_ALL;
 
-    enum class ScreenSpaceVisibilityQuality : uint32_t
-    {
-        Low,
-        Medium,
-        High,
-        Ultra,
-        Custom
-    };
-
     enum class VisibilityEstimator : uint32_t
     {
         UniformProjectedAngle,
@@ -76,12 +68,6 @@ namespace uvsr
         IndependentHash,
         ToroidalBlueNoiseRankField,
         FilterAdaptedSpatiotemporalRankField
-    };
-
-    enum class VisibilitySpatialFilter : uint32_t
-    {
-        JointBilateral,
-        GaussianJointBilateral
     };
 
     enum class VisibilityScalarBufferPrecision : uint32_t

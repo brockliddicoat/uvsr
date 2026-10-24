@@ -1,0 +1,3 @@
+Files left out of this snapshot (build output, binaries, large or secret-looking):
+assets/scenes/living_room/components/living_room.glb  (19.5 MB)
+assets/scenes/sponza/components/sponza.glb  (66.7 MB)

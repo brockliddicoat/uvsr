@@ -431,10 +431,14 @@ namespace uvsr
         settings.indirectDiffuse.intensity = 4.0f;
         settings.reconstruction.temporalEnabled = false;
         settings.reconstruction.temporalResponse = 0.35f;
+        const VisibilityQualityReconstructionPreset reconstructionPreset =
+            GetVisibilityQualityReconstructionPreset(quality);
+        settings.reconstruction.spatialEnabled =
+            reconstructionPreset.spatialEnabled;
         settings.reconstruction.spatialFilter =
-            VisibilitySpatialFilter::GaussianJointBilateral;
-        settings.reconstruction.spatialRadius = 4.0f;
-        settings.reconstruction.spatialEnabled = false;
+            reconstructionPreset.spatialFilter;
+        settings.reconstruction.spatialRadius =
+            reconstructionPreset.spatialRadius;
         settings.showIndirectDiffuseOnly = false;
 
         VisibilityPerformanceProfile implementationProfile =
@@ -447,18 +451,12 @@ namespace uvsr
             settings.estimator =
                 VisibilityEstimator::UniformProjectedAngle;
             settings.sampling.maximumSampleCount = 8u;
-            settings.reconstruction.spatialEnabled = true;
-            settings.reconstruction.spatialFilter =
-                VisibilitySpatialFilter::JointBilateral;
             implementationProfile =
                 VisibilityPerformanceProfile::ExactFixed8;
             break;
         case ScreenSpaceVisibilityQuality::Medium:
             settings.resolution = VisibilityResolution::Half;
             settings.sampling.maximumSampleCount = 8u;
-            settings.reconstruction.spatialEnabled = true;
-            settings.reconstruction.spatialFilter =
-                VisibilitySpatialFilter::JointBilateral;
             implementationProfile =
                 VisibilityPerformanceProfile::ExactFixed8;
             break;

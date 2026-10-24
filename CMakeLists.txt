@@ -440,6 +440,18 @@ add_test(
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/noise/visibility_filter_adapted_gauss1_ema035_r8.bin"
 )
 
+add_executable(uvsr_visibility_quality_preset_tests
+    tests/visibility_quality_preset_tests.cpp
+)
+target_include_directories(
+    uvsr_visibility_quality_preset_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_visibility_quality_preset_reference
+    COMMAND uvsr_visibility_quality_preset_tests
+)
+
 add_executable(uvsr_visibility_performance_plan_tests
     tests/visibility_performance_plan_tests.cpp
     src/visibility_performance_plan.cpp
@@ -720,46 +732,70 @@ if (NOT UVSR_AA_DEVELOPER_OVERRIDES)
     )
 endif()
 
-set(UVSR_INTEL_SPONZA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/assets/scenes/intel_sponza")
-set(UVSR_INTEL_SPONZA_STAGING_DIR
-    "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/intel_sponza")
-file(GLOB_RECURSE UVSR_INTEL_SPONZA_RUNTIME_ASSETS
+set(UVSR_SCENE_SOURCE_DIR "${CMAKE_SOURCE_DIR}/assets/scenes")
+set(UVSR_SCENE_STAGING_DIR
+    "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models")
+file(GLOB_RECURSE UVSR_SCENE_RUNTIME_ASSETS
     CONFIGURE_DEPENDS
     LIST_DIRECTORIES false
-    "${UVSR_INTEL_SPONZA_SOURCE_DIR}/*"
+    "${UVSR_SCENE_SOURCE_DIR}/*"
 )
-list(SORT UVSR_INTEL_SPONZA_RUNTIME_ASSETS)
-string(JOIN "\n" UVSR_INTEL_SPONZA_ASSET_MANIFEST_CONTENT
-    ${UVSR_INTEL_SPONZA_RUNTIME_ASSETS})
-set(UVSR_INTEL_SPONZA_ASSET_MANIFEST
-    "${CMAKE_BINARY_DIR}/intel_sponza_runtime_assets.manifest")
+list(SORT UVSR_SCENE_RUNTIME_ASSETS)
+string(JOIN "\n" UVSR_SCENE_ASSET_MANIFEST_CONTENT
+    ${UVSR_SCENE_RUNTIME_ASSETS})
+set(UVSR_SCENE_ASSET_MANIFEST
+    "${CMAKE_BINARY_DIR}/scene_runtime_assets.manifest")
 file(GENERATE
-    OUTPUT "${UVSR_INTEL_SPONZA_ASSET_MANIFEST}"
-    CONTENT "${UVSR_INTEL_SPONZA_ASSET_MANIFEST_CONTENT}\n"
+    OUTPUT "${UVSR_SCENE_ASSET_MANIFEST}"
+    CONTENT "${UVSR_SCENE_ASSET_MANIFEST_CONTENT}\n"
 )
-set(UVSR_INTEL_SPONZA_STAGE_STAMP
-    "${UVSR_INTEL_SPONZA_STAGING_DIR}/.uvsr-stage.stamp")
+set(UVSR_SCENE_STAGE_STAMP
+    "${UVSR_SCENE_STAGING_DIR}/.uvsr-stage.stamp")
 add_custom_command(
-    OUTPUT "${UVSR_INTEL_SPONZA_STAGE_STAMP}"
+    OUTPUT "${UVSR_SCENE_STAGE_STAMP}"
     COMMAND ${CMAKE_COMMAND} -E remove_directory
-        "${UVSR_INTEL_SPONZA_STAGING_DIR}"
+        "${UVSR_SCENE_STAGING_DIR}"
     COMMAND ${CMAKE_COMMAND} -E make_directory
-        "${UVSR_INTEL_SPONZA_STAGING_DIR}"
+        "${UVSR_SCENE_STAGING_DIR}"
     COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${UVSR_INTEL_SPONZA_SOURCE_DIR}"
-        "${UVSR_INTEL_SPONZA_STAGING_DIR}"
+        "${UVSR_SCENE_SOURCE_DIR}"
+        "${UVSR_SCENE_STAGING_DIR}"
     COMMAND ${CMAKE_COMMAND} -E touch
-        "${UVSR_INTEL_SPONZA_STAGE_STAMP}"
+        "${UVSR_SCENE_STAGE_STAMP}"
     DEPENDS
-        ${UVSR_INTEL_SPONZA_RUNTIME_ASSETS}
-        "${UVSR_INTEL_SPONZA_ASSET_MANIFEST}"
-    COMMENT "Synchronizing Intel PBR Sponza runtime assets"
+        ${UVSR_SCENE_RUNTIME_ASSETS}
+        "${UVSR_SCENE_ASSET_MANIFEST}"
+    COMMENT "Synchronizing UVSR runtime scene assets"
     VERBATIM
 )
-add_custom_target(uvsr_stage_intel_sponza
-    DEPENDS "${UVSR_INTEL_SPONZA_STAGE_STAMP}"
+add_custom_target(uvsr_stage_scenes
+    DEPENDS "${UVSR_SCENE_STAGE_STAMP}"
 )
-add_dependencies(uvsr uvsr_stage_intel_sponza)
+add_dependencies(uvsr uvsr_stage_scenes)
+
+add_executable(uvsr_scene_asset_contract_tests
+    tests/scene_asset_contract_tests.cpp
+    src/scene_catalog.cpp
+)
+target_include_directories(
+    uvsr_scene_asset_contract_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(uvsr_scene_asset_contract_tests PRIVATE donut_core)
+add_dependencies(uvsr_scene_asset_contract_tests uvsr_stage_scenes)
+add_test(
+    NAME uvsr_scene_asset_contract
+    COMMAND uvsr_scene_asset_contract_tests
+        "${UVSR_SCENE_SOURCE_DIR}"
+        "${UVSR_SCENE_STAGING_DIR}"
+)
+add_test(
+    NAME uvsr_scene_asset_provenance
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_ROOT=${UVSR_SCENE_SOURCE_DIR}"
+        "-DSTAGING_ROOT=${UVSR_SCENE_STAGING_DIR}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/scene_asset_provenance.cmake"
+)
 
 if (WIN32)
     file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts/SegUIVar.ttf"
@@ -790,12 +826,6 @@ else()
 endif()
 
 add_custom_command(TARGET uvsr POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E remove_directory
-        "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/a_beautiful_game"
-    COMMAND ${CMAKE_COMMAND} -E remove_directory
-        "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/cornell_box"
-    COMMAND ${CMAKE_COMMAND} -E remove_directory
-        "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/nvidia_bistro"
     COMMAND ${CMAKE_COMMAND} -E remove_directory
         "${CMAKE_BINARY_DIR}/media/luts/kodak"
     COMMAND ${CMAKE_COMMAND} -E remove_directory

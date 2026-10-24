@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -12,6 +14,14 @@ namespace donut::vfs
 
 namespace uvsr
 {
+    struct SceneInitialCamera
+    {
+        std::array<float, 3> Position{};
+        std::array<float, 3> Direction{ 0.f, 0.f, -1.f };
+        std::array<float, 3> Up{ 0.f, 1.f, 0.f };
+        float VerticalFovDegrees = 60.f;
+    };
+
     struct SceneCatalogEntry
     {
         // FileName is the normalized native path passed to Donut's scene
@@ -20,6 +30,7 @@ namespace uvsr
         // ambiguous.
         std::string FileName;
         std::string DisplayName;
+        std::optional<SceneInitialCamera> InitialCamera;
     };
 
     std::string MakeSceneDisplayName(

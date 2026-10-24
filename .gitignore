@@ -1,4 +1,6 @@
 /build/
+/build-scenes/
+/build-scenes-aa/
 /.vs/
 *.user
 *.suo

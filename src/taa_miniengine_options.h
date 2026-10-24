@@ -512,6 +512,8 @@ namespace uvsr
         UVSR_AA_DEBUG_VIEW_COUNT;
     inline constexpr uint32_t MiniEngineTaaBlendPermutationCount =
         UVSR_TAA_BLEND_PERMUTATION_COUNT;
+    inline constexpr uint32_t
+        ProductionMiniEngineTaaAlgorithmPermutationCount = 3u;
 
     static_assert(
         MiniEngineTaaMotionSourceCount *
@@ -713,6 +715,28 @@ namespace uvsr
             break;
         }
         return result;
+    }
+
+    // Production packages retain one runtime cache slot per distinct shipping
+    // shader algorithm. Temporal High and Ultra intentionally share a slot
+    // because their shader options are identical; their history horizons are
+    // applied separately and do not affect shader compilation.
+    [[nodiscard]] inline constexpr uint32_t
+        GetProductionMiniEngineTaaAlgorithmPermutationIndex(
+            AntiAliasingPreset preset)
+    {
+        switch (preset)
+        {
+        case AntiAliasingPreset::TemporalPerformance:
+            return 0u;
+        case AntiAliasingPreset::TemporalBalanced:
+            return 1u;
+        case AntiAliasingPreset::TemporalQuality:
+        case AntiAliasingPreset::TemporalUltra:
+            return 2u;
+        default:
+            return ProductionMiniEngineTaaAlgorithmPermutationCount;
+        }
     }
 
     [[nodiscard]] inline constexpr bool IsTemporalHistoryFramesConfigurable(

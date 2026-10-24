@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -115,7 +116,9 @@ namespace
             return {};
         std::ostringstream contents;
         contents << input.rdbuf();
-        return contents.str();
+        std::string text = contents.str();
+        text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+        return text;
     }
 
     size_t CountOccurrences(
@@ -972,16 +975,39 @@ int main(int argc, char** argv)
     ExpectContains(
         aliasing,
         "\"Stable Interior\"",
-        "retained Stable Interior control");
+        "developer Stable Interior control");
+    if (CountOccurrences(
+            aliasing,
+            "drawStableInteriorControl();") != 1)
+    {
+        Fail(
+            "Stable Interior must have exactly one developer-only call site.");
+    }
+    const std::string_view productionAliasingControls = ExtractSection(
+        aliasing,
+        "#if !UVSR_AA_DEVELOPER_OVERRIDES",
+        "#endif",
+        "production Aliasing controls");
+    ExpectAbsent(
+        productionAliasingControls,
+        "drawStableInteriorControl();",
+        "production Stable Interior no-op");
     ExpectAbsent(
         aliasing,
         "\"Developer Performance Overrides\"",
         "removed Aliasing developer performance drawer");
-    ExpectOrdered(
-        aliasing,
-        "drawStableInteriorControl();",
-        "\"Sharpness###Sharpness\"",
-        "Stable Interior control order");
+    const size_t developerStableInterior =
+        aliasing.rfind("drawStableInteriorControl();");
+    const size_t developerSharpness =
+        aliasing.rfind("\"Sharpness###Sharpness\"");
+    if (developerStableInterior == std::string_view::npos ||
+        developerSharpness == std::string_view::npos ||
+        developerStableInterior >= developerSharpness)
+    {
+        Fail(
+            "developer Stable Interior must appear immediately before "
+            "Sharpness.");
+    }
     ExpectAbsent(
         aliasing,
         "(Preset)",

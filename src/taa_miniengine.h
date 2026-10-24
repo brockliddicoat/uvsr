@@ -131,9 +131,11 @@ namespace uvsr
         static constexpr uint32_t c_RuntimeAlgorithmPermutationCount =
             MiniEngineTaaBlendPermutationCount;
 #else
-        // Production packages contain only the four shipping temporal
-        // bundles. Developer packages retain the complete override matrix.
-        static constexpr uint32_t c_RuntimeAlgorithmPermutationCount = 4u;
+        // Production packages cache the three distinct shipping temporal
+        // algorithms. High and Ultra share shader options but keep separate
+        // history horizons. Developer packages retain the override matrix.
+        static constexpr uint32_t c_RuntimeAlgorithmPermutationCount =
+            ProductionMiniEngineTaaAlgorithmPermutationCount;
 #endif
         static constexpr uint32_t c_PerformancePermutationCount =
             c_RuntimeAlgorithmPermutationCount *

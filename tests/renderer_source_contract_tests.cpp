@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -12,7 +13,9 @@ namespace
         std::ifstream stream(path, std::ios::binary);
         std::ostringstream contents;
         contents << stream.rdbuf();
-        return contents.str();
+        std::string text = contents.str();
+        text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
+        return text;
     }
 
     std::string_view ExtractSection(
@@ -54,6 +57,25 @@ namespace
                   << forbidden << "'.\n";
         return false;
     }
+
+    bool ExpectOrdered(
+        std::string_view source,
+        std::string_view first,
+        std::string_view second,
+        const char* contract)
+    {
+        const size_t firstPosition = source.find(first);
+        const size_t secondPosition = source.find(second);
+        if (firstPosition != std::string_view::npos &&
+            secondPosition != std::string_view::npos &&
+            firstPosition < secondPosition)
+        {
+            return true;
+        }
+        std::cerr << "FAIL: " << contract << " must place '"
+                  << first << "' before '" << second << "'.\n";
+        return false;
+    }
 }
 
 int main(int argc, char** argv)
@@ -67,6 +89,8 @@ int main(int argc, char** argv)
     const std::filesystem::path root = argv[1];
     const std::string viewer = ReadFile(root / "src/uvsr.cpp");
     const std::string cmaa = ReadFile(root / "src/cmaa2.cpp");
+    const std::string visibility =
+        ReadFile(root / "src/screen_space_visibility.cpp");
     bool passed = true;
 
     const std::string_view refresh = ExtractSection(
@@ -115,6 +139,46 @@ int main(int argc, char** argv)
         cmaa,
         "RebuildBindingSet(sourceColor);",
         "CMAA2 source rebinding");
+
+    const std::string_view sceneLoaded = ExtractSection(
+        viewer,
+        "virtual void SceneLoaded() override",
+        "void SetWhiteWorldMode(WhiteWorldMode mode)");
+    passed &= ExpectOrdered(
+        sceneLoaded,
+        "sceneInitialCamera->VerticalFovDegrees;",
+        "PointThirdPersonCameraAt(",
+        "descriptor camera FOV framing");
+    passed &= ExpectOrdered(
+        sceneLoaded,
+        "PointThirdPersonCameraAt(",
+        "ApplySceneInitialCamera(*sceneInitialCamera);",
+        "descriptor camera pose application");
+
+    const std::string_view applyVisibilityQualityPreset = ExtractSection(
+        visibility,
+        "void ApplyScreenSpaceVisibilityQualityPreset(",
+        "bool MatchesScreenSpaceVisibilityQualityPreset(");
+    passed &= ExpectContains(
+        applyVisibilityQualityPreset,
+        "const VisibilityQualityReconstructionPreset reconstructionPreset =\n"
+        "            GetVisibilityQualityReconstructionPreset(quality);",
+        "visibility quality reconstruction recipe lookup");
+    passed &= ExpectContains(
+        applyVisibilityQualityPreset,
+        "settings.reconstruction.spatialEnabled =\n"
+        "            reconstructionPreset.spatialEnabled;",
+        "visibility quality spatial enable application");
+    passed &= ExpectContains(
+        applyVisibilityQualityPreset,
+        "settings.reconstruction.spatialFilter =\n"
+        "            reconstructionPreset.spatialFilter;",
+        "visibility quality spatial filter application");
+    passed &= ExpectContains(
+        applyVisibilityQualityPreset,
+        "settings.reconstruction.spatialRadius =\n"
+        "            reconstructionPreset.spatialRadius;",
+        "visibility quality spatial radius application");
 
     if (!passed)
         return 1;

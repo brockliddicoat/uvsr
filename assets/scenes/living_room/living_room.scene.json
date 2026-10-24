@@ -1,0 +1,18 @@
+{
+  "displayName": "Living Room",
+  "initialCamera": {
+    "position": [0.0, 1.65, 6.25],
+    "direction": [0.0, -0.079984, -0.996796],
+    "up": [0.0, 1.0, 0.0],
+    "verticalFovDegrees": 60.0
+  },
+  "models": [
+    "components/living_room.glb"
+  ],
+  "graph": [
+    {
+      "name": "Living Room",
+      "model": 0
+    }
+  ]
+}

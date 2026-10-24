@@ -1,0 +1,39 @@
+{
+  "converter": {
+    "name": "Blender",
+    "version": "5.1.2",
+    "script": "../../tools/import_downloaded_scene.py",
+    "objForwardAxis": "-Z",
+    "objUpAxis": "Y",
+    "gltfUpAxis": "Y",
+    "format": "GLB",
+    "embeddedTextures": true,
+    "dracoCompression": false
+  },
+  "scenes": [
+    {
+      "displayName": "Living Room",
+      "slug": "living_room",
+      "archiveSha256": "F14DAF4F566871E18C262A450DB9AE0285B7124E93E05B3A8BFBCBF674A21AEB",
+      "sourceObjSha256": "BE859F0081F7459DD1EEA891157CB3DB5C37A8A6506D9A03B0DDE46F9C780472",
+      "outputGlbSha256": "8817B37E56F99F165DC3BABA1A3FE98AED30CA07C991ECCC2C565DCF1D358673",
+      "outputBytes": 20398044,
+      "sourceTriangulatedTriangles": 580637,
+      "discardedDegenerateTriangles": 0,
+      "triangles": 580637,
+      "scale": 1.0
+    },
+    {
+      "displayName": "Sponza",
+      "slug": "sponza",
+      "archiveSha256": "DA005CBEE0BE2DF2ABC8513F3CEB61BCB6F69AAC112BABCD9C00169A27C2770C",
+      "sourceObjSha256": "DC9D77FA783772E92F47E67DDEF8344858FA14E224711B5DD7D39F7DB7042493",
+      "outputGlbSha256": "E63C996A8B73478D626CE6967184F320031A34D813383FCA26DD9EE7542028DA",
+      "outputBytes": 69939676,
+      "sourceTriangulatedTriangles": 262267,
+      "discardedDegenerateTriangles": 0,
+      "triangles": 262267,
+      "scale": 0.01
+    }
+  ]
+}
