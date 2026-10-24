@@ -31,8 +31,10 @@
 #include <donut/engine/View.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <utility>
+#include <vector>
 
 using namespace donut;
 using namespace donut::engine;
@@ -128,10 +130,8 @@ void PbrDeferredLightingPass::Init(const std::shared_ptr<ShaderFactory>& shaderF
 {
     auto samplerDesc = nvrhi::SamplerDesc()
         .setAllAddressModes(nvrhi::SamplerAddressMode::Border)
-        .setBorderColor(1.0f);
-    m_ShadowSampler = m_Device->createSampler(samplerDesc);
-
-    samplerDesc.setReductionType(nvrhi::SamplerReductionType::Comparison);
+        .setBorderColor(1.0f)
+        .setReductionType(nvrhi::SamplerReductionType::Comparison);
     m_ShadowSamplerComparison = m_Device->createSampler(samplerDesc);
 
     nvrhi::BufferDesc constantBufferDesc;
@@ -142,38 +142,48 @@ void PbrDeferredLightingPass::Init(const std::shared_ptr<ShaderFactory>& shaderF
     constantBufferDesc.maxVersions = c_MaxRenderPassConstantBufferVersions;
     m_DeferredLightingCB = m_Device->createBuffer(constantBufferDesc);
 
-    nvrhi::BindingLayoutDesc layoutDesc;
-    layoutDesc.visibility = nvrhi::ShaderType::Compute;
-    layoutDesc.bindings = {
-        nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
-        nvrhi::BindingLayoutItem::Texture_SRV(0),
-        nvrhi::BindingLayoutItem::Texture_SRV(1),
-        nvrhi::BindingLayoutItem::Texture_SRV(2),
-        nvrhi::BindingLayoutItem::Texture_SRV(3),
-        nvrhi::BindingLayoutItem::Texture_SRV(8),
-        nvrhi::BindingLayoutItem::Texture_SRV(9),
-        nvrhi::BindingLayoutItem::Texture_SRV(10),
-        nvrhi::BindingLayoutItem::Texture_SRV(11),
-        nvrhi::BindingLayoutItem::Texture_SRV(12),
-        nvrhi::BindingLayoutItem::Texture_SRV(14),
-        nvrhi::BindingLayoutItem::Texture_SRV(15),
-        nvrhi::BindingLayoutItem::Texture_SRV(16),
-        nvrhi::BindingLayoutItem::Texture_UAV(0),
-        nvrhi::BindingLayoutItem::Texture_UAV(1),
-        nvrhi::BindingLayoutItem::Sampler(0),
-        nvrhi::BindingLayoutItem::Sampler(1),
-        nvrhi::BindingLayoutItem::Sampler(2),
-        nvrhi::BindingLayoutItem::Sampler(3)
-    };
-    m_BindingLayout = m_Device->createBindingLayout(layoutDesc);
+    for (uint32_t variant = 0; variant < m_Pipelines.size(); ++variant)
+    {
+        const bool writeSourceRadiance = variant != 0u;
+        const bool writeBounceMetadata = variant == 2u;
+        Pipeline& pipeline = m_Pipelines[variant];
 
-    m_ComputeShader = shaderFactory->CreateShader(
-        "uvsr/pbr_deferred_lighting_cs.hlsl", "main", nullptr, nvrhi::ShaderType::Compute);
+        nvrhi::BindingLayoutDesc layoutDesc;
+        layoutDesc.visibility = nvrhi::ShaderType::Compute;
+        layoutDesc.bindings = {
+            nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
+            nvrhi::BindingLayoutItem::Texture_SRV(0),
+            nvrhi::BindingLayoutItem::Texture_SRV(8),
+            nvrhi::BindingLayoutItem::Texture_SRV(9),
+            nvrhi::BindingLayoutItem::Texture_SRV(10),
+            nvrhi::BindingLayoutItem::Texture_SRV(11),
+            nvrhi::BindingLayoutItem::Texture_SRV(12),
+            nvrhi::BindingLayoutItem::Texture_SRV(14),
+            nvrhi::BindingLayoutItem::Texture_SRV(15),
+            nvrhi::BindingLayoutItem::Texture_SRV(16),
+            nvrhi::BindingLayoutItem::Texture_UAV(0)
+        };
+        if (writeSourceRadiance)
+            layoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Texture_UAV(1));
+        layoutDesc.bindings.push_back(nvrhi::BindingLayoutItem::Sampler(1));
+        pipeline.bindingLayout = m_Device->createBindingLayout(layoutDesc);
 
-    nvrhi::ComputePipelineDesc pipelineDesc;
-    pipelineDesc.CS = m_ComputeShader;
-    pipelineDesc.bindingLayouts = { m_BindingLayout };
-    m_Pso = m_Device->createComputePipeline(pipelineDesc);
+        std::vector<ShaderMacro> macros;
+        macros.emplace_back(
+            "WRITE_SOURCE_RADIANCE", writeSourceRadiance ? "1" : "0");
+        macros.emplace_back(
+            "WRITE_BOUNCE_METADATA", writeBounceMetadata ? "1" : "0");
+        pipeline.shader = shaderFactory->CreateShader(
+            "uvsr/pbr_deferred_lighting_cs.hlsl",
+            "main",
+            &macros,
+            nvrhi::ShaderType::Compute);
+
+        nvrhi::ComputePipelineDesc pipelineDesc;
+        pipelineDesc.CS = pipeline.shader;
+        pipelineDesc.bindingLayouts = { pipeline.bindingLayout };
+        pipeline.pso = m_Device->createComputePipeline(pipelineDesc);
+    }
 }
 
 void PbrDeferredLightingPass::Render(
@@ -183,10 +193,12 @@ void PbrDeferredLightingPass::Render(
     nvrhi::ITexture* sourceRadianceOutput,
     bool separateIndirect,
     bool writeSourceRadiance,
+    bool writeBounceMetadata,
     bool includeEmissiveSource,
     float emissiveSourceGain,
     float2 randomOffset)
 {
+    assert(!writeBounceMetadata || writeSourceRadiance);
     if (!commandList ||
         !inputs.depth ||
         !inputs.gbufferNormals ||
@@ -217,7 +229,7 @@ void PbrDeferredLightingPass::Render(
     deferredConstants.ambientColorTop = float4(inputs.ambientColorTop, 0.f);
     deferredConstants.ambientColorBottom = float4(inputs.ambientColorBottom, 0.f);
     deferredConstants.indirectDiffuseScale = 1.f;
-    deferredConstants.indirectSpecularScale = 1.f;
+    deferredConstants.indirectSpecularScale = inputs.indirectSpecular ? 1.f : 0.f;
 
     nvrhi::ITexture* shadowMapTexture = nullptr;
     int numShadows = 0;
@@ -295,52 +307,14 @@ void PbrDeferredLightingPass::Render(
         }
     }
 
-    nvrhi::ITexture* lightProbeDiffuse = nullptr;
-    nvrhi::ITexture* lightProbeSpecular = nullptr;
-    nvrhi::ITexture* lightProbeEnvironmentBrdf = nullptr;
-    bool haveLightProbeTextureSet = false;
-
-    if (inputs.lightProbes)
-    {
-        for (const auto& probe : *inputs.lightProbes)
-        {
-            if (!probe->IsActive())
-                continue;
-
-            if (deferredConstants.numLightProbes >= DEFERRED_MAX_LIGHT_PROBES)
-            {
-                log::warning("Maximum number of active light probes (%d) exceeded in PbrDeferredLightingPass",
-                    DEFERRED_MAX_LIGHT_PROBES);
-                break;
-            }
-
-            if (!haveLightProbeTextureSet)
-            {
-                lightProbeDiffuse = probe->diffuseMap;
-                lightProbeSpecular = probe->specularMap;
-                lightProbeEnvironmentBrdf = probe->environmentBrdf;
-                haveLightProbeTextureSet = true;
-            }
-            else if (lightProbeDiffuse != probe->diffuseMap ||
-                lightProbeSpecular != probe->specularMap ||
-                lightProbeEnvironmentBrdf != probe->environmentBrdf)
-            {
-                log::error("All light probes submitted to PbrDeferredLightingPass must use the same texture set.");
-                commandList->endMarker();
-                return;
-            }
-
-            LightProbeConstants& lightProbeConstants =
-                deferredConstants.lightProbes[deferredConstants.numLightProbes];
-            probe->FillLightProbeConstants(lightProbeConstants);
-            ++deferredConstants.numLightProbes;
-        }
-    }
-
     for (uint viewIndex = 0;
         viewIndex < compositeView.GetNumChildViews(ViewType::PLANAR);
         ++viewIndex)
     {
+        const uint32_t pipelineIndex = writeBounceMetadata
+            ? 2u
+            : (writeSourceRadiance ? 1u : 0u);
+        const Pipeline& pipeline = m_Pipelines[pipelineIndex];
         const IView* view = compositeView.GetChildView(ViewType::PLANAR, viewIndex);
         const nvrhi::TextureSubresourceSet viewSubresources = view->GetSubresources();
 
@@ -349,12 +323,6 @@ void PbrDeferredLightingPass::Render(
             nvrhi::BindingSetItem::ConstantBuffer(0, m_DeferredLightingCB),
             nvrhi::BindingSetItem::Texture_SRV(0,
                 shadowMapTexture ? shadowMapTexture : m_CommonPasses->m_BlackDepthStencilTexture2DArray.Get()),
-            nvrhi::BindingSetItem::Texture_SRV(1,
-                lightProbeDiffuse ? lightProbeDiffuse : m_CommonPasses->m_BlackCubeMapArray.Get()),
-            nvrhi::BindingSetItem::Texture_SRV(2,
-                lightProbeSpecular ? lightProbeSpecular : m_CommonPasses->m_BlackCubeMapArray.Get()),
-            nvrhi::BindingSetItem::Texture_SRV(3,
-                lightProbeEnvironmentBrdf ? lightProbeEnvironmentBrdf : m_CommonPasses->m_BlackTexture.Get()),
             nvrhi::BindingSetItem::Texture_SRV(8, inputs.depth,
                 nvrhi::Format::UNKNOWN, viewSubresources),
             nvrhi::BindingSetItem::Texture_SRV(9, inputs.gbufferDiffuse,
@@ -375,23 +343,22 @@ void PbrDeferredLightingPass::Render(
                 inputs.shadowChannels ? inputs.shadowChannels : m_CommonPasses->m_BlackTexture.Get()),
             nvrhi::BindingSetItem::Texture_UAV(0, inputs.output,
                 nvrhi::Format::UNKNOWN, viewSubresources),
-            nvrhi::BindingSetItem::Texture_UAV(1,
-                sourceRadianceOutput ? sourceRadianceOutput : inputs.output,
-                nvrhi::Format::UNKNOWN, viewSubresources),
-            nvrhi::BindingSetItem::Sampler(0, m_ShadowSampler),
-            nvrhi::BindingSetItem::Sampler(1, m_ShadowSamplerComparison),
-            nvrhi::BindingSetItem::Sampler(2, m_CommonPasses->m_LinearWrapSampler),
-            nvrhi::BindingSetItem::Sampler(3, m_CommonPasses->m_LinearClampSampler)
+            nvrhi::BindingSetItem::Sampler(1, m_ShadowSamplerComparison)
         };
+        if (writeSourceRadiance)
+        {
+            bindingSetDesc.bindings.push_back(nvrhi::BindingSetItem::Texture_UAV(
+                1, sourceRadianceOutput, nvrhi::Format::UNKNOWN, viewSubresources));
+        }
 
         nvrhi::BindingSetHandle bindingSet =
-            m_BindingSets.GetOrCreateBindingSet(bindingSetDesc, m_BindingLayout);
+            m_BindingSets.GetOrCreateBindingSet(bindingSetDesc, pipeline.bindingLayout);
 
         view->FillPlanarViewConstants(deferredConstants.view);
         commandList->writeBuffer(m_DeferredLightingCB, &constants, sizeof(constants));
 
         nvrhi::ComputeState state;
-        state.pipeline = m_Pso;
+        state.pipeline = pipeline.pso;
         state.bindings = { bindingSet };
         commandList->setComputeState(state);
 

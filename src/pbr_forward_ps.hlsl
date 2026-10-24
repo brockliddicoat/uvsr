@@ -74,6 +74,8 @@ float EvaluateForwardVisibility(LightConstants light, float3 surfaceWorldPositio
 
     cascadeVisibility.x += (1.0f - cascadeVisibility.y) * light.outOfBoundsShadow;
     float visibility = cascadeVisibility.x;
+    if (!(visibility > 0.0f))
+        return 0.0f;
 
     [loop]
     for (int object = 0; object < 4; ++object)
@@ -88,6 +90,8 @@ float EvaluateForwardVisibility(LightConstants light, float3 surfaceWorldPositio
             surfaceWorldPosition,
             g_ForwardLight.shadowMapTextureSize);
         visibility *= saturate(objectVisibility.x + (1.0f - objectVisibility.y));
+        if (!(visibility > 0.0f))
+            break;
     }
 
     return saturate(visibility);
@@ -143,15 +147,39 @@ void main(
 
     float3 directDiffuse = 0.0f;
     float3 directSpecular = 0.0f;
-    [loop]
-    for (uint lightIndex = 0; lightIndex < g_ForwardLight.numLights; ++lightIndex)
+    if (g_ForwardLight.numLights > 0u)
     {
-        LightConstants light = g_ForwardLight.lights[lightIndex];
-        float visibility = EvaluateForwardVisibility(light, surfaceWorldPosition);
-        PbrLightSample lightSample = SamplePbrLight(light, surfaceWorldPosition, visibility);
-        PbrDirectLighting direct = EvaluateDirectLight(material, surface, lightSample);
-        directDiffuse += direct.diffuse;
-        directSpecular += direct.specular;
+        PbrPreparedSurface preparedSurface = PreparePbrSurface(surface);
+        PbrPreparedMaterial preparedMaterial = PreparePbrMaterial(material);
+        LightingContributionGate exactDirectGate = MakeLightingContributionGate(
+            0u, 0u, 0.0f, 1.0f);
+        [loop]
+        for (uint lightIndex = 0; lightIndex < g_ForwardLight.numLights; ++lightIndex)
+        {
+            LightConstants light = g_ForwardLight.lights[lightIndex];
+            PbrLightSample lightSample = SamplePbrLight(
+                light, surfaceWorldPosition, 1.0f);
+            uint lightRejection = LightingClassifyContribution(
+                exactDirectGate,
+                LightingSource_Direct,
+                lightSample.incidentRadiance,
+                1.0f);
+            if (!LightingShouldEvaluate(lightRejection))
+                continue;
+            lightRejection = ClassifyPbrDirectSurfacePrepared(
+                preparedSurface, lightSample.directionToLight);
+            if (!LightingShouldEvaluate(lightRejection))
+                continue;
+
+            float visibility = EvaluateForwardVisibility(light, surfaceWorldPosition);
+            if (!(visibility > 0.0f))
+                continue;
+            lightSample.visibility = visibility;
+            PbrDirectLighting direct = EvaluateDirectLightPrevalidated(
+                preparedMaterial, preparedSurface, lightSample);
+            directDiffuse += direct.diffuse;
+            directSpecular += direct.specular;
+        }
     }
 
     // Material occlusion is kept out of the BSDF and direct-light visibility.

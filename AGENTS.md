@@ -17,6 +17,24 @@
   `assets/scenes/nvidia_bistro/`, generated `build/` content, or `work/`
   artifacts.
 
+## GitHub freshness
+
+- Before starting every task or running task-specific build work, check the
+  online GitHub remote for the current branch and relevant base branch. Use
+  `git ls-remote` or an equivalent live remote query; do not rely only on
+  stale local tracking refs.
+- Compare the exact local and remote commits and classify the state as equal,
+  behind, ahead, or diverged. Inspect `git status` and uncommitted source and
+  build work before deciding whether an update is safe.
+- Update only when the remote is clearly newer and the worktree can be
+  advanced without losing local work; prefer a fast-forward-only update.
+- If local commits, uncommitted source, or build output appears ahead of
+  GitHub, do not pull, reset, checkout, rebase, or overwrite it. Preserve the
+  local state and report the exact local and remote refs.
+- If no upstream or matching remote branch exists, treat the work as
+  local-only rather than replacing it with another branch. Record that state
+  before beginning implementation.
+
 ## Change discipline
 
 - Inspect `git status` and the relevant diff before editing. Preserve unrelated
@@ -46,8 +64,9 @@
   output, screen-space indirect lighting, scene lighting, or other visible
   rendering behavior.
 - Keep the forward and deferred PBR paths on the shared UVSR material/lighting
-  contract. The PBR comparison toggle must retain the same camera, scene,
-  tonemapper, sky, and lights.
+  contract. The PBR comparison implementation is retained for possible future
+  experiments, but its production UI control is hidden. If restored, the
+  toggle must retain the same camera, scene, tonemapper, sky, and lights.
 - Preserve the display pipeline order: scene-linear HDR radiance, camera white
   balance, exposure in EV, AgX inset transform, logarithmic encoding, contrast
   tone scale, Base-space grade/LUT, output gamut conversion, display transfer,
@@ -73,9 +92,12 @@
   `cmake --build build --config Release --target uvsr`.
 - For PBR or rendering changes, also build `uvsr_pbr_tests` and run
   `ctest --test-dir build -C Release --output-on-failure`.
-- Launch `build/bin/uvsr.exe` and smoke-test after runtime, rendering, shader,
-  scene-loading, or UI changes. Exercise the relevant forward/deferred, PBR
-  on/off, and screen-space AO/GI combinations when they could be affected.
+- Launch through `tools/launch_uvsr.ps1 -Experiment "<specific test>"` and
+  smoke-test after runtime, rendering, shader, scene-loading, or UI changes.
+  Never launch the bare executable during agent work: every renderer taskbar
+  title must identify the experiment being run. Exercise the relevant
+  forward/deferred and screen-space AO/GI combinations when they could be
+  affected.
 - Documentation-only changes require link and diff validation, not a renderer
   rebuild.
 - Run `git diff --check` before committing.

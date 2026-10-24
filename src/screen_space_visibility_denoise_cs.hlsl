@@ -21,7 +21,6 @@ Texture2D<float4> t_IndirectDiffuse : register(t1);
 Texture2D<float> t_Depth : register(t2);
 Texture2D<float4> t_Normal : register(t3);
 Texture2D<float4> t_RawDebug : register(t4);
-Texture2D<float> t_HistoryValidity : register(t5);
 
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
@@ -36,41 +35,6 @@ bool ValidDepth(float depth)
         : depth >= 0.0f && depth < 1.0f;
 }
 
-uint2 RepresentativePixel(uint2 samplingPixel, out float depth)
-{
-    uint2 origin = samplingPixel * g_Visibility.resolutionScale;
-    uint2 maximum = uint2(g_Visibility.fullResolution) - 1u;
-    uint2 selected = min(origin, maximum);
-    depth = t_Depth[selected];
-    if (g_Visibility.resolutionScale == 1u)
-        return selected;
-    bool valid = ValidDepth(depth);
-
-    [loop]
-    for (uint y = 0u; y < g_Visibility.resolutionScale; ++y)
-    {
-        [loop]
-        for (uint x = 0u; x < g_Visibility.resolutionScale; ++x)
-        {
-            uint2 candidate = origin + uint2(x, y);
-            if (any(candidate >= uint2(g_Visibility.fullResolution)))
-                continue;
-            float candidateDepth = t_Depth[candidate];
-            if (!ValidDepth(candidateDepth))
-                continue;
-            bool closer = !valid || (g_Visibility.reverseDepth != 0u
-                ? candidateDepth > depth : candidateDepth < depth);
-            if (closer)
-            {
-                selected = candidate;
-                depth = candidateDepth;
-                valid = true;
-            }
-        }
-    }
-    return selected;
-}
-
 float3 SafeNormal(float3 value)
 {
     float lengthSquared = dot(value, value);
@@ -79,7 +43,7 @@ float3 SafeNormal(float3 value)
         : 0.0f;
 }
 
-bool ViewDepth(float2 pixelCenter, float deviceDepth, out float viewDepth)
+bool ViewDepth(float deviceDepth, out float viewDepth)
 {
     float4x4 projection = g_Visibility.view.matViewToClip;
     float denominator = deviceDepth * projection[2][3] - projection[2][2];
@@ -99,8 +63,8 @@ void main(uint2 pixel : SV_DispatchThreadID)
     if (any(pixel >= uint2(g_Visibility.samplingResolution)))
         return;
 
-    float centerDeviceDepth;
-    uint2 centerFullPixel = RepresentativePixel(pixel, centerDeviceDepth);
+    uint2 centerFullPixel = pixel;
+    float centerDeviceDepth = t_Depth[centerFullPixel];
     if (!ValidDepth(centerDeviceDepth))
     {
 #if ENABLE_AO
@@ -115,7 +79,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
     }
 
     float centerViewDepth;
-    if (!ViewDepth(float2(centerFullPixel) + 0.5f, centerDeviceDepth, centerViewDepth))
+    if (!ViewDepth(centerDeviceDepth, centerViewDepth))
         centerViewDepth = 0.0f;
     float3 centerNormal = SafeNormal(t_Normal[centerFullPixel].xyz);
 
@@ -150,14 +114,13 @@ void main(uint2 pixel : SV_DispatchThreadID)
             int2 neighbor = int2(pixel) + FilterDirections[directionIndex] * distance;
             if (any(neighbor < 0) || any(neighbor >= int2(g_Visibility.samplingResolution)))
                 continue;
-            float neighborDeviceDepth;
-            uint2 neighborFullPixel = RepresentativePixel(uint2(neighbor), neighborDeviceDepth);
+            uint2 neighborFullPixel = uint2(neighbor);
+            float neighborDeviceDepth = t_Depth[neighborFullPixel];
             if (!ValidDepth(neighborDeviceDepth))
                 continue;
 
             float neighborViewDepth;
-            if (!ViewDepth(float2(neighborFullPixel) + 0.5f,
-                neighborDeviceDepth, neighborViewDepth))
+            if (!ViewDepth(neighborDeviceDepth, neighborViewDepth))
             {
                 continue;
             }
@@ -190,16 +153,6 @@ void main(uint2 pixel : SV_DispatchThreadID)
         }
     }
 
-    float historyWeight = g_Visibility.temporalEnabled != 0u
-        ? t_HistoryValidity[pixel]
-        : 0.0f;
-    float3 debug = debugSum / weightSum;
-    if (g_Visibility.debugMode == 17u)
-        debug = historyWeight.xxx;
-    else if (g_Visibility.debugMode == 18u)
-        debug = lerp(float3(0.8f, 0.05f, 0.05f), float3(0.05f, 0.8f, 0.1f),
-            saturate(historyWeight));
-
 #if ENABLE_AO
     u_AmbientVisibility[pixel] = saturate(ambientSum / weightSum);
 #endif
@@ -208,5 +161,5 @@ void main(uint2 pixel : SV_DispatchThreadID)
         min(max(giSum / weightSum, 0.0f), 65504.0f), 1.0f);
 #endif
     if (traversalDebugActive)
-        u_Debug[pixel] = float4(max(debug, 0.0f), 1.0f);
+        u_Debug[pixel] = float4(max(debugSum / weightSum, 0.0f), 1.0f);
 }

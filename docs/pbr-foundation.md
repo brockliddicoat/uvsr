@@ -15,8 +15,9 @@ output gamut conversion, and display transfer happen afterward.
   alpha testing remains active; transmission/refraction is not part of the
   base BSDF.
 - Ambient occlusion is not part of the BSDF or direct lighting. Authored
-  material occlusion and screen-space ambient visibility modulate only
-  approximate indirect diffuse. Screen-space GI is added separately and is not
+  material occlusion modulates the approximate indirect fallback and
+  screen-space diffuse transport, while screen-space ambient visibility
+  modulates only the approximate sky fallback. Screen-space GI is not
   multiplied by ambient visibility. The converted Bistro ORM maps have no
   authored occlusion channel, so their zero-filled red channel is ignored.
 
@@ -63,7 +64,7 @@ G-buffer bandwidth is 25 bytes per pixel, excluding depth.
 | G1 | `RGBA8_UNORM` | Octahedral geometric normal in RG; IOR remapped from `[1,3]` in B; 8-bit feature mask in A |
 | G2 | `RGBA16_SNORM` | Linear shading normal in RGB; perceptual roughness in A |
 | G3 | `RGBA16_FLOAT` | Scene-linear emissive radiance in RGB; metalness in A |
-| G4 | `R8_UNORM` | Authored material ambient occlusion for approximate indirect diffuse only |
+| G4 | `R8_UNORM` | Authored material ambient occlusion for indirect-light fallback and diffuse transport |
 | G5 (conditional) | `RGBA16_FLOAT` | Previous-minus-current pixel motion in XY; previous-minus-current device-depth delta in Z; A unused |
 
 Base-color quantization follows ordinary sRGB8 material storage. Geometric
@@ -128,6 +129,36 @@ radiance. Point and spot lights use inverse-square attenuation with a minimum
 distance squared of `1e-4`; their authored range, when nonzero, supplies the
 only smooth range cutoff. Spot lights add their authored cone falloff.
 
+## Shared contribution-gate contract
+
+`src/lighting_contribution.hlsli` supplies a common early-out vocabulary to the
+forward, deferred, and screen-space lighting shaders. Its source-activity mask
+has independent direct, emissive, environment, indirect-diffuse, and
+indirect-specular bits. Systems may add a bit to `knownInactiveSources` only
+when they have proved that source class inactive for the current scope. A scope
+can be skipped only when every relevant source is known inactive, so unknown
+scene data remains conservatively active. `forceActiveSources` preserves debug
+and diagnostic consumers. The contract is intentionally open to later scene,
+material, light-cluster, visibility, residency, probe, and radiance-cache data.
+The shared bit definitions are compiled by C++, HLSL, and tests from
+`src/lighting_contribution_shared.h`; screen-space inputs already expose a CPU
+scene-activity mask, while unintegrated systems naturally leave their bits clear.
+
+Hard rejection reasons are local facts rather than global availability: zero or
+non-finite signal, below-threshold signal, a back-facing surface, zero
+visibility, an out-of-influence light, or a material with no contributing lobe.
+Any one can terminate the operation in which it was established, but cannot
+silence an unrelated source class. The nonzero adjustable threshold is currently
+used only for higher GI bounces; direct-light gates use an exact-zero cutoff.
+
+Forward and deferred direct-light loops reject zero/range/cone light samples and
+back-facing surface-light pairs before shadow evaluation and BSDF work. A fully
+occluded shadow result exits before remaining shadow consumers. Deferred shading
+also recognizes the cleared G-buffer normal as background before decoding the
+other material targets. These are exact exits and do not change production
+lighting. The direct-visibility debug view keeps the source activity it needs
+for inspection.
+
 ## Debug views and validation
 
 Deferred debug views do not add to the settings window. Use:
@@ -142,20 +173,22 @@ Deferred debug views do not add to the settings window. Use:
 - `F8`: direct-light visibility
 
 Visibility, GI-light-only, mask, slice, horizon, and history debug modes live in
-the **Screen-Space Indirect Lighting > Debug** section. See
+the **Visibility > Debug** section. See
 `docs/screen-space-visibility.md` for the complete list and value conventions.
 
 The values still pass through the display pipeline so they can be inspected on
-the current output device. Debug modes apply only to deferred PBR shading and
-are disabled when **Enable PBR** selects Donut's legacy comparison path.
-Forward and deferred production lighting both use the same shared BSDF.
+the current output device. Debug modes apply only to deferred PBR shading. The
+Donut legacy comparison path remains implemented for future experiments, but
+its **Enable PBR** control is not exposed in the production UI. Forward and
+deferred production lighting both use the same shared BSDF.
 
 `tests/pbr_reference_tests.cpp` validates defaults and invalid-value repair,
 roughness extremes, dielectric and metallic behavior, dark/bright base colors,
 IOR 1.0/1.33/1.5/2.0, directional and point lights, grazing Fresnel,
 geometric-normal rejection, no-light/emission-only behavior, visibility
-0/0.5/1, finite nonnegative output, and independence of direct lighting from
-ambient occlusion.
+0/0.5/1, finite nonnegative output, independence of direct lighting from
+ambient occlusion, source-mask composition, contribution-gate boundary cases,
+and the four-bounce frontier recurrence.
 
 ## Current limitations and performance-sensitive areas
 
@@ -176,9 +209,20 @@ ambient occlusion.
   write/read bandwidth per pixel. It prevents authored ambient occlusion from
   being conflated with direct shadow visibility or discarded.
 - Deferred direct lighting loops over at most Donut's existing 16 lights per
-  pixel. No clustered/tiled list was added.
-- Each direct-light evaluation normalizes directions and evaluates square
-  roots for correlated Smith-GGX. These are the main arithmetic hot spots.
+  pixel. No clustered/tiled list was added; exact contribution gates avoid
+  shadow and BSDF work for ineligible lights but do not replace enumeration.
+- Surface normals, view direction, diffuse color, specular F0, and roughness
+  alpha are prepared once per pixel and reused by all eligible lights. Per-light
+  direction/half-vector normalization and correlated Smith-GGX square roots
+  remain the main arithmetic hot spots after the exact gates.
+- Deferred lighting compiles a source-radiance-UAV specialization only when
+  screen-space GI consumes a potentially active source. Its UVSR PBR shader
+  does not enumerate or bind Donut probe inputs it does not evaluate.
+  Background pixels exit on the cleared normal sentinel before the remaining
+  G-buffer reads.
+- Debug-only composite paths return before unrelated material and fallback-light
+  work. Temporal rejection delays packed history-normal and neighborhood reads
+  until their cheaper activity, motion, bounds, and depth tests pass.
 
 ## Exact extension steps
 

@@ -15,6 +15,15 @@
 #ifndef ENABLE_TRAVERSAL_DEBUG
 #define ENABLE_TRAVERSAL_DEBUG 0
 #endif
+#ifndef ENABLE_BOUNCE_REINJECTION
+#define ENABLE_BOUNCE_REINJECTION 0
+#endif
+#ifndef INITIALIZE_BOUNCE_CUMULATIVE
+#define INITIALIZE_BOUNCE_CUMULATIVE 0
+#endif
+#ifndef ENABLE_BOUNCE_METADATA
+#define ENABLE_BOUNCE_METADATA 0
+#endif
 
 cbuffer c_Visibility : register(b0)
 {
@@ -23,13 +32,21 @@ cbuffer c_Visibility : register(b0)
 
 Texture2D<float> t_Depth : register(t0);
 Texture2D<float4> t_Normals : register(t1);
+#if ENABLE_BOUNCE_REINJECTION
+Texture2D<float4> t_PreviousBounceFrontier : register(t2);
+Texture2D<float> t_DepthHierarchy : register(t3);
+Texture2D<float4> t_GBufferDiffuse : register(t4);
+Texture2D<float4> t_Emissive : register(t5);
+Texture2D<float> t_MaterialAmbientOcclusion : register(t6);
+VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_BounceFrontier : register(u0);
+VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
+#else
 Texture2D<float4> t_SourceRadiance : register(t2);
-Texture2D<float4> t_Emissive : register(t3);
-Texture2D<float> t_DepthHierarchy : register(t4);
-Texture2D<float4> t_GBufferFeatures : register(t5);
+Texture2D<float> t_DepthHierarchy : register(t3);
 VK_IMAGE_FORMAT("r16f") RWTexture2D<float> u_AmbientVisibility : register(u0);
 VK_IMAGE_FORMAT("rgba16f") RWTexture2D<float4> u_IndirectDiffuse : register(u1);
 VK_IMAGE_FORMAT("rgba8") RWTexture2D<float4> u_Debug : register(u2);
+#endif
 
 static const float VisibilityPi = 3.14159265358979323846f;
 static const float VisibilityHalfPi = 1.57079632679489661923f;
@@ -169,46 +186,6 @@ bool ProjectViewPosition(float3 positionVS, out float2 pixelPosition)
     return all(isfinite(pixelPosition));
 }
 
-uint2 SelectRepresentativePixel(uint2 samplingPixel, out float representativeDepth)
-{
-    uint2 cellOrigin = samplingPixel * g_Visibility.resolutionScale;
-    uint2 fullMaximum = uint2(g_Visibility.fullResolution) - 1u;
-    uint2 selectedPixel = min(cellOrigin, fullMaximum);
-    representativeDepth = t_Depth[selectedPixel];
-    if (g_Visibility.resolutionScale == 1u)
-        return selectedPixel;
-    bool foundValid = IsValidDepth(representativeDepth);
-
-    [loop]
-    for (uint y = 0u; y < g_Visibility.resolutionScale; ++y)
-    {
-        [loop]
-        for (uint x = 0u; x < g_Visibility.resolutionScale; ++x)
-        {
-            uint2 candidatePixel = cellOrigin + uint2(x, y);
-            if (any(candidatePixel >= uint2(g_Visibility.fullResolution)))
-                continue;
-
-            float candidateDepth = t_Depth[candidatePixel];
-            if (!IsValidDepth(candidateDepth))
-                continue;
-
-            bool candidateIsCloser = !foundValid ||
-                (g_Visibility.reverseDepth != 0u
-                    ? candidateDepth > representativeDepth
-                    : candidateDepth < representativeDepth);
-            if (candidateIsCloser)
-            {
-                selectedPixel = candidatePixel;
-                representativeDepth = candidateDepth;
-                foundValid = true;
-            }
-        }
-    }
-
-    return selectedPixel;
-}
-
 VisibilityInterval BuildVisibilityInterval(
     float3 frontDelta,
     float3 frontDirection,
@@ -236,14 +213,26 @@ VisibilityInterval BuildVisibilityInterval(
 
 void WriteEmptyVisibilityOutput(uint2 pixel, bool traversalDebugActive)
 {
+#if ENABLE_BOUNCE_REINJECTION
+    float4 previousFrontier = t_PreviousBounceFrontier[pixel];
+    u_BounceFrontier[pixel] = 0.0f;
+#if INITIALIZE_BOUNCE_CUMULATIVE
+    // Bounce two initializes C2 from B1 even when this receiver cannot launch
+    // another path. Later bounces leave the existing cumulative value intact.
+    u_IndirectDiffuse[pixel] = previousFrontier;
+#endif
+#else
 #if ENABLE_AO
     u_AmbientVisibility[pixel] = 1.0f;
 #endif
 #if ENABLE_GI
     u_IndirectDiffuse[pixel] = 0.0f;
 #endif
+#if ENABLE_TRAVERSAL_DEBUG
     if (traversalDebugActive)
         u_Debug[pixel] = 0.0f;
+#endif
+#endif
 }
 
 [numthreads(8, 8, 1)]
@@ -252,11 +241,49 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     if (any(dispatchPixel >= uint2(g_Visibility.samplingResolution)))
         return;
 
-    float receiverDepth;
-    uint2 receiverPixel = SelectRepresentativePixel(dispatchPixel, receiverDepth);
+    uint2 receiverPixel = dispatchPixel;
+    float receiverDepth = t_Depth[receiverPixel];
     float2 receiverPixelCenter = float2(receiverPixel) + 0.5f;
 
     const bool traversalDebugActive = ENABLE_TRAVERSAL_DEBUG != 0;
+#if ENABLE_BOUNCE_REINJECTION
+    const bool forceBounceActivity =
+        g_Visibility.debugMode >= 3u && g_Visibility.debugMode <= 5u;
+    LightingContributionGate bounceContributionGate = MakeLightingContributionGate(
+        g_Visibility.knownInactiveLightingSources,
+        forceBounceActivity ? LightingSource_IndirectDiffuse : 0u,
+        g_Visibility.minimumBounceContribution,
+        g_Visibility.lightingExposureScale);
+    float bounceToFinalUpperBound = forceBounceActivity
+        ? 1.0f
+        : max(g_Visibility.indirectDiffuseIntensity, 0.0f) * UVSR_INV_PI;
+#else
+    const uint firstBounceSources =
+        LightingSource_Direct | LightingSource_Emissive;
+    LightingContributionGate firstBounceContributionGate =
+        MakeLightingContributionGate(
+            g_Visibility.knownInactiveLightingSources,
+            g_Visibility.debugMode != 0u ? firstBounceSources : 0u,
+            0.0f,
+            1.0f);
+#endif
+
+#if ENABLE_GI
+#if ENABLE_BOUNCE_REINJECTION
+    const bool giSourcePotential = LightingHasPotentialSource(
+        bounceContributionGate, LightingSource_IndirectDiffuse);
+#else
+    const bool giSourcePotential = LightingHasPotentialSource(
+        firstBounceContributionGate, firstBounceSources);
+#endif
+#if !ENABLE_AO
+    if (!giSourcePotential)
+    {
+        WriteEmptyVisibilityOutput(dispatchPixel, traversalDebugActive);
+        return;
+    }
+#endif
+#endif
 
     if (!IsValidDepth(receiverDepth) || !(g_Visibility.radiusWorld > VisibilityEpsilon))
     {
@@ -280,6 +307,21 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
         return;
     }
     receiverNormalVS = SafeNormalize(receiverNormalVS, float3(0.0f, 0.0f, -1.0f));
+
+#if ENABLE_BOUNCE_REINJECTION
+    // Source generation cached this exact, frame-local material fact in the
+    // frontier metadata. One existing frontier read now replaces three
+    // full-screen G-buffer reads at the front of every later bounce.
+    float4 previousReceiverFrontier =
+        t_PreviousBounceFrontier[receiverPixel];
+    uint receiverFrontierMetadata = (uint)round(
+        max(previousReceiverFrontier.a, 0.0f));
+    if ((receiverFrontierMetadata & PbrGiMetadata_DiffuseActive) == 0u)
+    {
+        WriteEmptyVisibilityOutput(dispatchPixel, traversalDebugActive);
+        return;
+    }
+#endif
 
     float3 viewDirection;
     if (g_Visibility.orthographicProjection != 0u)
@@ -416,9 +458,12 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 (float(stepIndex) + jitter) * inverseStepsOnSide,
                 0.5f * inverseStepsOnSide);
             float distributedStep = saturate(normalizedStep);
-            distributedStep = abs(g_Visibility.stepDistributionExponent - 2.0f) < 1e-4f
-                ? distributedStep * distributedStep
-                : pow(distributedStep, g_Visibility.stepDistributionExponent);
+            if (abs(g_Visibility.stepDistributionExponent - 1.0f) >= 1e-4f)
+            {
+                distributedStep = abs(g_Visibility.stepDistributionExponent - 2.0f) < 1e-4f
+                    ? distributedStep * distributedStep
+                    : pow(distributedStep, g_Visibility.stepDistributionExponent);
+            }
             [unroll]
             for (uint sideIndex = 0u; sideIndex < 2u; ++sideIndex)
             {
@@ -548,10 +593,63 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 if (!(receiverCosine > 0.0f))
                     continue;
 
+#if ENABLE_BOUNCE_REINJECTION
+                // Only the newest transport frontier is eligible for another
+                // bounce. Reject its conservative final-image upper bound
+                // before fetching material textures; the sum of angular-sector
+                // weights is at most one, so all rejected source pieces remain
+                // bounded by the configured cutoff at this receiver.
+                uint2 previousSamplingPixel = samplePixel;
+                float4 previousFrontierSample =
+                    t_PreviousBounceFrontier[previousSamplingPixel];
+                float3 previousFrontier = max(previousFrontierSample.rgb, 0.0f);
+                uint sourceRejection = LightingClassifyContribution(
+                    bounceContributionGate,
+                    LightingSource_IndirectDiffuse,
+                    previousFrontier,
+                    bounceToFinalUpperBound);
+                if (!LightingShouldEvaluate(sourceRejection))
+                    continue;
+
+                float3 sourceBaseColor = max(
+                    t_GBufferDiffuse[samplePixel].rgb, 0.0f);
+                float sourceMetalness = saturate(t_Emissive[samplePixel].a);
+                float sourceMaterialAo = saturate(
+                    t_MaterialAmbientOcclusion[samplePixel]);
+                float3 sourceDiffuseReflectance = sourceBaseColor *
+                    (1.0f - sourceMetalness);
+                float3 transportedFrontier = previousFrontier *
+                    sourceDiffuseReflectance * sourceMaterialAo;
+                sourceRejection = LightingClassifyContribution(
+                    bounceContributionGate,
+                    LightingSource_IndirectDiffuse,
+                    transportedFrontier,
+                    bounceToFinalUpperBound);
+                if (!LightingShouldEvaluate(sourceRejection))
+                    continue;
+
+                float3 sourceRadiance = transportedFrontier * UVSR_INV_PI;
+                uint sourceFrontierMetadata = (uint)round(
+                    max(previousFrontierSample.a, 0.0f));
+                bool sourceIsDoubleSided =
+                    (sourceFrontierMetadata &
+                        PbrGiMetadata_SurfaceDoubleSided) != 0u;
+#else
+                if (!giSourcePotential)
+                    continue;
                 float4 sourceSample = t_SourceRadiance[samplePixel];
                 float3 sourceRadiance = max(sourceSample.rgb, 0.0f);
-                if (!IsFiniteFloat3(sourceRadiance) || !any(sourceRadiance > 0.0f))
+                // First-bounce thresholding is intentionally exact-only. The
+                // uniform source gate above already handled scene activity, so
+                // avoid the general threshold classifier in this hot loop.
+                if (!IsFiniteFloat3(sourceRadiance) ||
+                    !any(sourceRadiance > 0.0f))
                     continue;
+                uint sourceMetadata = (uint)round(max(sourceSample.a, 0.0f));
+                bool sourceIsDoubleSided =
+                    (sourceMetadata &
+                        PbrGiMetadata_OutgoingDoubleSided) != 0u;
+#endif
 
                 float3 sampleNormalWS = t_Normals[samplePixel].xyz;
                 float3 sampleNormalVS = mul(float4(sampleNormalWS, 0.0f),
@@ -560,7 +658,7 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
                 if (traversalDebugActive)
                     debugSourceNormal = sampleNormalVS;
                 float signedSourceCosine = dot(sampleNormalVS, -directionToSample);
-                float sourceCosine = sourceSample.a > 0.5f
+                float sourceCosine = sourceIsDoubleSided
                     ? abs(signedSourceCosine)
                     : saturate(signedSourceCosine);
                 float3 weightedSource = sourceRadiance * sourceCosine;
@@ -638,8 +736,38 @@ void main(uint2 dispatchPixel : SV_DispatchThreadID)
     u_AmbientVisibility[dispatchPixel] = ambientVisibility;
 #endif
 #if ENABLE_GI
-    u_IndirectDiffuse[dispatchPixel] = float4(min(indirectDiffuse, 65504.0f), 1.0f);
+#if ENABLE_BOUNCE_REINJECTION
+    float frontierMetadataValue = previousReceiverFrontier.a;
+    u_BounceFrontier[dispatchPixel] = float4(
+        min(indirectDiffuse, 65504.0f), frontierMetadataValue);
+#if INITIALIZE_BOUNCE_CUMULATIVE
+    float3 cumulativeIndirectDiffuse = max(
+        previousReceiverFrontier.rgb, 0.0f) + indirectDiffuse;
+    u_IndirectDiffuse[dispatchPixel] = float4(
+        min(cumulativeIndirectDiffuse, 65504.0f), frontierMetadataValue);
+#else
+    float4 cumulativeSample = u_IndirectDiffuse[dispatchPixel];
+    float3 cumulativeIndirectDiffuse = max(cumulativeSample.rgb, 0.0f) +
+        indirectDiffuse;
+    u_IndirectDiffuse[dispatchPixel] = float4(
+        min(cumulativeIndirectDiffuse, 65504.0f), cumulativeSample.a);
 #endif
+#else
+    float receiverFrontierMetadataValue = 0.0f;
+#if ENABLE_BOUNCE_METADATA
+    uint receiverSourceMetadata = (uint)round(max(
+        t_SourceRadiance[receiverPixel].a, 0.0f));
+    uint receiverFrontierMetadata = receiverSourceMetadata &
+        (PbrGiMetadata_SurfaceDoubleSided |
+            PbrGiMetadata_DiffuseActive);
+    receiverFrontierMetadataValue = float(receiverFrontierMetadata);
+#endif
+    u_IndirectDiffuse[dispatchPixel] = float4(
+        min(indirectDiffuse, 65504.0f), receiverFrontierMetadataValue);
+#endif
+#endif
+#if ENABLE_TRAVERSAL_DEBUG
     if (traversalDebugActive)
         u_Debug[dispatchPixel] = float4(saturate(debugValue), 1.0f);
+#endif
 }

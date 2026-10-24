@@ -40,14 +40,55 @@ void main(uint2 pixel : SV_DispatchThreadID)
     if (any(pixel >= uint2(g_Visibility.fullResolution)))
         return;
 
-    uint2 samplingPixel = min(pixel / g_Visibility.resolutionScale,
-        uint2(g_Visibility.samplingResolution) - 1u);
-    float rawAmbientVisibility = g_Visibility.debugMode == 1u
-        ? saturate(t_RawAmbientVisibility[samplingPixel]) : 1.0f;
+    uint2 samplingPixel = pixel;
+    if (g_Visibility.debugMode != 0u)
+    {
+        float3 debugColor = 0.0f;
+        if (g_Visibility.debugMode == 1u)
+            debugColor = (g_Visibility.enableAmbientOcclusion != 0u
+                ? saturate(t_RawAmbientVisibility[samplingPixel]) : 1.0f).xxx;
+        else if (g_Visibility.debugMode == 2u)
+            debugColor = (g_Visibility.enableAmbientOcclusion != 0u
+                ? saturate(t_FilteredAmbientVisibility[pixel]) : 1.0f).xxx;
+        else if (g_Visibility.debugMode == 3u)
+            debugColor = g_Visibility.enableIndirectDiffuse != 0u
+                ? max(t_RawIndirectDiffuse[samplingPixel].rgb, 0.0f)
+                : 0.0f;
+        else if (g_Visibility.debugMode == 4u)
+            debugColor = g_Visibility.enableIndirectDiffuse != 0u
+                ? max(t_FilteredIndirectDiffuse[pixel].rgb, 0.0f) : 0.0f;
+        else if (g_Visibility.debugMode == 5u)
+            debugColor = g_Visibility.enableIndirectDiffuse != 0u
+                ? max(t_FilteredIndirectDiffuse[pixel].rgb, 0.0f) *
+                    g_Visibility.indirectDiffuseIntensity
+                : 0.0f;
+        else if (g_Visibility.debugMode == 6u)
+            debugColor = max(t_DirectRadianceSource[pixel].rgb, 0.0f);
+        else if (g_Visibility.debugMode == 17u ||
+            g_Visibility.debugMode == 18u)
+        {
+            float historyWeight = g_Visibility.temporalEnabled != 0u
+                ? t_HistoryValidity[samplingPixel]
+                : 0.0f;
+            debugColor = g_Visibility.debugMode == 17u
+                ? historyWeight.xxx
+                : lerp(
+                    float3(0.8f, 0.05f, 0.05f),
+                    float3(0.05f, 0.8f, 0.1f),
+                    saturate(historyWeight));
+        }
+        else if (g_Visibility.debugMode >= 7u)
+            debugColor = t_FilteredDebug[pixel].rgb;
+
+        if (any(!isfinite(debugColor)))
+            debugColor = 0.0f;
+        u_Output[pixel] = float4(
+            min(max(debugColor, 0.0f), 65504.0f), 0.0f);
+        return;
+    }
+
     float filteredAmbientVisibility = g_Visibility.enableAmbientOcclusion != 0u
         ? saturate(t_FilteredAmbientVisibility[pixel]) : 1.0f;
-    float3 rawIndirectDiffuse = g_Visibility.debugMode == 3u
-        ? max(t_RawIndirectDiffuse[samplingPixel].rgb, 0.0f) : 0.0f;
     float3 filteredIndirectDiffuse = g_Visibility.enableIndirectDiffuse != 0u
         ? max(t_FilteredIndirectDiffuse[pixel].rgb, 0.0f) : 0.0f;
 
@@ -103,40 +144,5 @@ void main(uint2 pixel : SV_DispatchThreadID)
         finalComposite = 0.0f;
     finalComposite = max(finalComposite, 0.0f);
 
-    float3 outputColor = finalComposite;
-    if (g_Visibility.debugMode == 1u)
-        outputColor = rawAmbientVisibility.xxx;
-    else if (g_Visibility.debugMode == 2u)
-        outputColor = filteredAmbientVisibility.xxx;
-    else if (g_Visibility.debugMode == 3u)
-        outputColor = rawIndirectDiffuse;
-    else if (g_Visibility.debugMode == 4u)
-        outputColor = filteredIndirectDiffuse;
-    else if (g_Visibility.debugMode == 5u)
-        outputColor = filteredIndirectDiffuse * g_Visibility.indirectDiffuseIntensity;
-    else if (g_Visibility.debugMode == 6u)
-        outputColor = max(t_DirectRadianceSource[pixel].rgb, 0.0f);
-    else if (g_Visibility.debugMode == 17u)
-    {
-        float historyWeight = g_Visibility.temporalEnabled != 0u
-            ? t_HistoryValidity[samplingPixel]
-            : 0.0f;
-        outputColor = historyWeight.xxx;
-    }
-    else if (g_Visibility.debugMode == 18u)
-    {
-        float historyWeight = g_Visibility.temporalEnabled != 0u
-            ? t_HistoryValidity[samplingPixel]
-            : 0.0f;
-        outputColor = lerp(
-            float3(0.8f, 0.05f, 0.05f),
-            float3(0.05f, 0.8f, 0.1f),
-            saturate(historyWeight));
-    }
-    else if (g_Visibility.debugMode >= 7u)
-        outputColor = t_FilteredDebug[pixel].rgb;
-
-    if (any(!isfinite(outputColor)))
-        outputColor = 0.0f;
-    u_Output[pixel] = float4(min(max(outputColor, 0.0f), 65504.0f), 0.0f);
+    u_Output[pixel] = float4(min(finalComposite, 65504.0f), 0.0f);
 }

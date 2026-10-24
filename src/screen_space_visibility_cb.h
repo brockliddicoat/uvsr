@@ -29,8 +29,8 @@ struct ScreenSpaceVisibilityConstants
     float normalRejection;
 
     float emissiveGain;
-    float paddingSampling0;
-    float paddingSampling1;
+    float minimumBounceContribution;
+    float lightingExposureScale;
     float paddingSampling2;
 
     float3 ambientColorTop;
@@ -41,7 +41,7 @@ struct ScreenSpaceVisibilityConstants
     uint frameIndex;
     uint sliceCount;
     uint sampleCount;
-    uint resolutionScale;
+    uint knownInactiveLightingSources;
 
     uint enableAmbientOcclusion;
     uint enableIndirectDiffuse;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lighting_contribution_shared.h"
+
 #include <donut/core/math/math.h>
 #include <nvrhi/nvrhi.h>
 
@@ -16,6 +18,22 @@ namespace donut::engine
 
 namespace uvsr
 {
+    inline constexpr uint32_t MaxIndirectDiffuseBounceCount = 4;
+    // Kept bit-identical to lighting_contribution.hlsli so CPU scene systems
+    // can feed conservative source-availability facts into the shared shader
+    // gate. Unknown sources are represented by a clear bit and stay active.
+    inline constexpr uint32_t LightingSource_Direct =
+        UVSR_LIGHTING_SOURCE_DIRECT;
+    inline constexpr uint32_t LightingSource_Emissive =
+        UVSR_LIGHTING_SOURCE_EMISSIVE;
+    inline constexpr uint32_t LightingSource_Environment =
+        UVSR_LIGHTING_SOURCE_ENVIRONMENT;
+    inline constexpr uint32_t LightingSource_IndirectDiffuse =
+        UVSR_LIGHTING_SOURCE_INDIRECT_DIFFUSE;
+    inline constexpr uint32_t LightingSource_IndirectSpecular =
+        UVSR_LIGHTING_SOURCE_INDIRECT_SPECULAR;
+    inline constexpr uint32_t LightingSource_All = UVSR_LIGHTING_SOURCE_ALL;
+
     enum class ScreenSpaceVisibilityQuality : uint32_t
     {
         Low,
@@ -57,9 +75,10 @@ namespace uvsr
 
     struct SharedSamplingSettings
     {
-        // Total stochastic depth fetches per pixel. Samples are divided between
-        // the two ordered horizon directions, with the odd sample alternating
-        // sides across the spatiotemporal phase sequence.
+        // First-bounce stochastic depth fetches per pixel. Samples are divided
+        // between the two ordered horizon directions, with the odd sample
+        // alternating sides across the spatiotemporal phase sequence. Later
+        // GI bounces progressively reduce this budget toward eight samples.
         uint32_t sampleCount = 32;
         float radius = 3.0f;
         float thickness = 0.5f;
@@ -86,6 +105,16 @@ namespace uvsr
     struct IndirectDiffuseSettings
     {
         bool enabled = true;
+        // One bounce preserves the original screen-space GI behavior. Extra
+        // bounces repeat the finite current-frame transport solve with a
+        // progressive sample budget; keep the product limit small because
+        // every bounce still incurs a full-resolution traversal dispatch.
+        uint32_t bounceCount = 1;
+        // Maximum exposed scene-linear radiance that all analytically rejected
+        // pieces of a higher-order bounce may add before tone mapping. Zero
+        // keeps exact-zero exits only. The gate accounts for GI Intensity and
+        // uses conservative unit bounds for receiver reflectance/material AO.
+        float minimumBounceContribution = 0.001f;
         float intensity = 4.0f;
         bool includeEmissive = true;
         float emissiveGain = 4.0f;
@@ -141,6 +170,9 @@ namespace uvsr
         nvrhi::ITexture* materialAmbientOcclusion = nullptr;
         nvrhi::ITexture* baseLighting = nullptr;
         nvrhi::ITexture* output = nullptr;
+        // Scene, clustering, residency, or future lighting systems may mark a
+        // source class inactive only when absence is proven for this frame.
+        uint32_t knownInactiveLightingSources = 0u;
     };
 
     struct ScreenSpaceVisibilityTimings
@@ -172,6 +204,7 @@ namespace uvsr
             const ScreenSpaceVisibilityInputs& inputs,
             dm::float3 ambientColorTop,
             dm::float3 ambientColorBottom,
+            float exposureScale,
             uint32_t frameIndex);
 
         void ResetHistory();
@@ -208,6 +241,15 @@ namespace uvsr
         // AO, GI and traversal-debug specialization prevents the full sampling
         // kernel from carrying every consumer's registers and texture traffic.
         std::array<Pipeline, 8> m_Sampling;
+        // The packed receiver metadata needed by a later bounce has its own GI
+        // specialization. One-bounce rendering therefore avoids even the
+        // receiver source-alpha read and metadata output arithmetic.
+        std::array<Pipeline, 2> m_MultiBounceFirstSampling;
+        // Later bounces use GI-only specializations. Bounce two initializes the
+        // cumulative target; bounces three and four add to it in place. Keeping
+        // both variants out of m_Sampling preserves the original one-bounce
+        // register and SRV footprint.
+        std::array<Pipeline, 2> m_IndirectBounceSampling;
         Pipeline m_DepthHierarchy;
         std::array<Pipeline, 4> m_Temporal;
         std::array<Pipeline, 4> m_Denoise;
@@ -215,12 +257,17 @@ namespace uvsr
 
         dm::uint2 m_FullSize = dm::uint2::zero();
         dm::uint2 m_SamplingSize = dm::uint2::zero();
-        uint32_t m_ResolutionScale = 0;
         bool m_TemporalResourcesEnabled = false;
+        bool m_MultipleBounceResourcesEnabled = false;
+        bool m_DepthHierarchyResourcesEnabled = false;
 
         nvrhi::TextureHandle m_RawAmbientVisibility;
         nvrhi::TextureHandle m_DepthHierarchyTexture;
-        nvrhi::TextureHandle m_RawIndirectDiffuse;
+        // Higher-order transport uses an incremental frontier B(n)=T(B(n-1))
+        // in two ping-pong textures and accumulates C(n)=C(n-1)+B(n) in a third
+        // UAV. The extra two allocations exist only for multiple bounces.
+        nvrhi::TextureHandle m_RawIndirectDiffuse[2];
+        nvrhi::TextureHandle m_CumulativeIndirectDiffuse;
         nvrhi::TextureHandle m_RawDebug;
         nvrhi::TextureHandle m_HistoryAmbientVisibility[2];
         nvrhi::TextureHandle m_HistoryIndirectDiffuse[2];
@@ -232,6 +279,21 @@ namespace uvsr
         nvrhi::TextureHandle m_DenoisedDebug;
         nvrhi::TextureHandle m_OutputAmbientVisibility;
         nvrhi::TextureHandle m_OutputIndirectDiffuse;
+
+        // Sampling resources are stable for the lifetime of this pass. Cache
+        // the descriptor sets instead of allocating one per active bounce on
+        // every frame. The three later-bounce slots encode the fixed resource
+        // rotations for requested bounces two through four.
+        std::array<nvrhi::BindingSetHandle, 8> m_SamplingBindingSets;
+        std::array<nvrhi::BindingSetHandle, 2> m_MultiBounceFirstBindingSets;
+        std::array<nvrhi::BindingSetHandle, 3> m_IndirectBounceBindingSets;
+        nvrhi::BindingSetHandle m_DepthHierarchyBindingSet;
+        // Finite combinations of consumer specialization, history direction,
+        // bounce source, and filter source avoid rebuilding full-resolution
+        // descriptor sets every frame.
+        std::array<nvrhi::BindingSetHandle, 16> m_TemporalBindingSets;
+        std::array<nvrhi::BindingSetHandle, 16> m_SpatialBindingSets;
+        std::array<nvrhi::BindingSetHandle, 8> m_CompositeBindingSets;
 
         uint32_t m_HistoryReadIndex = 0;
         bool m_HistoryValid = false;
@@ -252,12 +314,17 @@ namespace uvsr
         void CreatePipelines(const std::shared_ptr<donut::engine::ShaderFactory>& shaderFactory);
         void EnsureResources(
             dm::uint2 fullSize,
-            bool temporalEnabled);
+            bool temporalEnabled,
+            bool multipleBouncesEnabled,
+            bool depthHierarchyEnabled);
         void ReleaseResources();
         bool UpdateHistoryValidity(
             const ScreenSpaceVisibilitySettings& settings,
-            const donut::engine::IView& view);
-        static uint64_t ComputeHistorySignature(const ScreenSpaceVisibilitySettings& settings);
+            const donut::engine::IView& view,
+            float exposureScale);
+        static uint64_t ComputeHistorySignature(
+            const ScreenSpaceVisibilitySettings& settings,
+            float exposureScale);
 
         void BeginStage(nvrhi::ICommandList* commandList, Stage stage);
         void EndStage(nvrhi::ICommandList* commandList, Stage stage);

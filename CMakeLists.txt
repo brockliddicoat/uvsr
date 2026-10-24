@@ -163,6 +163,16 @@ add_custom_command(TARGET uvsr POST_BUILD
         "${CMAKE_SOURCE_DIR}/assets/scenes/nvidia_bistro/LICENSE.txt"
         "${CMAKE_SOURCE_DIR}/assets/scenes/nvidia_bistro/README.txt"
         "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/nvidia_bistro"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/zeroday"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/assets/scenes/zeroday/ZeroDay_MeasureOne.glb"
+        "${CMAKE_SOURCE_DIR}/assets/scenes/zeroday/ZeroDay_MeasureSeven.glb"
+        "${CMAKE_SOURCE_DIR}/assets/scenes/zeroday/ZeroDay_MeasureSeven_ColoredLights.glb"
+        "${CMAKE_SOURCE_DIR}/assets/scenes/zeroday/LICENSE.txt"
+        "${CMAKE_SOURCE_DIR}/assets/scenes/zeroday/README.txt"
+        "${CMAKE_SOURCE_DIR}/assets/scenes/zeroday/CHANGELOG.txt"
+        "${CMAKE_BINARY_DIR}/media/glTF-Sample-Assets/Models/zeroday"
     COMMAND ${CMAKE_COMMAND} -E remove_directory
         "${CMAKE_BINARY_DIR}/media/luts/kodak"
     COMMAND ${CMAKE_COMMAND} -E make_directory

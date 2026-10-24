@@ -61,46 +61,42 @@ bool PositiveViewDepth(float deviceDepth, out float viewDepth)
     return isfinite(viewDepth);
 }
 
-uint2 RepresentativePixel(uint2 samplingPixel)
-{
-    uint2 cellOrigin = samplingPixel * g_Visibility.resolutionScale;
-    uint2 fullMaximum = uint2(g_Visibility.fullResolution) - 1u;
-    uint2 selectedPixel = min(cellOrigin, fullMaximum);
-    float selectedDepth = t_CurrentDepth[selectedPixel];
-    if (g_Visibility.resolutionScale == 1u)
-        return selectedPixel;
-    bool foundValid = ValidDepth(selectedDepth);
-
-    [loop]
-    for (uint y = 0u; y < g_Visibility.resolutionScale; ++y)
-    {
-        [loop]
-        for (uint x = 0u; x < g_Visibility.resolutionScale; ++x)
-        {
-            uint2 candidate = cellOrigin + uint2(x, y);
-            if (any(candidate >= uint2(g_Visibility.fullResolution)))
-                continue;
-            float depth = t_CurrentDepth[candidate];
-            if (!ValidDepth(depth))
-                continue;
-            bool closer = !foundValid || (g_Visibility.reverseDepth != 0u
-                ? depth > selectedDepth : depth < selectedDepth);
-            if (closer)
-            {
-                selectedPixel = candidate;
-                selectedDepth = depth;
-                foundValid = true;
-            }
-        }
-    }
-    return selectedPixel;
-}
-
 [numthreads(8, 8, 1)]
 void main(uint2 pixel : SV_DispatchThreadID)
 {
     if (any(pixel >= uint2(g_Visibility.samplingResolution)))
         return;
+
+    uint2 fullPixel = pixel;
+    float currentDepth = t_CurrentDepth[fullPixel];
+    if (!ValidDepth(currentDepth))
+    {
+#if ENABLE_AO
+        u_HistoryAmbientVisibility[pixel] = 1.0f;
+#endif
+#if ENABLE_GI
+        u_HistoryIndirectDiffuse[pixel] = 0.0f;
+#endif
+        u_HistoryDepth[pixel] = currentDepth;
+        u_HistoryNormal[pixel] = float4(0.5f, 0.5f, 0.5f, 1.0f);
+        u_HistoryValidity[pixel] = 0.0f;
+        return;
+    }
+
+    float3 currentNormal = SafeNormal(t_CurrentNormal[fullPixel].xyz);
+    if (!(dot(currentNormal, currentNormal) > 0.0f))
+    {
+#if ENABLE_AO
+        u_HistoryAmbientVisibility[pixel] = 1.0f;
+#endif
+#if ENABLE_GI
+        u_HistoryIndirectDiffuse[pixel] = 0.0f;
+#endif
+        u_HistoryDepth[pixel] = currentDepth;
+        u_HistoryNormal[pixel] = float4(0.5f, 0.5f, 0.5f, 1.0f);
+        u_HistoryValidity[pixel] = 0.0f;
+        return;
+    }
 
     float currentAmbient = ENABLE_AO != 0
         ? saturate(t_RawAmbientVisibility[pixel]) : 1.0f;
@@ -114,44 +110,62 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float3 giMinimum = currentGi;
     float3 giMaximum = currentGi;
 
-    uint2 fullPixel = RepresentativePixel(pixel);
-    float currentDepth = t_CurrentDepth[fullPixel];
-    float3 currentNormal = SafeNormal(t_CurrentNormal[fullPixel].xyz);
-    float3 motion = t_MotionVectors[fullPixel].xyz;
-    float2 previousFullCenter = float2(fullPixel) + 0.5f + motion.xy;
-    float2 previousUv = previousFullCenter / g_Visibility.fullResolution;
-
-    bool inside = all(previousFullCenter >= 0.5f) &&
-        all(previousFullCenter <= g_Visibility.fullResolution - 0.5f);
-    bool historyAccepted = g_Visibility.temporalEnabled != 0u &&
-        g_Visibility.historyValid != 0u && inside && ValidDepth(currentDepth) &&
-        dot(currentNormal, currentNormal) > 0.0f;
-
+    float motionRejection = 1.0f;
+    bool historyAccepted = false;
     float historyAmbient = currentAmbient;
     float3 historyGi = currentGi;
-    if (historyAccepted)
+    if (g_Visibility.temporalEnabled != 0u && g_Visibility.historyValid != 0u)
     {
-        int2 previousHistoryPixel = clamp(
-            int2(previousUv * g_Visibility.samplingResolution),
-            0,
-            int2(g_Visibility.samplingResolution) - 1);
-        float previousDepth = t_HistoryDepth[previousHistoryPixel];
-        float3 previousNormal = SafeNormal(
-            t_HistoryNormal[previousHistoryPixel].xyz * 2.0f - 1.0f);
-        float expectedPreviousDepth = currentDepth + motion.z;
-        float previousViewDepth;
-        float expectedPreviousViewDepth;
-        bool depthAccepted = ValidDepth(previousDepth) &&
-            ValidDepth(expectedPreviousDepth) &&
-            PositiveViewDepth(previousDepth, previousViewDepth) &&
-            PositiveViewDepth(expectedPreviousDepth, expectedPreviousViewDepth);
-        float depthTolerance = g_Visibility.depthRejection *
-            max(expectedPreviousViewDepth, 0.1f);
-        depthAccepted = depthAccepted &&
-            abs(previousViewDepth - expectedPreviousViewDepth) <= depthTolerance;
-        bool normalAccepted = dot(currentNormal, previousNormal) >=
-            g_Visibility.normalRejection;
-        historyAccepted = depthAccepted && normalAccepted;
+        int2 previousHistoryPixel = 0;
+        float3 motion = t_MotionVectors[fullPixel].xyz;
+        float2 normalizedMotion =
+            motion.xy / max(g_Visibility.fullResolution, 1.0f) * 96.0f;
+        float motionLengthSquared = dot(normalizedMotion, normalizedMotion);
+        motionRejection = isfinite(motionLengthSquared) &&
+            motionLengthSquared < 1.0f
+            ? sqrt(max(motionLengthSquared, 0.0f))
+            : 1.0f;
+        float2 previousFullCenter = float2(fullPixel) + 0.5f + motion.xy;
+        bool inside = all(previousFullCenter >= 0.5f) &&
+            all(previousFullCenter <= g_Visibility.fullResolution - 0.5f);
+        historyAccepted = inside && motionRejection < 1.0f;
+
+        if (historyAccepted)
+        {
+            float2 previousUv = previousFullCenter / g_Visibility.fullResolution;
+            previousHistoryPixel = clamp(
+                int2(previousUv * g_Visibility.samplingResolution),
+                0,
+                int2(g_Visibility.samplingResolution) - 1);
+            float previousDepth = t_HistoryDepth[previousHistoryPixel];
+            float expectedPreviousDepth = currentDepth + motion.z;
+            float previousViewDepth = 0.0f;
+            float expectedPreviousViewDepth = 0.0f;
+            bool depthAccepted = false;
+            if (ValidDepth(previousDepth) && ValidDepth(expectedPreviousDepth) &&
+                PositiveViewDepth(previousDepth, previousViewDepth) &&
+                PositiveViewDepth(expectedPreviousDepth, expectedPreviousViewDepth))
+            {
+                float depthTolerance = g_Visibility.depthRejection *
+                    max(expectedPreviousViewDepth, 0.1f);
+                depthAccepted = abs(previousViewDepth - expectedPreviousViewDepth) <=
+                    depthTolerance;
+            }
+
+            if (depthAccepted)
+            {
+                // Delay this packed-normal read until depth reprojection has
+                // passed; disocclusions are normally rejected by depth first.
+                float3 previousNormal = SafeNormal(
+                    t_HistoryNormal[previousHistoryPixel].xyz * 2.0f - 1.0f);
+                historyAccepted = dot(currentNormal, previousNormal) >=
+                    g_Visibility.normalRejection;
+            }
+            else
+            {
+                historyAccepted = false;
+            }
+        }
 
         if (historyAccepted)
         {
@@ -195,8 +209,6 @@ void main(uint2 pixel : SV_DispatchThreadID)
         }
     }
 
-    float motionRejection = saturate(length(
-        motion.xy / max(g_Visibility.fullResolution, 1.0f)) * 96.0f);
     float aoHistoryWeight = ENABLE_AO != 0 && historyAccepted
         ? g_Visibility.aoTemporalResponse * (1.0f - motionRejection)
         : 0.0f;
