@@ -21,11 +21,7 @@ is also available from the scene picker.
   scene color and history resources stay at display resolution.
 - Screen-space visibility feeds current-frame AO/GI directly into composition;
   it has no temporal accumulation or spatial filtering stage.
-- The renderer selector provides **Deferred**, **Forward**, and **Forward
-  Tonemapperless** modes. The tonemapperless mode renders with the forward path
-  and sends its scene-linear HDR result directly to the sRGB display target,
-  bypassing AgX, exposure, grading, LUTs, and dithering; out-of-range values are
-  clipped by the display target.
+- The renderer selector provides **Deferred** and **Forward** modes.
 - Renderer settings always start from factory defaults; **Reset Settings**
   restores those defaults in-session, and settings are not carried between
   launches.

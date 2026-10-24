@@ -553,8 +553,7 @@ enum class AgxPreset
 enum class RendererMode
 {
     Deferred,
-    Forward,
-    ForwardTonemapperless
+    Forward
 };
 
 struct AgxToneMappingParameters
@@ -946,10 +945,6 @@ struct UIData
         return RenderMode == RendererMode::Deferred;
     }
 
-    [[nodiscard]] bool UsesTonemapper() const
-    {
-        return RenderMode != RendererMode::ForwardTonemapperless;
-    }
 };
 
 class UvsrSceneViewer : public ApplicationBase
@@ -1958,24 +1953,14 @@ public:
             m_ReconstructiveTemporalAAPass->Deactivate();
         }
 
-        nvrhi::ITexture* displayTexture = displaySource;
-        if (m_ui.UsesTonemapper())
-        {
-            m_AgxToneMappingPass->Render(
-                m_CommandList, m_ui.AgxToneMappingParams, *m_View,
-                displaySource, rtaaMetadata, rtaaMoments, sharpening);
+        m_AgxToneMappingPass->Render(
+            m_CommandList, m_ui.AgxToneMappingParams, *m_View,
+            displaySource, rtaaMetadata, rtaaMoments, sharpening);
 
-            if (rtaaActive)
-                m_ReconstructiveTemporalAAPass->EndFusedSharpeningTimer(m_CommandList);
+        if (rtaaActive)
+            m_ReconstructiveTemporalAAPass->EndFusedSharpeningTimer(m_CommandList);
 
-            displayTexture = m_RenderTargets->LdrColor;
-        }
-
-        // The tonemapperless renderer intentionally sends forward scene-linear
-        // radiance straight to the sRGB swap-chain target. The render-target
-        // conversion still applies the display transfer and clamps values to
-        // the target's representable range, but AgX, exposure, grading, LUTs,
-        // and dithering are all absent from this path.
+        nvrhi::ITexture* displayTexture = m_RenderTargets->LdrColor;
         m_CommonPasses->BlitTexture(
             m_CommandList, framebuffer, displayTexture, &m_BindingCache);
 
@@ -2300,14 +2285,13 @@ protected:
 
         static const char* rendererModeLabels[] = {
             "Deferred",
-            "Forward",
-            "Forward Tonemapperless"
+            "Forward"
         };
         ImGui::SetNextItemWidth(-FLT_MIN);
         const bool rendererModeComboOpen = ImGui::BeginCombo(
             "##RendererMode", rendererModeLabels[int(m_ui.RenderMode)]);
         ImGui::SetItemTooltip(
-            "Choose deferred, forward, or forward rendering that bypasses AgX and the grading LUT.");
+            "Choose deferred or forward rendering.");
         if (rendererModeComboOpen)
         {
             for (int modeIndex = 0;
