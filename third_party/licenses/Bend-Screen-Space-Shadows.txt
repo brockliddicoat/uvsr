@@ -1,0 +1,16 @@
+Bend screen-space shadows
+
+Copyright 2023 Sony Interactive Entertainment.
+
+Licensed under the Apache License, Version 2.0. the complete license is included
+in Apache-2.0.txt in this directory.
+
+upstream source:
+https://www.bendstudio.com/assets/cms/downloads/code_final_candidate.zip
+https://www.bendstudio.com/blog/inside-bend-screen-space-shadows/
+
+UVSR retains the released bend_sss_cpu.h and bend_sss_gpu.h without modification.
+UVSR supplies the renderer adapter, shader permutation configuration, and
+angular-light sampling and accumulation. the optional Wave Optimizations path
+uses the retained Bend planner and tracer. disabling that path does not remove
+the included code or compiled shaders from this distribution.
