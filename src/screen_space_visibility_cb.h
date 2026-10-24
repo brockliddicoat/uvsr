@@ -54,9 +54,17 @@ struct ScreenSpaceVisibilityConstants
     uint historyValid;
 
     uint showIndirectDiffuseOnly;
-    uint padding3;
-    uint padding4;
-    uint padding5;
+    // The CPU resolves the legacy or rotating receiver before dispatch. The
+    // centered offsets are zero when disabled; the packed integer coordinate
+    // uses 16 bits per axis. No shader needs a per-pixel feature branch.
+    float sampleRotationCenteredOutputPixelOffsetX;
+    float sampleRotationCenteredOutputPixelOffsetY;
+    uint sampleRotationPackedOutputPixelOffset;
 };
+
+#ifdef __cplusplus
+static_assert(sizeof(ScreenSpaceVisibilityConstants) == 896u,
+    "The shared visibility constant-buffer layout must remain 896 bytes");
+#endif
 
 #endif // UVSR_SCREEN_SPACE_VISIBILITY_CB_H

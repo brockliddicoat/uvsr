@@ -22,6 +22,16 @@ architecture without either add-on.
   when spatial filtering is disabled because raw grid expansion produces
   coherent GI streaks. The **Reconstruction and Upsampling** drawer starts
   collapsed.
+- **Experimental Sample Rotation** is a retired, default-off local
+  receiver-dithering experiment for Half visibility resolution at even output
+  dimensions. It visits the
+  top-left, bottom-right, top-right, and bottom-left pixel in each 2x2 block
+  without changing the visibility sample count, projection, scene G-buffer,
+  or resource layout. Full, Quarter, and odd-sized outputs retain the legacy
+  fixed receiver. This visibility-only experiment is not a scene-level or
+  output-space temporal superresolution mode. Direct user evaluation found no
+  visible improvement and a worse, noisier result even after temporal history
+  gathered, so it must not be promoted as a quality feature.
 - **Adaptive Sparse Sampling** is off by default. The default fixed-work
   specialization traces one stochastic slice and **20 Fixed Samples Per Pixel**
   for every eligible pixel, with the adaptive neighborhood, reprojection,
@@ -259,11 +269,11 @@ not already cached.
 
 Build and run the scene-catalog, experiment-title, camera-collision,
 camera-controls, Sponza-camera-preset, PBR, World-Material-view,
-radial-visibility, estimator, visibility-projection, and visibility-sampling
-reference tests separately:
+radial-visibility, estimator, visibility-projection, visibility-sampling, and
+sample-rotation reference tests separately:
 
 ```powershell
-cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_sponza_camera_tests uvsr_pbr_tests uvsr_world_material_view_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests
+cmake --build build --config Release --target uvsr_scene_catalog_tests uvsr_experiment_title_tests uvsr_camera_collision_tests uvsr_camera_controls_tests uvsr_sponza_camera_tests uvsr_pbr_tests uvsr_world_material_view_tests uvsr_radial_visibility_tests uvsr_visibility_estimator_tests uvsr_visibility_projection_tests uvsr_visibility_sampling_tests uvsr_visibility_sample_rotation_tests
 ctest --test-dir build -C Release --output-on-failure
 ```
 

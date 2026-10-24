@@ -233,6 +233,18 @@ add_test(
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/noise/visibility_filter_adapted_gauss1_ema035_r8.bin"
 )
 
+add_executable(uvsr_visibility_sample_rotation_tests
+    tests/visibility_sample_rotation_tests.cpp
+)
+target_include_directories(
+    uvsr_visibility_sample_rotation_tests
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+add_test(
+    NAME uvsr_visibility_sample_rotation_reference
+    COMMAND uvsr_visibility_sample_rotation_tests
+)
+
 # Donut builds its complete shader catalog as an internal dependency. Stage it
 # outside the runtime tree, then package only the shaders instantiated by UVSR.
 set(UVSR_ROOT_SHADERS

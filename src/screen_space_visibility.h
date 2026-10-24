@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lighting_contribution_shared.h"
+#include "visibility_sample_rotation.h"
 
 #include <donut/core/math/math.h>
 #include <nvrhi/nvrhi.h>
@@ -110,6 +111,15 @@ namespace uvsr
     {
         bool temporalEnabled = false;
         bool spatialEnabled = false;
+        // Experimental receiver dithering for the scale-two visibility path.
+        // Unsupported resolutions preserve their legacy fixed receiver.
+        bool experimentalSampleRotationEnabled = false;
+#ifndef NDEBUG
+        // Debug-only controls are intentionally absent from normal builds and
+        // are exposed by the UI only while the experiment is active.
+        bool sampleRotationDebugFreezePhase = false;
+        int sampleRotationDebugPhase = 0;
+#endif
         // SSRT3's default current-frame blend response.
         float temporalResponse = 0.35f;
         VisibilitySpatialFilter spatialFilter =
@@ -237,6 +247,12 @@ namespace uvsr
             return m_Timings;
         }
 
+        [[nodiscard]] const VisibilitySampleRotationState&
+            GetSampleRotationState() const
+        {
+            return m_CurrentSampleRotationState;
+        }
+
     private:
         enum class Stage : uint32_t
         {
@@ -340,6 +356,8 @@ namespace uvsr
         bool m_SamplingNoiseUploaded = false;
         bool m_HistoryValid = false;
         bool m_FeedbackValid = false;
+        VisibilitySampleRotationSequence m_SampleRotationSequence;
+        VisibilitySampleRotationState m_CurrentSampleRotationState;
         bool m_HistoryConfigurationInitialized = false;
         uint64_t m_HistoryConfigurationKey = 0u;
         bool m_HistoryEstimatorInitialized = false;

@@ -83,7 +83,8 @@ namespace
 
     uint64_t BuildHistoryConfigurationKey(
         const ScreenSpaceVisibilityConstants& constants,
-        uint32_t activeBounceCount)
+        uint32_t activeBounceCount,
+        uint64_t sampleRotationConvention)
     {
         uint64_t key = 0xcbf29ce484222325ull;
         const auto appendFloat = [&key](float value)
@@ -107,6 +108,7 @@ namespace
         appendUint(constants.adaptiveSamplingEnabled);
         appendUint(constants.useDepthHierarchy);
         appendUint(constants.resolutionScale);
+        AppendHistoryConfigurationValue(key, sampleRotationConvention);
         if (constants.enableIndirectDiffuse != 0u)
         {
             appendFloat(constants.emissiveGain);
@@ -776,6 +778,8 @@ namespace uvsr
         m_FeedbackValid = false;
         m_HistoryIndex = 0u;
         m_FeedbackIndex = 0u;
+        m_SampleRotationSequence.Reset();
+        m_CurrentSampleRotationState = {};
     }
 
     void ScreenSpaceVisibilityPass::ResetBindingCache()
@@ -1089,8 +1093,30 @@ namespace uvsr
         constants.adaptiveSamplingEnabled = adaptiveEnabled ? 1u : 0u;
         constants.showIndirectDiffuseOnly =
             settings.showIndirectDiffuseOnly ? 1u : 0u;
+        const VisibilitySampleRotationState rotationConvention =
+            ResolveVisibilitySampleRotationState(
+                settings.reconstruction.experimentalSampleRotationEnabled,
+                resolutionScale,
+                fullSize.x,
+                fullSize.y,
+                0u);
+        uint64_t sampleRotationHistoryConvention =
+            GetVisibilitySampleRotationHistoryConvention(rotationConvention);
+#ifndef NDEBUG
+        if (rotationConvention.IsEnabled() &&
+            settings.reconstruction.sampleRotationDebugFreezePhase)
+        {
+            const uint32_t frozenPhase = uint32_t(std::clamp(
+                settings.reconstruction.sampleRotationDebugPhase, 0, 3));
+            sampleRotationHistoryConvention ^= 0x8000000000000000ull |
+                (uint64_t(frozenPhase) << 48u);
+        }
+#endif
         const uint64_t historyConfigurationKey =
-            BuildHistoryConfigurationKey(constants, activeBounceCount);
+            BuildHistoryConfigurationKey(
+                constants,
+                activeBounceCount,
+                sampleRotationHistoryConvention);
         if (m_HistoryConfigurationInitialized &&
             historyConfigurationKey != m_HistoryConfigurationKey)
         {
@@ -1098,6 +1124,36 @@ namespace uvsr
         }
         m_HistoryConfigurationKey = historyConfigurationKey;
         m_HistoryConfigurationInitialized = true;
+#ifndef NDEBUG
+        if (settings.reconstruction.sampleRotationDebugFreezePhase)
+        {
+            m_CurrentSampleRotationState =
+                ResolveVisibilitySampleRotationState(
+                    settings.reconstruction.experimentalSampleRotationEnabled,
+                    resolutionScale,
+                    fullSize.x,
+                    fullSize.y,
+                    uint32_t(std::clamp(
+                        settings.reconstruction.sampleRotationDebugPhase,
+                        0,
+                        3)));
+        }
+        else
+#endif
+        {
+            m_CurrentSampleRotationState = m_SampleRotationSequence.Resolve(
+                settings.reconstruction.experimentalSampleRotationEnabled,
+                resolutionScale,
+                fullSize.x,
+                fullSize.y);
+        }
+        constants.sampleRotationCenteredOutputPixelOffsetX =
+            m_CurrentSampleRotationState.centeredOutputPixelOffsetX;
+        constants.sampleRotationCenteredOutputPixelOffsetY =
+            m_CurrentSampleRotationState.centeredOutputPixelOffsetY;
+        constants.sampleRotationPackedOutputPixelOffset =
+            PackVisibilitySampleRotationOutputPixelOffset(
+                m_CurrentSampleRotationState);
         constants.feedbackValid = adaptiveEnabled && m_FeedbackValid ? 1u : 0u;
         constants.historyValid = temporalEnabled && m_HistoryValid ? 1u : 0u;
         commandList->writeBuffer(
@@ -1508,6 +1564,10 @@ namespace uvsr
             m_HistoryValid = true;
             m_HistoryIndex = 1u - historyWrite;
         }
+#ifndef NDEBUG
+        if (!settings.reconstruction.sampleRotationDebugFreezePhase)
+#endif
+            m_SampleRotationSequence.Advance(m_CurrentSampleRotationState);
         ++m_TimerFrame;
     }
 }

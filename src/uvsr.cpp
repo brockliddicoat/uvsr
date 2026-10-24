@@ -1855,6 +1855,11 @@ public:
                 up);
         }
         m_ThirdPersonCamera.ResetZoomReferenceDistance(distance);
+        // Framing is an instantaneous camera cut. Do not interpret history or
+        // motion from the preceding pose under the newly selected view.
+        m_PreviousView.reset();
+        if (m_ScreenSpaceVisibilityPass)
+            m_ScreenSpaceVisibilityPass->ResetHistory();
     }
 
     std::shared_ptr<TextureCache> GetTextureCache()
@@ -2308,6 +2313,21 @@ public:
             ? &m_ScreenSpaceVisibilityPass->GetTimings()
             : nullptr;
     }
+
+#ifndef NDEBUG
+    const VisibilitySampleRotationState* GetVisibilitySampleRotationState() const
+    {
+        return m_ScreenSpaceVisibilityPass
+            ? &m_ScreenSpaceVisibilityPass->GetSampleRotationState()
+            : nullptr;
+    }
+
+    void ResetScreenSpaceVisibilityHistory()
+    {
+        if (m_ScreenSpaceVisibilityPass)
+            m_ScreenSpaceVisibilityPass->ResetHistory();
+    }
+#endif
 
 };
 
@@ -2973,6 +2993,55 @@ protected:
             {
                 VisibilityReconstructionSettings& reconstruction =
                     visibility.reconstruction;
+                const bool sampleRotationSupported =
+                    visibility.resolution == VisibilityResolution::Half;
+                if (!sampleRotationSupported)
+                    ImGui::BeginDisabled();
+                ImGui::Checkbox(
+                    "Experimental Sample Rotation",
+                    &reconstruction.experimentalSampleRotationEnabled);
+                ImGui::SetItemTooltip(
+                    "Rotate the visibility receiver across each 2x2 output block. Experimental; applies only to Half sampling resolution with even output dimensions.");
+                if (!sampleRotationSupported)
+                    ImGui::EndDisabled();
+
+#ifndef NDEBUG
+                const VisibilitySampleRotationState* sampleRotationState =
+                    m_app->GetVisibilitySampleRotationState();
+                if (sampleRotationSupported &&
+                    reconstruction.experimentalSampleRotationEnabled &&
+                    sampleRotationState && sampleRotationState->IsEnabled())
+                {
+                    bool debugRotationChanged = ImGui::Checkbox(
+                        "Freeze Sample Rotation Phase",
+                        &reconstruction.sampleRotationDebugFreezePhase);
+                    ImGui::SetItemTooltip(
+                        "Debug only: hold the selected phase for fixed-phase captures.");
+                    if (!reconstruction.sampleRotationDebugFreezePhase)
+                        ImGui::BeginDisabled();
+                    debugRotationChanged |= ImGui::SliderInt(
+                        "Sample Rotation Phase",
+                        &reconstruction.sampleRotationDebugPhase,
+                        0,
+                        3);
+                    ImGui::SetItemTooltip(
+                        "Debug only: choose the frozen output-pixel phase.");
+                    if (!reconstruction.sampleRotationDebugFreezePhase)
+                        ImGui::EndDisabled();
+                    if (debugRotationChanged)
+                        m_app->ResetScreenSpaceVisibilityHistory();
+
+                    ImGui::Text(
+                        "Current Sample Rotation Phase: %u / %u",
+                        sampleRotationState->phaseIndex,
+                        sampleRotationState->phaseCount);
+                    if (ImGui::Button("Reset Sample Rotation History"))
+                        m_app->ResetScreenSpaceVisibilityHistory();
+                    ImGui::SetItemTooltip(
+                        "Debug only: discard AO/GI history; a frozen phase remains selected.");
+                }
+#endif
+
                 ImGui::Checkbox(
                     "Temporal Reconstruction",
                     &reconstruction.temporalEnabled);

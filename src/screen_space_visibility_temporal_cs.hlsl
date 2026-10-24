@@ -34,7 +34,11 @@ uint2 SamplingToFullPixel(uint2 samplingPixel)
 {
     uint scale = max(g_Visibility.resolutionScale, 1u);
     uint2 fullSize = uint2(g_Visibility.fullResolution);
-    return min(samplingPixel * scale + scale / 2u, fullSize - 1u);
+    uint packedOffset =
+        g_Visibility.sampleRotationPackedOutputPixelOffset;
+    uint2 outputPixelOffset = uint2(
+        packedOffset & 0xffffu, packedOffset >> 16u);
+    return min(samplingPixel * scale + outputPixelOffset, fullSize - 1u);
 }
 
 float3 SafeNormal(float3 value, float3 fallback)

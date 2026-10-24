@@ -102,8 +102,21 @@ bool ProjectViewPosition(float3 positionVS, out float2 pixelPosition)
 uint2 SamplingToFullPixel(uint2 samplingPixel)
 {
     uint scale = max(g_Visibility.resolutionScale, 1u);
-    return min(samplingPixel * scale + scale / 2u,
+    uint packedOffset =
+        g_Visibility.sampleRotationPackedOutputPixelOffset;
+    uint2 outputPixelOffset = uint2(
+        packedOffset & 0xffffu, packedOffset >> 16u);
+    return min(samplingPixel * scale + outputPixelOffset,
         uint2(g_Visibility.fullResolution) - 1u);
+}
+
+float2 SampleRotationCenteredOutputPixelOffset()
+{
+    // The CPU writes zero here for disabled and unsupported modes, preserving
+    // UVSR's exact legacy upsample registration without a shader branch.
+    return float2(
+        g_Visibility.sampleRotationCenteredOutputPixelOffsetX,
+        g_Visibility.sampleRotationCenteredOutputPixelOffsetY);
 }
 
 float JointWeight(
@@ -188,7 +201,10 @@ void main(uint2 pixel : SV_DispatchThreadID)
     }
 
     uint scale = max(g_Visibility.resolutionScale, 1u);
-    float2 samplingPosition = (float2(pixel) + 0.5f) /
+    float2 centeredOutputPixelOffset =
+        SampleRotationCenteredOutputPixelOffset();
+    float2 samplingPosition =
+        (float2(pixel) + 0.5f - centeredOutputPixelOffset) /
         float(scale) - 0.5f;
     int2 samplingCenter = int2(round(samplingPosition));
     float centerDepth = LinearViewDepth(centerDeviceDepth);
@@ -312,7 +328,8 @@ void main(uint2 pixel : SV_DispatchThreadID)
             float2 targetPixelPosition;
             if (!ProjectViewPosition(targetPositionVS, targetPixelPosition))
                 continue;
-            float2 targetSamplingPosition = targetPixelPosition /
+            float2 targetSamplingPosition =
+                (targetPixelPosition - centeredOutputPixelOffset) /
                 float(scale) - 0.5f;
             int2 coordinate = int2(round(targetSamplingPosition));
             float spatialWeight = exp(-dot(tangentOffset, tangentOffset) /
